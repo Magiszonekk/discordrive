@@ -1,0 +1,107 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 String      @id @default(cuid())
+  email              String      @unique
+  passwordHash       String
+  kekSalt            String      // base64 — salt for Argon2id
+  wrapIv             String      // base64 — IV used to wrap Master Key
+  encryptedMasterKey String      // base64 — Master Key wrapped with KEK
+  createdAt          DateTime    @default(now())
+  files              File[]
+  folders            Folder[]
+  shareLinks         ShareLink[]
+}
+
+model File {
+  id           String     @id @default(cuid())
+  userId       String
+  folderId     String?
+  name         String
+  mimeType     String     @default("application/octet-stream")
+  size         BigInt
+  chunkSize    Int
+  chunkCount   Int
+  encryptedFEK String     // base64 — FEK wrapped with Master Key
+  fekIv        String     // base64 — IV used to wrap FEK
+  sha256       String?    // hex — hash of original file
+  thumbnailUrl String?
+  status       FileStatus @default(UPLOADING)
+  createdAt    DateTime   @default(now())
+
+  user       User        @relation(fields: [userId], references: [id])
+  folder     Folder?     @relation(fields: [folderId], references: [id])
+  chunks     Chunk[]
+  shareLinks ShareLink[]
+
+  @@index([userId, folderId])
+  @@index([status, createdAt])
+}
+
+enum FileStatus {
+  UPLOADING
+  READY
+  FAILED
+}
+
+model Chunk {
+  id        String @id @default(cuid())
+  fileId    String
+  index     Int
+  messageId String // Discord message ID
+  channelId String // Discord channel ID
+  webhookId String // webhook used for upload
+  size      Int    // size of encrypted chunk (with IV)
+
+  file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@unique([fileId, index])
+}
+
+model Folder {
+  id        String   @id @default(cuid())
+  userId    String
+  parentId  String?
+  name      String
+  createdAt DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id])
+  parent   Folder?  @relation("FolderTree", fields: [parentId], references: [id])
+  children Folder[] @relation("FolderTree")
+  files    File[]
+
+  @@index([userId, parentId])
+}
+
+model ShareLink {
+  token        String    @id @default(cuid())
+  fileId       String
+  userId       String
+  wrappedFEK   String    // base64 — FEK wrapped with share key
+  wrapIv       String    // base64
+  passwordHash String?   // Argon2 hash (if password-protected)
+  passwordSalt String?   // base64
+  expiresAt    DateTime?
+  label        String?
+  downloads    Int       @default(0)
+  maxDownloads Int?
+  createdAt    DateTime  @default(now())
+
+  file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([fileId])
+  @@index([expiresAt])
+}
+
+model Setting {
+  key   String @id
+  value String
+}

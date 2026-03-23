@@ -1,0 +1,25 @@
+{
+  "name": "ddv4",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev --workspace=@ddv4/api",
+    "dev:frontend": "npm run dev --workspace=@ddv4/frontend",
+    "db:generate": "npm run generate --workspace=@ddv4/database",
+    "db:push": "npm run db:push --workspace=@ddv4/database",
+    "typecheck": "tsc --build",
+    "build": "npm run build --workspaces --if-present",
+    "benchmark": "tsx scripts/benchmark.ts",
+    "infra:up": "docker compose -f infra/docker-compose.yml --env-file .env up -d",
+    "infra:down": "docker compose -f infra/docker-compose.yml --env-file .env down"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "dotenv": "^16.6.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
