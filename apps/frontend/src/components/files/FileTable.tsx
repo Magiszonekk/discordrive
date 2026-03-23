@@ -5,6 +5,7 @@ interface FileItem {
   name: string;
   mimeType: string;
   size: string;
+  chunkSize: number;
   chunkCount: number;
   encryptedFEK: string;
   fekIv: string;
@@ -23,9 +24,10 @@ interface Props {
   files: FileItem[];
   folders: FolderItem[];
   onDownload: (file: FileItem) => void;
+  onPlay?: (file: FileItem) => void;
 }
 
-export function FileTable({ files, folders, onDownload }: Props) {
+export function FileTable({ files, folders, onDownload, onPlay }: Props) {
   const navigate = useNavigate();
 
   if (folders.length === 0 && files.length === 0) {
@@ -84,7 +86,15 @@ export function FileTable({ files, folders, onDownload }: Props) {
               <td className="px-4 py-3 text-zinc-400 text-sm">
                 {new Date(file.createdAt).toLocaleDateString()}
               </td>
-              <td className="px-4 py-3 text-right">
+              <td className="px-4 py-3 text-right flex gap-2 justify-end">
+                {onPlay && file.status === "READY" && file.mimeType.startsWith("video/") && (
+                  <button
+                    onClick={() => onPlay(file)}
+                    className="text-green-400 hover:text-green-300 text-sm"
+                  >
+                    Play
+                  </button>
+                )}
                 <button
                   onClick={() => onDownload(file)}
                   className="text-blue-400 hover:text-blue-300 text-sm"

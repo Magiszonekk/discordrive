@@ -5,6 +5,13 @@ import { BrowserRouter } from "react-router";
 import { App } from "./App.js";
 import "./index.css";
 
+// Register video streaming Service Worker
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/stream-sw.js").catch(() => {
+    // SW registration may fail in unsupported environments — non-critical
+  });
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { gqlRequest } from "../lib/graphql.js";
@@ -8,6 +8,7 @@ import { useUploadStore } from "../stores/upload.js";
 import { FileTable } from "../components/files/FileTable.js";
 import { UploadProgress } from "../components/files/UploadProgress.js";
 import { FolderBreadcrumb } from "../components/files/FolderBreadcrumb.js";
+import { VideoPlayer } from "../components/video/VideoPlayer.js";
 
 const FILES_QUERY = `
   query Files($folderId: ID) {
@@ -26,6 +27,16 @@ export function Dashboard() {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploads = useUploadStore((s) => s.uploads);
+  const [playingFile, setPlayingFile] = useState<{
+    id: string;
+    name: string;
+    mimeType: string;
+    size: string;
+    chunkSize: number;
+    chunkCount: number;
+    encryptedFEK: string;
+    fekIv: string;
+  } | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["files", folderId ?? null],
@@ -93,6 +104,22 @@ export function Dashboard() {
     [],
   );
 
+  const handlePlay = useCallback(
+    (file: {
+      id: string;
+      name: string;
+      mimeType: string;
+      size: string;
+      chunkSize: number;
+      chunkCount: number;
+      encryptedFEK: string;
+      fekIv: string;
+    }) => {
+      setPlayingFile(file);
+    },
+    [],
+  );
+
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
@@ -137,6 +164,23 @@ export function Dashboard() {
           files={data?.files ?? []}
           folders={data?.folders ?? []}
           onDownload={handleDownload}
+          onPlay={handlePlay}
+        />
+      )}
+
+      {playingFile && (
+        <VideoPlayer
+          file={{
+            fileId: playingFile.id,
+            fileName: playingFile.name,
+            mimeType: playingFile.mimeType,
+            size: playingFile.size,
+            chunkSize: playingFile.chunkSize,
+            chunkCount: playingFile.chunkCount,
+            encryptedFEK: playingFile.encryptedFEK,
+            fekIv: playingFile.fekIv,
+          }}
+          onClose={() => setPlayingFile(null)}
         />
       )}
     </div>
