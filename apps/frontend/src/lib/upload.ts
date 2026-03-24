@@ -19,7 +19,7 @@ const INIT_UPLOAD = `
       name: $name, mimeType: $mimeType, size: $size,
       chunkSize: $chunkSize, chunkCount: $chunkCount,
       encryptedFEK: $encryptedFEK, fekIv: $fekIv, folderId: $folderId
-    ) { fileId }
+    ) { fileId uploadConcurrency }
   }
 `;
 
@@ -56,7 +56,7 @@ export async function uploadFile(
   store.updateUpload("pending", { status: UploadStatus.UPLOADING });
 
   const { initUpload } = await gqlRequest<{
-    initUpload: { fileId: string };
+    initUpload: { fileId: string; uploadConcurrency: number };
   }>(INIT_UPLOAD, {
     name: file.name,
     mimeType: file.type || "application/octet-stream",
@@ -76,40 +76,57 @@ export async function uploadFile(
   store.updateUpload(fileId, { status: UploadStatus.UPLOADING });
 
   // 4. Upload chunks with concurrency control
-  const concurrency = config.defaultUploadConcurrency;
+  const concurrency = initUpload.uploadConcurrency || config.defaultUploadConcurrency;
   let uploadedChunks = 0;
   let bytesUploaded = 0;
+  const failedChunks: number[] = [];
 
   const uploadQueue: Promise<void>[] = [];
 
   for await (const { index, data } of chunkFileStream(file, chunkSize)) {
     // Encrypt chunk
-    const encrypted = await encryptChunk(data.buffer as ArrayBuffer, fek);
+    const encrypted = await encryptChunk(
+      data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+      fek,
+    );
 
     // Concurrency control
     if (uploadQueue.length >= concurrency) {
       await Promise.race(uploadQueue);
     }
 
-    const chunkPromise = uploadChunkToApi(fileId, index, encrypted)
-      .then(() => {
+    const chunkPromise = (async () => {
+      try {
+        await uploadChunkToApi(fileId, index, encrypted);
         uploadedChunks++;
         bytesUploaded += data.byteLength;
         store.updateUpload(fileId, {
           uploadedChunks,
           bytesUploaded,
         });
-      })
-      .finally(() => {
-        const idx = uploadQueue.indexOf(chunkPromise);
-        if (idx !== -1) uploadQueue.splice(idx, 1);
-      });
+      } catch (err) {
+        console.error(`Chunk ${index} failed:`, err);
+        failedChunks.push(index);
+      }
+    })();
+
+    chunkPromise.finally(() => {
+      const idx = uploadQueue.indexOf(chunkPromise);
+      if (idx !== -1) uploadQueue.splice(idx, 1);
+    });
 
     uploadQueue.push(chunkPromise);
   }
 
   // Wait for remaining uploads
   await Promise.all(uploadQueue);
+
+  if (failedChunks.length > 0) {
+    store.updateUpload(fileId, { status: UploadStatus.FAILED });
+    throw new Error(
+      `Upload failed. ${failedChunks.length} chunk(s) failed: ${failedChunks.join(", ")}`,
+    );
+  }
 
   // 5. Finalize
   store.updateUpload(fileId, { status: UploadStatus.FINALIZING });

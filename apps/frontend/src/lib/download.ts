@@ -1,5 +1,6 @@
 // DiscorDrive v4 — Download pipeline (streaming)
 
+import JSZip from "jszip";
 import { decryptChunk } from "@ddv4/processing";
 import { downloadChunkFromApi, downloadSharedChunk } from "./api.js";
 import { unwrapFEK } from "./crypto.js";
@@ -72,6 +73,53 @@ async function streamDownload(params: {
   const a = document.createElement("a");
   a.href = url;
   a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+interface ZipFileItem {
+  fileId: string;
+  fileName: string;
+  mimeType: string;
+  chunkCount: number;
+  encryptedFEK: string;
+  fekIv: string;
+}
+
+export async function downloadFolderAsZip(
+  folderName: string,
+  files: ZipFileItem[],
+  onProgress?: (completed: number, total: number) => void,
+): Promise<void> {
+  const masterKey = useAuthStore.getState().masterKey;
+  if (!masterKey) throw new Error("Not authenticated");
+
+  const zip = new JSZip();
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const fek = await unwrapFEK(masterKey, file.encryptedFEK, file.fekIv);
+
+    const chunks: ArrayBuffer[] = [];
+    for (let j = 0; j < file.chunkCount; j++) {
+      const encrypted = await downloadChunkFromApi(file.fileId, j);
+      const decrypted = await decryptChunk(encrypted, fek);
+      chunks.push(decrypted);
+    }
+
+    const blob = new Blob(chunks, { type: file.mimeType });
+    zip.file(file.fileName, blob);
+
+    onProgress?.(i + 1, files.length);
+  }
+
+  const zipBlob = await zip.generateAsync({ type: "blob" });
+  const url = URL.createObjectURL(zipBlob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${folderName}.zip`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

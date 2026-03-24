@@ -1,5 +1,7 @@
 // DiscorDrive v4 — API Server (Node.js HTTP + GraphQL Yoga)
 
+import "./env.js"; // Must be first — loads .env before other modules initialize
+
 import { createServer } from "node:http";
 import { createYoga } from "graphql-yoga";
 import { schema, createContext } from "./schema.js";
@@ -19,6 +21,7 @@ const yoga = createYoga({
   schema,
   context: ({ request }) => createContext(request),
   graphqlEndpoint: "/graphql",
+  maskedErrors: false,
   cors: {
     origin: serverConfig.frontendUrl,
     credentials: true,

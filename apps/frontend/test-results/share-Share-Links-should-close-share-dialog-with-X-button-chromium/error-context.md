@@ -1,0 +1,75 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - link "Discordrive" [ref=e6] [cursor=pointer]:
+        - /url: /
+        - img [ref=e7]
+        - text: Discordrive
+      - link "Settings" [ref=e9] [cursor=pointer]:
+        - /url: /settings
+        - img [ref=e10]
+    - button "New Folder" [ref=e14]:
+      - img [ref=e15]
+      - text: New Folder
+    - navigation [ref=e17]:
+      - link "All Files" [ref=e18] [cursor=pointer]:
+        - /url: /
+        - img [ref=e19]
+        - text: All Files
+    - generic [ref=e21]:
+      - generic [ref=e22]:
+        - img [ref=e23]
+        - generic [ref=e25]: 1.2 KB stored
+      - generic [ref=e26]: 1 file
+  - main [ref=e27]:
+    - generic [ref=e28]:
+      - generic [ref=e29]:
+        - link "Files" [ref=e31] [cursor=pointer]:
+          - /url: /
+          - img [ref=e32]
+          - text: Files
+        - generic [ref=e34]:
+          - generic [ref=e35]:
+            - img [ref=e36]
+            - textbox "Search files..." [ref=e38]
+          - button "Upload Files" [ref=e39]:
+            - img [ref=e40]
+            - text: Upload Files
+      - generic [ref=e43]:
+        - generic [ref=e44]:
+          - generic [ref=e45]: test-share.txt
+          - generic [ref=e46]: Complete
+        - generic [ref=e49]: 1/1 chunks · DONE
+      - table [ref=e51]:
+        - rowgroup [ref=e52]:
+          - row "Name Size Date" [ref=e53]:
+            - columnheader "Name" [ref=e54]
+            - columnheader "Size" [ref=e55]
+            - columnheader "Date" [ref=e56]
+            - columnheader [ref=e57]
+        - rowgroup [ref=e58]:
+          - row "test-share.txt 1.2 KB 3/24/2026" [ref=e59]:
+            - cell "test-share.txt" [ref=e60]
+            - cell "1.2 KB" [ref=e61]
+            - cell "3/24/2026" [ref=e62]
+            - cell [ref=e63]:
+              - button [ref=e64]:
+                - img [ref=e65]
+      - generic [ref=e70]:
+        - generic [ref=e71]:
+          - generic [ref=e72]:
+            - heading "Share file" [level=3] [ref=e73]
+            - paragraph [ref=e74]: test-share.txt
+          - button [ref=e75]:
+            - img [ref=e76]
+        - generic [ref=e79]:
+          - heading "Create new link" [level=4] [ref=e80]
+          - generic [ref=e81]:
+            - textbox "Label (optional)" [ref=e82]
+            - spinbutton [ref=e83]
+          - textbox "Password (optional)" [ref=e84]
+          - button "Create Share Link" [ref=e85]
+```

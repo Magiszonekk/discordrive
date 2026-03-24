@@ -5,7 +5,7 @@ import type { AppMode } from "@ddv4/types";
 
 export const config = {
   // Chunking
-  defaultChunkSize: 10 * 1024 * 1024, // 10 MB
+  defaultChunkSize: 10 * 1024 * 1024 - 256, // ~10 MB (room for AES-GCM encryption overhead within Discord's limit)
   maxChunkSize: 25 * 1024 * 1024, // 25 MB (Nitro/boost only)
 
   // Argon2id parameters

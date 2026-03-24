@@ -1,0 +1,45 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - link "Discordrive" [ref=e6] [cursor=pointer]:
+        - /url: /
+        - img [ref=e7]
+        - text: Discordrive
+      - link "Settings" [ref=e9] [cursor=pointer]:
+        - /url: /settings
+        - img [ref=e10]
+    - button "New Folder" [ref=e14]:
+      - img [ref=e15]
+      - text: New Folder
+    - navigation [ref=e17]:
+      - link "All Files" [ref=e18] [cursor=pointer]:
+        - /url: /
+        - img [ref=e19]
+        - text: All Files
+    - generic [ref=e21]:
+      - generic [ref=e22]:
+        - img [ref=e23]
+        - generic [ref=e25]: 0 B stored
+      - generic [ref=e26]: 0 files
+  - main [ref=e27]:
+    - generic [ref=e28]:
+      - generic [ref=e29]:
+        - link "Files" [ref=e31] [cursor=pointer]:
+          - /url: /
+          - img [ref=e32]
+          - text: Files
+        - generic [ref=e34]:
+          - generic [ref=e35]:
+            - img [ref=e36]
+            - textbox "Search files..." [ref=e38]
+          - button "Upload Files" [ref=e39]:
+            - img [ref=e40]
+            - text: Upload Files
+      - generic [ref=e42]:
+        - img [ref=e43]
+        - paragraph [ref=e45]: No files in this folder yet
+        - paragraph [ref=e46]: Upload a file to get started
+```

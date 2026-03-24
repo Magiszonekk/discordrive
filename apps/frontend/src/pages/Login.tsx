@@ -55,8 +55,9 @@ export function Login() {
         <h1 className="text-2xl font-bold text-white mb-6">DiscorDrive</h1>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm text-zinc-400 mb-1">Email</label>
+            <label htmlFor="email" className="block text-sm text-zinc-400 mb-1">Email</label>
             <input
+              id="email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -65,8 +66,9 @@ export function Login() {
             />
           </div>
           <div>
-            <label className="block text-sm text-zinc-400 mb-1">Password</label>
+            <label htmlFor="password" className="block text-sm text-zinc-400 mb-1">Password</label>
             <input
+              id="password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}

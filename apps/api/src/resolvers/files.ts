@@ -14,7 +14,7 @@ const rateLimiter = new WebhookRateLimiter();
 export async function initUpload(
   userId: string,
   input: InitUploadRequest,
-): Promise<{ fileId: string }> {
+): Promise<{ fileId: string; uploadConcurrency: number }> {
   const file = await db.file.create({
     data: {
       userId,
@@ -30,7 +30,8 @@ export async function initUpload(
     },
   });
 
-  return { fileId: file.id };
+  const webhooks = parseWebhookUrls(serverConfig.webhooks);
+  return { fileId: file.id, uploadConcurrency: webhooks.length };
 }
 
 export async function finalizeUpload(

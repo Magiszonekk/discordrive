@@ -79,6 +79,7 @@ export const schema = createSchema<Context>({
 
     type InitUploadResult {
       fileId: ID!
+      uploadConcurrency: Int!
     }
 
     type FinalizeUploadResult {

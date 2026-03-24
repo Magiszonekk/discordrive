@@ -1,0 +1,67 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - link "Discordrive" [ref=e6] [cursor=pointer]:
+        - /url: /
+        - img [ref=e7]
+        - text: Discordrive
+      - link "Settings" [ref=e9] [cursor=pointer]:
+        - /url: /settings
+        - img [ref=e10]
+    - button "New Folder" [ref=e14]:
+      - img [ref=e15]
+      - text: New Folder
+    - navigation [ref=e17]:
+      - link "All Files" [ref=e18] [cursor=pointer]:
+        - /url: /
+        - img [ref=e19]
+        - text: All Files
+    - generic [ref=e21]:
+      - generic [ref=e22]:
+        - img [ref=e23]
+        - generic [ref=e25]: 1.3 KB stored
+      - generic [ref=e26]: 1 file
+  - main [ref=e27]:
+    - generic [ref=e28]:
+      - generic [ref=e29]:
+        - link "Files" [ref=e31] [cursor=pointer]:
+          - /url: /
+          - img [ref=e32]
+          - text: Files
+        - generic [ref=e34]:
+          - generic [ref=e35]:
+            - img [ref=e36]
+            - textbox "Search files..." [ref=e38]
+          - button "Upload Files" [ref=e39]:
+            - img [ref=e40]
+            - text: Upload Files
+      - generic [ref=e43]:
+        - generic [ref=e44]:
+          - generic [ref=e45]: test-actions.txt
+          - generic [ref=e46]: Complete
+        - generic [ref=e49]: 1/1 chunks · DONE
+      - table [ref=e51]:
+        - rowgroup [ref=e52]:
+          - row "Name Size Date" [ref=e53]:
+            - columnheader "Name" [ref=e54]
+            - columnheader "Size" [ref=e55]
+            - columnheader "Date" [ref=e56]
+            - columnheader [ref=e57]
+        - rowgroup [ref=e58]:
+          - row "test-actions.txt 1.3 KB 3/24/2026" [ref=e59]:
+            - cell "test-actions.txt" [ref=e60]
+            - cell "1.3 KB" [ref=e61]
+            - cell "3/24/2026" [ref=e62]
+            - cell [ref=e63]:
+              - button [ref=e64]:
+                - img [ref=e65]
+      - generic [ref=e70]:
+        - heading "Delete file" [level=3] [ref=e71]
+        - paragraph [ref=e72]: Are you sure you want to delete "test-actions.txt"? This action cannot be undone.
+        - generic [ref=e73]:
+          - button "Cancel" [ref=e74]
+          - button "Delete" [ref=e75]
+```

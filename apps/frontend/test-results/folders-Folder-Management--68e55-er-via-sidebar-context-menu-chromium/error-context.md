@@ -1,0 +1,66 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - link "Discordrive" [ref=e6] [cursor=pointer]:
+        - /url: /
+        - img [ref=e7]
+        - text: Discordrive
+      - link "Settings" [ref=e9] [cursor=pointer]:
+        - /url: /settings
+        - img [ref=e10]
+    - button "New Folder" [ref=e14]:
+      - img [ref=e15]
+      - text: New Folder
+    - navigation [ref=e17]:
+      - link "All Files" [ref=e18] [cursor=pointer]:
+        - /url: /
+        - img [ref=e19]
+        - text: All Files
+      - link "Old Name 0" [ref=e22] [cursor=pointer]:
+        - /url: /folder/cmn4elyeo004tvcrs8a07l52h
+        - img [ref=e23]
+        - generic [ref=e25]: Old Name
+        - generic [ref=e26]: "0"
+        - button [ref=e27]:
+          - img [ref=e28]
+    - generic [ref=e32]:
+      - generic [ref=e33]:
+        - img [ref=e34]
+        - generic [ref=e36]: 0 B stored
+      - generic [ref=e37]: 0 files
+  - main [ref=e38]:
+    - generic [ref=e39]:
+      - generic [ref=e40]:
+        - link "Files" [active] [ref=e42] [cursor=pointer]:
+          - /url: /
+          - img [ref=e43]
+          - text: Files
+        - generic [ref=e45]:
+          - generic [ref=e46]:
+            - img [ref=e47]
+            - textbox "Search files..." [ref=e49]
+          - button "Upload Files" [ref=e50]:
+            - img [ref=e51]
+            - text: Upload Files
+      - table [ref=e54]:
+        - rowgroup [ref=e55]:
+          - row "Name Size Date" [ref=e56]:
+            - columnheader "Name" [ref=e57]
+            - columnheader "Size" [ref=e58]
+            - columnheader "Date" [ref=e59]
+            - columnheader [ref=e60]
+        - rowgroup [ref=e61]:
+          - row "Old Name 0 files —" [ref=e62] [cursor=pointer]:
+            - cell "Old Name" [ref=e63]:
+              - generic [ref=e64]:
+                - img [ref=e65]
+                - generic [ref=e67]: Old Name
+            - cell "0 files" [ref=e68]
+            - cell "—" [ref=e69]
+            - cell [ref=e70]:
+              - button [ref=e71]:
+                - img [ref=e72]
+```

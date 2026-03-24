@@ -32,6 +32,7 @@ export interface InitUploadRequest {
 
 export interface InitUploadResponse {
   fileId: string;
+  uploadConcurrency: number;
 }
 
 export interface FinalizeUploadRequest {

@@ -89,6 +89,7 @@ export async function handleUpload(
       index: chunkIndex,
     });
   } catch (error) {
+    console.error("Upload error:", error);
     const message = error instanceof Error ? error.message : "Upload failed";
     return Response.json({ error: message }, { status: 500 });
   }
