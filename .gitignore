@@ -5,3 +5,4 @@ dist/
 *.log
 .DS_Store
 packages/database/node_modules/.prisma
+test-results

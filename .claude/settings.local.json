@@ -3,7 +3,8 @@
     "allow": [
       "Bash(find /d/pulpit/ddv4 -type f -name *)",
       "Bash(npm install:*)",
-      "Bash(npx prisma:*)"
+      "Bash(npx prisma:*)",
+      "Bash(find /c/Users/Lenovo/Desktop/ddv4/apps/frontend/src -type f -name *VideoPlayer* -o -name *video* ! -path */node_modules/*)"
     ]
   }
 }
