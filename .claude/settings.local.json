@@ -3,7 +3,12 @@
     "allow": [
       "Bash(find /d/pulpit/ddv4 -type f -name *)",
       "Bash(npm install:*)",
-      "Bash(npx prisma:*)"
+      "Bash(npx prisma:*)",
+      "Bash(xargs -0 grep -l \"createSecureServer\\\\|spdy\\\\|h2\\\\|http2\\\\|https\")",
+      "Bash(xargs grep:*)",
+      "Bash(ls -la /c/Users/Lenovo/Desktop/ddv4/packages/*/package.json)",
+      "Bash(find /c/Users/Lenovo/Desktop/ddv4 -maxdepth 3 -type f -name *.conf -o -name nginx* -o -name middleware*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

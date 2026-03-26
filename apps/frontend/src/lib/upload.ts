@@ -1,10 +1,12 @@
 // DiscorDrive v4 — Upload pipeline
+// Hashing and GraphQL orchestration in main thread.
+// Chunk encryption + upload delegated to Service Worker via @ddv4/stream-engine.
 
-import { chunkFileStream, encryptChunk, hashFile, calculateChunkCount } from "@ddv4/processing";
+import { hashFile, calculateChunkCount } from "@ddv4/processing";
 import { config } from "@ddv4/config";
 import { gqlRequest } from "./graphql.js";
-import { uploadChunkToApi } from "./api.js";
 import { prepareFileUpload } from "./crypto.js";
+import { uploadViaSW } from "./swUpload.js";
 import { useUploadStore } from "../stores/upload.js";
 import { useAuthStore } from "../stores/auth.js";
 import { UploadStatus } from "@ddv4/types";
@@ -75,41 +77,13 @@ export async function uploadFile(
   store.addUpload(fileId, file.name, chunkCount, file.size);
   store.updateUpload(fileId, { status: UploadStatus.UPLOADING });
 
-  // 4. Upload chunks with concurrency control
-  const concurrency = config.defaultUploadConcurrency;
-  let uploadedChunks = 0;
-  let bytesUploaded = 0;
-
-  const uploadQueue: Promise<void>[] = [];
-
-  for await (const { index, data } of chunkFileStream(file, chunkSize)) {
-    // Encrypt chunk
-    const encrypted = await encryptChunk(data.buffer as ArrayBuffer, fek);
-
-    // Concurrency control
-    if (uploadQueue.length >= concurrency) {
-      await Promise.race(uploadQueue);
-    }
-
-    const chunkPromise = uploadChunkToApi(fileId, index, encrypted)
-      .then(() => {
-        uploadedChunks++;
-        bytesUploaded += data.byteLength;
-        store.updateUpload(fileId, {
-          uploadedChunks,
-          bytesUploaded,
-        });
-      })
-      .finally(() => {
-        const idx = uploadQueue.indexOf(chunkPromise);
-        if (idx !== -1) uploadQueue.splice(idx, 1);
-      });
-
-    uploadQueue.push(chunkPromise);
-  }
-
-  // Wait for remaining uploads
-  await Promise.all(uploadQueue);
+  // 4. Upload chunks via Service Worker (encrypt + upload with concurrency)
+  await uploadViaSW(file, fileId, fek, chunkSize, (progress) => {
+    store.updateUpload(fileId, {
+      uploadedChunks: progress.uploadedChunks,
+      bytesUploaded: progress.bytesUploaded,
+    });
+  });
 
   // 5. Finalize
   store.updateUpload(fileId, { status: UploadStatus.FINALIZING });

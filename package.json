@@ -13,6 +13,7 @@
     "typecheck": "tsc --build",
     "build": "npm run build --workspaces --if-present",
     "benchmark": "tsx scripts/benchmark.ts",
+    "benchmark:e2e": "tsx scripts/benchmark-e2e.ts",
     "infra:up": "docker compose -f infra/docker-compose.yml --env-file .env up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml --env-file .env down"
   },

@@ -87,20 +87,21 @@ export async function deleteFile(userId: string, fileId: string): Promise<boolea
   const webhooks = parseWebhookUrls(serverConfig.webhooks);
   const webhookMap = new Map(webhooks.map((w) => [w.id, w]));
 
-  const deletePromises = file.chunks.map(async (chunk) => {
-    const webhook = webhookMap.get(chunk.webhookId);
-    if (!webhook) return; // Webhook no longer configured
-    try {
-      await discordDeleteChunk(webhook, chunk.messageId, rateLimiter);
-    } catch {
-      // Best effort — chunk may already be deleted
-    }
-  });
-
-  await Promise.allSettled(deletePromises);
-
-  // Delete from DB (cascades to chunks and share links)
+  // Delete from DB first (cascades to chunks and share links)
   await db.file.delete({ where: { id: fileId } });
+
+  // Delete Discord messages in background — best effort, don't block response
+  void Promise.allSettled(
+    file.chunks.map(async (chunk) => {
+      const webhook = webhookMap.get(chunk.webhookId);
+      if (!webhook) return; // Webhook no longer configured
+      try {
+        await discordDeleteChunk(webhook, chunk.messageId, rateLimiter);
+      } catch {
+        // Best effort — chunk may already be deleted
+      }
+    }),
+  );
 
   return true;
 }

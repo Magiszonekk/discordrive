@@ -82,12 +82,15 @@ async function handleRequest(req: Request): Promise<Response> {
 
   // Upload chunk
   if (method === "POST" && (params = matchRoute(pathname, "/api/upload/:fileId/chunk/:index"))) {
-    const rl = checkRateLimit(ip);
-    if (!rl.allowed) {
-      return Response.json({ error: "Rate limited" }, {
-        status: 429,
-        headers: { "Retry-After": String(rl.retryAfter) },
-      });
+    // Skip rate limiting in backend-only mode (benchmarks, API-only usage)
+    if (serverConfig.appMode !== "backend-only") {
+      const rl = checkRateLimit(ip);
+      if (!rl.allowed) {
+        return Response.json({ error: "Rate limited" }, {
+          status: 429,
+          headers: { "Retry-After": String(rl.retryAfter) },
+        });
+      }
     }
     return handleUpload(req, params as { fileId: string; index: string });
   }
