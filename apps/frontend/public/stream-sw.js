@@ -26,7 +26,7 @@
     saltLength: 16,
     // 128-bit salt
     // Upload concurrency
-    defaultUploadConcurrency: 3,
+    defaultUploadConcurrency: 10,
     // Discord rate limiting
     webhookRateLimitDefault: 120,
     // req/min starting point
@@ -205,17 +205,20 @@
      * Encrypt and upload pre-chunked data with concurrency control.
      * Chunks are Uint8Array[] — caller handles chunking (chunkFileStream, Buffer.subarray, etc.).
      */
-    async uploadChunks(fileId, chunks, cfg, sink, onProgress) {
+    async uploadChunks(fileId, chunks, cfg, sink, onProgress, signal) {
       const totalChunks = chunks.length;
       const totalBytes = chunks.reduce((sum, c) => sum + c.byteLength, 0);
       let uploadedChunks = 0;
       let bytesUploaded = 0;
+      const maxRetries = cfg.maxRetries ?? 5;
       const tasks = chunks.map((chunk, index) => async () => {
+        signal?.throwIfAborted();
         const encrypted = await this.encrypt(
           chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength),
           cfg.fek
         );
-        await sink.upload(fileId, index, encrypted);
+        signal?.throwIfAborted();
+        await this.uploadWithRetry(sink, fileId, index, encrypted, maxRetries);
         uploadedChunks++;
         bytesUploaded += chunk.byteLength;
         onProgress?.({
@@ -226,7 +229,7 @@
           totalBytes
         });
       });
-      await this.runPool(tasks, cfg.concurrency);
+      await this.runPool(tasks, cfg.concurrency, signal);
     }
     /**
      * Encrypt and upload from an async iterable (streaming, no full buffer needed).
@@ -241,12 +244,13 @@
           await Promise.race(queue);
         }
         const chunkBytes = data.byteLength;
+        const maxRetries = cfg.maxRetries ?? 5;
         const chunkPromise = (async () => {
           const encrypted = await this.encrypt(
             data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
             cfg.fek
           );
-          await sink.upload(fileId, index, encrypted);
+          await this.uploadWithRetry(sink, fileId, index, encrypted, maxRetries);
           uploadedChunks++;
           bytesUploaded += chunkBytes;
           onProgress?.({
@@ -266,6 +270,21 @@
       }
       await Promise.all(queue);
     }
+    async uploadWithRetry(sink, fileId, index, encrypted, maxRetries) {
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          await sink.upload(fileId, index, encrypted);
+          return;
+        } catch (err) {
+          if (attempt >= maxRetries) throw err;
+          const msg = err instanceof Error ? err.message : String(err);
+          const is429 = msg.includes("429");
+          const baseMs = is429 ? 5e3 : 1e3;
+          const backoffMs = Math.min(baseMs * Math.pow(2, attempt), 6e4);
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        }
+      }
+    }
     async encrypt(chunk, fek) {
       const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH2));
       const ciphertext = await crypto.subtle.encrypt(
@@ -278,11 +297,12 @@
       output.set(new Uint8Array(ciphertext), iv.byteLength);
       return output.buffer;
     }
-    async runPool(tasks, concurrency) {
+    async runPool(tasks, concurrency, signal) {
       const results = new Array(tasks.length);
       let nextIdx = 0;
       async function worker() {
         while (true) {
+          signal?.throwIfAborted();
           const idx = nextIdx;
           if (idx >= tasks.length) break;
           nextIdx++;
@@ -295,6 +315,34 @@
       return results;
     }
   };
+
+  // ../../packages/processing/src/chunker.ts
+  async function* chunkFileStream(file, chunkSize = config.defaultChunkSize) {
+    const stream = file instanceof ReadableStream ? file : file.stream();
+    const reader = stream.getReader();
+    let buffer = new Uint8Array(0);
+    let index = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const newBuffer = new Uint8Array(buffer.length + value.length);
+        newBuffer.set(buffer, 0);
+        newBuffer.set(value, buffer.length);
+        buffer = newBuffer;
+        while (buffer.length >= chunkSize) {
+          yield { index, data: buffer.subarray(0, chunkSize) };
+          buffer = buffer.subarray(chunkSize);
+          index++;
+        }
+      }
+      if (buffer.length > 0) {
+        yield { index, data: buffer };
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
 
   // src/sw/stream-sw.ts
   var downloadEngine = new DownloadEngine();
@@ -315,8 +363,9 @@
     }
   };
   var SwChunkSink = class {
-    constructor(token) {
+    constructor(token, signal) {
       this.token = token;
+      this.signal = signal;
     }
     async upload(fileId, chunkIndex, encrypted) {
       const res = await globalThis.fetch(
@@ -327,7 +376,8 @@
             Authorization: `Bearer ${this.token}`,
             "Content-Type": "application/octet-stream"
           },
-          body: encrypted
+          body: encrypted,
+          signal: this.signal
         }
       );
       if (!res.ok) {
@@ -336,6 +386,7 @@
     }
   };
   var sources = /* @__PURE__ */ new Map();
+  var uploadControllers = /* @__PURE__ */ new Map();
   function broadcast(message) {
     self.clients.matchAll().then((clients) => {
       for (const client of clients) {
@@ -365,8 +416,10 @@
       downloadEngine.unregister(msg.fileId);
       sources.delete(msg.fileId);
     }
-    if (msg.type === "UPLOAD_CHUNKS") {
+    if (msg.type === "UPLOAD_FILE") {
       const handleUpload = async () => {
+        const controller = new AbortController();
+        uploadControllers.set(msg.fileId, controller);
         const fek = await crypto.subtle.importKey(
           "raw",
           msg.fekRaw,
@@ -374,18 +427,17 @@
           false,
           ["encrypt"]
         );
-        const sink = new SwChunkSink(msg.token);
-        const chunks = msg.chunks.map(
-          (buf) => new Uint8Array(buf)
-        );
+        const sink = new SwChunkSink(msg.token, controller.signal);
         try {
-          await uploadEngine.uploadChunks(
+          await uploadEngine.uploadStream(
             msg.fileId,
-            chunks,
+            chunkFileStream(msg.file, msg.chunkSize),
+            msg.totalChunks,
             {
               fek,
               chunkSize: msg.chunkSize,
-              concurrency: msg.concurrency ?? 3
+              concurrency: msg.concurrency ?? 10,
+              maxRetries: msg.maxRetries ?? 5
             },
             sink,
             (progress) => {
@@ -398,14 +450,23 @@
           );
           broadcast({ type: "UPLOAD_DONE", fileId: msg.fileId });
         } catch (err) {
-          broadcast({
-            type: "UPLOAD_ERROR",
-            fileId: msg.fileId,
-            error: err instanceof Error ? err.message : "Upload failed"
-          });
+          if (err.name === "AbortError") {
+            broadcast({ type: "UPLOAD_CANCELLED", fileId: msg.fileId });
+          } else {
+            broadcast({
+              type: "UPLOAD_ERROR",
+              fileId: msg.fileId,
+              error: err instanceof Error ? err.message : "Upload failed"
+            });
+          }
+        } finally {
+          uploadControllers.delete(msg.fileId);
         }
       };
       event.waitUntil(handleUpload());
+    }
+    if (msg.type === "CANCEL_UPLOAD") {
+      uploadControllers.get(msg.fileId)?.abort();
     }
   });
   self.addEventListener("fetch", (event) => {

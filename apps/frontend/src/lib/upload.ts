@@ -34,6 +34,12 @@ const FINALIZE_UPLOAD = `
   }
 `;
 
+const DELETE_FILE = `
+  mutation DeleteFile($fileId: ID!) {
+    deleteFile(fileId: $fileId)
+  }
+`;
+
 export async function uploadFile(
   file: File,
   folderId: string | null,
@@ -48,11 +54,21 @@ export async function uploadFile(
   // 1. Prepare FEK
   const { fek, encryptedFEK, fekIv } = await prepareFileUpload(masterKey);
 
+  // Create AbortController for this upload and register it in the store
+  const controller = new AbortController();
+
   // 2. Hash file
   store.addUpload("pending", file.name, chunkCount, file.size);
+  store.registerController("pending", controller);
   store.updateUpload("pending", { status: UploadStatus.HASHING });
 
   const sha256 = await hashFile(file);
+
+  // Check if cancelled during hashing (before any DB record exists)
+  if (controller.signal.aborted) {
+    store.removeUpload("pending");
+    return "";
+  }
 
   // 3. Init upload
   store.updateUpload("pending", { status: UploadStatus.UPLOADING });
@@ -72,18 +88,29 @@ export async function uploadFile(
 
   const fileId = initUpload.fileId;
 
-  // Update store with real fileId
+  // Update store with real fileId, re-register controller under it
   store.removeUpload("pending");
   store.addUpload(fileId, file.name, chunkCount, file.size);
+  store.registerController(fileId, controller);
   store.updateUpload(fileId, { status: UploadStatus.UPLOADING });
 
   // 4. Upload chunks via Service Worker (encrypt + upload with concurrency)
-  await uploadViaSW(file, fileId, fek, chunkSize, (progress) => {
-    store.updateUpload(fileId, {
-      uploadedChunks: progress.uploadedChunks,
-      bytesUploaded: progress.bytesUploaded,
-    });
-  });
+  try {
+    await uploadViaSW(file, fileId, fek, chunkSize, (progress) => {
+      store.updateUpload(fileId, {
+        uploadedChunks: progress.uploadedChunks,
+        bytesUploaded: progress.bytesUploaded,
+      });
+    }, controller.signal);
+  } catch (err) {
+    if ((err as DOMException).name === "AbortError") {
+      store.removeUpload(fileId);
+      gqlRequest(DELETE_FILE, { fileId }).catch(() => {});
+      return "";
+    }
+    store.updateUpload(fileId, { status: UploadStatus.FAILED });
+    throw err;
+  }
 
   // 5. Finalize
   store.updateUpload(fileId, { status: UploadStatus.FINALIZING });

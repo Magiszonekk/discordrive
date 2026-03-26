@@ -97,3 +97,40 @@ export async function streamChunk(
 
   return response.body;
 }
+
+/**
+ * Get fresh CDN URL and stream chunk data, with retry on transient CDN errors.
+ * Re-fetches the CDN URL on each retry (URLs can expire or become stale).
+ */
+export async function downloadChunk(
+  webhook: WebhookInfo,
+  messageId: string,
+  rateLimiter: WebhookRateLimiter,
+): Promise<ReadableStream<Uint8Array>> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const cdnUrl = await getChunkUrl(webhook, messageId, rateLimiter);
+
+    let response: Response;
+    try {
+      response = await fetch(cdnUrl, { signal: AbortSignal.timeout(60_000) });
+    } catch (err: unknown) {
+      if (attempt >= MAX_RETRIES) throw err;
+      if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
+        await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
+        continue;
+      }
+      throw err;
+    }
+
+    if (response.ok && response.body) return response.body;
+
+    if (response.status >= 500 && attempt < MAX_RETRIES) {
+      await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
+      continue;
+    }
+
+    throw new Error(`CDN download failed: ${response.status} ${response.statusText}`);
+  }
+
+  throw new Error(`Failed to download chunk after ${MAX_RETRIES} retries`);
+}

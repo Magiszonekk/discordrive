@@ -28,6 +28,7 @@ export interface UploadConfig {
   fek: CryptoKey;
   chunkSize: number;
   concurrency: number;
+  maxRetries?: number; // per-chunk upload retries, default 5
 }
 
 /** Progress callback dla uploadu */

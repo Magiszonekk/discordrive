@@ -25,7 +25,7 @@ export const config = {
   saltLength: 16, // 128-bit salt
 
   // Upload concurrency
-  defaultUploadConcurrency: 3,
+  defaultUploadConcurrency: 10,
 
   // Discord rate limiting
   webhookRateLimitDefault: 120, // req/min starting point

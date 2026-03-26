@@ -8,7 +8,9 @@
       "Bash(xargs grep:*)",
       "Bash(ls -la /c/Users/Lenovo/Desktop/ddv4/packages/*/package.json)",
       "Bash(find /c/Users/Lenovo/Desktop/ddv4 -maxdepth 3 -type f -name *.conf -o -name nginx* -o -name middleware*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(python3 -c \":*)",
+      "Bash(node -e \":*)"
     ]
   }
 }

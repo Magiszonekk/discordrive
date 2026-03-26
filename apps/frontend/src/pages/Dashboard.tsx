@@ -9,6 +9,13 @@ import { FileTable } from "../components/files/FileTable.js";
 import { UploadProgress } from "../components/files/UploadProgress.js";
 import { FolderBreadcrumb } from "../components/files/FolderBreadcrumb.js";
 import { VideoPlayer } from "../components/video/VideoPlayer.js";
+import { ShareModal } from "../components/files/ShareModal.js";
+
+const DELETE_FILE_MUTATION = `
+  mutation DeleteFile($fileId: ID!) {
+    deleteFile(fileId: $fileId)
+  }
+`;
 
 const FILES_QUERY = `
   query Files($folderId: ID) {
@@ -27,6 +34,13 @@ export function Dashboard() {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploads = useUploadStore((s) => s.uploads);
+  const [sharingFile, setSharingFile] = useState<{
+    id: string;
+    name: string;
+    encryptedFEK: string;
+    fekIv: string;
+  } | null>(null);
+
   const [playingFile, setPlayingFile] = useState<{
     id: string;
     name: string;
@@ -104,6 +118,18 @@ export function Dashboard() {
     [],
   );
 
+  const handleDelete = useCallback(
+    async (file: { id: string }) => {
+      try {
+        await gqlRequest(DELETE_FILE_MUTATION, { fileId: file.id });
+        queryClient.invalidateQueries({ queryKey: ["files"] });
+      } catch (err) {
+        console.error("Delete failed:", err);
+      }
+    },
+    [queryClient],
+  );
+
   const handlePlay = useCallback(
     (file: {
       id: string;
@@ -165,6 +191,15 @@ export function Dashboard() {
           folders={data?.folders ?? []}
           onDownload={handleDownload}
           onPlay={handlePlay}
+          onDelete={handleDelete}
+          onShare={(file) => setSharingFile(file)}
+        />
+      )}
+
+      {sharingFile && (
+        <ShareModal
+          file={sharingFile}
+          onClose={() => setSharingFile(null)}
         />
       )}
 

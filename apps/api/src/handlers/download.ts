@@ -6,8 +6,7 @@ import { db } from "@ddv4/database";
 import {
   parseWebhookUrls,
   WebhookRateLimiter,
-  getChunkUrl,
-  streamChunk,
+  downloadChunk,
 } from "@ddv4/discord-client";
 import { serverConfig } from "@ddv4/config/server";
 import { authenticateRequestAny } from "../middleware/auth.js";
@@ -56,11 +55,8 @@ export async function handleDownload(
       return Response.json({ error: "Webhook not available" }, { status: 503 });
     }
 
-    // Get fresh CDN URL
-    const cdnUrl = await getChunkUrl(webhook, chunk.messageId, rateLimiter);
-
-    // Stream from CDN to client (proxy, no buffering)
-    const stream = await streamChunk(cdnUrl);
+    // Get fresh CDN URL and stream (retries on transient CDN errors)
+    const stream = await downloadChunk(webhook, chunk.messageId, rateLimiter);
 
     return new Response(stream, {
       headers: {

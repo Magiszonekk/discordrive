@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router";
+import { Play, Download, Trash2, Share2, Folder } from "lucide-react";
 
 interface FileItem {
   id: string;
@@ -25,9 +26,11 @@ interface Props {
   folders: FolderItem[];
   onDownload: (file: FileItem) => void;
   onPlay?: (file: FileItem) => void;
+  onDelete?: (file: FileItem) => void;
+  onShare?: (file: FileItem) => void;
 }
 
-export function FileTable({ files, folders, onDownload, onPlay }: Props) {
+export function FileTable({ files, folders, onDownload, onPlay, onDelete, onShare }: Props) {
   const navigate = useNavigate();
 
   if (folders.length === 0 && files.length === 0) {
@@ -53,7 +56,7 @@ export function FileTable({ files, folders, onDownload, onPlay }: Props) {
             <th className="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase">
               Date
             </th>
-            <th className="w-24" />
+            <th className="w-32" />
           </tr>
         </thead>
         <tbody>
@@ -64,8 +67,10 @@ export function FileTable({ files, folders, onDownload, onPlay }: Props) {
               onClick={() => navigate(`/folder/${folder.id}`)}
             >
               <td className="px-4 py-3 text-white">
-                <span className="mr-2">📁</span>
-                {folder.name}
+                <span className="inline-flex items-center gap-2">
+                  <Folder size={16} className="text-zinc-400" />
+                  {folder.name}
+                </span>
               </td>
               <td className="px-4 py-3 text-zinc-400 text-sm">
                 {folder.fileCount} files
@@ -86,27 +91,73 @@ export function FileTable({ files, folders, onDownload, onPlay }: Props) {
               <td className="px-4 py-3 text-zinc-400 text-sm">
                 {new Date(file.createdAt).toLocaleDateString()}
               </td>
-              <td className="px-4 py-3 text-right flex gap-2 justify-end">
-                {onPlay && file.status === "READY" && file.mimeType.startsWith("video/") && (
-                  <button
-                    onClick={() => onPlay(file)}
-                    className="text-green-400 hover:text-green-300 text-sm"
+              <td className="px-4 py-3">
+                <div className="flex items-center gap-1 justify-end">
+                  {onPlay && file.status === "READY" && file.mimeType.startsWith("video/") && (
+                    <IconButton
+                      onClick={() => onPlay(file)}
+                      title="Play"
+                      className="text-green-400 hover:text-green-300 hover:bg-green-400/10"
+                    >
+                      <Play size={15} />
+                    </IconButton>
+                  )}
+                  <IconButton
+                    onClick={() => onDownload(file)}
+                    title="Download"
+                    className="text-blue-400 hover:text-blue-300 hover:bg-blue-400/10"
                   >
-                    Play
-                  </button>
-                )}
-                <button
-                  onClick={() => onDownload(file)}
-                  className="text-blue-400 hover:text-blue-300 text-sm"
-                >
-                  Download
-                </button>
+                    <Download size={15} />
+                  </IconButton>
+                  {onShare && file.status === "READY" && (
+                    <IconButton
+                      onClick={() => onShare(file)}
+                      title="Share"
+                      className="text-violet-400 hover:text-violet-300 hover:bg-violet-400/10"
+                    >
+                      <Share2 size={15} />
+                    </IconButton>
+                  )}
+                  {onDelete && (
+                    <IconButton
+                      onClick={() => {
+                        if (confirm(`Delete "${file.name}"?`)) onDelete(file);
+                      }}
+                      title="Delete"
+                      className="text-red-400 hover:text-red-300 hover:bg-red-400/10"
+                    >
+                      <Trash2 size={15} />
+                    </IconButton>
+                  )}
+                </div>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function IconButton({
+  children,
+  onClick,
+  title,
+  className,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  title: string;
+  className: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={`p-1.5 rounded-md transition-colors ${className}`}
+    >
+      {children}
+    </button>
   );
 }
 

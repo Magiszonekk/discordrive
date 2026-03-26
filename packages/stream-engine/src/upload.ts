@@ -18,18 +18,22 @@ export class UploadEngine {
     cfg: UploadConfig,
     sink: ChunkSink,
     onProgress?: (progress: UploadProgress) => void,
+    signal?: AbortSignal,
   ): Promise<void> {
     const totalChunks = chunks.length;
     const totalBytes = chunks.reduce((sum, c) => sum + c.byteLength, 0);
     let uploadedChunks = 0;
     let bytesUploaded = 0;
 
+    const maxRetries = cfg.maxRetries ?? 5;
     const tasks = chunks.map((chunk, index) => async () => {
+      signal?.throwIfAborted();
       const encrypted = await this.encrypt(
         chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer,
         cfg.fek,
       );
-      await sink.upload(fileId, index, encrypted);
+      signal?.throwIfAborted();
+      await this.uploadWithRetry(sink, fileId, index, encrypted, maxRetries);
 
       uploadedChunks++;
       bytesUploaded += chunk.byteLength;
@@ -42,7 +46,7 @@ export class UploadEngine {
       });
     });
 
-    await this.runPool(tasks, cfg.concurrency);
+    await this.runPool(tasks, cfg.concurrency, signal);
   }
 
   /**
@@ -68,12 +72,13 @@ export class UploadEngine {
       }
 
       const chunkBytes = data.byteLength;
+      const maxRetries = cfg.maxRetries ?? 5;
       const chunkPromise = (async () => {
         const encrypted = await this.encrypt(
           data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer,
           cfg.fek,
         );
-        await sink.upload(fileId, index, encrypted);
+        await this.uploadWithRetry(sink, fileId, index, encrypted, maxRetries);
 
         uploadedChunks++;
         bytesUploaded += chunkBytes;
@@ -97,6 +102,29 @@ export class UploadEngine {
     await Promise.all(queue);
   }
 
+  private async uploadWithRetry(
+    sink: ChunkSink,
+    fileId: string,
+    index: number,
+    encrypted: ArrayBuffer,
+    maxRetries: number,
+  ): Promise<void> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        await sink.upload(fileId, index, encrypted);
+        return;
+      } catch (err: unknown) {
+        if (attempt >= maxRetries) throw err;
+        const msg = err instanceof Error ? err.message : String(err);
+        const is429 = msg.includes("429");
+        // 429: exponential backoff starting at 5s; other errors: starting at 1s
+        const baseMs = is429 ? 5_000 : 1_000;
+        const backoffMs = Math.min(baseMs * Math.pow(2, attempt), 60_000);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      }
+    }
+  }
+
   private async encrypt(chunk: ArrayBuffer, fek: CryptoKey): Promise<ArrayBuffer> {
     const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
     const ciphertext = await crypto.subtle.encrypt(
@@ -115,12 +143,14 @@ export class UploadEngine {
   private async runPool<T>(
     tasks: (() => Promise<T>)[],
     concurrency: number,
+    signal?: AbortSignal,
   ): Promise<T[]> {
     const results: T[] = new Array(tasks.length);
     let nextIdx = 0;
 
     async function worker() {
       while (true) {
+        signal?.throwIfAborted();
         const idx = nextIdx;
         if (idx >= tasks.length) break;
         nextIdx++;

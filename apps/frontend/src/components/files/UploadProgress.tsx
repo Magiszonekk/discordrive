@@ -1,7 +1,15 @@
+import { X } from "lucide-react";
 import { useUploadStore } from "../../stores/upload.js";
+
+function formatSpeed(bps: number): string {
+  if (bps >= 1024 * 1024) return `${(bps / (1024 * 1024)).toFixed(1)} MB/s`;
+  if (bps >= 1024) return `${(bps / 1024).toFixed(0)} KB/s`;
+  return `${bps.toFixed(0)} B/s`;
+}
 
 export function UploadProgress() {
   const uploads = useUploadStore((s) => s.uploads);
+  const cancelUpload = useUploadStore((s) => s.cancelUpload);
 
   if (uploads.size === 0) return null;
 
@@ -13,6 +21,9 @@ export function UploadProgress() {
             ? Math.round((upload.bytesUploaded / upload.bytesTotal) * 100)
             : 0;
 
+        const isActive =
+          upload.status !== "DONE" && upload.status !== "FAILED";
+
         return (
           <div
             key={upload.fileId}
@@ -22,7 +33,21 @@ export function UploadProgress() {
               <span className="text-white truncate mr-4">
                 {upload.fileName}
               </span>
-              <span className="text-zinc-400 shrink-0">
+              <span className="text-zinc-400 shrink-0 flex items-center gap-2">
+                {isActive && (
+                  <button
+                    onClick={() => cancelUpload(upload.fileId)}
+                    title="Cancel"
+                    className="text-zinc-500 hover:text-red-400 transition-colors"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+                {isActive && upload.speedBps !== undefined && upload.speedBps > 0 && (
+                  <span className="text-zinc-500">
+                    {formatSpeed(upload.speedBps)}
+                  </span>
+                )}
                 {upload.status === "DONE"
                   ? "Complete"
                   : upload.status === "FAILED"

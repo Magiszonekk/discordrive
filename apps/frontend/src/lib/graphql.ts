@@ -3,7 +3,10 @@
 import { GraphQLClient } from "graphql-request";
 import { useAuthStore } from "../stores/auth.js";
 
-const endpoint = "/graphql";
+const endpoint =
+  typeof window !== "undefined"
+    ? `${window.location.origin}/graphql`
+    : "/graphql";
 
 export function getGraphQLClient(): GraphQLClient {
   const token = useAuthStore.getState().token;

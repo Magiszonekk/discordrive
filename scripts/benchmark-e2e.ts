@@ -3,9 +3,10 @@
 // Tests the full pipeline: generate → encrypt → API upload → API download → decrypt → verify.
 // Measures end-to-end throughput including API server, DB, Discord, and crypto overhead.
 //
-// Usage: npx tsx scripts/benchmark-e2e.ts [fileSize] [concurrency]
+// Usage: npx tsx scripts/benchmark-e2e.ts [fileSize] [concurrency] [--stream]
 // Default file size: 25 MB
 // Default concurrency: 3
+// --stream: streaming mode — generate+encrypt+upload in one pipeline (lower RAM)
 //
 // Requires:
 //   - Running API server: npm run dev:api
@@ -13,7 +14,7 @@
 //   - PostgreSQL + WEBHOOK_* configured
 
 import "dotenv/config";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { config } from "@ddv4/config";
 import {
   generateFEK,
@@ -24,7 +25,7 @@ import {
   toBase64,
   hashBuffer,
 } from "@ddv4/processing";
-import { UploadEngine, DownloadEngine, type ChunkSource, type ChunkSink, type StreamConfig } from "@ddv4/stream-engine";
+import { UploadEngine, type ChunkSource, type ChunkSink } from "@ddv4/stream-engine";
 import {
   formatBytes,
   formatDuration,
@@ -133,6 +134,7 @@ async function main() {
   const chunkSize = config.defaultChunkSize;
   const chunkCount = Math.ceil(totalBytes / chunkSize);
   const concurrency = parseInt(process.argv[3] ?? "3", 10);
+  const streamMode = process.argv.includes("--stream");
 
   // Pre-check: API server alive?
   console.log(`\nChecking API server at ${baseUrl}...`);
@@ -158,11 +160,156 @@ async function main() {
   console.log(`  Chunk size:   ${formatBytes(chunkSize)}`);
   console.log(`  Chunk count:  ${chunkCount}`);
   console.log(`  Concurrency:  ${concurrency}`);
+  console.log(`  Mode:         ${streamMode ? "streaming (gen+enc+upload pipeline)" : "batch (pre-buffered)"}`);
   console.log(`  API:          ${baseUrl}`);
   console.log(`  Auth:         ${apiKey ? "API key" : "open (no API_KEY)"}`);
   console.log("═══════════════════════════════════════════\n");
 
   const timings: TimingResult[] = [];
+
+  // =========================================================================
+  // STREAM MODE: generate + encrypt + upload as one pipeline (low RAM)
+  // =========================================================================
+  if (streamMode) {
+    // Crypto setup
+    const fek = await generateFEK();
+    const masterKey = await generateMasterKey();
+    const wrappedFek = await wrapKey(fek, masterKey);
+    const encryptedFEK = toBase64(wrappedFek.data);
+    const fekIv = toBase64(wrappedFek.iv);
+
+    // Init upload
+    const { initUpload } = await gql<{ initUpload: { fileId: string } }>(INIT_UPLOAD, {
+      name: `benchmark_stream_${Date.now()}.bin`,
+      mimeType: "application/octet-stream",
+      size: totalBytes.toString(),
+      chunkSize,
+      chunkCount,
+      encryptedFEK,
+      fekIv,
+    });
+    const fileId = initUpload.fileId;
+    console.log(`Streaming pipeline (generate → encrypt → upload)...`);
+    console.log(`  File ID: ${fileId}`);
+
+    // Stream pipeline: generate chunks, hash them, encrypt+upload via engine
+    const hasher = createHash("sha256");
+
+    async function* streamingChunks(): AsyncIterable<{ index: number; data: Uint8Array }> {
+      for (let i = 0; i < chunkCount; i++) {
+        const size = Math.min(chunkSize, totalBytes - i * chunkSize);
+        const data = new Uint8Array(randomBytes(size));
+        hasher.update(data);
+        yield { index: i, data };
+      }
+    }
+
+    const uploadEngine = new UploadEngine();
+    const sink = new NodeChunkSink();
+    const pipelineProgress = { count: 0, bytes: 0 };
+    const pipelineStart = performance.now();
+    const pipelineTicker = startTicker("Pipeline", chunkCount, pipelineProgress, pipelineStart);
+
+    await uploadEngine.uploadStream(
+      fileId,
+      streamingChunks(),
+      chunkCount,
+      { fek, chunkSize, concurrency, maxRetries: 5 },
+      sink,
+      (progress) => {
+        pipelineProgress.count = progress.uploadedChunks;
+        pipelineProgress.bytes = progress.bytesUploaded;
+      },
+    );
+    clearInterval(pipelineTicker);
+
+    const pipelineMs = performance.now() - pipelineStart;
+    const originalHash = hasher.digest("hex");
+    timings.push({ label: "Gen + encrypt + upload", durationMs: pipelineMs, bytes: totalBytes });
+    process.stdout.write(`\r  Pipeline: ${chunkCount}/${chunkCount} (100%) — ${throughput(totalBytes, pipelineMs)}    \n`);
+    console.log(`  Pipeline complete: ${formatDuration(pipelineMs)} (${throughput(totalBytes, pipelineMs)})\n`);
+
+    // Finalize
+    const { finalizeUpload } = await gql<{
+      finalizeUpload: { success: boolean; missingChunks?: number[] };
+    }>(FINALIZE_UPLOAD, { fileId, sha256: originalHash });
+
+    if (!finalizeUpload.success) {
+      console.error(`  FAILED: Missing chunks: ${finalizeUpload.missingChunks?.join(", ")}`);
+      process.exit(1);
+    }
+    console.log(`  Finalized.\n`);
+
+    // Download
+    console.log(`Downloading through API (concurrency: ${concurrency})...`);
+    const source = new NodeChunkSource();
+    const chunkDownloadTimes: number[] = new Array(chunkCount);
+    const downloadProgress = { count: 0, bytes: 0 };
+    const downloadStart = performance.now();
+    const downloadTicker = startTicker("Download", chunkCount, downloadProgress, downloadStart);
+    const downloadedEncrypted: ArrayBuffer[] = new Array(chunkCount);
+    const dlTasks = Array.from({ length: chunkCount }, (_, i) => async () => {
+      const t0 = performance.now();
+      downloadedEncrypted[i] = await source.fetch(fileId, i);
+      chunkDownloadTimes[i] = performance.now() - t0;
+      downloadProgress.count++;
+      downloadProgress.bytes += downloadedEncrypted[i].byteLength;
+    });
+    let dlIdx = 0;
+    const dlWorker = async () => { while (dlIdx < dlTasks.length) await dlTasks[dlIdx++](); };
+    await Promise.all(Array.from({ length: Math.min(concurrency, chunkCount) }, dlWorker));
+    clearInterval(downloadTicker);
+    const downloadedBytes = downloadedEncrypted.reduce((sum, c) => sum + c.byteLength, 0);
+    const downloadMs = performance.now() - downloadStart;
+    timings.push({ label: "Download (API)", durationMs: downloadMs, bytes: downloadedBytes });
+    process.stdout.write(`\r  Download: ${chunkCount}/${chunkCount} (100%) — ${throughput(downloadedBytes, downloadMs)}    \n`);
+    console.log(`  Download complete: ${formatDuration(downloadMs)} (${throughput(downloadedBytes, downloadMs)})\n`);
+
+    // Decrypt + verify
+    console.log("Decrypting and verifying integrity...");
+    const decStart = performance.now();
+    const decryptedChunks: ArrayBuffer[] = [];
+    for (let i = 0; i < chunkCount; i++) {
+      decryptedChunks.push(await decryptChunk(downloadedEncrypted[i], fek));
+    }
+    const reassembledSize = decryptedChunks.reduce((sum, c) => sum + c.byteLength, 0);
+    const reassembled = new Uint8Array(reassembledSize);
+    let rOffset = 0;
+    for (const chunk of decryptedChunks) { reassembled.set(new Uint8Array(chunk), rOffset); rOffset += chunk.byteLength; }
+    const downloadHash = await hashBuffer(reassembled.buffer.slice(reassembled.byteOffset, reassembled.byteOffset + reassembled.byteLength) as ArrayBuffer);
+    const decMs = performance.now() - decStart;
+    timings.push({ label: "Decrypt + verify", durationMs: decMs, bytes: reassembledSize });
+    const integrityOk = downloadHash === originalHash;
+    console.log(`  Decrypt: ${formatDuration(decMs)} (${throughput(reassembledSize, decMs)})`);
+    console.log(`  Integrity: ${integrityOk ? "✓ PASS" : "✗ FAIL"}`);
+    console.log(`    Original:   ${originalHash.slice(0, 32)}...`);
+    console.log(`    Downloaded: ${downloadHash.slice(0, 32)}...`);
+    if (!integrityOk) console.error("\n  INTEGRITY CHECK FAILED! Data corruption detected.\n");
+    console.log();
+
+    // Cleanup
+    console.log("Cleaning up...");
+    const deleteStart = performance.now();
+    await gql(DELETE_FILE, { fileId });
+    const deleteMs = performance.now() - deleteStart;
+    timings.push({ label: "Cleanup (delete)", durationMs: deleteMs });
+    console.log(`  Done in ${formatDuration(deleteMs)}\n`);
+
+    // Report
+    printSummary(timings);
+    printChunkStats("download:", chunkDownloadTimes);
+    const streamPipelineMs =
+      (timings.find((t) => t.label === "Gen + encrypt + upload")?.durationMs ?? 0) +
+      (timings.find((t) => t.label === "Download (API)")?.durationMs ?? 0) +
+      (timings.find((t) => t.label === "Decrypt + verify")?.durationMs ?? 0);
+    console.log(`\n  Pipeline throughput:  ${throughput(totalBytes, streamPipelineMs)} (gen+enc+upload→download→decrypt)`);
+    console.log("\n═══════════════════════════════════════════");
+    return;
+  }
+
+  // =========================================================================
+  // BATCH MODE (default): pre-generate all chunks, encrypt, then upload
+  // =========================================================================
 
   // === 1. GENERATE TEST DATA ===
   console.log("Generating random test data...");
@@ -225,7 +372,6 @@ async function main() {
   const fileId = initUpload.fileId;
   console.log(`  File ID: ${fileId}`);
 
-  const uploadEngine = new UploadEngine();
   const sink = new NodeChunkSink();
 
   const chunkUploadTimes: number[] = new Array(chunkCount);

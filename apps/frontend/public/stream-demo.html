@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<!--
+  DiscorDrive v4 — Service Worker Streaming Demo
+  ─────────────────────────────────────────────
+  Serve this from the DiscorDrive frontend origin (http://localhost:5173).
+  Vite automatically serves files from apps/frontend/public/ — open:
+    http://localhost:5173/stream-demo.html
+
+  How to get fekRaw:
+    In your Node.js upload script, after generating or unwrapping the FEK:
+      import { exportKey, toBase64 } from "@ddv4/processing";
+      const fekRaw = toBase64(await exportKey(fek));
+      console.log("fekRaw:", fekRaw);
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DiscorDrive — Stream Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f0f0f;
+      color: #e0e0e0;
+      padding: 2rem;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 1.4rem; margin-bottom: 0.25rem; color: #fff; }
+    p.sub { color: #888; font-size: 0.85rem; margin-bottom: 2rem; }
+    label { display: block; font-size: 0.8rem; color: #aaa; margin-bottom: 0.25rem; margin-top: 1rem; }
+    input {
+      width: 100%;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      color: #e0e0e0;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.85rem;
+      font-family: monospace;
+    }
+    input:focus { outline: none; border-color: #5865f2; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    button {
+      margin-top: 1.5rem;
+      width: 100%;
+      padding: 0.75rem;
+      background: #5865f2;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 1rem;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button:hover { background: #4752c4; }
+    button:disabled { background: #333; color: #666; cursor: not-allowed; }
+    #status {
+      margin-top: 1rem;
+      font-size: 0.85rem;
+      color: #888;
+      min-height: 1.2rem;
+    }
+    #status.error { color: #f87171; }
+    #status.ok { color: #4ade80; }
+    video {
+      margin-top: 1.5rem;
+      width: 100%;
+      border-radius: 8px;
+      background: #000;
+      display: none;
+    }
+    video.visible { display: block; }
+    .hint {
+      margin-top: 2rem;
+      padding: 1rem;
+      background: #1a1a1a;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      color: #888;
+      line-height: 1.6;
+    }
+    .hint code { color: #c9a227; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>DiscorDrive — Stream Demo</h1>
+  <p class="sub">Plays an encrypted file directly from Discord via Service Worker — no server decryption.</p>
+
+  <form id="form">
+    <label>JWT Token (Bearer …) — leave empty if using API key auth</label>
+    <input id="token" type="password" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+
+    <label>File ID</label>
+    <input id="fileId" required placeholder="clx...">
+
+    <label>fekRaw (base64 raw AES-GCM key) — export from Node.js after upload</label>
+    <input id="fekRaw" required placeholder="base64-encoded raw FEK...">
+
+    <div class="row">
+      <div>
+        <label>Chunk Size (bytes)</label>
+        <input id="chunkSize" required type="number" value="10485704">
+      </div>
+      <div>
+        <label>Chunk Count</label>
+        <input id="chunkCount" required type="number" value="1">
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Total Size (bytes)</label>
+        <input id="totalSize" required type="number" value="0">
+      </div>
+      <div>
+        <label>MIME Type</label>
+        <input id="mimeType" required value="video/mp4">
+      </div>
+    </div>
+
+    <button type="submit" id="btn">Register stream &amp; play</button>
+  </form>
+
+  <div id="status"></div>
+  <video id="video" controls></video>
+
+  <div class="hint">
+    <strong>How to get fekRaw from your Node.js upload:</strong><br>
+    <code>import { exportKey, toBase64 } from "@ddv4/processing";</code><br>
+    <code>console.log(toBase64(await exportKey(fek)));</code><br><br>
+    The Service Worker must already be registered (run <code>npm run dev:frontend</code> and visit
+    <code>http://localhost:5173</code> first — the SW registers on first page load).
+  </div>
+
+  <script>
+    const status = (msg, cls = "") => {
+      const el = document.getElementById("status");
+      el.textContent = msg;
+      el.className = cls;
+    };
+
+    document.getElementById("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById("btn");
+      btn.disabled = true;
+      status("Registering Service Worker...");
+
+      try {
+        // 1. Ensure SW is registered
+        if (!("serviceWorker" in navigator)) {
+          throw new Error("Service Workers not supported in this browser");
+        }
+
+        const reg = await navigator.serviceWorker.register("/stream-sw.js");
+        await navigator.serviceWorker.ready;
+        const sw = reg.active ?? (await navigator.serviceWorker.ready).active;
+        if (!sw) throw new Error("Service Worker not active");
+
+        // 2. Read form values
+        const fileId    = document.getElementById("fileId").value.trim();
+        const fekRawB64 = document.getElementById("fekRaw").value.trim();
+        const token     = document.getElementById("token").value.trim();
+        const chunkSize = parseInt(document.getElementById("chunkSize").value, 10);
+        const chunkCount= parseInt(document.getElementById("chunkCount").value, 10);
+        const totalSize = parseInt(document.getElementById("totalSize").value, 10);
+        const mimeType  = document.getElementById("mimeType").value.trim();
+
+        // 3. Decode fekRaw base64 → ArrayBuffer
+        const binary = atob(fekRawB64);
+        const fekRaw = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) fekRaw[i] = binary.charCodeAt(i);
+        const fekBuf = fekRaw.buffer;
+
+        // 4. Send REGISTER_STREAM to SW (transfer fekBuf — zero-copy)
+        status("Sending stream registration to Service Worker...");
+        sw.postMessage(
+          {
+            type: "REGISTER_STREAM",
+            fileId,
+            token: token ? `Bearer ${token}` : "",
+            fekRaw: fekBuf,
+            chunkSize,
+            chunkCount,
+            totalSize,
+            mimeType,
+            chunksAhead: 3,
+            chunksBehind: 2,
+          },
+          [fekBuf],
+        );
+
+        // 5. Give SW a moment to import the key, then point video at SW stream
+        await new Promise((r) => setTimeout(r, 100));
+
+        const video = document.getElementById("video");
+        video.src = `/sw-stream/${fileId}`;
+        video.className = "visible";
+        video.play().catch(() => {/* autoplay blocked — user can click play */});
+
+        status(`Streaming /sw-stream/${fileId}`, "ok");
+      } catch (err) {
+        status(`Error: ${err.message}`, "error");
+        document.getElementById("btn").disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

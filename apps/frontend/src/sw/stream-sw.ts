@@ -14,6 +14,7 @@ import {
   type ChunkSource,
   type ChunkSink,
 } from "@ddv4/stream-engine";
+import { chunkFileStream } from "@ddv4/processing";
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -38,7 +39,7 @@ class SwChunkSource implements ChunkSource {
 }
 
 class SwChunkSink implements ChunkSink {
-  constructor(private token: string) {}
+  constructor(private token: string, private signal?: AbortSignal) {}
 
   async upload(
     fileId: string,
@@ -54,6 +55,7 @@ class SwChunkSink implements ChunkSink {
           "Content-Type": "application/octet-stream",
         },
         body: encrypted,
+        signal: this.signal,
       },
     );
     if (!res.ok) {
@@ -64,6 +66,9 @@ class SwChunkSink implements ChunkSink {
 
 // Token per-stream source registry (needed because each stream has its own token)
 const sources = new Map<string, SwChunkSource>();
+
+// AbortControllers for in-progress uploads
+const uploadControllers = new Map<string, AbortController>();
 
 // === Helpers ===
 
@@ -105,9 +110,12 @@ self.addEventListener("message", (event: ExtendableMessageEvent) => {
     sources.delete(msg.fileId);
   }
 
-  // Upload (new protocol)
-  if (msg.type === "UPLOAD_CHUNKS") {
+  // Upload — streaming protocol: SW reads File directly, chunks on demand
+  if (msg.type === "UPLOAD_FILE") {
     const handleUpload = async () => {
+      const controller = new AbortController();
+      uploadControllers.set(msg.fileId, controller);
+
       const fek = await crypto.subtle.importKey(
         "raw",
         msg.fekRaw,
@@ -115,21 +123,18 @@ self.addEventListener("message", (event: ExtendableMessageEvent) => {
         false,
         ["encrypt"],
       );
-      const sink = new SwChunkSink(msg.token);
-
-      // Convert transferred ArrayBuffers to Uint8Arrays
-      const chunks: Uint8Array[] = (msg.chunks as ArrayBuffer[]).map(
-        (buf) => new Uint8Array(buf),
-      );
+      const sink = new SwChunkSink(msg.token, controller.signal);
 
       try {
-        await uploadEngine.uploadChunks(
+        await uploadEngine.uploadStream(
           msg.fileId,
-          chunks,
+          chunkFileStream(msg.file as File, msg.chunkSize),
+          msg.totalChunks,
           {
             fek,
             chunkSize: msg.chunkSize,
-            concurrency: msg.concurrency ?? 3,
+            concurrency: msg.concurrency ?? 10,
+            maxRetries: msg.maxRetries ?? 5,
           },
           sink,
           (progress) => {
@@ -143,15 +148,25 @@ self.addEventListener("message", (event: ExtendableMessageEvent) => {
 
         broadcast({ type: "UPLOAD_DONE", fileId: msg.fileId });
       } catch (err) {
-        broadcast({
-          type: "UPLOAD_ERROR",
-          fileId: msg.fileId,
-          error: err instanceof Error ? err.message : "Upload failed",
-        });
+        if ((err as DOMException).name === "AbortError") {
+          broadcast({ type: "UPLOAD_CANCELLED", fileId: msg.fileId });
+        } else {
+          broadcast({
+            type: "UPLOAD_ERROR",
+            fileId: msg.fileId,
+            error: err instanceof Error ? err.message : "Upload failed",
+          });
+        }
+      } finally {
+        uploadControllers.delete(msg.fileId);
       }
     };
 
     event.waitUntil(handleUpload());
+  }
+
+  if (msg.type === "CANCEL_UPLOAD") {
+    uploadControllers.get(msg.fileId)?.abort();
   }
 });
 

@@ -92,6 +92,7 @@ export interface UploadProgress {
   bytesUploaded: number;
   bytesTotal: number;
   status: UploadStatus;
+  speedBps?: number;
 }
 
 export interface DownloadProgress {
