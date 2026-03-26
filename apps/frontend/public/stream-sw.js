@@ -1,12 +1,16 @@
 "use strict";
 (() => {
-  // packages/config/src/index.ts
+  // ../../packages/config/src/index.ts
   var config = {
     // Chunking
-    defaultChunkSize: 10 * 1024 * 1024,
-    // 10 MB
-    maxChunkSize: 25 * 1024 * 1024,
-    // 25 MB (Nitro/boost only)
+    // Plaintext chunk size — after AES-GCM encryption, each chunk grows by:
+    //   12B (IV) + 16B (GCM auth tag) = 28B overhead
+    // Discord enforces a 10 MiB (10 * 1024 * 1024 B) limit per file.
+    // So max plaintext = 10 MiB - 28B to ensure encrypted chunk stays within limit.
+    defaultChunkSize: 10 * 1024 * 1024 - 28,
+    // 10 MiB minus AES-GCM overhead
+    maxChunkSize: 25 * 1024 * 1024 - 28,
+    // 25 MiB minus overhead (Nitro/boost only)
     // Argon2id parameters
     argon2: {
       memory: 65536,
@@ -36,7 +40,7 @@
     anonymousTTLDays: 30
   };
 
-  // packages/stream-engine/src/download.ts
+  // ../../packages/stream-engine/src/download.ts
   var IV_LENGTH = config.ivLength;
   var DownloadEngine = class {
     streams = /* @__PURE__ */ new Map();
@@ -194,7 +198,7 @@
     }
   };
 
-  // packages/stream-engine/src/upload.ts
+  // ../../packages/stream-engine/src/upload.ts
   var IV_LENGTH2 = config.ivLength;
   var UploadEngine = class {
     /**
@@ -292,7 +296,7 @@
     }
   };
 
-  // apps/frontend/src/sw/stream-sw.ts
+  // src/sw/stream-sw.ts
   var downloadEngine = new DownloadEngine();
   var uploadEngine = new UploadEngine();
   var SwChunkSource = class {
