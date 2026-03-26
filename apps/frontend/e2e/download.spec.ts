@@ -24,7 +24,7 @@ test.afterAll(() => {
 });
 
 test.describe("File Download", () => {
-  test("should upload a file then trigger download via blob URL", async ({ page }) => {
+  test("should upload a file then trigger download via SW proxy URL", async ({ page }) => {
     test.setTimeout(120_000);
 
     const user = generateTestUser();
@@ -32,7 +32,7 @@ test.describe("File Download", () => {
 
     await uploadTestFile(page, TEST_FILE, "test-download.txt");
 
-    // Intercept the programmatic <a> click by monitoring blob URL creation
+    // Intercept the programmatic <a> click — new SW path uses /ddv4-file/:id?download=1
     const downloadTriggered = page.evaluate(() => {
       return new Promise<string>((resolve) => {
         const origCreateElement = document.createElement.bind(document);
@@ -42,7 +42,10 @@ test.describe("File Download", () => {
             const origClick = el.click.bind(el);
             el.click = function () {
               const anchor = el as HTMLAnchorElement;
-              if (anchor.href?.startsWith("blob:") && anchor.download) {
+              if (
+                (anchor.href?.includes("/ddv4-file/") || anchor.href?.startsWith("blob:")) &&
+                anchor.download
+              ) {
                 resolve(anchor.download);
               }
               return origClick();

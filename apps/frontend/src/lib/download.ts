@@ -1,16 +1,21 @@
-// DiscorDrive v4 — Download pipeline (streaming)
+// DiscorDrive v4 — Download pipeline
+// Single-file downloads use the SW decryption proxy (streaming, no memory buffering).
+// Folder ZIP downloads still use the in-memory approach via JSZip.
 
 import JSZip from "jszip";
-import { decryptChunk } from "@ddv4/processing";
+import { decryptChunk, exportKey } from "@ddv4/processing";
 import { downloadChunkFromApi, downloadSharedChunk } from "./api.js";
 import { unwrapFEK } from "./crypto.js";
 import { useAuthStore } from "../stores/auth.js";
+import { ddv4 } from "./swClient.js";
 
 interface DownloadOptions {
   fileId: string;
   fileName: string;
   mimeType: string;
   chunkCount: number;
+  chunkSize: number;
+  totalSize: number;
   encryptedFEK: string;
   fekIv: string;
 }
@@ -20,36 +25,87 @@ interface SharedDownloadOptions {
   fileName: string;
   mimeType: string;
   chunkCount: number;
+  chunkSize: number;
+  totalSize: number;
   fek: CryptoKey;
 }
 
 export async function downloadFile(options: DownloadOptions): Promise<void> {
-  const masterKey = useAuthStore.getState().masterKey;
+  const { masterKey, token } = useAuthStore.getState();
   if (!masterKey) throw new Error("Not authenticated");
+  if (!token) throw new Error("No auth token");
 
-  const fek = await unwrapFEK(masterKey, options.encryptedFEK, options.fekIv);
-  await streamDownload({
-    fileName: options.fileName,
-    mimeType: options.mimeType,
-    chunkCount: options.chunkCount,
-    fek,
-    fetchChunk: (index) => downloadChunkFromApi(options.fileId, index),
-  });
+  if ("serviceWorker" in navigator) {
+    // SW path: streaming download — no memory buffering
+    const fek = await unwrapFEK(masterKey, options.encryptedFEK, options.fekIv);
+    const fekRaw = await exportKey(fek);
+
+    const handle = await ddv4.registerFile({
+      fekRaw,
+      chunkUrlTemplate: `/api/download/${options.fileId}/chunk/{index}`,
+      headers: { Authorization: `Bearer ${token}` },
+      chunkSize: options.chunkSize,
+      chunkCount: options.chunkCount,
+      totalSize: options.totalSize,
+      mimeType: options.mimeType,
+      fileName: options.fileName,
+    });
+
+    triggerDownload(handle.downloadUrl, options.fileName);
+    // Keep registered — SW streams chunks while browser downloads.
+    // The handle is not tracked here; it stays alive until page unload.
+  } else {
+    // Fallback: buffer all chunks in main thread
+    const fek = await unwrapFEK(masterKey, options.encryptedFEK, options.fekIv);
+    await bufferAndDownload({
+      fileName: options.fileName,
+      mimeType: options.mimeType,
+      chunkCount: options.chunkCount,
+      fek,
+      fetchChunk: (i) => downloadChunkFromApi(options.fileId, i),
+    });
+  }
 }
 
 export async function downloadSharedFile(
   options: SharedDownloadOptions,
 ): Promise<void> {
-  await streamDownload({
-    fileName: options.fileName,
-    mimeType: options.mimeType,
-    chunkCount: options.chunkCount,
-    fek: options.fek,
-    fetchChunk: (index) => downloadSharedChunk(options.token, index),
-  });
+  if ("serviceWorker" in navigator) {
+    const fekRaw = await exportKey(options.fek);
+
+    const handle = await ddv4.registerFile({
+      fekRaw,
+      chunkUrlTemplate: `/api/share/${options.token}/chunk/{index}`,
+      headers: {},
+      chunkSize: options.chunkSize,
+      chunkCount: options.chunkCount,
+      totalSize: options.totalSize,
+      mimeType: options.mimeType,
+      fileName: options.fileName,
+    });
+
+    triggerDownload(handle.downloadUrl, options.fileName);
+  } else {
+    await bufferAndDownload({
+      fileName: options.fileName,
+      mimeType: options.mimeType,
+      chunkCount: options.chunkCount,
+      fek: options.fek,
+      fetchChunk: (i) => downloadSharedChunk(options.token, i),
+    });
+  }
 }
 
-async function streamDownload(params: {
+function triggerDownload(url: string, fileName: string): void {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+async function bufferAndDownload(params: {
   fileName: string;
   mimeType: string;
   chunkCount: number;
@@ -57,8 +113,6 @@ async function streamDownload(params: {
   fetchChunk: (index: number) => Promise<ArrayBuffer>;
 }): Promise<void> {
   const { fileName, mimeType, chunkCount, fek, fetchChunk } = params;
-
-  // Collect decrypted chunks
   const chunks: ArrayBuffer[] = [];
 
   for (let i = 0; i < chunkCount; i++) {
@@ -67,17 +121,13 @@ async function streamDownload(params: {
     chunks.push(decrypted);
   }
 
-  // Create blob and trigger download
   const blob = new Blob(chunks, { type: mimeType });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  triggerDownload(url, fileName);
   URL.revokeObjectURL(url);
 }
+
+// === Folder ZIP download (always in-memory — must combine multiple files) ===
 
 interface ZipFileItem {
   fileId: string;
@@ -117,11 +167,6 @@ export async function downloadFolderAsZip(
 
   const zipBlob = await zip.generateAsync({ type: "blob" });
   const url = URL.createObjectURL(zipBlob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${folderName}.zip`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  triggerDownload(url, `${folderName}.zip`);
   URL.revokeObjectURL(url);
 }

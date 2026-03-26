@@ -23,6 +23,9 @@ export const config = {
   // Upload concurrency
   defaultUploadConcurrency: 3,
 
+  // Upload retry count (per chunk, on timeout/network error)
+  uploadChunkRetries: 5,
+
   // Discord rate limiting
   webhookRateLimitDefault: 120, // req/min starting point
   webhookRateLimitWindow: 60_000, // 1 minute window

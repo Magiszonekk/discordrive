@@ -63,6 +63,8 @@ export function SharedFile() {
         fileName: info.fileName,
         mimeType: info.mimeType,
         chunkCount: info.chunkCount,
+        chunkSize: info.chunkSize,
+        totalSize: Number(info.fileSize),
         fek,
       });
     } catch (err) {

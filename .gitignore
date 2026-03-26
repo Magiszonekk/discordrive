@@ -6,3 +6,7 @@ dist/
 .DS_Store
 packages/database/node_modules/.prisma
 test-results
+e2e/fixtures/*.bin
+.claude
+certs/
+fixtures

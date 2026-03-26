@@ -1,8 +1,11 @@
-// DiscorDrive v4 — Video streaming helper (main thread ↔ Service Worker)
+// DiscorDrive v4 — Video streaming helper (main thread ↔ @ddv4/sw-client)
+// Thin wrapper that bridges app-specific auth/crypto to the generic Ddv4Client.
 
 import { exportKey } from "@ddv4/processing";
+import type { FileHandle } from "@ddv4/sw-client";
 import { unwrapFEK } from "./crypto.js";
 import { useAuthStore } from "../stores/auth.js";
+import { ddv4 } from "./swClient.js";
 
 export interface StreamFileInfo {
   fileId: string;
@@ -14,28 +17,15 @@ export interface StreamFileInfo {
   fekIv: string;
 }
 
-/**
- * Register the streaming Service Worker (idempotent).
- * Returns the active ServiceWorkerRegistration.
- */
-export async function ensureServiceWorker(): Promise<ServiceWorkerRegistration> {
-  if (!("serviceWorker" in navigator)) {
-    throw new Error("Service Workers not supported in this browser");
-  }
-
-  const existing = await navigator.serviceWorker.getRegistration("/");
-  if (!existing) {
-    await navigator.serviceWorker.register("/stream-sw.js");
-  }
-
-  return navigator.serviceWorker.ready;
-}
+// Track active handles by fileId for cleanup
+const activeHandles = new Map<string, FileHandle>();
 
 /**
- * Register a file for streaming. Unwraps FEK, exports it,
- * and sends it to the Service Worker along with file metadata.
+ * Register a file for streaming. Unwraps FEK, exports raw bytes,
+ * and registers with the decryption proxy SW.
+ * Returns the FileHandle (use handle.url as <video src>).
  */
-export async function registerStream(file: StreamFileInfo): Promise<void> {
+export async function registerStream(file: StreamFileInfo): Promise<FileHandle> {
   const { masterKey, token } = useAuthStore.getState();
   if (!masterKey) throw new Error("Not authenticated");
   if (!token) throw new Error("No auth token");
@@ -43,45 +33,37 @@ export async function registerStream(file: StreamFileInfo): Promise<void> {
   const fek = await unwrapFEK(masterKey, file.encryptedFEK, file.fekIv);
   const fekRaw = await exportKey(fek);
 
-  const reg = await ensureServiceWorker();
-  const sw = reg.active;
-  if (!sw) throw new Error("Service Worker not active");
-
-  const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
-  const chunksAhead = parseInt(env.VITE_STREAM_CHUNKS_AHEAD ?? "3", 10);
-  const chunksBehind = parseInt(env.VITE_STREAM_CHUNKS_BEHIND ?? "2", 10);
-
-  sw.postMessage({
-    type: "REGISTER_STREAM",
-    fileId: file.fileId,
-    token,
+  const handle = await ddv4.registerFile({
     fekRaw,
+    chunkUrlTemplate: `/api/download/${file.fileId}/chunk/{index}`,
+    headers: { Authorization: `Bearer ${token}` },
     chunkSize: file.chunkSize,
     chunkCount: file.chunkCount,
     totalSize: Number(file.size),
     mimeType: file.mimeType,
-    chunksAhead,
-    chunksBehind,
+    chunksAhead: 3,
+    chunksBehind: 2,
   });
+
+  activeHandles.set(file.fileId, handle);
+  return handle;
 }
 
 /**
  * Unregister a stream and free its resources in the Service Worker.
  */
 export async function unregisterStream(fileId: string): Promise<void> {
-  const reg = await navigator.serviceWorker.getRegistration("/");
-  const sw = reg?.active;
-  if (!sw) return;
-
-  sw.postMessage({
-    type: "UNREGISTER_STREAM",
-    fileId,
-  });
+  const handle = activeHandles.get(fileId);
+  if (handle) {
+    await handle.unregister();
+    activeHandles.delete(fileId);
+  }
 }
 
 /**
- * Get the URL for the video element's src attribute.
+ * Get the streaming URL for a registered file.
+ * Returns the handle URL if available, otherwise constructs a fallback URL.
  */
 export function getStreamUrl(fileId: string): string {
-  return `/sw-stream/${fileId}`;
+  return activeHandles.get(fileId)?.url ?? `/ddv4-file/${fileId}`;
 }

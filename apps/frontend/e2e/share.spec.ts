@@ -36,7 +36,7 @@ test.describe("Share Links", () => {
 
     // ShareDialog should appear
     await expect(page.getByText("Share file")).toBeVisible();
-    await expect(page.getByText("test-share.txt")).toBeVisible();
+    await expect(page.locator(".fixed.z-50").getByText("test-share.txt")).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Create Share Link" }),
     ).toBeVisible();
@@ -130,9 +130,8 @@ test.describe("Share Links", () => {
 
     await expect(page.getByText("Share file")).toBeVisible();
 
-    // Close via the X button (first button in the dialog header area)
-    // The close button contains the X SVG and is next to the heading
-    const dialog = page.locator("div").filter({ hasText: "Share file" }).last();
+    // Close via the X button (first button in the dialog overlay)
+    const dialog = page.locator(".fixed.z-50");
     await dialog.locator("button").first().click();
 
     await expect(page.getByText("Share file")).not.toBeVisible();

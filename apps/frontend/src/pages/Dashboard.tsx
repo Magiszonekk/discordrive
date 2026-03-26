@@ -109,6 +109,8 @@ export function Dashboard() {
           fileName: file.name,
           mimeType: file.mimeType,
           chunkCount: file.chunkCount,
+          chunkSize: file.chunkSize,
+          totalSize: Number(file.size),
           encryptedFEK: file.encryptedFEK,
           fekIv: file.fekIv,
         });

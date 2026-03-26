@@ -31,7 +31,7 @@ export async function initUpload(
   });
 
   const webhooks = parseWebhookUrls(serverConfig.webhooks);
-  return { fileId: file.id, uploadConcurrency: webhooks.length };
+  return { fileId: file.id, uploadConcurrency: webhooks.length * 2 };
 }
 
 export async function finalizeUpload(

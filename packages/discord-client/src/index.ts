@@ -7,7 +7,7 @@ export {
 
 export { WebhookRateLimiter } from "./rate-limiter.js";
 
-export { uploadChunk, type UploadResult } from "./uploader.js";
+export { uploadChunk, uploadChunkStream, type UploadResult } from "./uploader.js";
 
 export { getChunkUrl, streamChunk } from "./downloader.js";
 

@@ -4,7 +4,6 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import {
   registerStream,
   unregisterStream,
-  getStreamUrl,
   type StreamFileInfo,
 } from "../../lib/videoStream.js";
 import { downloadFile } from "../../lib/download.js";
@@ -25,9 +24,9 @@ export function VideoPlayer({ file, onClose }: VideoPlayerProps) {
     let unmounted = false;
 
     registerStream(file)
-      .then(() => {
+      .then((handle) => {
         if (!unmounted && videoRef.current) {
-          videoRef.current.src = getStreamUrl(file.fileId);
+          videoRef.current.src = handle.url;
           videoRef.current.load();
         }
       })
@@ -82,6 +81,8 @@ export function VideoPlayer({ file, onClose }: VideoPlayerProps) {
       fileName: file.fileName,
       mimeType: file.mimeType,
       chunkCount: file.chunkCount,
+      chunkSize: file.chunkSize,
+      totalSize: Number(file.size),
       encryptedFEK: file.encryptedFEK,
       fekIv: file.fekIv,
     });

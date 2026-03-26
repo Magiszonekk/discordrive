@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { gqlRequest } from "../../lib/graphql.js";
@@ -52,6 +52,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   const [renamingFolder, setRenamingFolder] = useState<{ id: string; name: string } | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [deletingFolder, setDeletingFolder] = useState<{ id: string; name: string } | null>(null);
+  const renameCancelRef = useRef(false);
 
   const { data } = useQuery({
     queryKey: ["sidebar"],
@@ -146,6 +147,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
                 value={newFolderName}
                 onChange={(e) => setNewFolderName(e.target.value)}
                 onBlur={() => { if (!newFolderName.trim()) setCreatingFolder(false); }}
+                onKeyDown={(e) => { if (e.key === "Escape") setCreatingFolder(false); }}
                 placeholder="Folder name"
                 className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-white placeholder-zinc-500 outline-none focus:border-zinc-600 min-w-0"
               />
@@ -195,8 +197,16 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
                     autoFocus
                     value={renameValue}
                     onChange={(e) => setRenameValue(e.target.value)}
-                    onBlur={() => setRenamingFolder(null)}
-                    onKeyDown={(e) => { if (e.key === "Escape") setRenamingFolder(null); }}
+                    onBlur={() => {
+                      if (!renameCancelRef.current) handleRenameFolder();
+                      renameCancelRef.current = false;
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        renameCancelRef.current = true;
+                        setRenamingFolder(null);
+                      }
+                    }}
                     className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-white outline-none focus:border-zinc-600"
                   />
                 </form>

@@ -5,6 +5,7 @@ import { Register } from "./pages/Register.js";
 import { Dashboard } from "./pages/Dashboard.js";
 import { SharedFile } from "./pages/SharedFile.js";
 import { Settings } from "./pages/Settings.js";
+import { VideoPage } from "./pages/VideoPage.js";
 import { MainLayout } from "./components/layout/MainLayout.js";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -24,6 +25,14 @@ export function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/share/:token" element={<SharedFile />} />
+      <Route
+        path="/video/:fileId"
+        element={
+          <ProtectedRoute>
+            <VideoPage />
+          </ProtectedRoute>
+        }
+      />
       <Route
         path="/*"
         element={

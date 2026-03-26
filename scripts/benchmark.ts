@@ -2,7 +2,7 @@
 // DiscorDrive v4 — Benchmark script
 // Tests upload → download → delete pipeline and measures timing.
 //
-// Usage: npx tsx scripts/benchmark.ts [fileSize] [concurrency]
+// Usage: npx tsx scripts/benchmark.ts [fileSize] [concurrency] [--log <path>]
 // fileSize accepts: 100 (MB), 100MB, 2GB, 500KB, 2.5GB
 // Default file size: 25 MB
 // Default concurrency: number of configured webhooks
@@ -10,7 +10,10 @@
 // Requires: WEBHOOK_1 (and optionally more) in .env, running PostgreSQL.
 
 import "dotenv/config";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createCipheriv, createHash } from "node:crypto";
+import { writeFileSync, readFileSync, unlinkSync } from "node:fs";
+import { tmpdir, cpus, totalmem } from "node:os";
+import { join } from "node:path";
 import { serverConfig } from "@ddv4/config/server";
 import { parseWebhookUrls, WebhookRateLimiter, uploadChunk, getChunkUrl, streamChunk, deleteChunk } from "@ddv4/discord-client";
 import { config } from "@ddv4/config";
@@ -133,10 +136,102 @@ function parseSize(input: string): number {
   return Math.round(value * multipliers[unit]);
 }
 
+// === Hardware Diagnostics ===
+
+interface HardwareResults {
+  cpu: string;
+  cores: number;
+  ramGB: number;
+  diskReadMBps: number;
+  aesGcmMBps: number;
+  sha256MBps: number;
+  memAllocMBps: number;
+}
+
+function runHardwareBenchmark(): HardwareResults {
+  const cpuInfo = cpus();
+  const cpu = cpuInfo[0]?.model ?? "Unknown";
+  const cores = cpuInfo.length;
+  const ramGB = Math.round(totalmem() / (1024 ** 3));
+
+  // Disk sequential read
+  const diskTestSize = 50 * 1024 * 1024; // 50MB
+  const tmpPath = join(tmpdir(), `ddv4-bench-${Date.now()}.bin`);
+  const diskBuf = randomBytes(diskTestSize);
+  writeFileSync(tmpPath, diskBuf);
+  // Warm up FS cache
+  readFileSync(tmpPath);
+  const diskStart = performance.now();
+  readFileSync(tmpPath);
+  const diskMs = performance.now() - diskStart;
+  unlinkSync(tmpPath);
+  const diskReadMBps = (diskTestSize / (1024 * 1024)) / (diskMs / 1000);
+
+  // AES-256-GCM encryption
+  const aesKey = randomBytes(32);
+  const aesIv = randomBytes(12);
+  const aesData = randomBytes(10 * 1024 * 1024); // 10MB (= 1 chunk)
+  const aesIterations = 5;
+  const aesStart = performance.now();
+  for (let i = 0; i < aesIterations; i++) {
+    const cipher = createCipheriv("aes-256-gcm", aesKey, aesIv);
+    cipher.update(aesData);
+    cipher.final();
+    cipher.getAuthTag();
+  }
+  const aesMs = performance.now() - aesStart;
+  const aesTotalBytes = 10 * 1024 * 1024 * aesIterations;
+  const aesGcmMBps = (aesTotalBytes / (1024 * 1024)) / (aesMs / 1000);
+
+  // SHA-256 hashing
+  const hashData = randomBytes(50 * 1024 * 1024); // 50MB
+  const hashStart = performance.now();
+  createHash("sha256").update(hashData).digest("hex");
+  const hashMs = performance.now() - hashStart;
+  const sha256MBps = (50 * 1024 * 1024 / (1024 * 1024)) / (hashMs / 1000);
+
+  // Memory allocation
+  const allocCount = 20;
+  const allocSize = 10 * 1024 * 1024; // 10MB
+  const allocStart = performance.now();
+  for (let i = 0; i < allocCount; i++) {
+    const buf = Buffer.alloc(allocSize);
+    buf[0] = 1; // prevent optimization
+  }
+  const allocMs = performance.now() - allocStart;
+  const allocTotalMB = (allocCount * allocSize) / (1024 * 1024);
+  const memAllocMBps = allocTotalMB / (allocMs / 1000);
+
+  return { cpu, cores, ramGB, diskReadMBps, aesGcmMBps, sha256MBps, memAllocMBps };
+}
+
+function printHardwareResults(hw: HardwareResults): void {
+  console.log("═══════════════════════════════════════════");
+  console.log("  Hardware Diagnostics");
+  console.log("═══════════════════════════════════════════");
+  console.log(`  CPU:          ${hw.cpu} (${hw.cores} cores)`);
+  console.log(`  RAM:          ${hw.ramGB} GB`);
+  console.log(`  Disk read:    ${hw.diskReadMBps.toFixed(1)} MB/s`);
+  console.log(`  AES-GCM:      ${hw.aesGcmMBps.toFixed(1)} MB/s (10MB × 5)`);
+  console.log(`  SHA-256:      ${hw.sha256MBps.toFixed(1)} MB/s`);
+  console.log(`  Mem alloc:    ${hw.memAllocMBps.toFixed(1)} MB/s (10MB × 20)`);
+  console.log("═══════════════════════════════════════════\n");
+}
+
 // === Main ===
 
 async function main() {
-  const totalBytes = parseSize(process.argv[2] ?? "25");
+  // Parse --log flag
+  const logIdx = process.argv.indexOf("--log");
+  const logPath = logIdx !== -1 && process.argv[logIdx + 1] ? process.argv[logIdx + 1] : null;
+
+  // Filter --log and its value from positional args
+  const positionalArgs = process.argv.slice(2).filter((_, i) => {
+    const absI = i + 2;
+    return absI !== logIdx && absI !== logIdx + 1;
+  });
+
+  const totalBytes = parseSize(positionalArgs[0] ?? "25");
   const chunkSize = config.defaultChunkSize;
   const chunkCount = Math.ceil(totalBytes / chunkSize);
 
@@ -147,7 +242,12 @@ async function main() {
     process.exit(1);
   }
 
-  const concurrency = parseInt(process.argv[3] ?? String(webhooks.length), 10);
+  const concurrency = parseInt(positionalArgs[1] ?? String(webhooks.length), 10);
+
+  // Run hardware diagnostics
+  console.log("Running hardware diagnostics...\n");
+  const hwResults = runHardwareBenchmark();
+  printHardwareResults(hwResults);
 
   console.log("═══════════════════════════════════════════");
   console.log("  DiscorDrive Benchmark");
@@ -333,6 +433,56 @@ async function main() {
   }
 
   console.log("\n═══════════════════════════════════════════");
+
+  // Write JSON results to file if --log was specified
+  if (logPath) {
+    const { writeFileSync: writeLog } = await import("node:fs");
+    const { resolve } = await import("node:path");
+
+    const result = {
+      timestamp: new Date().toISOString(),
+      hardware: {
+        cpu: hwResults.cpu,
+        cores: hwResults.cores,
+        ramGB: hwResults.ramGB,
+        diskReadMBps: parseFloat(hwResults.diskReadMBps.toFixed(1)),
+        aesGcmMBps: parseFloat(hwResults.aesGcmMBps.toFixed(1)),
+        sha256MBps: parseFloat(hwResults.sha256MBps.toFixed(1)),
+        memAllocMBps: parseFloat(hwResults.memAllocMBps.toFixed(1)),
+      },
+      config: {
+        totalBytes,
+        chunkSize,
+        chunkCount,
+        webhooks: webhooks.length,
+        concurrency,
+      },
+      timings: timings.map((t) => ({
+        label: t.label,
+        durationMs: Math.round(t.durationMs),
+        bytes: t.bytes ?? null,
+        throughputMBps: t.bytes
+          ? parseFloat(((t.bytes / (1024 * 1024)) / (t.durationMs / 1000)).toFixed(2))
+          : null,
+      })),
+      perChunk: {
+        upload: validUploadTimes.length > 0 ? {
+          avgMs: Math.round(validUploadTimes.reduce((a, b) => a + b, 0) / validUploadTimes.length),
+          minMs: Math.round(Math.min(...validUploadTimes)),
+          maxMs: Math.round(Math.max(...validUploadTimes)),
+        } : null,
+        download: validDownloadTimes.length > 0 ? {
+          avgMs: Math.round(validDownloadTimes.reduce((a, b) => a + b, 0) / validDownloadTimes.length),
+          minMs: Math.round(Math.min(...validDownloadTimes)),
+          maxMs: Math.round(Math.max(...validDownloadTimes)),
+        } : null,
+      },
+    };
+
+    const fullPath = resolve(logPath);
+    writeLog(fullPath, JSON.stringify(result, null, 2) + "\n");
+    console.log(`\n  Results written to ${fullPath}`);
+  }
 }
 
 main().catch((err) => {

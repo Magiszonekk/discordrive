@@ -1,7 +1,20 @@
 // DiscorDrive v4 — Server-only configuration (reads process.env)
 // NEVER import this from browser/frontend code.
 
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AppMode } from "@ddv4/types";
+
+const __configDir = dirname(fileURLToPath(import.meta.url));
+
+/** Resolve a path relative to the project root (3 levels up from this file). */
+function resolveFromRoot(p: string): string {
+  if (!p) return "";
+  // Absolute paths stay as-is; relative paths resolve from project root
+  if (p.startsWith("/") || /^[a-zA-Z]:/.test(p)) return p;
+  // This file lives at packages/config/src/server.ts → root is ../../../
+  return resolve(__configDir, "../../..", p);
+}
 
 /**
  * Collect webhook URLs from env vars: WEBHOOK_1, WEBHOOK_2, ...
@@ -29,4 +42,12 @@ export const serverConfig = {
   apiUrl: process.env.API_URL ?? `http://localhost:${process.env.API_PORT ?? "3000"}`,
   frontendUrl: process.env.FRONTEND_URL ?? `http://localhost:${process.env.FRONTEND_PORT ?? "5173"}`,
   apiKey: process.env.API_KEY ?? "",
+  tlsKeyPath: resolveFromRoot(process.env.TLS_KEY_PATH ?? ""),
+  tlsCertPath: resolveFromRoot(process.env.TLS_CERT_PATH ?? ""),
+  uploadPorts: (process.env.UPLOAD_PORTS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(Number)
+    .filter((n) => !isNaN(n) && n > 0),
 };

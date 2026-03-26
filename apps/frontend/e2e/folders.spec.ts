@@ -125,7 +125,7 @@ test.describe("Folder Management", () => {
     await openFileContextMenu(page, "Table Rename");
     await page.getByRole("button", { name: "Rename" }).click();
 
-    const renameInput = page.locator("tr", { hasText: "Table Rename" }).locator("input");
+    const renameInput = page.locator("tr input");
     await renameInput.clear();
     await renameInput.fill("Table Renamed");
     await renameInput.press("Tab");

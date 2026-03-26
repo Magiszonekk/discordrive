@@ -33,6 +33,8 @@ export async function loginUser(page: Page, email: string, password: string) {
 }
 
 export async function logout(page: Page) {
+  await page.locator("aside").getByRole("link", { name: "Settings" }).click();
+  await page.waitForURL("/settings");
   await page.getByRole("button", { name: "Log out" }).first().click();
   await page.waitForURL("/login");
 }

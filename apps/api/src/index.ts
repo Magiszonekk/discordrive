@@ -1,8 +1,11 @@
-// DiscorDrive v4 — API Server (Node.js HTTP + GraphQL Yoga)
+// DiscorDrive v4 — API Server (Node.js HTTP/2 + GraphQL Yoga)
 
 import "./env.js"; // Must be first — loads .env before other modules initialize
 
 import { createServer } from "node:http";
+import { createSecureServer } from "node:http2";
+import { existsSync, readFileSync } from "node:fs";
+
 import { createYoga } from "graphql-yoga";
 import { schema, createContext } from "./schema.js";
 import { handleUpload } from "./handlers/upload.js";
@@ -142,23 +145,36 @@ function addCorsHeaders(response: Response): Response {
 
 const port = serverConfig.apiPort;
 
-const server = createServer(async (nodeReq, nodeRes) => {
+const debugUpload = process.env.DEBUG_UPLOAD === "1";
+
+// Use HTTP/2 if TLS certs are configured, otherwise fall back to HTTP/1.1
+const hasTls =
+  serverConfig.tlsKeyPath &&
+  serverConfig.tlsCertPath &&
+  existsSync(serverConfig.tlsKeyPath) &&
+  existsSync(serverConfig.tlsCertPath);
+
+const requestHandler = async (nodeReq: import("node:http").IncomingMessage, nodeRes: import("node:http").ServerResponse) => {
   // Convert Node.js request to Web Request
-  const protocol = "http";
-  const host = nodeReq.headers.host ?? `localhost:${port}`;
+  const protocol = hasTls ? "https" : "http";
+  // HTTP/2 uses :authority pseudo-header instead of Host
+  const host = (nodeReq.headers[":authority"] as string | undefined)
+    ?? nodeReq.headers.host
+    ?? `localhost:${port}`;
   const url = `${protocol}://${host}${nodeReq.url}`;
 
   const headers = new Headers();
   for (const [key, value] of Object.entries(nodeReq.headers)) {
-    if (value) {
-      if (Array.isArray(value)) {
-        for (const v of value) headers.append(key, v);
-      } else {
-        headers.set(key, value);
-      }
+    // Skip HTTP/2 pseudo-headers (:method, :path, :scheme, :authority)
+    if (key.startsWith(":") || !value) continue;
+    if (Array.isArray(value)) {
+      for (const v of value) headers.append(key, v);
+    } else {
+      headers.set(key, value);
     }
   }
 
+  const bodyReadStart = performance.now();
   const bodyBuffer =
     nodeReq.method !== "GET" && nodeReq.method !== "HEAD"
       ? await new Promise<Uint8Array>((resolve) => {
@@ -170,6 +186,12 @@ const server = createServer(async (nodeReq, nodeRes) => {
           });
         })
       : undefined;
+
+  if (debugUpload && bodyBuffer && bodyBuffer.byteLength > 1024 && nodeReq.url?.includes("/api/upload/")) {
+    console.log(
+      `[HTTP] ${nodeReq.method} ${nodeReq.url}: bodyRead=${(performance.now() - bodyReadStart).toFixed(0)}ms bodySize=${bodyBuffer.byteLength}`,
+    );
+  }
 
   const request = new Request(url, {
     method: nodeReq.method,
@@ -204,10 +226,50 @@ const server = createServer(async (nodeReq, nodeRes) => {
     nodeRes.writeHead(500);
     nodeRes.end(JSON.stringify({ error: "Internal server error" }));
   }
-});
+};
 
+const tlsOptions = hasTls
+  ? {
+      key: readFileSync(serverConfig.tlsKeyPath),
+      cert: readFileSync(serverConfig.tlsCertPath),
+      allowHTTP1: true,
+      settings: {
+        initialWindowSize: 16 * 1024 * 1024, // 16MB per stream (default 64KB)
+        maxFrameSize: 32 * 1024,              // 32KB frames (default 16KB)
+      },
+      maxSessionMemory: 256,                  // 256MB session memory (default 10MB)
+    }
+  : null;
+
+function setupSessionWindow(s: import("node:http").Server | import("node:http2").Http2SecureServer) {
+  if (hasTls) {
+    s.on("session", (session: import("node:http2").ServerHttp2Session) => {
+      session.setLocalWindowSize(128 * 1024 * 1024); // 128MB session window
+    });
+  }
+}
+
+const server = tlsOptions
+  ? createSecureServer(tlsOptions, requestHandler as unknown as Parameters<typeof createSecureServer>[1])
+  : createServer(requestHandler);
+setupSessionWindow(server);
+
+const scheme = hasTls ? "https" : "http";
 server.listen(port, () => {
-  console.log(`DiscorDrive API running on http://localhost:${port}`);
-  console.log(`GraphQL endpoint: http://localhost:${port}/graphql`);
+  console.log(`DiscorDrive API running on ${scheme}://localhost:${port}${hasTls ? " (HTTP/2)" : " (HTTP/1.1)"}`);
+  console.log(`GraphQL endpoint: ${scheme}://localhost:${port}/graphql`);
   console.log(`Mode: ${serverConfig.appMode}${serverConfig.appMode === "backend-only" ? (serverConfig.apiKey ? " (API key required)" : " (open access — no API key set)") : ""}`);
 });
+
+// Additional upload ports — each port creates a separate HTTP/2 connection from the browser,
+// bypassing the single-TCP-connection bottleneck that limits throughput to ~35 MB/s.
+for (const uploadPort of serverConfig.uploadPorts) {
+  if (uploadPort === port) continue; // skip if same as main port
+  const uploadServer = tlsOptions
+    ? createSecureServer(tlsOptions, requestHandler as unknown as Parameters<typeof createSecureServer>[1])
+    : createServer(requestHandler);
+  setupSessionWindow(uploadServer);
+  uploadServer.listen(uploadPort, () => {
+    console.log(`Upload port: ${scheme}://localhost:${uploadPort}`);
+  });
+}

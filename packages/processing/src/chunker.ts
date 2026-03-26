@@ -10,7 +10,8 @@ export async function* chunkFileStream(
     file instanceof ReadableStream ? file : (file as File).stream();
   const reader = stream.getReader();
 
-  let buffer = new Uint8Array(0);
+  let buffer = new Uint8Array(chunkSize);
+  let writeOffset = 0;
   let index = 0;
 
   try {
@@ -19,23 +20,26 @@ export async function* chunkFileStream(
 
       if (done) break;
 
-      // Append new data to buffer
-      const newBuffer = new Uint8Array(buffer.length + value.length);
-      newBuffer.set(buffer, 0);
-      newBuffer.set(value, buffer.length);
-      buffer = newBuffer;
+      let readOffset = 0;
+      while (readOffset < value.length) {
+        const space = chunkSize - writeOffset;
+        const toCopy = Math.min(space, value.length - readOffset);
+        buffer.set(value.subarray(readOffset, readOffset + toCopy), writeOffset);
+        writeOffset += toCopy;
+        readOffset += toCopy;
 
-      // Yield complete chunks
-      while (buffer.length >= chunkSize) {
-        yield { index, data: buffer.subarray(0, chunkSize) };
-        buffer = buffer.subarray(chunkSize);
-        index++;
+        if (writeOffset === chunkSize) {
+          yield { index, data: buffer };
+          buffer = new Uint8Array(chunkSize);
+          writeOffset = 0;
+          index++;
+        }
       }
     }
 
     // Yield remaining data as the last chunk
-    if (buffer.length > 0) {
-      yield { index, data: buffer };
+    if (writeOffset > 0) {
+      yield { index, data: buffer.subarray(0, writeOffset) };
     }
   } finally {
     reader.releaseLock();

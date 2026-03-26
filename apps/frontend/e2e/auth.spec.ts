@@ -8,7 +8,7 @@ test.describe("Authentication", () => {
 
     await expect(page).toHaveURL("/");
     await expect(page.getByText("DiscorDrive")).toBeVisible();
-    await expect(page.getByText(user.email)).toBeVisible();
+    await expect(page.getByText("Upload Files")).toBeVisible();
   });
 
   test("should show error for password mismatch on register", async ({ page }) => {
@@ -39,7 +39,7 @@ test.describe("Authentication", () => {
     await loginUser(page, user.email, user.password);
 
     await expect(page).toHaveURL("/");
-    await expect(page.getByText(user.email)).toBeVisible();
+    await expect(page.getByText("Upload Files")).toBeVisible();
   });
 
   test("should show error for invalid credentials", async ({ page }) => {

@@ -36,8 +36,7 @@ test.describe("File Actions", () => {
     await page.getByRole("button", { name: "Rename" }).click();
 
     // Inline input appears in the file row
-    const fileRow = page.locator("tr", { hasText: "test-actions.txt" });
-    const renameInput = fileRow.locator("input");
+    const renameInput = page.locator("tr input");
     await expect(renameInput).toBeVisible();
     await expect(renameInput).toHaveValue("test-actions.txt");
 
@@ -64,8 +63,7 @@ test.describe("File Actions", () => {
     await openFileContextMenu(page, "test-actions.txt");
     await page.getByRole("button", { name: "Rename" }).click();
 
-    const fileRow = page.locator("tr", { hasText: "test-actions.txt" });
-    const renameInput = fileRow.locator("input");
+    const renameInput = page.locator("tr input");
     await expect(renameInput).toBeVisible();
 
     await renameInput.fill("should-not-save.txt");
@@ -89,7 +87,7 @@ test.describe("File Actions", () => {
 
     // ConfirmDialog appears
     await expect(page.getByText("Delete file")).toBeVisible();
-    await expect(page.getByText("test-actions.txt")).toBeVisible();
+    await expect(page.locator("p").filter({ hasText: "test-actions.txt" })).toBeVisible();
 
     // Cancel — file stays
     await page.getByRole("button", { name: "Cancel" }).click();
@@ -110,7 +108,7 @@ test.describe("File Actions", () => {
 
     // ConfirmDialog appears with file-specific title and message
     await expect(page.getByText("Delete file")).toBeVisible();
-    await expect(page.getByText(/test-actions\.txt/)).toBeVisible();
+    await expect(page.locator("p").filter({ hasText: /test-actions\.txt/ })).toBeVisible();
 
     // Confirm deletion
     await page.getByRole("button", { name: "Delete" }).click();

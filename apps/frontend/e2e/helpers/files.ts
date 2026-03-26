@@ -7,11 +7,12 @@ export async function uploadTestFile(
   page: Page,
   filePath: string,
   fileName: string,
+  timeout = 60_000,
 ): Promise<void> {
   const fileInput = page.locator('input[type="file"]');
   await fileInput.setInputFiles(filePath);
   await expect(page.locator("tr", { hasText: fileName })).toBeVisible({
-    timeout: 60_000,
+    timeout,
   });
 }
 

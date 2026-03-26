@@ -20,7 +20,7 @@ test.describe("Settings", () => {
 
     await expect(page.getByText("Storage Usage")).toBeVisible();
     await expect(page.getByText(/used/)).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(/\d+ files/)).toBeVisible();
+    await expect(page.locator("main").getByText(/\d+ files/)).toBeVisible();
   });
 
   test("should logout from settings page", async ({ page }) => {

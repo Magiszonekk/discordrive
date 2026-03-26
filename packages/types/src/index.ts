@@ -10,6 +10,7 @@ export enum UploadStatus {
   FINALIZING = "FINALIZING",
   DONE = "DONE",
   FAILED = "FAILED",
+  CANCELLED = "CANCELLED",
 }
 
 export enum FileStatus {
@@ -92,6 +93,7 @@ export interface UploadProgress {
   bytesUploaded: number;
   bytesTotal: number;
   status: UploadStatus;
+  speedBps?: number; // bytes per second, updated during upload
 }
 
 export interface DownloadProgress {

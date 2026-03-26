@@ -4,7 +4,12 @@
       "Bash(find /d/pulpit/ddv4 -type f -name *)",
       "Bash(npm install:*)",
       "Bash(npx prisma:*)",
-      "Bash(find /c/Users/Lenovo/Desktop/ddv4/apps/frontend/src -type f -name *VideoPlayer* -o -name *video* ! -path */node_modules/*)"
+      "Bash(find /c/Users/Lenovo/Desktop/ddv4/apps/frontend/src -type f -name *VideoPlayer* -o -name *video* ! -path */node_modules/*)",
+      "Bash(npx tsc:*)",
+      "Bash(grep -r \"157\\\\|159\\\\|FAILED\\\\|chunks\" /c/Users/Lenovo/Desktop/ddv4/apps/frontend/src --include=*.ts --include=*.tsx)",
+      "Bash(find /c/Users/Lenovo/Desktop/ddv4 -name nginx.conf -o -name .nginx -o -name docker-compose* -o -name Dockerfile*)",
+      "Bash(grep -r \"http2\\\\|HTTP/2\\\\|keepalive\\\\|Connection.*keep-alive\" /c/Users/Lenovo/Desktop/ddv4 --include=*.ts --include=*.js --include=*.json --include=*.conf)",
+      "Bash(openssl req:*)"
     ]
   }
 }
