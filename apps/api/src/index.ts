@@ -12,6 +12,8 @@ import {
   handleShareChunk,
 } from "./handlers/share.js";
 import { handleThumbnail } from "./handlers/thumbnail.js";
+import { handleHealthCheck } from "./handlers/healthcheck.js";
+import { handleStats } from "./handlers/stats.js";
 import { checkRateLimit } from "./middleware/rate-limit.js";
 import { serverConfig } from "@ddv4/config/server";
 
@@ -123,6 +125,16 @@ async function handleRequest(req: Request): Promise<Response> {
   // Thumbnail
   if (method === "GET" && (params = matchRoute(pathname, "/api/thumbnail/:fileId"))) {
     return handleThumbnail(req, params as { fileId: string });
+  }
+
+  // Admin — health check
+  if (method === "POST" && pathname === "/api/admin/healthcheck") {
+    return handleHealthCheck(req);
+  }
+
+  // Admin — stats
+  if (method === "GET" && pathname === "/api/admin/stats") {
+    return handleStats(req);
   }
 
   return Response.json({ error: "Not found" }, { status: 404 });

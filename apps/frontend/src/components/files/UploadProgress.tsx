@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { useUploadStore } from "../../stores/upload.js";
 
@@ -10,6 +11,23 @@ function formatSpeed(bps: number): string {
 export function UploadProgress() {
   const uploads = useUploadStore((s) => s.uploads);
   const cancelUpload = useUploadStore((s) => s.cancelUpload);
+  const removeUpload = useUploadStore((s) => s.removeUpload);
+  const scheduledRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    for (const upload of uploads.values()) {
+      if (
+        (upload.status === "DONE" || upload.status === "FAILED") &&
+        !scheduledRef.current.has(upload.fileId)
+      ) {
+        scheduledRef.current.add(upload.fileId);
+        setTimeout(() => {
+          removeUpload(upload.fileId);
+          scheduledRef.current.delete(upload.fileId);
+        }, 3000);
+      }
+    }
+  }, [uploads, removeUpload]);
 
   if (uploads.size === 0) return null;
 

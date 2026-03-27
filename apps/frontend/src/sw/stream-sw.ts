@@ -24,11 +24,11 @@ const uploadEngine = new UploadEngine();
 // === Browser-specific adapters ===
 
 class SwChunkSource implements ChunkSource {
-  constructor(private token: string) {}
+  constructor(private token: string, private apiBaseUrl = "") {}
 
   async fetch(fileId: string, chunkIndex: number): Promise<ArrayBuffer> {
     const res = await globalThis.fetch(
-      `/api/download/${fileId}/chunk/${chunkIndex}`,
+      `${this.apiBaseUrl}/api/download/${fileId}/chunk/${chunkIndex}`,
       { headers: { Authorization: `Bearer ${this.token}` } },
     );
     if (!res.ok) {
@@ -39,7 +39,7 @@ class SwChunkSource implements ChunkSource {
 }
 
 class SwChunkSink implements ChunkSink {
-  constructor(private token: string, private signal?: AbortSignal) {}
+  constructor(private token: string, private signal?: AbortSignal, private apiBaseUrl = "") {}
 
   async upload(
     fileId: string,
@@ -47,7 +47,7 @@ class SwChunkSink implements ChunkSink {
     encrypted: ArrayBuffer,
   ): Promise<void> {
     const res = await globalThis.fetch(
-      `/api/upload/${fileId}/chunk/${chunkIndex}`,
+      `${this.apiBaseUrl}/api/upload/${fileId}/chunk/${chunkIndex}`,
       {
         method: "POST",
         headers: {
@@ -101,7 +101,7 @@ self.addEventListener("message", (event: ExtendableMessageEvent) => {
           chunksAhead: msg.chunksAhead,
           chunksBehind: msg.chunksBehind,
         });
-        sources.set(msg.fileId, new SwChunkSource(msg.token));
+        sources.set(msg.fileId, new SwChunkSource(msg.token, msg.apiBaseUrl ?? ""));
       });
   }
 
@@ -123,7 +123,7 @@ self.addEventListener("message", (event: ExtendableMessageEvent) => {
         false,
         ["encrypt"],
       );
-      const sink = new SwChunkSink(msg.token, controller.signal);
+      const sink = new SwChunkSink(msg.token, controller.signal, msg.apiBaseUrl ?? "");
 
       try {
         await uploadEngine.uploadStream(

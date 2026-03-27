@@ -2,6 +2,8 @@
 
 import { useAuthStore } from "../stores/auth.js";
 
+const API_BASE = import.meta.env.VITE_API_URL ?? "";
+
 function getAuthHeaders(): Record<string, string> {
   const token = useAuthStore.getState().token;
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -12,7 +14,7 @@ export async function uploadChunkToApi(
   chunkIndex: number,
   data: ArrayBuffer,
 ): Promise<{ messageId: string; channelId: string }> {
-  const response = await fetch(`/api/upload/${fileId}/chunk/${chunkIndex}`, {
+  const response = await fetch(`${API_BASE}/api/upload/${fileId}/chunk/${chunkIndex}`, {
     method: "POST",
     headers: {
       ...getAuthHeaders(),
@@ -33,7 +35,7 @@ export async function downloadChunkFromApi(
   fileId: string,
   chunkIndex: number,
 ): Promise<ArrayBuffer> {
-  const response = await fetch(`/api/download/${fileId}/chunk/${chunkIndex}`, {
+  const response = await fetch(`${API_BASE}/api/download/${fileId}/chunk/${chunkIndex}`, {
     headers: getAuthHeaders(),
   });
 
@@ -48,7 +50,7 @@ export async function downloadSharedChunk(
   token: string,
   chunkIndex: number,
 ): Promise<ArrayBuffer> {
-  const response = await fetch(`/api/share/${token}/chunk/${chunkIndex}`);
+  const response = await fetch(`${API_BASE}/api/share/${token}/chunk/${chunkIndex}`);
 
   if (!response.ok) {
     throw new Error(`Download failed: ${response.status}`);
@@ -58,7 +60,7 @@ export async function downloadSharedChunk(
 }
 
 export async function getShareInfo(token: string) {
-  const response = await fetch(`/api/share/${token}/info`);
+  const response = await fetch(`${API_BASE}/api/share/${token}/info`);
   if (!response.ok) return null;
   return response.json();
 }
@@ -67,7 +69,7 @@ export async function verifySharePassword(
   token: string,
   password: string,
 ): Promise<boolean> {
-  const response = await fetch(`/api/share/${token}/verify-password`, {
+  const response = await fetch(`${API_BASE}/api/share/${token}/verify-password`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ password }),

@@ -7,6 +7,7 @@ import * as authResolvers from "./resolvers/auth.js";
 import * as fileResolvers from "./resolvers/files.js";
 import * as folderResolvers from "./resolvers/folders.js";
 import * as sharingResolvers from "./resolvers/sharing.js";
+import * as healthResolvers from "./resolvers/health.js";
 
 interface Context {
   auth: AuthPayload | null;
@@ -92,6 +93,38 @@ export const schema = createSchema<Context>({
       fileCount: Int!
     }
 
+    type ChunkHealthInfo {
+      id: ID!
+      index: Int!
+      messageId: String!
+      webhookId: String!
+      size: Int!
+      encryptedHash: String
+      healthStatus: String
+      healthCheckedAt: DateTime
+    }
+
+    type FileHealthInfo {
+      fileId: ID!
+      fileName: String!
+      chunkCount: Int!
+      chunks: [ChunkHealthInfo!]!
+    }
+
+    type HealthCheckSummary {
+      checked: Int!
+      healthy: Int!
+      missing: Int!
+      modified: Int!
+      skipped: Int!
+      durationMs: Int!
+    }
+
+    input ChunkHealthUpdateInput {
+      chunkId: ID!
+      status: String!
+    }
+
     type Query {
       me: User
       files(folderId: ID): [File!]!
@@ -99,6 +132,7 @@ export const schema = createSchema<Context>({
       file(fileId: ID!): File
       shareLinks(fileId: ID!): [ShareLink!]!
       storageUsage: StorageUsage!
+      filesForHealthCheck(samplePercent: Float): [FileHealthInfo!]!
     }
 
     input ReWrappedFEK {
@@ -165,6 +199,9 @@ export const schema = createSchema<Context>({
         maxDownloads: Int
         expiresAt: String
       ): Boolean!
+
+      updateChunkHealthBatch(updates: [ChunkHealthUpdateInput!]!): Int!
+      runHealthCheck(mode: String!, samplePercent: Float, fileId: ID): HealthCheckSummary!
     }
   `,
 
@@ -223,6 +260,15 @@ export const schema = createSchema<Context>({
       storageUsage: async (_parent: unknown, _args: unknown, ctx: Context) => {
         const auth = requireAuth(ctx);
         return fileResolvers.getStorageUsage(auth.userId);
+      },
+
+      filesForHealthCheck: async (
+        _parent: unknown,
+        args: { samplePercent?: number },
+        ctx: Context,
+      ) => {
+        const auth = requireAuth(ctx);
+        return healthResolvers.getFilesForHealthCheck(auth.userId, args.samplePercent);
       },
     },
 
@@ -385,6 +431,24 @@ export const schema = createSchema<Context>({
       ) => {
         const auth = requireAuth(ctx);
         return sharingResolvers.updateShareLink(auth.userId, args.token, args);
+      },
+
+      updateChunkHealthBatch: async (
+        _parent: unknown,
+        args: { updates: Array<{ chunkId: string; status: string }> },
+        ctx: Context,
+      ) => {
+        requireAuth(ctx);
+        return healthResolvers.updateChunkHealthBatch(args.updates);
+      },
+
+      runHealthCheck: async (
+        _parent: unknown,
+        args: { mode: string; samplePercent?: number; fileId?: string },
+        ctx: Context,
+      ) => {
+        const auth = requireAuth(ctx);
+        return healthResolvers.runHealthCheck(auth.userId, args.mode, args.samplePercent, args.fileId);
       },
     },
   },

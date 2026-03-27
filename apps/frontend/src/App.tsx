@@ -5,6 +5,7 @@ import { Register } from "./pages/Register.js";
 import { Dashboard } from "./pages/Dashboard.js";
 import { SharedFile } from "./pages/SharedFile.js";
 import { Settings } from "./pages/Settings.js";
+import { HealthCheck } from "./pages/HealthCheck.js";
 import { Unlock } from "./pages/Unlock.js";
 import { MainLayout } from "./components/layout/MainLayout.js";
 
@@ -39,6 +40,7 @@ export function App() {
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/folder/:folderId" element={<Dashboard />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/health" element={<HealthCheck />} />
               </Routes>
             </MainLayout>
           </ProtectedRoute>

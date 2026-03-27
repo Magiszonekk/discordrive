@@ -62,6 +62,7 @@ export async function registerStream(file: StreamFileInfo): Promise<void> {
     mimeType: file.mimeType,
     chunksAhead,
     chunksBehind,
+    apiBaseUrl: env.VITE_API_URL ?? "",
   });
 }
 

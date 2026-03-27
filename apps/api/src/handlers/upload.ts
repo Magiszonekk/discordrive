@@ -58,6 +58,10 @@ export async function handleUpload(
       return Response.json({ error: "Empty body" }, { status: 400 });
     }
 
+    // Hash encrypted chunk for integrity checks
+    const hashBuffer = await crypto.subtle.digest("SHA-256", body);
+    const encryptedHash = Buffer.from(hashBuffer).toString("hex");
+
     // Select webhook and upload to Discord
     const whs = getWebhooks();
     const webhookIds = whs.map((w) => w.id);
@@ -80,6 +84,7 @@ export async function handleUpload(
         channelId: result.channelId,
         webhookId: webhook.id,
         size: body.byteLength,
+        encryptedHash,
       },
     });
 

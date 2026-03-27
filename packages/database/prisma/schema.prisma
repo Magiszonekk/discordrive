@@ -53,17 +53,21 @@ enum FileStatus {
 }
 
 model Chunk {
-  id        String @id @default(cuid())
-  fileId    String
-  index     Int
-  messageId String // Discord message ID
-  channelId String // Discord channel ID
-  webhookId String // webhook used for upload
-  size      Int    // size of encrypted chunk (with IV)
+  id              String    @id @default(cuid())
+  fileId          String
+  index           Int
+  messageId       String    // Discord message ID
+  channelId       String    // Discord channel ID
+  webhookId       String    // webhook used for upload
+  size            Int       // size of encrypted chunk (with IV)
+  encryptedHash   String?   // SHA-256 hex of encrypted bytes (set at upload)
+  healthStatus    String?   // HEALTHY | MISSING | MODIFIED, null = unchecked
+  healthCheckedAt DateTime? // timestamp of last health check
 
   file File @relation(fields: [fileId], references: [id], onDelete: Cascade)
 
   @@unique([fileId, index])
+  @@index([healthStatus])
 }
 
 model Folder {

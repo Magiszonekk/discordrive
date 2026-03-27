@@ -80,6 +80,7 @@ export async function uploadViaSW(
         totalChunks,
         concurrency: config.defaultUploadConcurrency,
         maxRetries: 5,
+        apiBaseUrl: import.meta.env.VITE_API_URL ?? "",
       },
       [fekRaw as ArrayBuffer],
     );

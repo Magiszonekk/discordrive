@@ -1,5 +1,6 @@
 import { Link, useLocation } from "react-router";
 import { useAuthStore } from "../../stores/auth.js";
+import { Files, Settings, ShieldCheck } from "lucide-react";
 
 export function MainLayout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
@@ -17,22 +18,35 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
         <nav className="flex-1 p-3 space-y-1">
           <Link
             to="/"
-            className={`block px-3 py-2 rounded-lg text-sm ${
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
               location.pathname === "/" || location.pathname.startsWith("/folder")
                 ? "bg-zinc-800 text-white"
                 : "text-zinc-400 hover:text-white hover:bg-zinc-800"
             }`}
           >
+            <Files size={15} />
             Files
           </Link>
           <Link
+            to="/health"
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
+              location.pathname === "/health"
+                ? "bg-zinc-800 text-white"
+                : "text-zinc-400 hover:text-white hover:bg-zinc-800"
+            }`}
+          >
+            <ShieldCheck size={15} />
+            Healthcheck
+          </Link>
+          <Link
             to="/settings"
-            className={`block px-3 py-2 rounded-lg text-sm ${
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${
               location.pathname === "/settings"
                 ? "bg-zinc-800 text-white"
                 : "text-zinc-400 hover:text-white hover:bg-zinc-800"
             }`}
           >
+            <Settings size={15} />
             Settings
           </Link>
         </nav>

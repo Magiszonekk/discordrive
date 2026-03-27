@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { useParams } from "react-router";
+import { UploadCloud } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { gqlRequest } from "../lib/graphql.js";
 import { uploadFile } from "../lib/upload.js";
@@ -40,6 +41,9 @@ export function Dashboard() {
     encryptedFEK: string;
     fekIv: string;
   } | null>(null);
+
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounterRef = useRef(0);
 
   const [playingFile, setPlayingFile] = useState<{
     id: string;
@@ -146,9 +150,23 @@ export function Dashboard() {
     [],
   );
 
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounterRef.current += 1;
+    if (dragCounterRef.current === 1) setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current === 0) setIsDragging(false);
+  }, []);
+
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
+      dragCounterRef.current = 0;
+      setIsDragging(false);
       if (e.dataTransfer.files.length > 0) {
         handleUpload(e.dataTransfer.files);
       }
@@ -160,6 +178,8 @@ export function Dashboard() {
     <div
       className="flex-1 p-6"
       onDragOver={(e) => e.preventDefault()}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
       <div className="flex items-center justify-between mb-6">
@@ -179,6 +199,17 @@ export function Dashboard() {
             Upload Files
           </button>
         </div>
+      </div>
+
+      <div
+        className={`mb-4 border-2 border-dashed rounded-xl p-5 text-center text-sm transition-colors ${
+          isDragging
+            ? "border-blue-500 bg-blue-500/10 text-blue-400"
+            : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
+        }`}
+      >
+        <UploadCloud size={18} className="mx-auto mb-1.5 opacity-60" />
+        Drop files here to upload
       </div>
 
       {uploads.size > 0 && <UploadProgress />}

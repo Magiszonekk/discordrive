@@ -3,8 +3,9 @@
 import { GraphQLClient } from "graphql-request";
 import { useAuthStore } from "../stores/auth.js";
 
-const endpoint =
-  typeof window !== "undefined"
+const endpoint = import.meta.env.VITE_API_URL
+  ? `${import.meta.env.VITE_API_URL}/graphql`
+  : typeof window !== "undefined"
     ? `${window.location.origin}/graphql`
     : "/graphql";
 

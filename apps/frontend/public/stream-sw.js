@@ -348,12 +348,13 @@
   var downloadEngine = new DownloadEngine();
   var uploadEngine = new UploadEngine();
   var SwChunkSource = class {
-    constructor(token) {
+    constructor(token, apiBaseUrl = "") {
       this.token = token;
+      this.apiBaseUrl = apiBaseUrl;
     }
     async fetch(fileId, chunkIndex) {
       const res = await globalThis.fetch(
-        `/api/download/${fileId}/chunk/${chunkIndex}`,
+        `${this.apiBaseUrl}/api/download/${fileId}/chunk/${chunkIndex}`,
         { headers: { Authorization: `Bearer ${this.token}` } }
       );
       if (!res.ok) {
@@ -363,13 +364,14 @@
     }
   };
   var SwChunkSink = class {
-    constructor(token, signal) {
+    constructor(token, signal, apiBaseUrl = "") {
       this.token = token;
       this.signal = signal;
+      this.apiBaseUrl = apiBaseUrl;
     }
     async upload(fileId, chunkIndex, encrypted) {
       const res = await globalThis.fetch(
-        `/api/upload/${fileId}/chunk/${chunkIndex}`,
+        `${this.apiBaseUrl}/api/upload/${fileId}/chunk/${chunkIndex}`,
         {
           method: "POST",
           headers: {
@@ -409,7 +411,7 @@
           chunksAhead: msg.chunksAhead,
           chunksBehind: msg.chunksBehind
         });
-        sources.set(msg.fileId, new SwChunkSource(msg.token));
+        sources.set(msg.fileId, new SwChunkSource(msg.token, msg.apiBaseUrl ?? ""));
       });
     }
     if (msg.type === "UNREGISTER_STREAM") {
@@ -427,7 +429,7 @@
           false,
           ["encrypt"]
         );
-        const sink = new SwChunkSink(msg.token, controller.signal);
+        const sink = new SwChunkSink(msg.token, controller.signal, msg.apiBaseUrl ?? "");
         try {
           await uploadEngine.uploadStream(
             msg.fileId,
