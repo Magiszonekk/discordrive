@@ -10,7 +10,11 @@
       "Bash(find /c/Users/Lenovo/Desktop/ddv4 -maxdepth 3 -type f -name *.conf -o -name nginx* -o -name middleware*)",
       "Bash(npx tsc:*)",
       "Bash(python3 -c \":*)",
-      "Bash(node -e \":*)"
+      "Bash(node -e \":*)",
+      "Bash(DATABASE_URL=\"postgresql://ddv4:ddv4@localhost:5432/ddv4\" npx prisma db push)",
+      "Bash(DATABASE_URL=\"postgresql://ddv4:ddv4@localhost:5432/ddv4\" npx prisma db push --accept-data-loss)",
+      "Bash(find /c/Users/Lenovo/Desktop/ddv4 -name .env* -o -name *.env)",
+      "Bash(DATABASE_URL=\"postgresql://ddv4:ddv4@localhost:5432/ddv4\" npx prisma generate)"
     ]
   }
 }

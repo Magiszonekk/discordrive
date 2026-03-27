@@ -29,6 +29,7 @@ export const schema = createSchema<Context>({
     type User {
       id: ID!
       email: String!
+      username: String
       kekSalt: String!
       wrapIv: String!
       encryptedMasterKey: String!
@@ -109,13 +110,14 @@ export const schema = createSchema<Context>({
     type Mutation {
       register(
         email: String!
+        username: String!
         password: String!
         kekSalt: String!
         wrapIv: String!
         encryptedMasterKey: String!
       ): AuthResponse!
 
-      login(email: String!, password: String!): AuthResponse!
+      login(emailOrUsername: String!, password: String!): AuthResponse!
 
       changePassword(
         currentPassword: String!
@@ -229,6 +231,7 @@ export const schema = createSchema<Context>({
         _parent: unknown,
         args: {
           email: string;
+          username: string;
           password: string;
           kekSalt: string;
           wrapIv: string;
@@ -239,9 +242,9 @@ export const schema = createSchema<Context>({
         return authResolvers.register(args);
       },
 
-      login: async (_parent: unknown, args: { email: string; password: string }) => {
+      login: async (_parent: unknown, args: { emailOrUsername: string; password: string }) => {
         requireFullMode();
-        return authResolvers.login(args.email, args.password);
+        return authResolvers.login(args.emailOrUsername, args.password);
       },
 
       changePassword: async (

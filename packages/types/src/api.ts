@@ -2,6 +2,7 @@
 
 export interface RegisterRequest {
   email: string;
+  username: string;
   password: string;
   kekSalt: string;
   wrapIv: string;
@@ -13,6 +14,7 @@ export interface LoginResponse {
   user: {
     id: string;
     email: string;
+    username: string | null;
     kekSalt: string;
     wrapIv: string;
     encryptedMasterKey: string;

@@ -10,6 +10,7 @@ datasource db {
 model User {
   id                 String      @id @default(cuid())
   email              String      @unique
+  username           String?     @unique
   passwordHash       String
   kekSalt            String      // base64 — salt for Argon2id
   wrapIv             String      // base64 — IV used to wrap Master Key

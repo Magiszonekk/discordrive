@@ -6,9 +6,14 @@ import { signToken } from "../middleware/auth.js";
 import type { RegisterRequest, LoginResponse } from "@ddv4/types/api";
 
 export async function register(input: RegisterRequest): Promise<LoginResponse> {
-  const existing = await db.user.findUnique({ where: { email: input.email } });
-  if (existing) {
+  const existingEmail = await db.user.findUnique({ where: { email: input.email } });
+  if (existingEmail) {
     throw new Error("Email already registered");
+  }
+
+  const existingUsername = await db.user.findUnique({ where: { username: input.username } });
+  if (existingUsername) {
+    throw new Error("Username already taken");
   }
 
   const passwordHash = await argon2.hash(input.password, { type: argon2.argon2id });
@@ -16,6 +21,7 @@ export async function register(input: RegisterRequest): Promise<LoginResponse> {
   const user = await db.user.create({
     data: {
       email: input.email,
+      username: input.username,
       passwordHash,
       kekSalt: input.kekSalt,
       wrapIv: input.wrapIv,
@@ -30,6 +36,7 @@ export async function register(input: RegisterRequest): Promise<LoginResponse> {
     user: {
       id: user.id,
       email: user.email,
+      username: user.username,
       kekSalt: user.kekSalt,
       wrapIv: user.wrapIv,
       encryptedMasterKey: user.encryptedMasterKey,
@@ -38,17 +45,19 @@ export async function register(input: RegisterRequest): Promise<LoginResponse> {
 }
 
 export async function login(
-  email: string,
+  emailOrUsername: string,
   password: string,
 ): Promise<LoginResponse> {
-  const user = await db.user.findUnique({ where: { email } });
+  const user = await db.user.findFirst({
+    where: { OR: [{ email: emailOrUsername }, { username: emailOrUsername }] },
+  });
   if (!user) {
-    throw new Error("Invalid email or password");
+    throw new Error("Invalid email/username or password");
   }
 
   const valid = await argon2.verify(user.passwordHash, password);
   if (!valid) {
-    throw new Error("Invalid email or password");
+    throw new Error("Invalid email/username or password");
   }
 
   const token = signToken({ userId: user.id, email: user.email });
@@ -58,6 +67,7 @@ export async function login(
     user: {
       id: user.id,
       email: user.email,
+      username: user.username,
       kekSalt: user.kekSalt,
       wrapIv: user.wrapIv,
       encryptedMasterKey: user.encryptedMasterKey,

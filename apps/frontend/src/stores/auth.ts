@@ -10,6 +10,7 @@ interface AuthState {
   user: {
     id: string;
     email: string;
+    username: string | null;
     kekSalt: string;
     wrapIv: string;
     encryptedMasterKey: string;

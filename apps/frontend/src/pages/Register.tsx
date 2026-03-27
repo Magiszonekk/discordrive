@@ -7,21 +7,22 @@ import type { LoginResponse } from "@ddv4/types/api";
 
 const REGISTER_MUTATION = `
   mutation Register(
-    $email: String!, $password: String!,
+    $email: String!, $username: String!, $password: String!,
     $kekSalt: String!, $wrapIv: String!, $encryptedMasterKey: String!
   ) {
     register(
-      email: $email, password: $password,
+      email: $email, username: $username, password: $password,
       kekSalt: $kekSalt, wrapIv: $wrapIv, encryptedMasterKey: $encryptedMasterKey
     ) {
       token
-      user { id email kekSalt wrapIv encryptedMasterKey }
+      user { id email username kekSalt wrapIv encryptedMasterKey }
     }
   }
 `;
 
 export function Register() {
   const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
@@ -52,6 +53,7 @@ export function Register() {
         REGISTER_MUTATION,
         {
           email,
+          username,
           password,
           kekSalt: crypto.kekSalt,
           wrapIv: crypto.wrapIv,
@@ -80,6 +82,17 @@ export function Register() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
+              className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm text-zinc-400 mb-1">Username</label>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+              autoComplete="username"
               className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-blue-500"
             />
           </div>

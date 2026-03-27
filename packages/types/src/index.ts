@@ -25,6 +25,7 @@ export type AppMode = "full" | "backend-only";
 export interface User {
   id: string;
   email: string;
+  username: string | null;
   passwordHash: string;
   kekSalt: string;
   wrapIv: string;
