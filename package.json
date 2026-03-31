@@ -2,12 +2,12 @@
   "name": "discordrive",
   "private": true,
   "scripts": {
-    "dev:api": "npm run dev --workspace=@discordrive/api",
-    "dev:frontend": "npm run dev --workspace=@discordrive/frontend",
-    "db:generate": "npm run generate --workspace=@discordrive/database",
-    "db:push": "npm run db:push --workspace=@discordrive/database",
+    "dev:api": "pnpm --filter @discordrive/api dev",
+    "dev:frontend": "pnpm --filter @discordrive/frontend dev",
+    "db:generate": "pnpm --filter @discordrive/database generate",
+    "db:push": "pnpm --filter @discordrive/database db:push",
     "typecheck": "tsc --build",
-    "build": "npm run build --workspaces --if-present",
+    "build": "pnpm --recursive run build --if-present",
     "benchmark": "tsx scripts/benchmark.ts",
     "benchmark:e2e": "tsx scripts/benchmark-e2e.ts",
     "infra:up": "docker compose -f infra/docker-compose.yml --env-file .env up -d",
@@ -21,5 +21,14 @@
   },
   "dependencies": {
     "galery": "file:../galery-plugin"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/engines",
+      "argon2",
+      "better-sqlite3",
+      "esbuild",
+      "prisma"
+    ]
   }
 }
