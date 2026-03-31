@@ -10,6 +10,7 @@ import {
 } from "@ddv4/discord-client";
 import { serverConfig } from "@ddv4/config/server";
 import { authenticateRequestAny } from "../middleware/auth.js";
+import { pluginRegistry } from "../plugin-registry.js";
 
 const rateLimiter = new WebhookRateLimiter();
 
@@ -86,6 +87,12 @@ export async function handleUpload(
         size: body.byteLength,
         encryptedHash,
       },
+    });
+
+    await pluginRegistry.emitAsync("chunk:uploaded", {
+      fileId,
+      index: chunkIndex,
+      messageId: result.messageId,
     });
 
     return Response.json({

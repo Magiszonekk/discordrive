@@ -9,6 +9,7 @@
     "start": "node --env-file ../../.env --import tsx src/index.ts"
   },
   "dependencies": {
+    "@ddv4/plugin-sdk": "*",
     "@ddv4/types": "*",
     "@ddv4/config": "*",
     "@ddv4/database": "*",

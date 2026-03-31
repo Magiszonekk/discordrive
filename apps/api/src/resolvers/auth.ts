@@ -4,6 +4,7 @@ import argon2 from "argon2";
 import { db } from "@ddv4/database";
 import { signToken } from "../middleware/auth.js";
 import type { RegisterRequest, LoginResponse } from "@ddv4/types/api";
+import { pluginRegistry } from "../plugin-registry.js";
 
 export async function register(input: RegisterRequest): Promise<LoginResponse> {
   const existingEmail = await db.user.findUnique({ where: { email: input.email } });
@@ -30,6 +31,8 @@ export async function register(input: RegisterRequest): Promise<LoginResponse> {
   });
 
   const token = signToken({ userId: user.id, email: user.email });
+
+  await pluginRegistry.emitAsync("user:registered", { userId: user.id, email: user.email });
 
   return {
     token,

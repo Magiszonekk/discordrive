@@ -2,7 +2,7 @@
 
 import { createServer } from "node:http";
 import { createYoga } from "graphql-yoga";
-import { schema, createContext } from "./schema.js";
+import { buildSchema, createContext } from "./schema.js";
 import { handleUpload } from "./handlers/upload.js";
 import { handleDownload } from "./handlers/download.js";
 import {
@@ -16,39 +16,11 @@ import { handleHealthCheck } from "./handlers/healthcheck.js";
 import { handleStats } from "./handlers/stats.js";
 import { checkRateLimit } from "./middleware/rate-limit.js";
 import { serverConfig } from "@ddv4/config/server";
+import { pluginRegistry } from "./plugin-registry.js";
+import { matchRoute } from "@ddv4/plugin-sdk/route";
 
-const yoga = createYoga({
-  schema,
-  context: ({ request }) => createContext(request),
-  graphqlEndpoint: "/graphql",
-  cors: {
-    origin: serverConfig.frontendUrl,
-    credentials: true,
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  },
-});
-
-// Simple URL pattern matcher
-function matchRoute(
-  pathname: string,
-  pattern: string,
-): Record<string, string> | null {
-  const patternParts = pattern.split("/");
-  const pathParts = pathname.split("/");
-
-  if (patternParts.length !== pathParts.length) return null;
-
-  const params: Record<string, string> = {};
-  for (let i = 0; i < patternParts.length; i++) {
-    if (patternParts[i].startsWith(":")) {
-      params[patternParts[i].slice(1)] = pathParts[i];
-    } else if (patternParts[i] !== pathParts[i]) {
-      return null;
-    }
-  }
-  return params;
-}
+// yoga is initialized after plugins load (see below)
+let yoga: ReturnType<typeof createYoga>;
 
 async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
@@ -137,6 +109,12 @@ async function handleRequest(req: Request): Promise<Response> {
     return handleStats(req);
   }
 
+  // Plugin routes: /api/plugin/:pluginName/...
+  if (pathname.startsWith("/api/plugin/")) {
+    const result = pluginRegistry.dispatch(req, pathname);
+    if (result !== null) return result;
+  }
+
   return Response.json({ error: "Not found" }, { status: 404 });
 }
 
@@ -153,6 +131,21 @@ function addCorsHeaders(response: Response): Response {
 }
 
 const port = serverConfig.apiPort;
+
+await pluginRegistry.load();
+
+// Build schema after plugins are loaded so their GraphQL extensions are included
+yoga = createYoga({
+  schema: buildSchema(),
+  context: ({ request }) => createContext(request),
+  graphqlEndpoint: "/graphql",
+  cors: {
+    origin: serverConfig.frontendUrl,
+    credentials: true,
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  },
+});
 
 const server = createServer(async (nodeReq, nodeRes) => {
   // Convert Node.js request to Web Request
@@ -222,4 +215,9 @@ server.listen(port, () => {
   console.log(`DiscorDrive API running on http://localhost:${port}`);
   console.log(`GraphQL endpoint: http://localhost:${port}/graphql`);
   console.log(`Mode: ${serverConfig.appMode}${serverConfig.appMode === "backend-only" ? (serverConfig.apiKey ? " (API key required)" : " (open access — no API key set)") : ""}`);
+});
+
+process.on("SIGTERM", async () => {
+  await pluginRegistry.unload();
+  server.close();
 });

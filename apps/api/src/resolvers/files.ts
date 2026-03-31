@@ -8,6 +8,7 @@ import {
 } from "@ddv4/discord-client";
 import { serverConfig } from "@ddv4/config/server";
 import type { InitUploadRequest } from "@ddv4/types/api";
+import { pluginRegistry } from "../plugin-registry.js";
 
 const rateLimiter = new WebhookRateLimiter();
 
@@ -67,9 +68,17 @@ export async function finalizeUpload(
     return { success: false, missingChunks };
   }
 
-  await db.file.update({
+  const updated = await db.file.update({
     where: { id: fileId },
     data: { status: "READY", sha256 },
+  });
+
+  await pluginRegistry.emitAsync("file:uploaded", {
+    fileId,
+    userId,
+    mimeType: updated.mimeType,
+    size: updated.size,
+    sha256,
   });
 
   return { success: true };
@@ -89,6 +98,8 @@ export async function deleteFile(userId: string, fileId: string): Promise<boolea
 
   // Delete from DB first (cascades to chunks and share links)
   await db.file.delete({ where: { id: fileId } });
+
+  await pluginRegistry.emitAsync("file:deleted", { fileId, userId });
 
   // Delete Discord messages in background — best effort, don't block response
   void Promise.allSettled(

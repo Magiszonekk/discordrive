@@ -8,8 +8,9 @@ import * as fileResolvers from "./resolvers/files.js";
 import * as folderResolvers from "./resolvers/folders.js";
 import * as sharingResolvers from "./resolvers/sharing.js";
 import * as healthResolvers from "./resolvers/health.js";
+import { pluginRegistry } from "./plugin-registry.js";
 
-interface Context {
+export interface Context {
   auth: AuthPayload | null;
 }
 
@@ -22,8 +23,38 @@ function requireFullMode(): void {
   if (isBackendOnly()) throw new Error("Not available in backend-only mode");
 }
 
-export const schema = createSchema<Context>({
-  typeDefs: /* GraphQL */ `
+/** Deep-merge resolver maps without extra dependencies. */
+function mergeResolvers(
+  ...maps: Record<string, unknown>[]
+): Record<string, unknown> {
+  return maps.reduce(
+    (acc, cur) => {
+      for (const [k, v] of Object.entries(cur)) {
+        acc[k] =
+          v !== null &&
+          typeof v === "object" &&
+          !Array.isArray(v) &&
+          typeof acc[k] === "object" &&
+          acc[k] !== null
+            ? { ...(acc[k] as object), ...(v as object) }
+            : v;
+      }
+      return acc;
+    },
+    {} as Record<string, unknown>,
+  );
+}
+
+/**
+ * Build the GraphQL schema, merging in any extensions registered by plugins.
+ * Must be called after pluginRegistry.load().
+ */
+export function buildSchema() {
+  const { typeDefs: pluginTypeDefs, resolvers: pluginResolvers } =
+    pluginRegistry.getGraphqlExtensions();
+
+  return createSchema<Context>({
+  typeDefs: [/* GraphQL */ `
     scalar BigInt
     scalar DateTime
 
@@ -203,9 +234,9 @@ export const schema = createSchema<Context>({
       updateChunkHealthBatch(updates: [ChunkHealthUpdateInput!]!): Int!
       runHealthCheck(mode: String!, samplePercent: Float, fileId: ID): HealthCheckSummary!
     }
-  `,
+  `, ...pluginTypeDefs],
 
-  resolvers: {
+  resolvers: mergeResolvers({
     DateTime: {
       serialize: (value: unknown) => (value instanceof Date ? value.toISOString() : value),
       parseValue: (value: unknown) => new Date(value as string),
@@ -451,8 +482,9 @@ export const schema = createSchema<Context>({
         return healthResolvers.runHealthCheck(auth.userId, args.mode, args.samplePercent, args.fileId);
       },
     },
-  },
+  }, ...pluginResolvers),
 });
+}
 
 export async function createContext(request: Request): Promise<Context> {
   let auth: AuthPayload | null = null;
