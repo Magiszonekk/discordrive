@@ -1,7 +1,7 @@
 // DiscorDrive v4 — JWT authentication middleware
 
 import jwt from "jsonwebtoken";
-import { serverConfig } from "@ddv4/config/server";
+import { serverConfig } from "@discordrive/config/server";
 
 export interface AuthPayload {
   userId: string;
@@ -34,7 +34,7 @@ export function authenticateRequest(request: Request): AuthPayload {
 
 // === Backend-only mode helpers ===
 
-const SYSTEM_USER_EMAIL = "system@ddv4.local";
+const SYSTEM_USER_EMAIL = "system@discordrive.local";
 let cachedSystemUserId: string | null = null;
 
 /**
@@ -44,7 +44,7 @@ let cachedSystemUserId: string | null = null;
 export async function getSystemUserId(): Promise<string> {
   if (cachedSystemUserId) return cachedSystemUserId;
 
-  const { db } = await import("@ddv4/database");
+  const { db } = await import("@discordrive/database");
   let user = await db.user.findUnique({ where: { email: SYSTEM_USER_EMAIL } });
 
   if (!user) {

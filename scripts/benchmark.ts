@@ -12,9 +12,9 @@
 
 import "dotenv/config";
 import { randomBytes } from "node:crypto";
-import { serverConfig } from "@ddv4/config/server";
-import { parseWebhookUrls, WebhookRateLimiter, uploadChunk, getChunkUrl, streamChunk, deleteChunk } from "@ddv4/discord-client";
-import { config } from "@ddv4/config";
+import { serverConfig } from "@discordrive/config/server";
+import { parseWebhookUrls, WebhookRateLimiter, uploadChunk, getChunkUrl, streamChunk, deleteChunk } from "@discordrive/discord-client";
+import { config } from "@discordrive/config";
 import {
   formatBytes,
   formatDuration,

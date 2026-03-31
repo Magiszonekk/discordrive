@@ -1,16 +1,11 @@
 {
-  "name": "ddv4",
+  "name": "discordrive",
   "private": true,
-  "workspaces": [
-    "apps/*",
-    "packages/*",
-    "plugins/*"
-  ],
   "scripts": {
-    "dev:api": "npm run dev --workspace=@ddv4/api",
-    "dev:frontend": "npm run dev --workspace=@ddv4/frontend",
-    "db:generate": "npm run generate --workspace=@ddv4/database",
-    "db:push": "npm run db:push --workspace=@ddv4/database",
+    "dev:api": "npm run dev --workspace=@discordrive/api",
+    "dev:frontend": "npm run dev --workspace=@discordrive/frontend",
+    "db:generate": "npm run generate --workspace=@discordrive/database",
+    "db:push": "npm run db:push --workspace=@discordrive/database",
     "typecheck": "tsc --build",
     "build": "npm run build --workspaces --if-present",
     "benchmark": "tsx scripts/benchmark.ts",
@@ -23,5 +18,8 @@
     "dotenv": "^16.6.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "galery": "file:../galery-plugin"
   }
 }

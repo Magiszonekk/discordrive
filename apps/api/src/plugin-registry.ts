@@ -1,9 +1,9 @@
 // DiscorDrive v4 — Plugin Registry
-// Loads plugins from DDV_PLUGINS env var, manages lifecycle and event dispatch.
+// Loads plugins from DISCORDRIVE_PLUGINS env var, manages lifecycle and event dispatch.
 
 import { EventEmitter } from "node:events";
-import type { DdvPlugin, PluginEventMap, PluginHooks } from "@ddv4/plugin-sdk";
-import { matchRoute } from "@ddv4/plugin-sdk/route";
+import type { DiscodrivePlugin, PluginEventMap, PluginHooks } from "@discordrive/plugin-sdk";
+import { matchRoute } from "@discordrive/plugin-sdk/route";
 import { verifyToken } from "./middleware/auth.js";
 
 // ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ class TypedEmitter implements PluginHooks {
 // ---------------------------------------------------------------------------
 
 class PluginRegistry {
-  private plugins: DdvPlugin[] = [];
+  private plugins: DiscodrivePlugin[] = [];
   private emitter = new TypedEmitter();
 
   // Auth helper injected into setup context — plugins don't need to copy JWT logic
@@ -59,7 +59,7 @@ class PluginRegistry {
   };
 
   async load(): Promise<void> {
-    const pluginPaths = (process.env.DDV_PLUGINS ?? "")
+    const pluginPaths = (process.env.DISCORDRIVE_PLUGINS ?? "")
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
@@ -67,7 +67,7 @@ class PluginRegistry {
     for (const path of pluginPaths) {
       try {
         const mod = await import(path);
-        const plugin: DdvPlugin = mod.default ?? mod;
+        const plugin: DiscodrivePlugin = mod.default ?? mod;
         await plugin.setup?.({ hooks: this.emitter, auth: this.authHelper });
         this.plugins.push(plugin);
         console.log(`[plugins] Loaded: ${plugin.name}@${plugin.version}`);

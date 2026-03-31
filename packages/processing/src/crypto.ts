@@ -2,7 +2,7 @@
 // Uses Web Crypto API exclusively. ZERO Node.js crypto. ZERO Buffer.
 
 import { argon2id } from "hash-wasm";
-import { config } from "@ddv4/config";
+import { config } from "@discordrive/config";
 
 // === Utilities ===
 

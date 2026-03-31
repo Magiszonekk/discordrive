@@ -1,5 +1,5 @@
 {
-  "name": "@ddv4/api",
+  "name": "@discordrive/api",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -9,12 +9,12 @@
     "start": "node --env-file ../../.env --import tsx src/index.ts"
   },
   "dependencies": {
-    "@ddv4/plugin-sdk": "*",
-    "@ddv4/types": "*",
-    "@ddv4/config": "*",
-    "@ddv4/database": "*",
-    "@ddv4/discord-client": "*",
-    "@ddv4/processing": "*",
+    "@discordrive/plugin-sdk": "workspace:*",
+    "@discordrive/types": "workspace:*",
+    "@discordrive/config": "workspace:*",
+    "@discordrive/database": "workspace:*",
+    "@discordrive/discord-client": "workspace:*",
+    "@discordrive/processing": "workspace:*",
     "graphql": "^16.9.0",
     "graphql-yoga": "^5.10.0",
     "jsonwebtoken": "^9.0.0",

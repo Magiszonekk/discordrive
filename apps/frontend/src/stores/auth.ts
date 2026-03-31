@@ -38,7 +38,7 @@ export const useAuthStore = create<AuthState>()(
       logout: () => set({ token: null, user: null, masterKey: null }),
     }),
     {
-      name: "ddv4-auth",
+      name: "discordrive-auth",
       // Only persist token + user — CryptoKey cannot be serialized
       partialize: (state) => ({ token: state.token, user: state.user }),
     },

@@ -1,7 +1,7 @@
 // DiscorDrive v4 — Server-only configuration (reads process.env)
 // NEVER import this from browser/frontend code.
 
-import type { AppMode } from "@ddv4/types";
+import type { AppMode } from "@discordrive/types";
 
 /**
  * Collect webhook URLs from env vars: WEBHOOK_1, WEBHOOK_2, ...

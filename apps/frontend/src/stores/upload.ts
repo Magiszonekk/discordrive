@@ -1,7 +1,7 @@
 // DiscorDrive v4 — Upload store (Zustand)
 
 import { create } from "zustand";
-import type { UploadProgress, UploadStatus } from "@ddv4/types";
+import type { UploadProgress, UploadStatus } from "@discordrive/types";
 
 interface SpeedSample {
   time: number;  // ms epoch

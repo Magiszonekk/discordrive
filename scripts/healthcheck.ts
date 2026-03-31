@@ -31,7 +31,7 @@ import {
   getChunkUrl,
   downloadChunk,
   type WebhookInfo,
-} from "@ddv4/discord-client";
+} from "@discordrive/discord-client";
 import {
   formatBytes,
   formatDuration,

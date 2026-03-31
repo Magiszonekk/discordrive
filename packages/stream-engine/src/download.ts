@@ -3,7 +3,7 @@
 // caching with prefetch/eviction, byte-range assembly, full streaming.
 // Works in both browser (Service Worker) and Node.js (benchmark/CLI).
 
-import { config } from "@ddv4/config";
+import { config } from "@discordrive/config";
 import type { StreamConfig, ChunkSource } from "./types.js";
 
 const IV_LENGTH = config.ivLength;

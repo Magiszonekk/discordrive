@@ -1,4 +1,4 @@
-// DiscorDrive v4 — Crypto orchestrator (wraps @ddv4/processing)
+// DiscorDrive v4 — Crypto orchestrator (wraps @discordrive/processing)
 
 import {
   deriveKEK,
@@ -9,7 +9,7 @@ import {
   generateSalt,
   toBase64,
   fromBase64,
-} from "@ddv4/processing";
+} from "@discordrive/processing";
 
 export async function registerCrypto(password: string) {
   const salt = generateSalt();

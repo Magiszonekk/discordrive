@@ -1,6 +1,6 @@
 // DiscorDrive v4 — File chunker (streaming, browser-compatible)
 
-import { config } from "@ddv4/config";
+import { config } from "@discordrive/config";
 
 export async function* chunkFileStream(
   file: File | ReadableStream<Uint8Array>,

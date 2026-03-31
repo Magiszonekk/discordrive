@@ -1,5 +1,5 @@
 {
-  "name": "@ddv4/frontend",
+  "name": "@discordrive/frontend",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -9,10 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@ddv4/config": "*",
-    "@ddv4/processing": "*",
-    "@ddv4/stream-engine": "*",
-    "@ddv4/types": "*",
+    "@discordrive/config": "workspace:*",
+    "@discordrive/processing": "workspace:*",
+    "@discordrive/stream-engine": "workspace:*",
+    "@discordrive/types": "workspace:*",
     "@tanstack/react-query": "^5.62.0",
     "graphql-request": "^7.1.0",
     "hash-wasm": "^4.11.0",

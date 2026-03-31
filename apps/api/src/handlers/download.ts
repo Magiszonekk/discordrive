@@ -2,13 +2,13 @@
 // GET /api/download/:fileId/chunk/:index
 // Fetches fresh CDN URL from Discord, streams chunk to client.
 
-import { db } from "@ddv4/database";
+import { db } from "@discordrive/database";
 import {
   parseWebhookUrls,
   WebhookRateLimiter,
   downloadChunk,
-} from "@ddv4/discord-client";
-import { serverConfig } from "@ddv4/config/server";
+} from "@discordrive/discord-client";
+import { serverConfig } from "@discordrive/config/server";
 import { authenticateRequestAny } from "../middleware/auth.js";
 
 const rateLimiter = new WebhookRateLimiter();

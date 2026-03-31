@@ -220,7 +220,7 @@ The SW receives a `File` object directly (no main-thread buffering), reads it in
 
 ```typescript
 import { uploadViaSW } from "./lib/swUpload";
-import { generateFEK, generateMasterKey, wrapKey, toBase64 } from "@ddv4/processing";
+import { generateFEK, generateMasterKey, wrapKey, toBase64 } from "@discordrive/processing";
 
 // 1. Generate encryption key
 const fek = await generateFEK();

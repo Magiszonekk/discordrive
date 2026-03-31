@@ -2,7 +2,7 @@
 // DiscorDrive v4 — Download and decrypt a file from DiscorDrive storage
 //
 // Usage:
-//   npx tsx how-to-use/download.ts <fileId> <encryptedFEK> <fekIv> [output-path]
+//   npx tsx how-to-use/core/download.ts <fileId> <encryptedFEK> <fekIv> [output-path]
 //
 // Required env vars (see .env):
 //   DISCORDRIVE_URL=http://localhost:3000
@@ -13,13 +13,13 @@ import { createWriteStream, createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
-import { fromBase64, unwrapKey, decryptChunk } from "@ddv4/processing";
+import { fromBase64, unwrapKey, decryptChunk } from "@discordrive/processing";
 import { gql, downloadChunk, getMasterKey, runPool, BASE } from "./_client.js";
 
 const [fileId, encryptedFEK, fekIv, outputArg] = process.argv.slice(2);
 
 if (!fileId || !encryptedFEK || !fekIv) {
-  console.error("Usage: npx tsx how-to-use/download.ts <fileId> <encryptedFEK> <fekIv> [output-path]");
+  console.error("Usage: npx tsx how-to-use/core/download.ts <fileId> <encryptedFEK> <fekIv> [output-path]");
   process.exit(1);
 }
 

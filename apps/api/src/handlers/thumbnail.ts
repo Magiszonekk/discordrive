@@ -1,7 +1,7 @@
 // DiscorDrive v4 — Thumbnail proxy handler
 // GET /api/thumbnail/:fileId
 
-import { db } from "@ddv4/database";
+import { db } from "@discordrive/database";
 import { authenticateRequestAny } from "../middleware/auth.js";
 
 export async function handleThumbnail(

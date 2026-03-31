@@ -1,15 +1,15 @@
 // DiscorDrive v4 — Upload pipeline
 // Hashing and GraphQL orchestration in main thread.
-// Chunk encryption + upload delegated to Service Worker via @ddv4/stream-engine.
+// Chunk encryption + upload delegated to Service Worker via @discordrive/stream-engine.
 
-import { hashFile, calculateChunkCount } from "@ddv4/processing";
-import { config } from "@ddv4/config";
+import { hashFile, calculateChunkCount } from "@discordrive/processing";
+import { config } from "@discordrive/config";
 import { gqlRequest } from "./graphql.js";
 import { prepareFileUpload } from "./crypto.js";
 import { uploadViaSW } from "./swUpload.js";
 import { useUploadStore } from "../stores/upload.js";
 import { useAuthStore } from "../stores/auth.js";
-import { UploadStatus } from "@ddv4/types";
+import { UploadStatus } from "@discordrive/types";
 
 const INIT_UPLOAD = `
   mutation InitUpload(

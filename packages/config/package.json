@@ -1,5 +1,5 @@
 {
-  "name": "@ddv4/config",
+  "name": "@discordrive/config",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -11,6 +11,6 @@
     "./db": "./src/db.ts"
   },
   "dependencies": {
-    "@ddv4/types": "*"
+    "@discordrive/types": "workspace:*"
   }
 }

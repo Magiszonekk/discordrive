@@ -1,7 +1,7 @@
 // DiscorDrive v4 — Plugin SDK
 // Public interfaces for plugin authors.
 
-export interface DdvPlugin {
+export interface DiscodrivePlugin {
   name: string;
   version: string;
   routes?: PluginRoute[];

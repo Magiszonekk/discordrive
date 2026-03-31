@@ -2,7 +2,7 @@
 // Reads DISCORDRIVE_URL, API_KEY, MASTER_KEY from environment / .env
 
 import "dotenv/config";
-import { generateMasterKey, exportKey, importKey, toBase64, fromBase64 } from "@ddv4/processing";
+import { generateMasterKey, exportKey, importKey, toBase64, fromBase64 } from "@discordrive/processing";
 
 export const BASE = process.env.DISCORDRIVE_URL ?? "http://localhost:3000";
 const API_KEY = process.env.API_KEY ?? "";

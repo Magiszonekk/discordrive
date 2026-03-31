@@ -2,7 +2,7 @@
 // Universal upload logic: AES-GCM encryption, concurrent chunk upload,
 // progress reporting. Works in both browser (Service Worker) and Node.js.
 
-import { config } from "@ddv4/config";
+import { config } from "@discordrive/config";
 import type { ChunkSink, UploadConfig, UploadProgress } from "./types.js";
 
 const IV_LENGTH = config.ivLength;

@@ -1,5 +1,5 @@
 {
-  "name": "@ddv4/processing",
+  "name": "@discordrive/processing",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ddv4/config": "*",
+    "@discordrive/config": "workspace:*",
     "hash-wasm": "^4.11.0"
   }
 }

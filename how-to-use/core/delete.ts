@@ -2,7 +2,7 @@
 // DiscorDrive v4 — Delete a file from storage
 //
 // Usage:
-//   npx tsx how-to-use/delete.ts <fileId>
+//   npx tsx how-to-use/core/delete.ts <fileId>
 //
 // Required env vars (see .env):
 //   DISCORDRIVE_URL=http://localhost:3000
@@ -13,7 +13,7 @@ import { gql, BASE } from "./_client.js";
 
 const fileId = process.argv[2];
 if (!fileId) {
-  console.error("Usage: npx tsx how-to-use/delete.ts <fileId>");
+  console.error("Usage: npx tsx how-to-use/core/delete.ts <fileId>");
   process.exit(1);
 }
 

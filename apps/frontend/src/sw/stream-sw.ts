@@ -1,5 +1,5 @@
 // DiscorDrive v4 — Service Worker adapter
-// Thin wrapper over @ddv4/stream-engine. Handles browser-specific SW lifecycle,
+// Thin wrapper over @discordrive/stream-engine. Handles browser-specific SW lifecycle,
 // message protocol, and fetch interception. All core logic lives in the engine.
 //
 // NOTE: This file is compiled by esbuild (via Vite plugin) into public/stream-sw.js.
@@ -13,8 +13,8 @@ import {
   UploadEngine,
   type ChunkSource,
   type ChunkSink,
-} from "@ddv4/stream-engine";
-import { chunkFileStream } from "@ddv4/processing";
+} from "@discordrive/stream-engine";
+import { chunkFileStream } from "@discordrive/processing";
 
 declare const self: ServiceWorkerGlobalScope;
 

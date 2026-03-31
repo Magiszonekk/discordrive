@@ -15,7 +15,7 @@
 
 import "dotenv/config";
 import { randomBytes, createHash } from "node:crypto";
-import { config } from "@ddv4/config";
+import { config } from "@discordrive/config";
 import {
   generateFEK,
   generateMasterKey,
@@ -24,8 +24,8 @@ import {
   decryptChunk,
   toBase64,
   hashBuffer,
-} from "@ddv4/processing";
-import { UploadEngine, type ChunkSource, type ChunkSink } from "@ddv4/stream-engine";
+} from "@discordrive/processing";
+import { UploadEngine, type ChunkSource, type ChunkSink } from "@discordrive/stream-engine";
 import {
   formatBytes,
   formatDuration,

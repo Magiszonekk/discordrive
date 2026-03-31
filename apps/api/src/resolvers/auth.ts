@@ -1,9 +1,9 @@
 // DiscorDrive v4 — Auth resolvers (register, login, changePassword)
 
 import argon2 from "argon2";
-import { db } from "@ddv4/database";
+import { db } from "@discordrive/database";
 import { signToken } from "../middleware/auth.js";
-import type { RegisterRequest, LoginResponse } from "@ddv4/types/api";
+import type { RegisterRequest, LoginResponse } from "@discordrive/types/api";
 import { pluginRegistry } from "../plugin-registry.js";
 
 export async function register(input: RegisterRequest): Promise<LoginResponse> {

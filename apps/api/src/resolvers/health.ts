@@ -1,15 +1,15 @@
 // DiscorDrive v4 — Health check resolver
 // Verifies chunks exist on Discord and optionally checks integrity via encrypted hash.
 
-import { db } from "@ddv4/database";
+import { db } from "@discordrive/database";
 import {
   parseWebhookUrls,
   WebhookRateLimiter,
   getChunkUrl,
   downloadChunk,
   type WebhookInfo,
-} from "@ddv4/discord-client";
-import { serverConfig } from "@ddv4/config/server";
+} from "@discordrive/discord-client";
+import { serverConfig } from "@discordrive/config/server";
 import { createHash } from "node:crypto";
 
 export type HealthStatus = "HEALTHY" | "MISSING" | "MODIFIED";

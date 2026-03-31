@@ -2,8 +2,8 @@
 // GET /api/admin/stats
 
 import { authenticateRequestAny } from "../middleware/auth.js";
-import { db } from "@ddv4/database";
-import { serverConfig } from "@ddv4/config/server";
+import { db } from "@discordrive/database";
+import { serverConfig } from "@discordrive/config/server";
 
 export async function handleStats(request: Request): Promise<Response> {
   try {

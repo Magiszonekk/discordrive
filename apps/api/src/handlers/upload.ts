@@ -2,13 +2,13 @@
 // POST /api/upload/:fileId/chunk/:index
 // Receives encrypted chunk (binary body), forwards to Discord webhook, saves metadata.
 
-import { db } from "@ddv4/database";
+import { db } from "@discordrive/database";
 import {
   parseWebhookUrls,
   WebhookRateLimiter,
   uploadChunk,
-} from "@ddv4/discord-client";
-import { serverConfig } from "@ddv4/config/server";
+} from "@discordrive/discord-client";
+import { serverConfig } from "@discordrive/config/server";
 import { authenticateRequestAny } from "../middleware/auth.js";
 import { pluginRegistry } from "../plugin-registry.js";
 

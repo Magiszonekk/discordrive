@@ -1,6 +1,6 @@
 // DiscorDrive v4 — Folder resolvers
 
-import { db } from "@ddv4/database";
+import { db } from "@discordrive/database";
 
 export async function createFolder(
   userId: string,

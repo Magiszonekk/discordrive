@@ -1,7 +1,7 @@
 // DiscorDrive v4 — Webhook rate limiter with Cloudflare IP ban protection
 // Uses SLIDING WINDOW for global error tracking (not fixed window).
 
-import { config } from "@ddv4/config";
+import { config } from "@discordrive/config";
 
 interface WebhookState {
   remaining: number;

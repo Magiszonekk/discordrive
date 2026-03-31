@@ -15,9 +15,9 @@ import { handleThumbnail } from "./handlers/thumbnail.js";
 import { handleHealthCheck } from "./handlers/healthcheck.js";
 import { handleStats } from "./handlers/stats.js";
 import { checkRateLimit } from "./middleware/rate-limit.js";
-import { serverConfig } from "@ddv4/config/server";
+import { serverConfig } from "@discordrive/config/server";
 import { pluginRegistry } from "./plugin-registry.js";
-import { matchRoute } from "@ddv4/plugin-sdk/route";
+import { matchRoute } from "@discordrive/plugin-sdk/route";
 
 // yoga is initialized after plugins load (see below)
 let yoga: ReturnType<typeof createYoga>;

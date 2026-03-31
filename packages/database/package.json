@@ -1,5 +1,5 @@
 {
-  "name": "@ddv4/database",
+  "name": "@discordrive/database",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -15,7 +15,7 @@
     "studio": "dotenv -e ../../.env -- prisma studio"
   },
   "dependencies": {
-    "@ddv4/config": "*",
+    "@discordrive/config": "workspace:*",
     "@prisma/client": "^6.19.2"
   },
   "devDependencies": {

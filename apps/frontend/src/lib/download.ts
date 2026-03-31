@@ -1,6 +1,6 @@
 // DiscorDrive v4 — Download pipeline (streaming)
 
-import { decryptChunk } from "@ddv4/processing";
+import { decryptChunk } from "@discordrive/processing";
 import { downloadChunkFromApi, downloadSharedChunk } from "./api.js";
 import { unwrapFEK } from "./crypto.js";
 import { useAuthStore } from "../stores/auth.js";

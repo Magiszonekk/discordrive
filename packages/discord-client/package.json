@@ -1,5 +1,5 @@
 {
-  "name": "@ddv4/discord-client",
+  "name": "@discordrive/discord-client",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ddv4/types": "*",
-    "@ddv4/config": "*"
+    "@discordrive/types": "workspace:*",
+    "@discordrive/config": "workspace:*"
   }
 }

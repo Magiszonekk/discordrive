@@ -4,14 +4,14 @@
 // POST /api/share/:token/verify-password — Password verification
 // GET /api/share/:token/chunk/:index — Stream chunk (no auth required)
 
-import { db } from "@ddv4/database";
+import { db } from "@discordrive/database";
 import {
   parseWebhookUrls,
   WebhookRateLimiter,
   getChunkUrl,
   streamChunk,
-} from "@ddv4/discord-client";
-import { serverConfig } from "@ddv4/config/server";
+} from "@discordrive/discord-client";
+import { serverConfig } from "@discordrive/config/server";
 import {
   getShareInfo,
   verifySharePassword,

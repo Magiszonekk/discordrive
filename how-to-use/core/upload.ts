@@ -2,7 +2,7 @@
 // DiscorDrive v4 — Upload a local file to DiscorDrive storage
 //
 // Usage:
-//   npx tsx how-to-use/upload.ts <path/to/file>
+//   npx tsx how-to-use/core/upload.ts <path/to/file>
 //
 // Required env vars (see .env):
 //   DISCORDRIVE_URL=http://localhost:3000
@@ -13,13 +13,13 @@ import { createReadStream } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import { createHash } from "node:crypto";
-import { config } from "@ddv4/config";
-import { generateFEK, wrapKey, encryptChunk, toBase64 } from "@ddv4/processing";
+import { config } from "@discordrive/config";
+import { generateFEK, wrapKey, encryptChunk, toBase64 } from "@discordrive/processing";
 import { gql, uploadChunk, getMasterKey, runPool, BASE } from "./_client.js";
 
 const filePath = process.argv[2];
 if (!filePath) {
-  console.error("Usage: npx tsx how-to-use/upload.ts <path/to/file>");
+  console.error("Usage: npx tsx how-to-use/core/upload.ts <path/to/file>");
   process.exit(1);
 }
 

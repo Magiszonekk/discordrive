@@ -3,7 +3,7 @@ import { useParams } from "react-router";
 import { getShareInfo, verifySharePassword } from "../lib/api.js";
 import { unwrapSharedFEK } from "../lib/crypto.js";
 import { downloadSharedFile } from "../lib/download.js";
-import type { ShareInfoResponse } from "@ddv4/types/api";
+import type { ShareInfoResponse } from "@discordrive/types/api";
 
 export function SharedFile() {
   const { token } = useParams<{ token: string }>();

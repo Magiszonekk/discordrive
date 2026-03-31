@@ -8,7 +8,7 @@
 
   How to get fekRaw:
     In your Node.js upload script, after generating or unwrapping the FEK:
-      import { exportKey, toBase64 } from "@ddv4/processing";
+      import { exportKey, toBase64 } from "@discordrive/processing";
       const fekRaw = toBase64(await exportKey(fek));
       console.log("fekRaw:", fekRaw);
 -->
@@ -128,7 +128,7 @@
 
   <div class="hint">
     <strong>How to get fekRaw from your Node.js upload:</strong><br>
-    <code>import { exportKey, toBase64 } from "@ddv4/processing";</code><br>
+    <code>import { exportKey, toBase64 } from "@discordrive/processing";</code><br>
     <code>console.log(toBase64(await exportKey(fek)));</code><br><br>
     The Service Worker must already be registered (run <code>npm run dev:frontend</code> and visit
     <code>http://localhost:5173</code> first — the SW registers on first page load).

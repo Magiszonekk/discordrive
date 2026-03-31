@@ -2,7 +2,7 @@
 
 import { createSchema } from "graphql-yoga";
 import { verifyToken, isBackendOnly, getSystemUserId, type AuthPayload } from "./middleware/auth.js";
-import { serverConfig } from "@ddv4/config/server";
+import { serverConfig } from "@discordrive/config/server";
 import * as authResolvers from "./resolvers/auth.js";
 import * as fileResolvers from "./resolvers/files.js";
 import * as folderResolvers from "./resolvers/folders.js";
@@ -255,7 +255,7 @@ export function buildSchema() {
       me: async (_parent: unknown, _args: unknown, ctx: Context) => {
         requireFullMode();
         const auth = requireAuth(ctx);
-        const { db } = await import("@ddv4/database");
+        const { db } = await import("@discordrive/database");
         const user = await db.user.findUnique({ where: { id: auth.userId } });
         if (!user) return null;
         return {
@@ -494,7 +494,7 @@ export async function createContext(request: Request): Promise<Context> {
     const apiKey = request.headers.get("x-api-key");
     if (!serverConfig.apiKey || apiKey === serverConfig.apiKey) {
       const userId = await getSystemUserId();
-      auth = { userId, email: "system@ddv4.local" };
+      auth = { userId, email: "system@discordrive.local" };
     }
   } else {
     const authHeader = request.headers.get("authorization");

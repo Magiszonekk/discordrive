@@ -2,11 +2,11 @@
 // Sends File object to SW which streams it chunk by chunk, encrypts, and uploads.
 // RAM usage: O(concurrency × chunkSize) regardless of file size.
 
-import { calculateChunkCount, exportKey } from "@ddv4/processing";
-import { config } from "@ddv4/config";
+import { calculateChunkCount, exportKey } from "@discordrive/processing";
+import { config } from "@discordrive/config";
 import { ensureServiceWorker } from "./videoStream.js";
 import { useAuthStore } from "../stores/auth.js";
-import type { UploadProgress } from "@ddv4/stream-engine";
+import type { UploadProgress } from "@discordrive/stream-engine";
 
 /**
  * Upload a file through the Service Worker (streaming mode).

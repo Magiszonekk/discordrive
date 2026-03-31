@@ -2,7 +2,7 @@
 // DiscorDrive v4 — Create a public share link for a file
 //
 // Usage:
-//   npx tsx how-to-use/share.ts <fileId> <encryptedFEK> <fekIv>
+//   npx tsx how-to-use/core/share.ts <fileId> <encryptedFEK> <fekIv>
 //
 // The share link embeds a random share key in the URL fragment (#).
 // The fragment is never sent to the server — the key stays client-side.
@@ -13,14 +13,14 @@
 //   MASTER_KEY=<base64>
 
 import { randomBytes } from "node:crypto";
-import { fromBase64, unwrapKey, wrapKey, importKey, toBase64 } from "@ddv4/processing";
+import { fromBase64, unwrapKey, wrapKey, importKey, toBase64 } from "@discordrive/processing";
 import { gql, getMasterKey, BASE } from "./_client.js";
 
 const [fileId, encryptedFEK, fekIv] = process.argv.slice(2);
 
 if (!fileId || !encryptedFEK || !fekIv) {
   console.error(
-    "Usage: npx tsx how-to-use/share.ts <fileId> <encryptedFEK> <fekIv>",
+    "Usage: npx tsx how-to-use/core/share.ts <fileId> <encryptedFEK> <fekIv>",
   );
   process.exit(1);
 }

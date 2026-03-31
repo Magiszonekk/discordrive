@@ -7,3 +7,4 @@ dist/
 packages/database/node_modules/.prisma
 test-results
 fixtures
+.claude

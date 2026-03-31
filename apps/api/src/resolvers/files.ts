@@ -1,13 +1,13 @@
 // DiscorDrive v4 — File resolvers
 
-import { db } from "@ddv4/database";
+import { db } from "@discordrive/database";
 import {
   parseWebhookUrls,
   WebhookRateLimiter,
   deleteChunk as discordDeleteChunk,
-} from "@ddv4/discord-client";
-import { serverConfig } from "@ddv4/config/server";
-import type { InitUploadRequest } from "@ddv4/types/api";
+} from "@discordrive/discord-client";
+import { serverConfig } from "@discordrive/config/server";
+import type { InitUploadRequest } from "@discordrive/types/api";
 import { pluginRegistry } from "../plugin-registry.js";
 
 const rateLimiter = new WebhookRateLimiter();

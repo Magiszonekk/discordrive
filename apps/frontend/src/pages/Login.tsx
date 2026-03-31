@@ -3,7 +3,7 @@ import { useNavigate, Link } from "react-router";
 import { gqlRequest } from "../lib/graphql.js";
 import { loginCrypto } from "../lib/crypto.js";
 import { useAuthStore } from "../stores/auth.js";
-import type { LoginResponse } from "@ddv4/types/api";
+import type { LoginResponse } from "@discordrive/types/api";
 
 const LOGIN_MUTATION = `
   mutation Login($emailOrUsername: String!, $password: String!) {

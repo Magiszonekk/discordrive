@@ -1,6 +1,6 @@
 // DiscorDrive v4 — Video streaming helper (main thread ↔ Service Worker)
 
-import { exportKey } from "@ddv4/processing";
+import { exportKey } from "@discordrive/processing";
 import { unwrapFEK } from "./crypto.js";
 import { useAuthStore } from "../stores/auth.js";
 

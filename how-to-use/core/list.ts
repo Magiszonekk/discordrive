@@ -2,7 +2,7 @@
 // DiscorDrive v4 — List all files in storage
 //
 // Usage:
-//   npx tsx how-to-use/list.ts
+//   npx tsx how-to-use/core/list.ts
 //
 // Required env vars (see .env):
 //   DISCORDRIVE_URL=http://localhost:3000

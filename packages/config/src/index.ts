@@ -1,7 +1,7 @@
 // DiscorDrive v4 — Browser-safe configuration constants
 // This file MUST NOT contain process.env references — it's imported in the browser.
 
-import type { AppMode } from "@ddv4/types";
+import type { AppMode } from "@discordrive/types";
 
 export const config = {
   // Chunking
