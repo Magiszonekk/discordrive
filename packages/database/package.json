@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@discordrive/config": "workspace:*",
+    "@prisma/adapter-pg": "^7.6.0",
     "@prisma/client": "^7.6.0"
   },
   "devDependencies": {
