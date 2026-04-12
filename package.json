@@ -7,8 +7,12 @@
     "plugins/*"
   ],
   "scripts": {
+    "dev": "concurrently --kill-others-on-fail \"npm run dev:api\" \"npm run dev:frontend\"",
     "dev:api": "npm run dev --workspace=@ddv4/api",
     "dev:frontend": "npm run dev --workspace=@ddv4/frontend",
+    "start": "concurrently --kill-others-on-fail \"npm run start:api\" \"npm run start:frontend\"",
+    "start:api": "npm run start --workspace=@ddv4/api",
+    "start:frontend": "npm run preview --workspace=@ddv4/frontend",
     "db:generate": "npm run generate --workspace=@ddv4/database",
     "db:push": "npm run db:push --workspace=@ddv4/database",
     "typecheck": "tsc --build",
@@ -20,6 +24,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "concurrently": "^9.2.1",
     "dotenv": "^16.6.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"

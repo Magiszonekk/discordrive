@@ -3,6 +3,9 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { build } from "esbuild";
+import { config } from "dotenv";
+
+config({ path: resolve(__dirname, "../../.env") });
 
 const apiPort = process.env.API_PORT ?? "3000";
 const frontendPort = parseInt(process.env.FRONTEND_PORT ?? "5173", 10);
@@ -57,10 +60,14 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), serviceWorkerPlugin()],
   server: {
     port: frontendPort,
+    allowedHosts: ["discordrive.cikowice.pl"],
     proxy: {
       "/api": `http://localhost:${apiPort}`,
       "/graphql": `http://localhost:${apiPort}`,
     },
+  },
+  preview: {
+    port: frontendPort,
   },
   build: {
     rollupOptions: {
