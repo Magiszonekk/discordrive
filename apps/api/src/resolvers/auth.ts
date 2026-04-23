@@ -1,6 +1,6 @@
 // DiscorDrive v4 — Auth resolvers (register, login, changePassword)
 
-import argon2 from "argon2";
+import * as argon2 from "argon2";
 import { db } from "@ddv4/database";
 import { signToken } from "../middleware/auth.js";
 import type { RegisterRequest, LoginResponse } from "@ddv4/types/api";

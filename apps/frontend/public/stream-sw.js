@@ -40,7 +40,7 @@
     anonymousTTLDays: 30
   };
 
-  // ../../packages/stream-engine/src/download.ts
+  // ../../packages/stream-engine/src/download.js
   var IV_LENGTH = config.ivLength;
   var DownloadEngine = class {
     streams = /* @__PURE__ */ new Map();
@@ -74,7 +74,8 @@
         return inflight.get(chunkIndex);
       }
       const stream = this.streams.get(fileId);
-      if (!stream) throw new Error(`Stream ${fileId} not registered`);
+      if (!stream)
+        throw new Error(`Stream ${fileId} not registered`);
       const promise = this.fetchAndDecrypt(fileId, stream, chunkIndex, source);
       inflight?.set(chunkIndex, promise);
       try {
@@ -92,7 +93,8 @@
      */
     async getByteRange(fileId, start, end, source) {
       const stream = this.streams.get(fileId);
-      if (!stream) throw new Error(`Stream ${fileId} not registered`);
+      if (!stream)
+        throw new Error(`Stream ${fileId} not registered`);
       const { chunkSize } = stream;
       const startChunk = Math.floor(start / chunkSize);
       const endChunk = Math.floor(end / chunkSize);
@@ -123,7 +125,8 @@
      */
     createFullStream(fileId, source) {
       const stream = this.streams.get(fileId);
-      if (!stream) throw new Error(`Stream ${fileId} not registered`);
+      if (!stream)
+        throw new Error(`Stream ${fileId} not registered`);
       const { chunkCount } = stream;
       let currentChunk = 0;
       let cancelled = false;
@@ -152,7 +155,8 @@
      */
     async downloadAll(fileId, source) {
       const stream = this.streams.get(fileId);
-      if (!stream) throw new Error(`Stream ${fileId} not registered`);
+      if (!stream)
+        throw new Error(`Stream ${fileId} not registered`);
       const results = [];
       for (let i = 0; i < stream.chunkCount; i++) {
         results.push(await this.getDecryptedChunk(fileId, i, source));
@@ -172,7 +176,8 @@
     }
     schedulePrefetch(fileId, currentChunk, source) {
       const stream = this.streams.get(fileId);
-      if (!stream) return;
+      if (!stream)
+        return;
       const { chunkCount, chunksAhead } = stream;
       const limit = Math.min(currentChunk + chunksAhead + 1, chunkCount);
       for (let ci = currentChunk + 1; ci < limit; ci++) {
@@ -186,9 +191,11 @@
     }
     scheduleEviction(fileId, currentChunk) {
       const stream = this.streams.get(fileId);
-      if (!stream) return;
+      if (!stream)
+        return;
       const cache = this.chunkCache.get(fileId);
-      if (!cache) return;
+      if (!cache)
+        return;
       const evictBefore = currentChunk - stream.chunksBehind;
       for (const key of cache.keys()) {
         if (key < evictBefore) {
@@ -198,7 +205,7 @@
     }
   };
 
-  // ../../packages/stream-engine/src/upload.ts
+  // ../../packages/stream-engine/src/upload.js
   var IV_LENGTH2 = config.ivLength;
   var UploadEngine = class {
     /**
@@ -213,10 +220,7 @@
       const maxRetries = cfg.maxRetries ?? 5;
       const tasks = chunks.map((chunk, index) => async () => {
         signal?.throwIfAborted();
-        const encrypted = await this.encrypt(
-          chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength),
-          cfg.fek
-        );
+        const encrypted = await this.encrypt(chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength), cfg.fek);
         signal?.throwIfAborted();
         await this.uploadWithRetry(sink, fileId, index, encrypted, maxRetries);
         uploadedChunks++;
@@ -246,10 +250,7 @@
         const chunkBytes = data.byteLength;
         const maxRetries = cfg.maxRetries ?? 5;
         const chunkPromise = (async () => {
-          const encrypted = await this.encrypt(
-            data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
-            cfg.fek
-          );
+          const encrypted = await this.encrypt(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength), cfg.fek);
           await this.uploadWithRetry(sink, fileId, index, encrypted, maxRetries);
           uploadedChunks++;
           bytesUploaded += chunkBytes;
@@ -264,7 +265,8 @@
         })();
         const tracked = chunkPromise.finally(() => {
           const idx = queue.indexOf(tracked);
-          if (idx !== -1) queue.splice(idx, 1);
+          if (idx !== -1)
+            queue.splice(idx, 1);
         });
         queue.push(tracked);
       }
@@ -276,7 +278,8 @@
           await sink.upload(fileId, index, encrypted);
           return;
         } catch (err) {
-          if (attempt >= maxRetries) throw err;
+          if (attempt >= maxRetries)
+            throw err;
           const msg = err instanceof Error ? err.message : String(err);
           const is429 = msg.includes("429");
           const baseMs = is429 ? 5e3 : 1e3;
@@ -287,11 +290,7 @@
     }
     async encrypt(chunk, fek) {
       const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH2));
-      const ciphertext = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv },
-        fek,
-        chunk
-      );
+      const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, fek, chunk);
       const output = new Uint8Array(iv.byteLength + ciphertext.byteLength);
       output.set(iv, 0);
       output.set(new Uint8Array(ciphertext), iv.byteLength);
@@ -304,19 +303,18 @@
         while (true) {
           signal?.throwIfAborted();
           const idx = nextIdx;
-          if (idx >= tasks.length) break;
+          if (idx >= tasks.length)
+            break;
           nextIdx++;
           results[idx] = await tasks[idx]();
         }
       }
-      await Promise.all(
-        Array.from({ length: Math.min(concurrency, tasks.length) }, () => worker())
-      );
+      await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, () => worker()));
       return results;
     }
   };
 
-  // ../../packages/processing/src/chunker.ts
+  // ../../packages/processing/src/chunker.js
   async function* chunkFileStream(file, chunkSize = config.defaultChunkSize) {
     const stream = file instanceof ReadableStream ? file : file.stream();
     const reader = stream.getReader();
@@ -325,7 +323,8 @@
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done)
+          break;
         const newBuffer = new Uint8Array(buffer.length + value.length);
         newBuffer.set(buffer, 0);
         newBuffer.set(value, buffer.length);

@@ -20,7 +20,7 @@ import { pluginRegistry } from "./plugin-registry.js";
 import { matchRoute } from "@ddv4/plugin-sdk/route";
 
 // yoga is initialized after plugins load (see below)
-let yoga: ReturnType<typeof createYoga>;
+let yoga;
 
 async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
@@ -48,7 +48,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
   // GraphQL — handled by Yoga
   if (pathname === "/graphql") {
-    return yoga.handleRequest(req, {});
+    return yoga!.handleRequest(req, {});
   }
 
   // HTTP Routes
@@ -139,6 +139,7 @@ yoga = createYoga({
   schema: buildSchema(),
   context: ({ request }) => createContext(request),
   graphqlEndpoint: "/graphql",
+  maskedErrors: false,
   cors: {
     origin: serverConfig.frontendUrl,
     credentials: true,

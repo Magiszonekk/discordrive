@@ -26,7 +26,7 @@ function requireFullMode(): void {
 /** Deep-merge resolver maps without extra dependencies. */
 function mergeResolvers(
   ...maps: Record<string, unknown>[]
-): Record<string, unknown> {
+): Parameters<typeof createSchema<Context>>[0]["resolvers"] {
   return maps.reduce(
     (acc, cur) => {
       for (const [k, v] of Object.entries(cur)) {
@@ -42,7 +42,7 @@ function mergeResolvers(
       return acc;
     },
     {} as Record<string, unknown>,
-  );
+  ) as Parameters<typeof createSchema<Context>>[0]["resolvers"];
 }
 
 /**

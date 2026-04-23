@@ -1,6 +1,6 @@
 // DiscorDrive v4 — Share link resolvers
 
-import argon2 from "argon2";
+import * as argon2 from "argon2";
 import { db } from "@ddv4/database";
 import type { CreateShareRequest, ShareInfoResponse } from "@ddv4/types/api";
 

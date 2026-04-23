@@ -79,7 +79,7 @@ class PluginRegistry {
 
   async unload(): Promise<void> {
     // Tear down in reverse load order
-    for (const plugin of this.plugins.toReversed()) {
+    for (const plugin of [...this.plugins].reverse()) {
       await plugin
         .teardown?.()
         .catch((e) =>

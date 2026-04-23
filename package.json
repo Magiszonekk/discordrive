@@ -17,6 +17,8 @@
     "db:push": "npm run db:push --workspace=@ddv4/database",
     "typecheck": "tsc --build",
     "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspace=@ddv4/api",
+    "test:db": "npm run test --workspace=@ddv4/api -- db-connection",
     "benchmark": "tsx scripts/benchmark.ts",
     "benchmark:e2e": "tsx scripts/benchmark-e2e.ts",
     "infra:up": "docker compose -f infra/docker-compose.yml --env-file .env up -d",
