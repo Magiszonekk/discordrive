@@ -1,0 +1,29 @@
+{
+  "name": "@ddv4/database",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./seed/magiszonek": "./src/seed/magiszonek.ts"
+  },
+  "scripts": {
+    "generate": "prisma generate",
+    "db:push": "dotenv -e ../../.env -- prisma db push",
+    "db:push:force": "dotenv -e ../../.env -- prisma db push --force-reset",
+    "db:migrate": "dotenv -e ../../.env -- prisma migrate dev",
+    "studio": "dotenv -e ../../.env -- prisma studio",
+    "test": "vitest run --reporter=verbose"
+  },
+  "dependencies": {
+    "@ddv4/config": "*",
+    "@prisma/client": "^6.19.2"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^11.0.0",
+    "prisma": "^6.19.2",
+    "vitest": "^4.1.5"
+  }
+}

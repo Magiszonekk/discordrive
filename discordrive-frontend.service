@@ -1,0 +1,14 @@
+[Unit]
+Description=Discordrive Frontend (Vite Preview)
+After=network.target discordrive-api.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Desktop/discordrive/discordrive/apps/frontend
+ExecStart=/home/ubuntu/Desktop/discordrive/discordrive/node_modules/.bin/vite preview
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

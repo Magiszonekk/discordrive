@@ -1,0 +1,45 @@
+export {
+  generateSalt,
+  randomBytes,
+  toBase64,
+  fromBase64,
+  exportKey,
+  importKey,
+  deriveKEK,
+  deriveKEKFromParams,
+  generateMasterKey,
+  generateARK,
+  generateDomainKey,
+  wrapARKWithPassword,
+  unwrapARKWithPassword,
+  wrapDomainKey,
+  unwrapDomainKey,
+  wrapKey,
+  unwrapKey,
+  generateFEK,
+  generateRootFEK,
+  deriveFileContentKey,
+  deriveFileMetadataKey,
+  deriveShareWrapKey,
+  deriveShareAuthKey,
+  deriveShareCapabilityToken,
+  constantTimeEqual,
+  deriveLoginMaterial,
+  encryptChunk,
+  decryptChunk,
+  encryptFileMetadataPlaintext,
+  decryptFileMetadataPlaintext,
+  encryptFileManifestPlaintext,
+  decryptFileManifestPlaintext,
+} from "./crypto.js";
+
+export {
+  chunkFileStream,
+  calculateChunkCount,
+} from "./chunker.js";
+
+export {
+  hashStream,
+  hashFile,
+  hashBuffer,
+} from "./hash.js";

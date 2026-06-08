@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  fast-gate:
+    name: Fast gate (typecheck, build, smoke, unit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Run fast tests
+        run: npm test
+
+  integration:
+    name: Integration (API + DB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: fast-gate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare env file
+        run: |
+          cp .env.example .env
+          {
+            echo "POSTGRES_USER=ddv4"
+            echo "POSTGRES_PASSWORD=ddv4"
+            echo "POSTGRES_DB=ddv4"
+            echo "POSTGRES_PORT=5432"
+            echo "REDIS_PORT=6379"
+            echo "DATABASE_URL=postgresql://ddv4:ddv4@localhost:5432/ddv4"
+            echo "JWT_SECRET=ci-test-secret"
+            echo "JWT_EXPIRES_IN=7d"
+            echo "API_PORT=3000"
+            echo "FRONTEND_PORT=5173"
+            echo "APP_MODE=full"
+          } >> .env
+
+      - name: Start infrastructure
+        run: docker compose -f infra/docker-compose.yml --env-file .env up -d postgres redis
+
+      - name: Wait for PostgreSQL health
+        run: docker compose -f infra/docker-compose.yml --env-file .env ps
+
+      - name: Push database schema
+        run: npm run db:push
+
+      - name: Start API
+        run: |
+          npm run dev --workspace=@ddv4/api > /tmp/discordrive-api.log 2>&1 &
+          echo $! > /tmp/discordrive-api.pid
+
+      - name: Wait for API readiness
+        run: |
+          for i in {1..60}; do
+            if curl -s -X POST http://localhost:3000/graphql \
+              -H 'Content-Type: application/json' \
+              --data '{"query":"{ __typename }"}' | grep -q '"Query"'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API failed to become ready"
+          cat /tmp/discordrive-api.log || true
+          exit 1
+
+      - name: Run integration tests
+        run: npm run test:integration
+
+      - name: Show API log on failure
+        if: failure()
+        run: cat /tmp/discordrive-api.log || true
+
+      - name: Stop API
+        if: always()
+        run: |
+          if [ -f /tmp/discordrive-api.pid ]; then
+            kill $(cat /tmp/discordrive-api.pid) || true
+          fi
+
+      - name: Stop infrastructure
+        if: always()
+        run: docker compose -f infra/docker-compose.yml --env-file .env down -v

@@ -1,0 +1,14 @@
+[Unit]
+Description=Discordrive API
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Desktop/discordrive/discordrive/apps/api
+ExecStart=/home/ubuntu/.nvm/versions/node/v22.22.2/bin/node --env-file /home/ubuntu/Desktop/discordrive/discordrive/.env --import tsx src/index.ts
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

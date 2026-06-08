@@ -1,0 +1,14 @@
+{
+  "mode": "simple-single-blob",
+  "file_size_bytes": 377487360,
+  "upload_path_ms": 2314.2,
+  "upload_path_speed_mbps": 155.56,
+  "init_ms": 25.0,
+  "upload_ms": 2167.3,
+  "upload_speed_mbps": 166.11,
+  "commit_ms": 121.9,
+  "download_ms": 1982.8,
+  "download_speed_mbps": 181.56,
+  "delete_ms": 302.7,
+  "hash_verified": true
+}

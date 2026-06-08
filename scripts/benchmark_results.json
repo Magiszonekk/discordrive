@@ -1,0 +1,14 @@
+{
+  "file_size_bytes": 419430400,
+  "file_size": "400.00 MB",
+  "init_ms": 29.1,
+  "upload_ms": 2158.7,
+  "upload_speed_mbps": 185.3,
+  "commit_ms": 36.4,
+  "download_ms": 1564.2,
+  "download_speed_mbps": 255.72,
+  "delete_ms": 48.0,
+  "transfer_total_ms": 3722.9,
+  "transfer_speed_mbps": 214.89,
+  "hash_verified": true
+}

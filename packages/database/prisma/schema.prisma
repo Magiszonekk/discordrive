@@ -1,0 +1,196 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String      @id @default(cuid())
+  email       String      @unique
+  username    String?     @unique
+  createdAt   DateTime    @default(now())
+  crypto      UserCrypto?
+  domainKeys  DomainKey[]
+  files       File[]
+  folders     Folder[]
+  blobs       BlobTransport[]
+  shares      Share[]
+}
+
+model UserCrypto {
+  userId                 String   @id
+  wrappedARKByPassword   Bytes
+  wrappedARKByRecovery   Bytes
+  argon2MemoryKB         Int
+  argon2Iterations       Int
+  argon2Parallelism      Int
+  argon2SaltB64          String
+  serverAuthProofHash    String?
+  createdAt              DateTime @default(now())
+  lastPasswordChangeAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model DomainKey {
+  id         String   @id @default(cuid())
+  userId     String
+  domain     DomainId
+  wrappedKey Bytes
+  keyVersion Int      @default(1)
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, domain, keyVersion])
+  @@index([userId, domain])
+}
+
+model File {
+  id                    String      @id @default(cuid())
+  ownerUserId           String
+  parentFolderId        String?
+  encryptedName         String?
+  encryptedMimeType     String?
+  primaryManifestBlobId String?
+  wrappedFEK            Bytes
+  status                FileStatus  @default(UPLOADING)
+  totalCiphertextBytes  BigInt      @default(0)
+  chunkCount            Int         @default(0)
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+  deletedAt             DateTime?
+
+  owner        User                   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  parentFolder Folder?                @relation(fields: [parentFolderId], references: [id], onDelete: SetNull)
+  shares       ShareWrappedObjectKey[]
+
+  @@index([ownerUserId, parentFolderId, status])
+  @@index([ownerUserId, deletedAt])
+}
+
+enum FileStatus {
+  UPLOADING
+  READY
+  FAILED
+}
+
+enum BlobStorageKind {
+  LOCAL
+  DISCORD
+}
+
+model BlobTransport {
+  blobId               String           @id
+  ownerUserId          String
+  storageKind          BlobStorageKind
+  storagePath          String
+  discordMessageId     String?
+  discordChannelId     String?
+  webhookId            String?
+  ciphertextSizeBytes  BigInt
+  ciphertextHash       String?
+  healthStatus         BlobHealthStatus?
+  healthCheckedAt      DateTime?
+  createdAt            DateTime         @default(now())
+
+  owner User @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  @@index([ownerUserId, createdAt])
+}
+
+enum BlobHealthStatus {
+  HEALTHY
+  MISSING
+  MODIFIED
+}
+
+model Folder {
+  id               String    @id @default(cuid())
+  ownerUserId      String
+  parentFolderId   String?
+  encryptedBody    Bytes
+  wrappedFolderKey Bytes
+  itemCount        Int       @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  owner  User     @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  parent Folder?  @relation("FolderTree", fields: [parentFolderId], references: [id], onDelete: SetNull)
+  childFolders Folder[] @relation("FolderTree")
+  files   File[]
+
+  @@index([ownerUserId, parentFolderId])
+}
+
+model Share {
+  shareId          String      @id @default(cuid())
+  ownerUserId      String
+  shareType        ShareType   @default(FILE)
+  capabilityToken  Bytes
+  allowContent     Boolean     @default(true)
+  allowMetadata    Boolean     @default(true)
+  allowPreview     Boolean     @default(false)
+  status           ShareStatus @default(ACTIVE)
+  expiresAt        DateTime?
+  maxViews         Int?
+  viewCount        Int         @default(0)
+  createdAt        DateTime    @default(now())
+  revokedAt        DateTime?
+
+  owner             User                   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  grantedAccess     GrantedAccess[]
+  wrappedObjectKeys ShareWrappedObjectKey[]
+
+  @@index([ownerUserId, status])
+  @@index([expiresAt])
+}
+
+enum ShareType {
+  FILE
+}
+
+enum ShareStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+model GrantedAccess {
+  accessId        String   @id @default(cuid())
+  shareId         String
+  accessType      AccessType @default(PUBLIC_LINK)
+  wrappedAKShare  Bytes
+  createdAt       DateTime @default(now())
+  revokedAt       DateTime?
+  expiresAt       DateTime?
+
+  share Share @relation(fields: [shareId], references: [shareId], onDelete: Cascade)
+
+  @@index([shareId, accessType])
+}
+
+enum AccessType {
+  PUBLIC_LINK
+}
+
+model ShareWrappedObjectKey {
+  id         String @id @default(cuid())
+  shareId    String
+  fileId     String
+  wrappedFEK Bytes?
+
+  share Share @relation(fields: [shareId], references: [shareId], onDelete: Cascade)
+  file  File  @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@unique([shareId, fileId])
+  @@index([fileId])
+}
+
+enum DomainId {
+  FILES
+  GALLERY
+}
