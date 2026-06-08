@@ -183,7 +183,7 @@ export async function generateFEK(): Promise<CryptoKey> {
 }
 
 export async function generateRootFEK(): Promise<CryptoKey> {
-  return generateMasterKey();
+  return crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt", "wrapKey", "unwrapKey"]);
 }
 
 // === Wrapping ===

@@ -2,11 +2,12 @@
 // This script runs automatically when the API server starts.
 
 import { db } from "@ddv4/database";
+import { createHash } from "node:crypto";
 import {
   generateARK,
   generateDomainKey,
   generateRootFEK,
-  wrapARKWithPassword,
+  deriveLoginMaterial,
   wrapDomainKey,
   wrapKey,
   generateSalt,
@@ -22,6 +23,7 @@ interface CryptoData {
     parallelism: number;
     saltB64: string;
   };
+  serverAuthProofHash: string;
   ark: CryptoKey;
   filesKey: CryptoKey;
   wrappedFilesKey: string;
@@ -48,9 +50,10 @@ async function generateCryptoData(): Promise<CryptoData> {
   const filesKey = await generateDomainKey();
   const rootFek = await generateRootFEK();
 
-  // Wrap keys with password
-  const wrappedArk = await wrapARKWithPassword(ark, password, params);
-  const wrappedRecovery = await wrapARKWithPassword(ark, password, params);
+  // Single Argon2 run — derives ARK-wrapping key and server auth proof
+  const { arkWrapKey, serverAuthProof } = await deriveLoginMaterial(password, params);
+
+  const wrappedArkData = await wrapKey(ark, arkWrapKey);
   const wrappedFilesKey = await wrapDomainKey(filesKey, ark);
   const wrappedRootFek = await wrapKey(rootFek, filesKey);
 
@@ -61,10 +64,15 @@ async function generateCryptoData(): Promise<CryptoData> {
     return packed;
   }
 
+  const serverAuthProofHash = createHash("sha256")
+    .update(Buffer.from(toBase64(serverAuthProof), "base64"))
+    .digest("hex");
+
   return {
-    wrappedARKByPassword: toBase64(packWithIv(wrappedArk.wrappedARK, wrappedArk.iv)),
-    wrappedARKByRecovery: toBase64(packWithIv(wrappedRecovery.wrappedARK, wrappedRecovery.iv)),
+    wrappedARKByPassword: toBase64(packWithIv(wrappedArkData.data, wrappedArkData.iv)),
+    wrappedARKByRecovery: toBase64(packWithIv(wrappedArkData.data, wrappedArkData.iv)),
     argon2Params: params,
+    serverAuthProofHash,
     ark,
     filesKey,
     wrappedFilesKey: toBase64(wrappedFilesKey.data),
@@ -113,6 +121,7 @@ export async function createMagiszonekIfNeeded(): Promise<void> {
           argon2Iterations: cryptoData.argon2Params.iterations,
           argon2Parallelism: cryptoData.argon2Params.parallelism,
           argon2SaltB64: cryptoData.argon2Params.saltB64,
+          serverAuthProofHash: cryptoData.serverAuthProofHash,
         },
       },
     },

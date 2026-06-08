@@ -1,12 +1,20 @@
 import { useState } from "react";
-import { loginCrypto } from "../lib/crypto.js";
+import { loginCryptoFromKey, deriveLoginMaterial, toBase64 } from "../lib/crypto.js";
 import { gqlRequest } from "../lib/graphql.js";
 import { useAuthStore } from "../stores/auth.js";
-import type { LoginResponse } from "@ddv4/types/api";
+import type { LoginResponse, LoginChallengeDto } from "@ddv4/types/api";
+
+const GET_LOGIN_CHALLENGE = `
+  query GetLoginChallenge($emailOrUsername: String!) {
+    getLoginChallenge(emailOrUsername: $emailOrUsername) {
+      argon2Params { memoryKB iterations parallelism saltB64 }
+    }
+  }
+`;
 
 const LOGIN_MUTATION = `
-  mutation Login($emailOrUsername: String!, $password: String!) {
-    login(emailOrUsername: $emailOrUsername, password: $password) {
+  mutation Login($emailOrUsername: String!, $serverAuthProof: String!) {
+    login(emailOrUsername: $emailOrUsername, serverAuthProof: $serverAuthProof) {
       token
       user {
         id
@@ -38,18 +46,20 @@ export function Unlock() {
     setLoading(true);
 
     try {
-      // Fetch fresh crypto data from server and get a new token at the same time.
-      // This also refreshes the JWT so it doesn't expire mid-session.
+      const { getLoginChallenge } = await gqlRequest<{ getLoginChallenge: LoginChallengeDto | null }>(
+        GET_LOGIN_CHALLENGE,
+        { emailOrUsername: user.email },
+      );
+      if (!getLoginChallenge) throw new Error("Account not found");
+
+      const { arkWrapKey, serverAuthProof } = await deriveLoginMaterial(password, getLoginChallenge.argon2Params);
+
       const { login } = await gqlRequest<{ login: LoginResponse }>(LOGIN_MUTATION, {
         emailOrUsername: user.email,
-        password,
+        serverAuthProof: toBase64(serverAuthProof),
       });
 
-      const { ark, filesKey } = await loginCrypto(
-        password,
-        login.user.crypto.wrappedARKByPassword,
-        login.user.crypto.argon2Params,
-      );
+      const { ark, filesKey } = await loginCryptoFromKey(arkWrapKey, login.user.crypto.wrappedARKByPassword);
 
       setAuth(login.token, login.user, ark, filesKey ?? ark);
     } catch {
