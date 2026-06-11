@@ -124,9 +124,11 @@ export function buildSchema() {
       type ShareObjectKey {
         fileId: ID!
         primaryManifestBlobId: String
+        previewBlobId: String
         encryptedName: String
         encryptedMimeType: String
         wrappedFEK: String
+        wrappedFEKPreview: String
       }
 
       type ShareAccess {
@@ -134,6 +136,8 @@ export function buildSchema() {
         wrappedAKShare: String!
         wrappedObjectKeys: [ShareObjectKey!]!
         allowContent: Boolean!
+        allowMetadata: Boolean!
+        allowPreview: Boolean!
       }
 
       type SecureShare {
@@ -297,7 +301,10 @@ export function buildSchema() {
           capabilityToken: String!
           wrappedAKShare: String!
           wrappedFEK: String
+          wrappedFEKPreview: String
           allowContent: Boolean!
+          allowMetadata: Boolean
+          allowPreview: Boolean
           expiresAt: String
           maxViews: Int
         ): SecureShare!
@@ -518,12 +525,19 @@ export function buildSchema() {
           capabilityToken: string;
           wrappedAKShare: string;
           wrappedFEK?: string;
+          wrappedFEKPreview?: string;
           allowContent: boolean;
+          allowMetadata?: boolean;
+          allowPreview?: boolean;
           expiresAt?: string;
           maxViews?: number;
         }, ctx: Context) => {
           const auth = requireAuth(ctx);
-          const result = await sharingResolvers.createShare(auth.userId, { ...args, allowMetadata: false, allowPreview: false });
+          const result = await sharingResolvers.createShare(auth.userId, {
+            ...args,
+            allowMetadata: args.allowMetadata ?? false,
+            allowPreview: args.allowPreview ?? false,
+          });
           const shares = await sharingResolvers.getShares(auth.userId, args.fileId);
           return shares.find((share) => share.shareId === result.shareId)!;
         },

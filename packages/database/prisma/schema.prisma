@@ -198,10 +198,11 @@ enum AccessType {
 }
 
 model ShareWrappedObjectKey {
-  id         String @id @default(cuid())
-  shareId    String
-  fileId     String
-  wrappedFEK Bytes?
+  id                String @id @default(cuid())
+  shareId           String
+  fileId            String
+  wrappedFEK        Bytes?
+  wrappedFEKPreview Bytes?
 
   share Share @relation(fields: [shareId], references: [shareId], onDelete: Cascade)
   file  File  @relation(fields: [fileId], references: [id], onDelete: Cascade)

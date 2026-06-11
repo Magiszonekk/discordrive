@@ -46,6 +46,8 @@ const smokeUser = {
   username: "core-v1-smoke",
 };
 
+const serverAuthProof = Buffer.from("core-v1-smoke-proof").toString("base64");
+
 const bootstrap = {
   wrappedARKByPassword: Buffer.from("ark-password-smoke").toString("base64"),
   wrappedARKByRecovery: Buffer.from("ark-recovery-smoke").toString("base64"),
@@ -55,6 +57,7 @@ const bootstrap = {
     parallelism: 1,
     saltB64: Buffer.from("smoke-salt").toString("base64"),
   },
+  serverAuthProof,
 };
 
 const manifestBlobId = "manifest-derived-core-v1-smoke";
@@ -116,6 +119,7 @@ describe("core v1 smoke flow", () => {
           $wrappedARKByPassword: String!
           $wrappedARKByRecovery: String!
           $argon2Params: Argon2ParamsInput!
+          $serverAuthProof: String!
         ) {
           register(
             email: $email
@@ -123,6 +127,7 @@ describe("core v1 smoke flow", () => {
             wrappedARKByPassword: $wrappedARKByPassword
             wrappedARKByRecovery: $wrappedARKByRecovery
             argon2Params: $argon2Params
+            serverAuthProof: $serverAuthProof
           ) {
             token
             user {
@@ -154,8 +159,8 @@ describe("core v1 smoke flow", () => {
 
     const loginData = await execGraphql<{ login: AuthPayload }>(
       /* GraphQL */ `
-        mutation Login($emailOrUsername: String!, $password: String!) {
-          login(emailOrUsername: $emailOrUsername, password: $password) {
+        mutation Login($emailOrUsername: String!, $serverAuthProof: String!) {
+          login(emailOrUsername: $emailOrUsername, serverAuthProof: $serverAuthProof) {
             token
             user {
               id
@@ -178,7 +183,7 @@ describe("core v1 smoke flow", () => {
       `,
       {
         emailOrUsername: smokeUser.email,
-        password: "client-side-proof-placeholder",
+        serverAuthProof,
       },
     );
 
@@ -217,6 +222,14 @@ describe("core v1 smoke flow", () => {
       manifestBlobId,
       ciphertext.byteLength.toString(),
       1,
+      [
+        {
+          blobId: manifestBlobId,
+          storageKind: "LOCAL",
+          storagePath: path.join(tempBlobRoot, manifestBlobId),
+          ciphertextSizeBytes: ciphertext.byteLength.toString(),
+        },
+      ],
     );
 
     expect(commitData.success).toBe(true);

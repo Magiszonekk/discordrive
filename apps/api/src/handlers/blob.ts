@@ -299,32 +299,18 @@ export async function handleBlobUpload(req: Request, params: { blobId: string })
     // resumed: without this, chunks already stored (e.g. on Discord) would be
     // unrecoverable orphans until commitManifest. Re-uploads of the same blobId
     // overwrite the record with the newest location.
+    const transportData = {
+      ownerUserId: auth.userId,
+      storageKind,
+      storagePath,
+      ...(storageKind === "DISCORD" ? { discordMessageId, discordChannelId, webhookId } : {}),
+      ciphertextSizeBytes,
+      ciphertextHash,
+    };
     await db.blobTransport.upsert({
       where: { blobId: params.blobId },
-      create: {
-        blobId: params.blobId,
-        ownerUserId: auth.userId,
-        storageKind,
-        storagePath,
-        discordMessageId,
-        discordChannelId,
-        webhookId,
-        ciphertextSizeBytes,
-        ciphertextHash,
-        healthStatus: null,
-        healthCheckedAt: null,
-      },
-      update: {
-        storageKind,
-        storagePath,
-        discordMessageId,
-        discordChannelId,
-        webhookId,
-        ciphertextSizeBytes,
-        ciphertextHash,
-        healthStatus: null,
-        healthCheckedAt: null,
-      },
+      create: { blobId: params.blobId, ...transportData },
+      update: { ...transportData, healthStatus: null, healthCheckedAt: null },
     });
 
     logBlobUploadEvent({

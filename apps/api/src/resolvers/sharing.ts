@@ -23,8 +23,8 @@ export async function createShare(
       shareType: "FILE",
       capabilityToken: Buffer.from(input.capabilityToken, "base64"),
       allowContent: input.allowContent,
-      allowMetadata: false,
-      allowPreview: false,
+      allowMetadata: input.allowMetadata ?? false,
+      allowPreview: input.allowPreview ?? false,
       expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
       maxViews: input.maxViews ?? null,
       grantedAccess: {
@@ -37,6 +37,7 @@ export async function createShare(
         create: {
           fileId: input.fileId,
           wrappedFEK: input.wrappedFEK ? Buffer.from(input.wrappedFEK, "base64") : null,
+          wrappedFEKPreview: input.wrappedFEKPreview ? Buffer.from(input.wrappedFEKPreview, "base64") : null,
         },
       },
     },
@@ -98,10 +99,17 @@ export async function accessShare(
     wrappedObjectKeys: share.wrappedObjectKeys.map((item) => ({
       fileId: item.fileId,
       primaryManifestBlobId: item.file.primaryManifestBlobId ?? undefined,
-      encryptedName: item.file.encryptedName ?? undefined,
-      encryptedMimeType: item.file.encryptedMimeType ?? undefined,
+      // Permission-gated fields: the server only releases what the owner allowed
+      previewBlobId: share.allowPreview ? item.file.previewBlobId ?? undefined : undefined,
+      encryptedName: share.allowMetadata ? item.file.encryptedName ?? undefined : undefined,
+      encryptedMimeType: share.allowMetadata ? item.file.encryptedMimeType ?? undefined : undefined,
       wrappedFEK: item.wrappedFEK ? Buffer.from(item.wrappedFEK).toString("base64") : undefined,
+      wrappedFEKPreview: share.allowPreview && item.wrappedFEKPreview
+        ? Buffer.from(item.wrappedFEKPreview).toString("base64")
+        : undefined,
     })),
     allowContent: share.allowContent,
+    allowMetadata: share.allowMetadata,
+    allowPreview: share.allowPreview,
   };
 }

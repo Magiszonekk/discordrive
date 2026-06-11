@@ -33,6 +33,9 @@ vi.mock("@ddv4/discord-client", () => {
       waitForAvailable: vi.fn(async (webhookIds: string[]) => webhookIds[0]),
       recordResponse: vi.fn(),
       recordError: vi.fn(),
+      canUse: vi.fn(() => true),
+      getNextResetMs: vi.fn(() => 0),
+      getStateSnapshot: vi.fn(() => ({ remaining: null, inFlight: null })),
     };
   });
 
@@ -405,6 +408,11 @@ describe("blob transport handlers", () => {
       vi.mocked(discordClient.uploadChunk).mockResolvedValue({
         messageId: "discord-message-blob-discord-upload",
         channelId: "discord-channel-user-123",
+        transportPath: "direct",
+        attemptCount: 1,
+        upstreamStatus: 200,
+        elapsedMs: 5,
+        relayEgress: null,
       });
       const { handleBlobUpload } = await import("../../handlers/blob.js");
       const token = signToken({ userId: "user-123", email: "user@example.com" });

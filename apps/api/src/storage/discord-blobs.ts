@@ -387,5 +387,8 @@ export async function statDiscordBlob(storagePath: string): Promise<{ exists: bo
 }
 
 export function clearDiscordBlobStore(): void {
-  // no-op now that the adapter uses discord-client instead of an in-memory store
+  // Reset module-level sender caches so tests (and config reloads) see the
+  // current serverConfig instead of values cached at first use.
+  cachedWebhooks = null;
+  cachedBots = null;
 }

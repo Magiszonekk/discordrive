@@ -60,6 +60,9 @@ const baseUser = {
   username: "auth-bootstrap",
 };
 
+const initialServerAuthProof = Buffer.from("server-auth-proof-v1").toString("base64");
+const updatedServerAuthProof = Buffer.from("server-auth-proof-v2").toString("base64");
+
 const initialBootstrap = {
   wrappedARKByPassword: Buffer.from("ark-password-v1").toString("base64"),
   wrappedARKByRecovery: Buffer.from("ark-recovery-v1").toString("base64"),
@@ -69,9 +72,11 @@ const initialBootstrap = {
     parallelism: 2,
     saltB64: Buffer.from("salt-v1").toString("base64"),
   },
+  serverAuthProof: initialServerAuthProof,
 };
 
 const updatedPasswordBootstrap = {
+  currentServerAuthProof: initialServerAuthProof,
   wrappedARKByPassword: Buffer.from("ark-password-v2").toString("base64"),
   argon2Params: {
     memoryKB: 131072,
@@ -79,6 +84,7 @@ const updatedPasswordBootstrap = {
     parallelism: 1,
     saltB64: Buffer.from("salt-v2").toString("base64"),
   },
+  serverAuthProof: updatedServerAuthProof,
 };
 
 async function resetAuthFixtures() {
@@ -120,6 +126,7 @@ describe("auth bootstrap gate", () => {
         $wrappedARKByPassword: String!
         $wrappedARKByRecovery: String!
         $argon2Params: Argon2ParamsInput!
+        $serverAuthProof: String!
       ) {
         register(
           email: $email
@@ -127,6 +134,7 @@ describe("auth bootstrap gate", () => {
           wrappedARKByPassword: $wrappedARKByPassword
           wrappedARKByRecovery: $wrappedARKByRecovery
           argon2Params: $argon2Params
+          serverAuthProof: $serverAuthProof
         ) {
           token
           user {
@@ -183,8 +191,8 @@ describe("auth bootstrap gate", () => {
 
     const loginResult = await execAuth(
       /* GraphQL */ `
-        mutation Login($emailOrUsername: String!, $password: String!) {
-          login(emailOrUsername: $emailOrUsername, password: $password) {
+        mutation Login($emailOrUsername: String!, $serverAuthProof: String!) {
+          login(emailOrUsername: $emailOrUsername, serverAuthProof: $serverAuthProof) {
             token
             user {
               id
@@ -207,7 +215,7 @@ describe("auth bootstrap gate", () => {
       `,
       {
         emailOrUsername: baseUser.email,
-        password: "client-side-password-proof-placeholder",
+        serverAuthProof: initialServerAuthProof,
       },
     );
 
@@ -236,6 +244,7 @@ describe("auth bootstrap gate", () => {
           $wrappedARKByPassword: String!
           $wrappedARKByRecovery: String!
           $argon2Params: Argon2ParamsInput!
+          $serverAuthProof: String!
         ) {
           register(
             email: $email
@@ -243,6 +252,7 @@ describe("auth bootstrap gate", () => {
             wrappedARKByPassword: $wrappedARKByPassword
             wrappedARKByRecovery: $wrappedARKByRecovery
             argon2Params: $argon2Params
+            serverAuthProof: $serverAuthProof
           ) {
             user {
               id
@@ -272,8 +282,18 @@ describe("auth bootstrap gate", () => {
 
     const changeResult = await execAuth(
       /* GraphQL */ `
-        mutation ChangePassword($wrappedARKByPassword: String!, $argon2Params: Argon2ParamsInput!) {
-          changePassword(wrappedARKByPassword: $wrappedARKByPassword, argon2Params: $argon2Params)
+        mutation ChangePassword(
+          $currentServerAuthProof: String!
+          $wrappedARKByPassword: String!
+          $argon2Params: Argon2ParamsInput!
+          $serverAuthProof: String!
+        ) {
+          changePassword(
+            currentServerAuthProof: $currentServerAuthProof
+            wrappedARKByPassword: $wrappedARKByPassword
+            argon2Params: $argon2Params
+            serverAuthProof: $serverAuthProof
+          )
         }
       `,
       updatedPasswordBootstrap,
@@ -284,8 +304,8 @@ describe("auth bootstrap gate", () => {
 
     const loginResult = await execAuth(
       /* GraphQL */ `
-        mutation Login($emailOrUsername: String!, $password: String!) {
-          login(emailOrUsername: $emailOrUsername, password: $password) {
+        mutation Login($emailOrUsername: String!, $serverAuthProof: String!) {
+          login(emailOrUsername: $emailOrUsername, serverAuthProof: $serverAuthProof) {
             user {
               crypto {
                 wrappedARKByPassword
@@ -304,7 +324,7 @@ describe("auth bootstrap gate", () => {
       `,
       {
         emailOrUsername: baseUser.username,
-        password: "new-client-side-password-proof-placeholder",
+        serverAuthProof: updatedServerAuthProof,
       },
     );
 

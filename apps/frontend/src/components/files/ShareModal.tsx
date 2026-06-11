@@ -11,6 +11,7 @@ const CREATE_SHARE = `
     $wrappedAKShare: String!
     $wrappedFEK: String
     $allowContent: Boolean!
+    $allowMetadata: Boolean
     $expiresAt: String
     $maxViews: Int
   ) {
@@ -20,6 +21,7 @@ const CREATE_SHARE = `
       wrappedAKShare: $wrappedAKShare
       wrappedFEK: $wrappedFEK
       allowContent: $allowContent
+      allowMetadata: $allowMetadata
       expiresAt: $expiresAt
       maxViews: $maxViews
     ) {
@@ -121,6 +123,8 @@ export function ShareModal({ file, onClose }: Props) {
         wrappedAKShare: prepared.wrappedAKShare,
         wrappedFEK: prepared.wrappedFEK,
         allowContent: true,
+        // Web share links show the decrypted filename to the recipient
+        allowMetadata: true,
         expiresAt: expiresAt || null,
         maxViews: maxViews ? Number(maxViews) : null,
       });

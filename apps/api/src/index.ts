@@ -172,7 +172,7 @@ const server = createServer(async (nodeReq, nodeRes) => {
   const request = new Request(url, {
     method: nodeReq.method,
     headers,
-    body: bodyBuffer,
+    body: bodyBuffer ? new Uint8Array(bodyBuffer) : undefined,
     // @ts-ignore
     duplex: bodyBuffer ? "half" : undefined,
   });

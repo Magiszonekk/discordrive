@@ -81,6 +81,8 @@ export interface CreateFileShareRequest {
   capabilityToken: string;
   wrappedAKShare: string;
   wrappedFEK?: string;
+  /** Wrap(AK_share, FEK_preview) — lets recipients decrypt the low-res preview */
+  wrappedFEKPreview?: string;
   allowContent: boolean;
   allowMetadata: boolean;
   allowPreview: boolean;
@@ -94,11 +96,17 @@ export interface ShareAccessResponse {
   wrappedObjectKeys: Array<{
     fileId: string;
     primaryManifestBlobId?: string;
+    /** Only present when allowPreview */
+    previewBlobId?: string;
+    /** Only present when allowMetadata */
     encryptedName?: string;
     encryptedMimeType?: string;
     wrappedFEK?: string;
+    wrappedFEKPreview?: string;
   }>;
   allowContent: boolean;
+  allowMetadata: boolean;
+  allowPreview: boolean;
 }
 
 export type BlobStorageKindDto = "LOCAL" | "DISCORD";
