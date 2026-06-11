@@ -1,9 +1,9 @@
 // DiscorDrive v4 — File resolvers (secure files v2)
 
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, unlink } from "node:fs/promises";
 import { db } from "@ddv4/database";
-import { downloadChunk, getChunkUrl, parseWebhookUrls, WebhookRateLimiter, type WebhookInfo, downloadChunkBot, getChunkUrlBot, type BotInfo } from "@ddv4/discord-client";
+import { downloadChunk, getChunkUrl, parseWebhookUrls, WebhookRateLimiter, type WebhookInfo, downloadChunkBot, getChunkUrlBot, type BotInfo, deleteChunk } from "@ddv4/discord-client";
 import type { InitSecureUploadRequest, UploadedBlobTransportInput } from "@ddv4/types/api";
 import { pluginRegistry } from "../plugin-registry.js";
 
@@ -19,6 +19,8 @@ export async function initUpload(
       encryptedMimeType: input.encryptedMimeType ?? null,
       primaryManifestBlobId: null,
       wrappedFEK: Buffer.from(input.wrappedFEK, "base64"),
+      wrappedFEKPreview: input.wrappedFEKPreview ? Buffer.from(input.wrappedFEKPreview, "base64") : null,
+      dedupeTokenB64: input.dedupeTokenB64 ?? null,
       status: "UPLOADING",
       totalCiphertextBytes: BigInt(input.totalCiphertextBytes),
       chunkCount: input.chunkCount,
@@ -26,6 +28,39 @@ export async function initUpload(
   });
 
   return { fileId: file.id, status: "uploading" };
+}
+
+// Dedupe lookup: the token is HMAC(per-user dedupe key, content hash) computed
+// client-side, so the server can match equality without learning the content
+// hash itself. Returns the existing live file for that token, if any.
+export async function getFileByDedupeToken(ownerUserId: string, dedupeTokenB64: string) {
+  return db.file.findFirst({
+    where: { ownerUserId, dedupeTokenB64, deletedAt: null, status: "READY" },
+  });
+}
+
+// Attaches a client-generated, client-encrypted low-res preview to a file.
+// The preview blob must already be uploaded (PUT /api/blob/{previewBlobId}).
+export async function setFilePreview(
+  ownerUserId: string,
+  fileId: string,
+  previewBlobId: string,
+  wrappedFEKPreview: string,
+): Promise<boolean> {
+  const file = await db.file.findFirst({ where: { id: fileId, ownerUserId } });
+  if (!file) throw new Error("File not found");
+
+  const blob = await db.blobTransport.findUnique({ where: { blobId: previewBlobId } });
+  if (!blob || blob.ownerUserId !== ownerUserId) throw new Error("Preview blob not found");
+
+  await db.file.update({
+    where: { id: fileId },
+    data: {
+      previewBlobId,
+      wrappedFEKPreview: Buffer.from(wrappedFEKPreview, "base64"),
+    },
+  });
+  return true;
 }
 
 export async function commitManifest(
@@ -147,6 +182,131 @@ export async function moveFile(
 
   await db.file.update({ where: { id: fileId }, data: { parentFolderId } });
   return true;
+}
+
+// === Trash ===
+
+type PurgeableFile = { id: string; ownerUserId: string; previewBlobId: string | null };
+type PurgeableBlob = {
+  blobId: string;
+  storageKind: string;
+  storagePath: string;
+  discordMessageId: string | null;
+  webhookId: string | null;
+};
+
+function buildWebhookMap(): Map<string, WebhookInfo> {
+  const webhookUrls = Object.entries(process.env)
+    .filter(([key]) => /^WEBHOOK_\d+$/.test(key))
+    .map(([, value]) => value as string)
+    .filter(Boolean);
+  return new Map(parseWebhookUrls(webhookUrls).map((w) => [w.id, w]));
+}
+
+// Best-effort physical deletion. Failures are logged, not thrown: a purge must
+// never be blocked by an already-deleted Discord message or missing local file.
+// Bot-uploaded blobs are skipped (deletion is webhook-only); their ciphertext
+// stays orphaned on Discord, which leaks nothing.
+async function deleteBlobsBestEffort(blobs: PurgeableBlob[]): Promise<void> {
+  const webhookMap = buildWebhookMap();
+  const rateLimiter = new WebhookRateLimiter();
+
+  for (const blob of blobs) {
+    try {
+      if (blob.storageKind === "LOCAL") {
+        await unlink(blob.storagePath);
+      } else if (blob.discordMessageId && blob.webhookId && webhookMap.has(blob.webhookId)) {
+        await deleteChunk(webhookMap.get(blob.webhookId)!, blob.discordMessageId, rateLimiter);
+      }
+    } catch (error) {
+      console.warn(JSON.stringify({
+        ts: new Date().toISOString(),
+        scope: "trash-purge",
+        type: "blob_delete_failed",
+        blobId: blob.blobId,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+}
+
+async function purgeFileRecord(file: PurgeableFile): Promise<void> {
+  const blobs = await db.blobTransport.findMany({
+    where: {
+      ownerUserId: file.ownerUserId,
+      OR: [
+        { blobId: { startsWith: `${file.id}:` } },
+        ...(file.previewBlobId ? [{ blobId: file.previewBlobId }] : []),
+      ],
+    },
+  });
+
+  await deleteBlobsBestEffort(blobs);
+
+  await db.$transaction([
+    db.blobTransport.deleteMany({ where: { blobId: { in: blobs.map((b) => b.blobId) } } }),
+    db.shareWrappedObjectKey.deleteMany({ where: { fileId: file.id } }),
+    db.file.delete({ where: { id: file.id } }),
+  ]);
+}
+
+export async function getTrashedFiles(ownerUserId: string) {
+  return db.file.findMany({
+    where: { ownerUserId, deletedAt: { not: null } },
+    orderBy: { deletedAt: "desc" },
+  });
+}
+
+export async function restoreFile(ownerUserId: string, fileId: string): Promise<boolean> {
+  const file = await db.file.findFirst({ where: { id: fileId, ownerUserId, deletedAt: { not: null } } });
+  if (!file) throw new Error("File not found in trash");
+
+  // If the original folder was deleted in the meantime, restore to root.
+  let parentFolderId = file.parentFolderId;
+  if (parentFolderId) {
+    const parent = await db.folder.findFirst({ where: { id: parentFolderId, ownerUserId } });
+    if (!parent) parentFolderId = null;
+  }
+
+  await db.file.update({ where: { id: fileId }, data: { deletedAt: null, parentFolderId } });
+  return true;
+}
+
+export async function purgeFile(ownerUserId: string, fileId: string): Promise<boolean> {
+  const file = await db.file.findFirst({ where: { id: fileId, ownerUserId, deletedAt: { not: null } } });
+  if (!file) throw new Error("File not found in trash");
+  await purgeFileRecord(file);
+  return true;
+}
+
+export async function emptyTrash(ownerUserId: string): Promise<number> {
+  const files = await db.file.findMany({ where: { ownerUserId, deletedAt: { not: null } } });
+  for (const file of files) await purgeFileRecord(file);
+  return files.length;
+}
+
+// Permanently removes trashed files past the retention window. Runs across all
+// users — invoked from the server's periodic sweep, not from user requests.
+export async function purgeExpiredTrash(retentionDays = 30): Promise<number> {
+  const cutoff = new Date(Date.now() - retentionDays * 86_400_000);
+  const files = await db.file.findMany({ where: { deletedAt: { lt: cutoff } } });
+
+  let purged = 0;
+  for (const file of files) {
+    try {
+      await purgeFileRecord(file);
+      purged++;
+    } catch (error) {
+      console.warn(JSON.stringify({
+        ts: new Date().toISOString(),
+        scope: "trash-purge",
+        type: "file_purge_failed",
+        fileId: file.id,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+  return purged;
 }
 
 export async function getFiles(ownerUserId: string, parentFolderId: string | null) {

@@ -85,7 +85,10 @@ export function buildSchema() {
         encryptedName: String
         encryptedMimeType: String
         primaryManifestBlobId: String
+        previewBlobId: String
         wrappedFEK: String!
+        wrappedFEKPreview: String
+        dedupeTokenB64: String
         status: String!
         totalCiphertextBytes: String!
         chunkCount: Int!
@@ -212,6 +215,8 @@ export function buildSchema() {
         folders(parentFolderId: ID): [Folder!]!
         folderPath(folderId: ID!): [Folder!]!
         file(fileId: ID!): File
+        fileByDedupeToken(dedupeTokenB64: String!): File
+        trashedFiles: [File!]!
         uploadStatus(fileId: ID!): UploadStatus!
         shares(fileId: ID!): [SecureShare!]!
         storageUsage: StorageUsage!
@@ -243,9 +248,13 @@ export function buildSchema() {
           encryptedName: String
           encryptedMimeType: String
           wrappedFEK: String!
+          wrappedFEKPreview: String
+          dedupeTokenB64: String
           totalCiphertextBytes: String!
           chunkCount: Int!
         ): InitUploadResult!
+
+        setFilePreview(fileId: ID!, previewBlobId: String!, wrappedFEKPreview: String!): Boolean!
 
         commitManifest(
           fileId: ID!
@@ -257,6 +266,9 @@ export function buildSchema() {
 
         deleteFile(fileId: ID!): Boolean!
         moveFile(fileId: ID!, parentFolderId: ID): Boolean!
+        restoreFile(fileId: ID!): Boolean!
+        purgeFile(fileId: ID!): Boolean!
+        emptyTrash: Int!
 
         createFolder(encryptedBodyB64: String!, wrappedFolderKeyB64: String!, parentFolderId: ID): Folder!
         renameFolder(folderId: ID!, encryptedBodyB64: String!): Boolean!
@@ -286,6 +298,8 @@ export function buildSchema() {
       File: {
         totalCiphertextBytes: (parent: { totalCiphertextBytes: bigint | string }) => parent.totalCiphertextBytes.toString(),
         wrappedFEK: (parent: { wrappedFEK: Uint8Array | Buffer }) => Buffer.from(parent.wrappedFEK).toString("base64"),
+        wrappedFEKPreview: (parent: { wrappedFEKPreview: Uint8Array | Buffer | null }) =>
+          parent.wrappedFEKPreview ? Buffer.from(parent.wrappedFEKPreview).toString("base64") : null,
       },
       Folder: {
         encryptedBody: (parent: { encryptedBody: Uint8Array | Buffer }) => Buffer.from(parent.encryptedBody).toString("base64"),
@@ -341,6 +355,14 @@ export function buildSchema() {
           const auth = requireAuth(ctx);
           return fileResolvers.getUploadStatus(auth.userId, args.fileId);
         },
+        fileByDedupeToken: async (_parent: unknown, args: { dedupeTokenB64: string }, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return fileResolvers.getFileByDedupeToken(auth.userId, args.dedupeTokenB64);
+        },
+        trashedFiles: async (_parent: unknown, _args: unknown, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return fileResolvers.getTrashedFiles(auth.userId);
+        },
         shares: async (_parent: unknown, args: { fileId: string }, ctx: Context) => {
           const auth = requireAuth(ctx);
           return sharingResolvers.getShares(auth.userId, args.fileId);
@@ -392,6 +414,8 @@ export function buildSchema() {
           encryptedName?: string;
           encryptedMimeType?: string;
           wrappedFEK: string;
+          wrappedFEKPreview?: string;
+          dedupeTokenB64?: string;
           totalCiphertextBytes: string;
           chunkCount: number;
         }, ctx: Context) => {
@@ -424,6 +448,22 @@ export function buildSchema() {
         moveFile: async (_parent: unknown, args: { fileId: string; parentFolderId?: string }, ctx: Context) => {
           const auth = requireAuth(ctx);
           return fileResolvers.moveFile(auth.userId, args.fileId, args.parentFolderId ?? null);
+        },
+        setFilePreview: async (_parent: unknown, args: { fileId: string; previewBlobId: string; wrappedFEKPreview: string }, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return fileResolvers.setFilePreview(auth.userId, args.fileId, args.previewBlobId, args.wrappedFEKPreview);
+        },
+        restoreFile: async (_parent: unknown, args: { fileId: string }, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return fileResolvers.restoreFile(auth.userId, args.fileId);
+        },
+        purgeFile: async (_parent: unknown, args: { fileId: string }, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return fileResolvers.purgeFile(auth.userId, args.fileId);
+        },
+        emptyTrash: async (_parent: unknown, _args: unknown, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return fileResolvers.emptyTrash(auth.userId);
         },
         createFolder: async (_parent: unknown, args: { encryptedBodyB64: string; wrappedFolderKeyB64: string; parentFolderId?: string }, ctx: Context) => {
           const auth = requireAuth(ctx);

@@ -40,6 +40,8 @@ export interface InitSecureUploadRequest {
   encryptedName?: string;
   encryptedMimeType?: string;
   wrappedFEK: string;
+  wrappedFEKPreview?: string;
+  dedupeTokenB64?: string;
   totalCiphertextBytes: string;
   chunkCount: number;
 }

@@ -116,6 +116,16 @@ const port = serverConfig.apiPort;
 
 await pluginRegistry.load();
 
+// Daily sweep: permanently remove files that sat in trash longer than 30 days.
+import { purgeExpiredTrash } from "./resolvers/files.js";
+const TRASH_RETENTION_DAYS = 30;
+const trashSweep = () =>
+  purgeExpiredTrash(TRASH_RETENTION_DAYS)
+    .then((purged) => { if (purged > 0) console.log(`Trash sweep: purged ${purged} expired file(s)`); })
+    .catch((error) => console.error("Trash sweep failed:", error));
+trashSweep();
+setInterval(trashSweep, 24 * 60 * 60 * 1000).unref();
+
 // Create Magiszonek user if needed (fire-and-forget)
 import { createMagiszonekIfNeeded } from "@ddv4/database/seed/magiszonek";
 createMagiszonekIfNeeded().catch(console.error);

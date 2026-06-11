@@ -56,7 +56,10 @@ model File {
   encryptedName         String?
   encryptedMimeType     String?
   primaryManifestBlobId String?
+  previewBlobId         String?
   wrappedFEK            Bytes
+  wrappedFEKPreview     Bytes?
+  dedupeTokenB64        String?
   status                FileStatus  @default(UPLOADING)
   totalCiphertextBytes  BigInt      @default(0)
   chunkCount            Int         @default(0)
@@ -70,6 +73,7 @@ model File {
 
   @@index([ownerUserId, parentFolderId, status])
   @@index([ownerUserId, deletedAt])
+  @@index([ownerUserId, dedupeTokenB64])
 }
 
 enum FileStatus {
