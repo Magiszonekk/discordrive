@@ -12,6 +12,7 @@ data class MediaAsset(
     val bucketName: String,
     val mimeType: String,
     val sizeBytes: Long,
+    val dateAddedSec: Long,
     val isVideo: Boolean,
 )
 
@@ -22,8 +23,11 @@ data class MediaAsset(
 class MediaScanner(private val context: Context) {
 
     fun scanAll(): List<MediaAsset> =
-        scan(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, isVideo = false) +
-            scan(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, isVideo = true)
+        (scan(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, isVideo = false) +
+            scan(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, isVideo = true))
+            .sortedByDescending { it.dateAddedSec }
+
+    fun findById(assetId: Long): MediaAsset? = scanAll().firstOrNull { it.id == assetId }
 
     private fun scan(collection: Uri, isVideo: Boolean): List<MediaAsset> {
         val projection = arrayOf(
@@ -32,6 +36,7 @@ class MediaScanner(private val context: Context) {
             MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,
             MediaStore.MediaColumns.MIME_TYPE,
             MediaStore.MediaColumns.SIZE,
+            MediaStore.MediaColumns.DATE_ADDED,
         )
 
         val assets = mutableListOf<MediaAsset>()
@@ -45,6 +50,7 @@ class MediaScanner(private val context: Context) {
             val bucketCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
             val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
             val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+            val dateCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
 
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
@@ -55,6 +61,7 @@ class MediaScanner(private val context: Context) {
                     bucketName = cursor.getString(bucketCol) ?: "Unsorted",
                     mimeType = cursor.getString(mimeCol) ?: "application/octet-stream",
                     sizeBytes = cursor.getLong(sizeCol),
+                    dateAddedSec = cursor.getLong(dateCol),
                     isVideo = isVideo,
                 )
             }

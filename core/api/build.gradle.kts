@@ -12,7 +12,8 @@ java {
 dependencies {
     api(project(":core:crypto"))
     implementation(libs.okhttp)
-    implementation(libs.kotlinx.serialization.json)
+    // api: DTOs are @Serializable and consumers (the app) use Json directly
+    api(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.okhttp.mockwebserver)

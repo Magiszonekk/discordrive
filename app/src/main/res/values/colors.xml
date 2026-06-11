@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#0F0F12</color>
+    <color name="surface">#18181C</color>
+    <color name="surface_high">#222228</color>
+    <color name="text">#E8E8EC</color>
+    <color name="text_dim">#9C9CA6</color>
+    <color name="accent">#4F7CFF</color>
+    <color name="accent_dim">#2C3E73</color>
+    <color name="white">#FFFFFF</color>
+    <color name="badge_synced">#34C77B</color>
+    <color name="badge_pending">#9C9CA6</color>
+    <color name="scrim">#99000000</color>
+</resources>

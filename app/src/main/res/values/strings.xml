@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DiscorDrive Gallery</string>
+
+    <!-- Login -->
+    <string name="login_title">DiscorDrive Gallery</string>
+    <string name="login_subtitle">Twoje zdjęcia, zaszyfrowane end-to-end</string>
+    <string name="login_server">Adres serwera</string>
+    <string name="login_email">E-mail lub nazwa użytkownika</string>
+    <string name="login_password">Hasło</string>
+    <string name="login_button">Zaloguj się</string>
+    <string name="login_progress">Logowanie… (wyprowadzanie kluczy)</string>
+
+    <!-- Main -->
+    <string name="action_search">Szukaj</string>
+    <string name="action_sync">Synchronizuj</string>
+    <string name="action_ai">Analiza AI</string>
+    <string name="action_settings">Ustawienia</string>
+    <string name="empty_gallery">Brak multimediów na urządzeniu.\nZrób zdjęcie albo nadaj uprawnienia w ustawieniach systemu.</string>
+    <string name="sync_done">Synchronizacja zakończona</string>
+    <string name="badge_synced_desc">Zsynchronizowane</string>
+
+    <!-- Search -->
+    <string name="search_hint">Szukaj w tagach i opisach…</string>
+    <string name="search_empty">Brak wyników. Uruchom „Analizę AI”, aby otagować zdjęcia.</string>
+    <string name="search_indexing">Pobieranie indeksu tagów…</string>
+
+    <!-- Viewer -->
+    <string name="viewer_no_enrichment">Brak tagów — uruchom „Analizę AI”</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Ustawienia</string>
+    <string name="settings_account">Konto</string>
+    <string name="settings_logout">Wyloguj</string>
+    <string name="settings_ai">Sztuczna inteligencja</string>
+    <string name="settings_ai_hint">Endpoint w formacie OpenAI (/v1/chat/completions). Obrazy są zmniejszane przed wysłaniem. Tagi i opisy są szyfrowane end-to-end.</string>
+    <string name="settings_ai_url">AI endpoint URL</string>
+    <string name="settings_ai_key">Klucz API</string>
+    <string name="settings_ai_model">Model</string>
+    <string name="settings_ai_auto">Analizuj automatycznie po synchronizacji</string>
+    <string name="settings_save">Zapisz</string>
+    <string name="settings_saved">Zapisano ustawienia</string>
+</resources>

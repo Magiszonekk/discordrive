@@ -1,137 +1,73 @@
 package com.discordrive.gallery
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.text.InputType
 import android.view.View
-import android.widget.Button
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.discordrive.gallery.api.AiVisionClient
-import com.discordrive.gallery.api.DiscorDriveClient
-import com.discordrive.gallery.api.EnrichmentEngine
-import com.discordrive.gallery.api.EnrichmentRecord
-import com.discordrive.gallery.crypto.DdvCrypto
+import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.progressindicator.LinearProgressIndicator
+import com.google.android.material.snackbar.Snackbar
 import kotlin.concurrent.thread
 
-/**
- * v1 shell: login → manual "scan & sync". Programmatic UI keeps the skeleton
- * dependency-free; a real gallery UI lands in Phase 4.
- */
+/** Photo grid — the heart of the app. */
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var serverInput: EditText
-    private lateinit var userInput: EditText
-    private lateinit var passwordInput: EditText
-    private lateinit var loginButton: Button
-    private lateinit var syncButton: Button
-    private lateinit var aiUrlInput: EditText
-    private lateinit var aiKeyInput: EditText
-    private lateinit var aiModelInput: EditText
-    private lateinit var aiScanButton: Button
-    private lateinit var searchInput: EditText
-    private lateinit var searchButton: Button
-    private lateinit var statusView: TextView
-
-    private var client: DiscorDriveClient? = null
-    private var filesKey: ByteArray? = null
-    private val enrichmentCache = mutableMapOf<String, EnrichmentRecord?>()
+    private lateinit var adapter: GalleryAdapter
+    private lateinit var progress: LinearProgressIndicator
+    private lateinit var statusBarText: TextView
+    private lateinit var emptyView: TextView
+    private var working = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            setPadding(48, 48, 48, 48)
+        if (!SessionManager.isLoggedIn) {
+            startActivity(Intent(this, LoginActivity::class.java))
+            finish()
+            return
         }
 
-        serverInput = EditText(this).apply {
-            hint = "Server URL"
-            // Emulator dev: http://10.0.2.2:3401
-            setText("https://example.com")
-        }
-        userInput = EditText(this).apply { hint = "Email / username" }
-        passwordInput = EditText(this).apply {
-            hint = "Password"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        }
-        loginButton = Button(this).apply {
-            text = "Zaloguj"
-            setOnClickListener { doLogin() }
-        }
-        syncButton = Button(this).apply {
-            text = "Skanuj i synchronizuj"
-            visibility = View.GONE
-            setOnClickListener { doSync() }
-        }
-        aiUrlInput = EditText(this).apply {
-            hint = "AI endpoint URL"
-            setText("http://10.0.2.2:8317")
-            visibility = View.GONE
-        }
-        aiKeyInput = EditText(this).apply {
-            hint = "AI API key"
-            visibility = View.GONE
-        }
-        aiModelInput = EditText(this).apply {
-            hint = "Model"
-            setText("nex-agi/nex-n2-pro:free")
-            visibility = View.GONE
-        }
-        aiScanButton = Button(this).apply {
-            text = "Analiza AI (tagi + opisy)"
-            visibility = View.GONE
-            setOnClickListener { doAiScan() }
-        }
-        searchInput = EditText(this).apply {
-            hint = "Szukaj w tagach i opisach…"
-            visibility = View.GONE
-        }
-        searchButton = Button(this).apply {
-            text = "Szukaj"
-            visibility = View.GONE
-            setOnClickListener { doSearch() }
-        }
-        statusView = TextView(this).apply { text = "DiscorDrive Gallery — niezalogowano" }
+        setContentView(R.layout.activity_main)
+        Insets.apply(findViewById(R.id.mainRoot), bottom = false)
 
-        root.addView(serverInput)
-        root.addView(userInput)
-        root.addView(passwordInput)
-        root.addView(loginButton)
-        root.addView(syncButton)
-        root.addView(aiUrlInput)
-        root.addView(aiKeyInput)
-        root.addView(aiModelInput)
-        root.addView(aiScanButton)
-        root.addView(searchInput)
-        root.addView(searchButton)
-        root.addView(statusView)
-        val scroll = ScrollView(this).apply {
-            isFillViewport = true
-            addView(root)
+        val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
+        toolbar.inflateMenu(R.menu.menu_main)
+        toolbar.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                R.id.action_search -> startActivity(Intent(this, SearchActivity::class.java))
+                R.id.action_sync -> runSync()
+                R.id.action_ai -> runAiScan()
+                R.id.action_settings -> startActivity(Intent(this, SettingsActivity::class.java))
+            }
+            true
         }
-        setContentView(scroll)
 
-        // targetSdk 35 forces edge-to-edge — keep the form clear of the status
-        // and navigation bars on Android 15+, and of the keyboard when typing.
-        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(scroll) { view, insets ->
-            val bars = insets.getInsets(
-                androidx.core.view.WindowInsetsCompat.Type.systemBars() or
-                    androidx.core.view.WindowInsetsCompat.Type.ime(),
-            )
-            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-            insets
+        progress = findViewById(R.id.progress)
+        statusBarText = findViewById(R.id.statusBarText)
+        emptyView = findViewById(R.id.emptyView)
+
+        adapter = GalleryAdapter { asset ->
+            startActivity(Intent(this, ViewerActivity::class.java).putExtra("assetId", asset.id))
+        }
+        findViewById<RecyclerView>(R.id.grid).apply {
+            layoutManager = GridLayoutManager(this@MainActivity, GalleryAdapter.SPAN_COUNT)
+            adapter = this@MainActivity.adapter
         }
 
         ensureMediaPermission()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (SessionManager.isLoggedIn) refreshGrid()
     }
 
     private fun ensureMediaPermission() {
@@ -143,149 +79,94 @@ class MainActivity : AppCompatActivity() {
         val missing = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-        if (missing.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, missing.toTypedArray(), 1)
+        if (missing.isNotEmpty()) ActivityCompat.requestPermissions(this, missing.toTypedArray(), 1)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        refreshGrid()
+    }
+
+    private fun refreshGrid() {
+        thread {
+            val assets = MediaScanner(this).scanAll()
+            val db = AppDb(this)
+            val synced = assets.filter { db.fileIdFor(it) != null }.map { it.id }.toSet()
+            runOnUiThread {
+                adapter.submit(assets, synced)
+                emptyView.visibility = if (assets.isEmpty()) View.VISIBLE else View.GONE
+            }
         }
     }
 
-    private fun setStatus(text: String) = runOnUiThread { statusView.text = text }
+    private fun setWorking(text: String?) {
+        runOnUiThread {
+            working = text != null
+            progress.visibility = if (text != null) View.VISIBLE else View.GONE
+            statusBarText.visibility = if (text != null) View.VISIBLE else View.GONE
+            statusBarText.text = text ?: ""
+        }
+    }
 
-    private fun doLogin() {
-        val server = serverInput.text.toString().trim().trimEnd('/')
-        val user = userInput.text.toString().trim()
-        val password = passwordInput.text.toString()
-        setStatus("Logowanie (Argon2)…")
-        loginButton.isEnabled = false
+    private fun runSync() {
+        if (working) return
+        val client = SessionManager.client ?: return
+        val filesKey = SessionManager.filesKey ?: return
+        setWorking(getString(R.string.action_sync) + "…")
 
         thread {
             try {
-                val newClient = DiscorDriveClient(server)
-                val session = newClient.login(user, password, deviceName = "Android Emulator")
-                client = newClient
-                filesKey = session.filesKey
-                setStatus("Zalogowano: ${session.user.email}\nSesja urządzenia: ${session.refreshToken != null}")
+                val runner = SyncRunner(this, client, filesKey)
+                val result = runner.sync { p ->
+                    setWorking("Sync ${p.done}/${p.total} · ↑${p.uploaded} · ${p.deduplicated} dedup · ${p.failed} błędów\n${p.detail}")
+                }
+                setWorking(null)
                 runOnUiThread {
-                    for (v in listOf(syncButton, aiUrlInput, aiKeyInput, aiModelInput, aiScanButton, searchInput, searchButton)) {
-                        v.visibility = View.VISIBLE
-                    }
-                    loginButton.isEnabled = true
+                    refreshGrid()
+                    Snackbar.make(
+                        findViewById(R.id.mainRoot),
+                        "${getString(R.string.sync_done)}: ↑${result.uploaded}, ${result.deduplicated} dedup, ${result.skipped} pominiętych, ${result.failed} błędów",
+                        Snackbar.LENGTH_LONG,
+                    ).show()
                 }
+                if (Settings.aiAutoAfterSync(this) && Settings.aiConfigured(this)) runAiScan()
             } catch (e: Exception) {
-                setStatus("Błąd logowania: ${e.message}")
-                runOnUiThread { loginButton.isEnabled = true }
+                setWorking(null)
+                runOnUiThread { Snackbar.make(findViewById(R.id.mainRoot), "Błąd: ${e.message}", Snackbar.LENGTH_LONG).show() }
             }
         }
     }
 
-    private fun doSync() {
-        val activeClient = client ?: return
-        val key = filesKey ?: return
-        syncButton.isEnabled = false
-
-        thread {
-            try {
-                val sync = GallerySync(activeClient, MediaScanner(this), key)
-                val result = sync.syncAll { p ->
-                    setStatus("Sync ${p.done}/${p.total}: ${p.current}\n↑ ${p.uploaded} nowych, ${p.deduplicated} dedup, ${p.failed} błędów")
-                }
-                setStatus(
-                    "Sync zakończony — ${result.total} plików\n" +
-                        "↑ ${result.uploaded} wgranych, ${result.deduplicated} zdedupliko­wanych, ${result.failed} błędów",
-                )
-            } catch (e: Exception) {
-                setStatus("Błąd synca: ${e.message}")
-            } finally {
-                runOnUiThread { syncButton.isEnabled = true }
-            }
+    private fun runAiScan() {
+        if (working) return
+        val client = SessionManager.client ?: return
+        val filesKey = SessionManager.filesKey ?: return
+        if (!Settings.aiConfigured(this)) {
+            Snackbar.make(findViewById(R.id.mainRoot), "Skonfiguruj AI w ustawieniach", Snackbar.LENGTH_LONG)
+                .setAction(R.string.action_settings) { startActivity(Intent(this, SettingsActivity::class.java)) }
+                .show()
+            return
         }
-    }
-
-    /**
-     * Tags every synced-but-unanalyzed asset: local bytes → dedupe token →
-     * remote fileId → downscaled image → AI → encrypted enrichment blob.
-     * Local originals never leave the device at full resolution.
-     */
-    private fun doAiScan() {
-        val activeClient = client ?: return
-        val key = filesKey ?: return
-        val ai = AiVisionClient(
-            baseUrl = aiUrlInput.text.toString().trim().trimEnd('/'),
-            apiKey = aiKeyInput.text.toString().trim(),
-            model = aiModelInput.text.toString().trim(),
-        )
-        val engine = EnrichmentEngine(activeClient)
-        aiScanButton.isEnabled = false
+        setWorking(getString(R.string.action_ai) + "…")
 
         thread {
             try {
-                val scanner = MediaScanner(this)
-                val assets = scanner.scanAll()
-                var analyzed = 0
-                var skipped = 0
-                var failed = 0
-
-                assets.forEachIndexed { index, asset ->
-                    setStatus("AI ${index + 1}/${assets.size}: ${asset.displayName}\n$analyzed przeanalizowanych, $skipped pominiętych, $failed błędów")
-                    try {
-                        val content = scanner.readBytes(asset)
-                        val token = DdvCrypto.b64encode(DdvCrypto.deriveDedupeToken(key, content))
-                        val file = activeClient.fileByDedupeToken(token)
-                        if (file == null || engine.hasEnrichment(file.id)) {
-                            skipped++
-                            return@forEachIndexed
-                        }
-                        val vision = ai.analyzeImage(AiImagePreparer.prepare(this, asset), "image/jpeg")
-                        val record = engine.buildRecord(vision, aiModelInput.text.toString().trim())
-                        engine.saveEnrichment(file.id, file.wrappedFEK, key, record)
-                        enrichmentCache[file.id] = record
-                        analyzed++
-                    } catch (e: Exception) {
-                        failed++
-                        android.util.Log.w("AiScan", "Failed for ${asset.displayName}", e)
-                    }
+                val ai = AiVisionClient(Settings.aiUrl(this), Settings.aiKey(this), Settings.aiModel(this))
+                val runner = SyncRunner(this, client, filesKey)
+                val result = runner.aiScan(ai, Settings.aiModel(this)) { p ->
+                    setWorking("AI ${p.done}/${p.total} · ${p.analyzed} nowych · ${p.failed} błędów\n${p.detail}")
                 }
-                setStatus("Analiza AI zakończona — ${assets.size} plików\n$analyzed przeanalizowanych, $skipped pominiętych, $failed błędów")
-            } catch (e: Exception) {
-                setStatus("Błąd analizy AI: ${e.message}")
-            } finally {
-                runOnUiThread { aiScanButton.isEnabled = true }
-            }
-        }
-    }
-
-    /** Client-side search over decrypted enrichments (server sees nothing). */
-    private fun doSearch() {
-        val activeClient = client ?: return
-        val key = filesKey ?: return
-        val query = searchInput.text.toString()
-        if (query.isBlank()) return
-        val engine = EnrichmentEngine(activeClient)
-        searchButton.isEnabled = false
-
-        thread {
-            try {
-                setStatus("Szukam „$query”…")
-                val files = activeClient.galleryDelta(null).files
-                    .filter { it.status == "READY" && it.deletedAt == null }
-
-                val results = StringBuilder()
-                var hits = 0
-                for (file in files) {
-                    val record = enrichmentCache.getOrPut(file.id) { engine.loadEnrichment(file, key) } ?: continue
-                    if (engine.matches(record, query)) {
-                        hits++
-                        val name = runCatching {
-                            val rootFek = DdvCrypto.unwrapRootFek(file.wrappedFEK, key)
-                            file.encryptedName?.let { DdvCrypto.decryptMeta(rootFek, it) }
-                        }.getOrNull() ?: file.id
-                        results.append("• $name\n  ${record.description}\n  [${record.tags.joinToString(", ")}]\n\n")
-                    }
+                setWorking(null)
+                runOnUiThread {
+                    Snackbar.make(
+                        findViewById(R.id.mainRoot),
+                        "Analiza AI: ${result.analyzed} nowych, ${result.skipped} pominiętych, ${result.failed} błędów",
+                        Snackbar.LENGTH_LONG,
+                    ).show()
                 }
-                setStatus(if (hits == 0) "Brak wyników dla „$query”" else "Wyniki dla „$query” ($hits):\n\n$results")
             } catch (e: Exception) {
-                setStatus("Błąd wyszukiwania: ${e.message}")
-            } finally {
-                runOnUiThread { searchButton.isEnabled = true }
+                setWorking(null)
+                runOnUiThread { Snackbar.make(findViewById(R.id.mainRoot), "Błąd AI: ${e.message}", Snackbar.LENGTH_LONG).show() }
             }
         }
     }

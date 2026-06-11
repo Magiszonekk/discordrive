@@ -9,20 +9,29 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- usesCleartextTraffic: dev builds talk to test APIs over plain HTTP
-         (10.0.2.2). Production servers run behind TLS. -->
+    <!-- usesCleartextTraffic: dev setups talk to test APIs / self-hosted AI
+         gateways over plain HTTP (VPN/LAN). Production servers use TLS. -->
     <application
-        android:label="DiscorDrive Gallery"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true"
-        android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
+        android:theme="@style/Theme.Gallery">
 
         <activity
-            android:name=".MainActivity"
+            android:name=".LoginActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity android:name=".MainActivity" android:exported="false" />
+        <activity android:name=".SearchActivity" android:exported="false" />
+        <activity android:name=".SettingsActivity" android:exported="false" />
+        <activity
+            android:name=".ViewerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Gallery.Viewer" />
     </application>
 </manifest>

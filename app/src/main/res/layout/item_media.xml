@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="2dp">
+
+    <ImageView
+        android:id="@+id/thumb"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:background="@color/surface_high"
+        android:contentDescription="@string/app_name"/>
+
+    <ImageView
+        android:id="@+id/playIcon"
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:layout_gravity="center"
+        android:src="@drawable/ic_play"
+        android:alpha="0.9"
+        android:visibility="gone"
+        android:importantForAccessibility="no"/>
+
+    <ImageView
+        android:id="@+id/cloudBadge"
+        android:layout_width="22dp"
+        android:layout_height="22dp"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="6dp"
+        android:background="@drawable/badge_bg"
+        android:padding="3dp"
+        android:src="@drawable/ic_cloud_pending"
+        android:contentDescription="@string/badge_synced_desc"/>
+</FrameLayout>
