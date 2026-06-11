@@ -49,12 +49,14 @@ class MainActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
             setPadding(48, 48, 48, 48)
         }
 
         serverInput = EditText(this).apply {
-            hint = "Server URL (http://10.0.2.2:3001)"
-            setText("http://10.0.2.2:3001")
+            hint = "Server URL"
+            // Emulator dev: http://10.0.2.2:3401
+            setText("https://example.com")
         }
         userInput = EditText(this).apply { hint = "Email / username" }
         passwordInput = EditText(this).apply {
@@ -112,7 +114,22 @@ class MainActivity : AppCompatActivity() {
         root.addView(searchInput)
         root.addView(searchButton)
         root.addView(statusView)
-        setContentView(ScrollView(this).apply { addView(root) })
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(root)
+        }
+        setContentView(scroll)
+
+        // targetSdk 35 forces edge-to-edge — keep the form clear of the status
+        // and navigation bars on Android 15+, and of the keyboard when typing.
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(scroll) { view, insets ->
+            val bars = insets.getInsets(
+                androidx.core.view.WindowInsetsCompat.Type.systemBars() or
+                    androidx.core.view.WindowInsetsCompat.Type.ime(),
+            )
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
 
         ensureMediaPermission()
     }
