@@ -44,7 +44,11 @@ export async function commitManifest(
   if (!manifestBlob) throw new Error("Manifest blob not found in commit payload");
 
   await db.$transaction(async (tx) => {
+    // Blob records are normally already written by the upload handler;
+    // skipDuplicates keeps those server-written rows authoritative and only
+    // fills in any the handler may have missed.
     await tx.blobTransport.createMany({
+      skipDuplicates: true,
       data: blobs.map((blob) => ({
         blobId: blob.blobId,
         ownerUserId,
@@ -80,6 +84,38 @@ export async function commitManifest(
   });
 
   return { success: true };
+}
+
+// Resume support: reports which chunk blobs of an UPLOADING file already made
+// it to storage, so a client can skip them on retry instead of re-uploading.
+export async function getUploadStatus(ownerUserId: string, fileId: string) {
+  const file = await db.file.findFirst({ where: { id: fileId, ownerUserId } });
+  if (!file) throw new Error("File not found");
+
+  const blobs = await db.blobTransport.findMany({
+    where: { ownerUserId, blobId: { startsWith: `${fileId}:` } },
+    select: { blobId: true },
+  });
+
+  const uploadedChunkIndices: number[] = [];
+  let hasManifest = false;
+  for (const blob of blobs) {
+    if (blob.blobId === `${fileId}:manifest`) {
+      hasManifest = true;
+      continue;
+    }
+    const match = blob.blobId.match(/:chunk:(\d+)$/);
+    if (match) uploadedChunkIndices.push(Number(match[1]));
+  }
+  uploadedChunkIndices.sort((a, b) => a - b);
+
+  return {
+    fileId,
+    status: file.status,
+    chunkCount: file.chunkCount,
+    uploadedChunkIndices,
+    hasManifest,
+  };
 }
 
 export async function deleteFile(ownerUserId: string, fileId: string): Promise<boolean> {

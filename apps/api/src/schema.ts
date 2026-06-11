@@ -142,6 +142,14 @@ export function buildSchema() {
         success: Boolean!
       }
 
+      type UploadStatus {
+        fileId: ID!
+        status: String!
+        chunkCount: Int!
+        uploadedChunkIndices: [Int!]!
+        hasManifest: Boolean!
+      }
+
       input UploadedBlobTransportInput {
         blobId: String!
         storageKind: String!
@@ -204,6 +212,7 @@ export function buildSchema() {
         folders(parentFolderId: ID): [Folder!]!
         folderPath(folderId: ID!): [Folder!]!
         file(fileId: ID!): File
+        uploadStatus(fileId: ID!): UploadStatus!
         shares(fileId: ID!): [SecureShare!]!
         storageUsage: StorageUsage!
         accessShare(shareId: ID!, capabilityToken: String!): ShareAccess
@@ -327,6 +336,10 @@ export function buildSchema() {
         file: async (_parent: unknown, args: { fileId: string }, ctx: Context) => {
           const auth = requireAuth(ctx);
           return fileResolvers.getFile(auth.userId, args.fileId);
+        },
+        uploadStatus: async (_parent: unknown, args: { fileId: string }, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return fileResolvers.getUploadStatus(auth.userId, args.fileId);
         },
         shares: async (_parent: unknown, args: { fileId: string }, ctx: Context) => {
           const auth = requireAuth(ctx);

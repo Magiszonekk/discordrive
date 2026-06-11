@@ -295,6 +295,38 @@ export async function handleBlobUpload(req: Request, params: { blobId: string })
     }
     const storeMs = performance.now() - storeStartMs;
 
+    // Persist transport coordinates immediately so interrupted uploads can be
+    // resumed: without this, chunks already stored (e.g. on Discord) would be
+    // unrecoverable orphans until commitManifest. Re-uploads of the same blobId
+    // overwrite the record with the newest location.
+    await db.blobTransport.upsert({
+      where: { blobId: params.blobId },
+      create: {
+        blobId: params.blobId,
+        ownerUserId: auth.userId,
+        storageKind,
+        storagePath,
+        discordMessageId,
+        discordChannelId,
+        webhookId,
+        ciphertextSizeBytes,
+        ciphertextHash,
+        healthStatus: null,
+        healthCheckedAt: null,
+      },
+      update: {
+        storageKind,
+        storagePath,
+        discordMessageId,
+        discordChannelId,
+        webhookId,
+        ciphertextSizeBytes,
+        ciphertextHash,
+        healthStatus: null,
+        healthCheckedAt: null,
+      },
+    });
+
     logBlobUploadEvent({
       type: "blob_upload_completed",
       requestId,
