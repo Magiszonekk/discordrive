@@ -115,10 +115,22 @@ export async function login(emailOrUsername: string, serverAuthProof: string): P
 
 export async function changePassword(
   userId: string,
+  currentServerAuthProof: string,
   wrappedARKByPassword: string,
   argon2Params: { memoryKB: number; iterations: number; parallelism: number; saltB64: string },
   serverAuthProof: string,
 ): Promise<boolean> {
+  // Require proof of the current password — a stolen JWT alone must not be able
+  // to overwrite the wrapped ARK (would lock the real user out of their data).
+  const existing = await db.userCrypto.findUnique({ where: { userId } });
+  if (!existing?.serverAuthProofHash) throw new Error("Invalid credentials");
+
+  const presented = hashProof(currentServerAuthProof);
+  const stored = Buffer.from(existing.serverAuthProofHash, "hex");
+  if (presented.length !== stored.length || !timingSafeEqual(presented, stored)) {
+    throw new Error("Current password is incorrect");
+  }
+
   await db.userCrypto.update({
     where: { userId },
     data: {

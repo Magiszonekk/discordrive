@@ -35,6 +35,16 @@ async function handleRequest(req: Request): Promise<Response> {
     req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
     req.headers.get("x-real-ip") ?? "unknown";
 
+  if (pathname.startsWith("/api/blob/") || pathname.startsWith("/api/share/blob/")) {
+    const { allowed, retryAfter } = checkRateLimit(ip, "blob");
+    if (!allowed) {
+      return Response.json(
+        { error: "Too many requests" },
+        { status: 429, headers: { "Retry-After": String(retryAfter ?? 60) } },
+      );
+    }
+  }
+
   // GraphQL — handled by Yoga
   if (pathname === "/graphql") {
     try {

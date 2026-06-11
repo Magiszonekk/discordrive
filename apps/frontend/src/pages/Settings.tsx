@@ -18,8 +18,8 @@ const STORAGE_QUERY = `
 `;
 
 const CHANGE_PASSWORD_MUTATION = `
-  mutation ChangePassword($wrappedARKByPassword: String!, $argon2Params: Argon2ParamsInput!, $serverAuthProof: String!) {
-    changePassword(wrappedARKByPassword: $wrappedARKByPassword, argon2Params: $argon2Params, serverAuthProof: $serverAuthProof)
+  mutation ChangePassword($currentServerAuthProof: String!, $wrappedARKByPassword: String!, $argon2Params: Argon2ParamsInput!, $serverAuthProof: String!) {
+    changePassword(currentServerAuthProof: $currentServerAuthProof, wrappedARKByPassword: $wrappedARKByPassword, argon2Params: $argon2Params, serverAuthProof: $serverAuthProof)
   }
 `;
 
@@ -30,6 +30,7 @@ export function Settings() {
   const accentColor = useThemeStore((s) => s.accentColor);
   const setAccentColor = useThemeStore((s) => s.setAccentColor);
 
+  const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [pwError, setPwError] = useState("");
@@ -67,6 +68,12 @@ export function Settings() {
 
     setPwLoading(true);
     try {
+      // Prove knowledge of the current password (derived with the *current* params)
+      const { serverAuthProof: currentProof } = await deriveLoginMaterial(
+        currentPassword,
+        currentUser.crypto.argon2Params,
+      );
+
       const salt = generateSalt();
       const params = {
         memoryKB: 19456,
@@ -81,6 +88,7 @@ export function Settings() {
       const wrappedARKByPassword = toBase64(packWrappedKey(wrappedArkData.data, wrappedArkData.iv));
 
       await gqlRequest(CHANGE_PASSWORD_MUTATION, {
+        currentServerAuthProof: toBase64(currentProof),
         wrappedARKByPassword,
         argon2Params: params,
         serverAuthProof: toBase64(serverAuthProof),
@@ -97,6 +105,7 @@ export function Settings() {
         },
       });
 
+      setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
       setPwSuccess(true);
@@ -125,6 +134,17 @@ export function Settings() {
             Sets a new password and re-encrypts your master key. You will need this password to unlock future sessions.
           </p>
           <form onSubmit={handleChangePassword} className="space-y-3">
+            <div>
+              <label className="mb-1 block text-sm text-zinc-400">Current password</label>
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                required
+                autoComplete="current-password"
+                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
+              />
+            </div>
             <div>
               <label className="mb-1 block text-sm text-zinc-400">New password</label>
               <input

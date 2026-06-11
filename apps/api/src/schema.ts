@@ -2,6 +2,7 @@
 
 import { createSchema } from "graphql-yoga";
 import { verifyToken, isBackendOnly, getSystemUserId, type AuthPayload } from "./middleware/auth.js";
+import { enforceRateLimit } from "./middleware/rate-limit.js";
 import { serverConfig } from "@ddv4/config/server";
 import * as authResolvers from "./resolvers/auth.js";
 import * as fileResolvers from "./resolvers/files.js";
@@ -11,6 +12,7 @@ import { pluginRegistry } from "./plugin-registry.js";
 
 export interface Context {
   auth: AuthPayload | null;
+  ip: string;
 }
 
 function requireAuth(ctx: Context): AuthPayload {
@@ -221,6 +223,7 @@ export function buildSchema() {
         login(emailOrUsername: String!, serverAuthProof: String!): AuthResponse!
 
         changePassword(
+          currentServerAuthProof: String!
           wrappedARKByPassword: String!
           argon2Params: Argon2ParamsInput!
           serverAuthProof: String!
@@ -281,8 +284,9 @@ export function buildSchema() {
         totalSizeBytes: (parent: { totalSizeBytes?: string }) => parent.totalSizeBytes ?? "0",
       },
       Query: {
-        getLoginChallenge: async (_parent: unknown, args: { emailOrUsername: string }) => {
+        getLoginChallenge: async (_parent: unknown, args: { emailOrUsername: string }, ctx: Context) => {
           requireFullMode();
+          enforceRateLimit(ctx.ip, "auth");
           return authResolvers.getLoginChallenge(args.emailOrUsername);
         },
         me: async (_parent: unknown, _args: unknown, ctx: Context) => {
@@ -336,7 +340,8 @@ export function buildSchema() {
           const auth = requireAuth(ctx);
           return fileResolvers.getFilesForHealthCheckDisplay(auth.userId);
         },
-        accessShare: async (_parent: unknown, args: { shareId: string; capabilityToken: string }) => {
+        accessShare: async (_parent: unknown, args: { shareId: string; capabilityToken: string }, ctx: Context) => {
+          enforceRateLimit(ctx.ip, "auth");
           return sharingResolvers.accessShare(args.shareId, args.capabilityToken);
         },
       },
@@ -348,22 +353,26 @@ export function buildSchema() {
           wrappedARKByRecovery: string;
           argon2Params: { memoryKB: number; iterations: number; parallelism: number; saltB64: string };
           serverAuthProof: string;
-        }) => {
+        }, ctx: Context) => {
           requireFullMode();
+          enforceRateLimit(ctx.ip, "auth");
           return authResolvers.register(args);
         },
-        login: async (_parent: unknown, args: { emailOrUsername: string; serverAuthProof: string }) => {
+        login: async (_parent: unknown, args: { emailOrUsername: string; serverAuthProof: string }, ctx: Context) => {
           requireFullMode();
+          enforceRateLimit(ctx.ip, "auth");
           return authResolvers.login(args.emailOrUsername, args.serverAuthProof);
         },
         changePassword: async (_parent: unknown, args: {
+          currentServerAuthProof: string;
           wrappedARKByPassword: string;
           argon2Params: { memoryKB: number; iterations: number; parallelism: number; saltB64: string };
           serverAuthProof: string;
         }, ctx: Context) => {
           requireFullMode();
+          enforceRateLimit(ctx.ip, "auth");
           const auth = requireAuth(ctx);
-          return authResolvers.changePassword(auth.userId, args.wrappedARKByPassword, args.argon2Params, args.serverAuthProof);
+          return authResolvers.changePassword(auth.userId, args.currentServerAuthProof, args.wrappedARKByPassword, args.argon2Params, args.serverAuthProof);
         },
         initUpload: async (_parent: unknown, args: {
           parentFolderId?: string;
@@ -452,6 +461,9 @@ export function buildSchema() {
 
 export async function createContext(request: Request): Promise<Context> {
   let auth: AuthPayload | null = null;
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    request.headers.get("x-real-ip") ?? "unknown";
 
   if (isBackendOnly()) {
     const apiKey = request.headers.get("x-api-key");
@@ -479,5 +491,5 @@ export async function createContext(request: Request): Promise<Context> {
     }
   }
 
-  return { auth };
+  return { auth, ip };
 }

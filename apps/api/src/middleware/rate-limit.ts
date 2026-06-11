@@ -5,22 +5,40 @@ interface RateLimitEntry {
   resetAt: number;
 }
 
-const limits = new Map<string, RateLimitEntry>();
-const WINDOW_MS = 60_000; // 1 minute
-const MAX_REQUESTS = 300; // 300 req/min per IP
+export interface RateLimitPolicy {
+  windowMs: number;
+  maxRequests: number;
+}
 
-export function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
+// Named policies. "auth" guards credential-related operations (login, register,
+// challenge fetch, password change, share access) against brute force and
+// enumeration. "blob" guards the high-volume binary transport endpoints.
+export const RATE_LIMIT_POLICIES = {
+  blob: { windowMs: 60_000, maxRequests: 300 },
+  auth: { windowMs: 60_000, maxRequests: 10 },
+} as const satisfies Record<string, RateLimitPolicy>;
+
+export type RateLimitPolicyName = keyof typeof RATE_LIMIT_POLICIES;
+
+const limits = new Map<string, RateLimitEntry>();
+
+export function checkRateLimit(
+  ip: string,
+  policyName: RateLimitPolicyName = "blob",
+): { allowed: boolean; retryAfter?: number } {
+  const policy = RATE_LIMIT_POLICIES[policyName];
+  const key = `${policyName}:${ip}`;
   const now = Date.now();
-  const entry = limits.get(ip);
+  const entry = limits.get(key);
 
   if (!entry || now >= entry.resetAt) {
-    limits.set(ip, { count: 1, resetAt: now + WINDOW_MS });
+    limits.set(key, { count: 1, resetAt: now + policy.windowMs });
     return { allowed: true };
   }
 
   entry.count++;
 
-  if (entry.count > MAX_REQUESTS) {
+  if (entry.count > policy.maxRequests) {
     const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
     return { allowed: false, retryAfter };
   }
@@ -28,12 +46,21 @@ export function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: num
   return { allowed: true };
 }
 
+// Throwing variant for GraphQL resolvers.
+export function enforceRateLimit(ip: string, policyName: RateLimitPolicyName): void {
+  const { allowed, retryAfter } = checkRateLimit(ip, policyName);
+  if (!allowed) {
+    throw new Error(`Too many requests. Try again in ${retryAfter ?? 60}s`);
+  }
+}
+
 // Periodic cleanup of expired entries
-setInterval(() => {
+const cleanupTimer = setInterval(() => {
   const now = Date.now();
-  for (const [ip, entry] of limits) {
+  for (const [key, entry] of limits) {
     if (now >= entry.resetAt) {
-      limits.delete(ip);
+      limits.delete(key);
     }
   }
-}, WINDOW_MS);
+}, 60_000);
+cleanupTimer.unref?.();
