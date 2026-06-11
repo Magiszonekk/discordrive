@@ -19,6 +19,26 @@ model User {
   blobs       BlobTransport[]
   shares      Share[]
   sessions    DeviceSession[]
+  encryptedStates EncryptedState[]
+}
+
+// Generic client-encrypted key-value store with optimistic locking.
+// Used by plugins (e.g. gallery: device sync manifests, thumbnail-pack index,
+// search index pointers). The server never sees plaintext values.
+model EncryptedState {
+  id        String   @id @default(cuid())
+  userId    String
+  domain    String
+  key       String
+  value     Bytes
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, domain, key])
+  @@index([userId, domain])
 }
 
 model DeviceSession {
