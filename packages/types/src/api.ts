@@ -33,6 +33,8 @@ export interface LoginResponse {
       lastPasswordChangeAt: string;
     };
   };
+  /** Present only for device-session logins (deviceName provided) */
+  refreshToken?: string;
 }
 
 export interface InitSecureUploadRequest {

@@ -6,16 +6,50 @@ import { serverConfig } from "@ddv4/config/server";
 export interface AuthPayload {
   userId: string;
   email: string;
+  // Device session id. Present only on tokens issued for a named device;
+  // such tokens stay valid only while the session is active (revocable).
+  sid?: string;
 }
 
-export function signToken(payload: AuthPayload): string {
+export function signToken(payload: AuthPayload, expiresIn?: string): string {
   return jwt.sign(payload, serverConfig.jwtSecret, {
-    expiresIn: serverConfig.jwtExpiresIn,
+    expiresIn: expiresIn ?? serverConfig.jwtExpiresIn,
   } as jwt.SignOptions);
 }
 
 export function verifyToken(token: string): AuthPayload {
   return jwt.verify(token, serverConfig.jwtSecret) as AuthPayload;
+}
+
+// --- Device session validation ---
+// Session-bound tokens are checked against the DB so revocation takes effect
+// before JWT expiry. A short cache keeps this off the hot path (chunk uploads).
+
+const SESSION_CACHE_MS = 60_000;
+const sessionCache = new Map<string, { validUntil: number; ok: boolean }>();
+
+export function invalidateSessionCache(sid: string): void {
+  sessionCache.delete(sid);
+}
+
+export async function isSessionActive(sid: string): Promise<boolean> {
+  const now = Date.now();
+  const cached = sessionCache.get(sid);
+  if (cached && now < cached.validUntil) return cached.ok;
+
+  const { db } = await import("@ddv4/database");
+  const session = await db.deviceSession.findUnique({ where: { id: sid } });
+  const ok = Boolean(session && !session.revokedAt && session.expiresAt > new Date());
+  sessionCache.set(sid, { validUntil: now + SESSION_CACHE_MS, ok });
+  return ok;
+}
+
+export async function verifySessionToken(token: string): Promise<AuthPayload> {
+  const payload = verifyToken(token);
+  if (payload.sid && !(await isSessionActive(payload.sid))) {
+    throw new Error("Session revoked or expired");
+  }
+  return payload;
 }
 
 export function extractToken(request: Request): string | null {
@@ -24,12 +58,12 @@ export function extractToken(request: Request): string | null {
   return auth.slice(7);
 }
 
-export function authenticateRequest(request: Request): AuthPayload {
+export async function authenticateRequest(request: Request): Promise<AuthPayload> {
   const token = extractToken(request);
   if (!token) {
     throw new Error("Authentication required");
   }
-  return verifyToken(token);
+  return verifySessionToken(token);
 }
 
 const SYSTEM_USER_EMAIL = "system@ddv4.local";

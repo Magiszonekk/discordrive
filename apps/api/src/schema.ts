@@ -1,7 +1,7 @@
 // DiscorDrive v4 — GraphQL Schema (secure files v2)
 
 import { createSchema } from "graphql-yoga";
-import { verifyToken, isBackendOnly, getSystemUserId, type AuthPayload } from "./middleware/auth.js";
+import { verifySessionToken, isBackendOnly, getSystemUserId, type AuthPayload } from "./middleware/auth.js";
 import { enforceRateLimit } from "./middleware/rate-limit.js";
 import { serverConfig } from "@ddv4/config/server";
 import * as authResolvers from "./resolvers/auth.js";
@@ -72,7 +72,20 @@ export function buildSchema() {
 
       type AuthResponse {
         token: String!
+        refreshToken: String
         user: User!
+      }
+
+      type DeviceSession {
+        id: ID!
+        deviceName: String
+        createdAt: DateTime!
+        lastUsedAt: DateTime!
+        expiresAt: DateTime!
+      }
+
+      type RefreshSessionResult {
+        token: String!
       }
 
       type LoginChallenge {
@@ -217,6 +230,7 @@ export function buildSchema() {
         file(fileId: ID!): File
         fileByDedupeToken(dedupeTokenB64: String!): File
         trashedFiles: [File!]!
+        sessions: [DeviceSession!]!
         uploadStatus(fileId: ID!): UploadStatus!
         shares(fileId: ID!): [SecureShare!]!
         storageUsage: StorageUsage!
@@ -234,7 +248,10 @@ export function buildSchema() {
           serverAuthProof: String!
         ): AuthResponse!
 
-        login(emailOrUsername: String!, serverAuthProof: String!): AuthResponse!
+        login(emailOrUsername: String!, serverAuthProof: String!, deviceName: String): AuthResponse!
+
+        refreshSession(refreshToken: String!): RefreshSessionResult!
+        revokeSession(sessionId: ID!): Boolean!
 
         changePassword(
           currentServerAuthProof: String!
@@ -363,6 +380,11 @@ export function buildSchema() {
           const auth = requireAuth(ctx);
           return fileResolvers.getTrashedFiles(auth.userId);
         },
+        sessions: async (_parent: unknown, _args: unknown, ctx: Context) => {
+          requireFullMode();
+          const auth = requireAuth(ctx);
+          return authResolvers.listSessions(auth.userId);
+        },
         shares: async (_parent: unknown, args: { fileId: string }, ctx: Context) => {
           const auth = requireAuth(ctx);
           return sharingResolvers.getShares(auth.userId, args.fileId);
@@ -393,10 +415,20 @@ export function buildSchema() {
           enforceRateLimit(ctx.ip, "auth");
           return authResolvers.register(args);
         },
-        login: async (_parent: unknown, args: { emailOrUsername: string; serverAuthProof: string }, ctx: Context) => {
+        login: async (_parent: unknown, args: { emailOrUsername: string; serverAuthProof: string; deviceName?: string }, ctx: Context) => {
           requireFullMode();
           enforceRateLimit(ctx.ip, "auth");
-          return authResolvers.login(args.emailOrUsername, args.serverAuthProof);
+          return authResolvers.login(args.emailOrUsername, args.serverAuthProof, args.deviceName ?? null);
+        },
+        refreshSession: async (_parent: unknown, args: { refreshToken: string }, ctx: Context) => {
+          requireFullMode();
+          enforceRateLimit(ctx.ip, "auth");
+          return authResolvers.refreshSession(args.refreshToken);
+        },
+        revokeSession: async (_parent: unknown, args: { sessionId: string }, ctx: Context) => {
+          requireFullMode();
+          const auth = requireAuth(ctx);
+          return authResolvers.revokeSession(auth.userId, args.sessionId);
         },
         changePassword: async (_parent: unknown, args: {
           currentServerAuthProof: string;
@@ -528,7 +560,7 @@ export async function createContext(request: Request): Promise<Context> {
     const authHeader = request.headers.get("authorization");
     if (authHeader?.startsWith("Bearer ")) {
       try {
-        auth = verifyToken(authHeader.slice(7));
+        auth = await verifySessionToken(authHeader.slice(7));
       } catch (error) {
         console.warn(JSON.stringify({
           ts: new Date().toISOString(),

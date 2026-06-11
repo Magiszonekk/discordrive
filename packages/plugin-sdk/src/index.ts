@@ -22,9 +22,10 @@ export interface PluginRoute {
 
 export interface PluginSetupContext {
   hooks: PluginHooks;
-  /** JWT validation helper — avoids duplicating auth logic in each plugin */
+  /** JWT validation helper — avoids duplicating auth logic in each plugin.
+   *  Async: session-bound device tokens are checked for revocation. */
   auth: {
-    verifyJwt(req: Request): { userId: string; email: string } | null;
+    verifyJwt(req: Request): Promise<{ userId: string; email: string } | null>;
   };
 }
 

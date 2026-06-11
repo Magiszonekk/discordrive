@@ -1,13 +1,83 @@
 // DiscorDrive v4 — Auth resolvers (secure files v2)
 
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { db } from "@ddv4/database";
-import { signToken } from "../middleware/auth.js";
+import { signToken, invalidateSessionCache } from "../middleware/auth.js";
 import type { RegisterRequest, LoginResponse } from "@ddv4/types/api";
 import { pluginRegistry } from "../plugin-registry.js";
 
 function hashProof(proofBase64: string): Buffer {
   return createHash("sha256").update(Buffer.from(proofBase64, "base64")).digest();
+}
+
+// === Device sessions ===
+// A login with a deviceName creates a revocable session: the client receives a
+// long-lived opaque refresh token (stored hashed) plus a short-lived JWT bound
+// to the session via the `sid` claim. Revoking the session kills both.
+
+const SESSION_REFRESH_TTL_DAYS = 180;
+const SESSION_ACCESS_TOKEN_TTL = "1h";
+
+function hashRefreshToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+async function createDeviceSession(
+  userId: string,
+  email: string,
+  deviceName: string,
+): Promise<{ token: string; refreshToken: string }> {
+  const refreshToken = randomBytes(32).toString("base64url");
+  const session = await db.deviceSession.create({
+    data: {
+      userId,
+      deviceName,
+      refreshTokenHash: hashRefreshToken(refreshToken),
+      expiresAt: new Date(Date.now() + SESSION_REFRESH_TTL_DAYS * 86_400_000),
+    },
+  });
+
+  const token = signToken({ userId, email, sid: session.id }, SESSION_ACCESS_TOKEN_TTL);
+  return { token, refreshToken };
+}
+
+export async function refreshSession(refreshToken: string): Promise<{ token: string }> {
+  const session = await db.deviceSession.findUnique({
+    where: { refreshTokenHash: hashRefreshToken(refreshToken) },
+    include: { user: true },
+  });
+
+  if (!session || session.revokedAt || session.expiresAt < new Date()) {
+    throw new Error("Invalid or expired session");
+  }
+
+  await db.deviceSession.update({
+    where: { id: session.id },
+    data: { lastUsedAt: new Date() },
+  });
+
+  return {
+    token: signToken({ userId: session.userId, email: session.user.email, sid: session.id }, SESSION_ACCESS_TOKEN_TTL),
+  };
+}
+
+export async function listSessions(userId: string) {
+  return db.deviceSession.findMany({
+    where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+    orderBy: { lastUsedAt: "desc" },
+  });
+}
+
+export async function revokeSession(userId: string, sessionId: string): Promise<boolean> {
+  const session = await db.deviceSession.findFirst({ where: { id: sessionId, userId } });
+  if (!session) throw new Error("Session not found");
+
+  await db.deviceSession.update({
+    where: { id: sessionId },
+    data: { revokedAt: new Date() },
+  });
+  invalidateSessionCache(sessionId);
+  return true;
 }
 
 export async function getLoginChallenge(emailOrUsername: string) {
@@ -76,7 +146,11 @@ export async function register(input: RegisterRequest): Promise<LoginResponse> {
   };
 }
 
-export async function login(emailOrUsername: string, serverAuthProof: string): Promise<LoginResponse> {
+export async function login(
+  emailOrUsername: string,
+  serverAuthProof: string,
+  deviceName?: string | null,
+): Promise<LoginResponse> {
   const user = await db.user.findFirst({
     where: { OR: [{ email: emailOrUsername }, { username: emailOrUsername }] },
     include: { crypto: true },
@@ -90,10 +164,18 @@ export async function login(emailOrUsername: string, serverAuthProof: string): P
     throw new Error("Invalid credentials");
   }
 
-  const token = signToken({ userId: user.id, email: user.email });
+  // Named device → revocable session with refresh token; otherwise a plain JWT
+  let token: string;
+  let refreshToken: string | undefined;
+  if (deviceName?.trim()) {
+    ({ token, refreshToken } = await createDeviceSession(user.id, user.email, deviceName.trim()));
+  } else {
+    token = signToken({ userId: user.id, email: user.email });
+  }
 
   return {
     token,
+    refreshToken,
     user: {
       id: user.id,
       email: user.email,

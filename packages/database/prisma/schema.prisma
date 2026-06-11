@@ -18,6 +18,22 @@ model User {
   folders     Folder[]
   blobs       BlobTransport[]
   shares      Share[]
+  sessions    DeviceSession[]
+}
+
+model DeviceSession {
+  id               String    @id @default(cuid())
+  userId           String
+  deviceName       String?
+  refreshTokenHash String    @unique
+  createdAt        DateTime  @default(now())
+  lastUsedAt       DateTime  @default(now())
+  expiresAt        DateTime
+  revokedAt        DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
 }
 
 model UserCrypto {

@@ -12,7 +12,7 @@ import {
   fetchCiphertextBlobFromDiscord,
   uploadCiphertextBlobToDiscord,
 } from "../storage/discord-blobs.js";
-import { extractToken, verifyToken } from "../middleware/auth.js";
+import { extractToken, verifySessionToken } from "../middleware/auth.js";
 import { constantTimeEqual } from "@ddv4/processing";
 
 type BlobRecord = {
@@ -30,12 +30,12 @@ type BlobRecord = {
   createdAt: Date;
 };
 
-function parseAuth(req: Request): { userId: string; email: string } | null {
+async function parseAuth(req: Request): Promise<{ userId: string; email: string } | null> {
   const token = extractToken(req);
   if (!token) return null;
 
   try {
-    return verifyToken(token);
+    return await verifySessionToken(token);
   } catch {
     return null;
   }
@@ -121,7 +121,7 @@ function makeUploadRequestId(blobId: string, telemetry: ReturnType<typeof parseU
 }
 
 export async function handleBlobMetadata(req: Request, params: { blobId: string }): Promise<Response> {
-  const auth = parseAuth(req);
+  const auth = await parseAuth(req);
   if (!auth) return Response.json({ error: "Authentication required" }, { status: 401 });
 
   const blob = await db.blobTransport.findUnique({ where: { blobId: params.blobId } });
@@ -133,7 +133,7 @@ export async function handleBlobMetadata(req: Request, params: { blobId: string 
 }
 
 export async function handleBlobContent(req: Request, params: { blobId: string }): Promise<Response> {
-  const auth = parseAuth(req);
+  const auth = await parseAuth(req);
   if (!auth) return Response.json({ error: "Authentication required" }, { status: 401 });
 
   const blob = await db.blobTransport.findUnique({ where: { blobId: params.blobId } });
@@ -220,7 +220,7 @@ export async function handleBlobContentForShare(req: Request, params: { blobId: 
 }
 
 export async function handleBlobUpload(req: Request, params: { blobId: string }): Promise<Response> {
-  const auth = parseAuth(req);
+  const auth = await parseAuth(req);
   if (!auth) return Response.json({ error: "Authentication required" }, { status: 401 });
 
   const telemetry = parseUploadTelemetryHeaders(req);

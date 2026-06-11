@@ -4,7 +4,7 @@
 import { EventEmitter } from "node:events";
 import type { DdvPlugin, PluginEventMap, PluginHooks } from "@ddv4/plugin-sdk";
 import { matchRoute } from "@ddv4/plugin-sdk/route";
-import { verifyToken } from "./middleware/auth.js";
+import { verifySessionToken } from "./middleware/auth.js";
 
 // ---------------------------------------------------------------------------
 // Typed async emitter — full type safety, no extra dependencies
@@ -47,11 +47,11 @@ class PluginRegistry {
 
   // Auth helper injected into setup context — plugins don't need to copy JWT logic
   private readonly authHelper = {
-    verifyJwt(req: Request): { userId: string; email: string } | null {
+    async verifyJwt(req: Request): Promise<{ userId: string; email: string } | null> {
       const header = req.headers.get("authorization");
       if (!header?.startsWith("Bearer ")) return null;
       try {
-        return verifyToken(header.slice(7));
+        return await verifySessionToken(header.slice(7));
       } catch {
         return null;
       }
