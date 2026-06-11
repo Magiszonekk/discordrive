@@ -5,7 +5,7 @@ import type { FileChunkManifestPlaintext } from "@ddv4/types";
 import { UploadStatus } from "@ddv4/types";
 import type { UploadedBlobTransportInput } from "@ddv4/types/api";
 import { gqlRequest } from "./graphql.js";
-import { uploadBlobToApi } from "./api.js";
+import { uploadBlobToApi, BlobUploadError } from "./api.js";
 import { prepareFileUpload, buildEncryptedManifest, encryptFileContentChunk } from "./crypto.js";
 import { LEGACY_UPLOAD_CHUNK_SIZE_BYTES } from "./upload-constants.js";
 import { config } from "@ddv4/config";
@@ -31,6 +31,29 @@ function logUploadEvent(event: UploadTelemetryEvent): void {
     ts: new Date().toISOString(),
     ...event,
   });
+}
+
+const CHUNK_MAX_ATTEMPTS = 4; // 1 initial + 3 retries
+const CHUNK_RETRY_BASE_MS = 800;
+
+async function withChunkRetry<T>(fn: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  for (let attempt = 0; attempt < CHUNK_MAX_ATTEMPTS; attempt++) {
+    if (signal.aborted) throw new DOMException("Upload aborted", "AbortError");
+    try {
+      return await fn();
+    } catch (err) {
+      if (signal.aborted) throw new DOMException("Upload aborted", "AbortError");
+      // 4xx errors are definitive (bad request, unauthorized) — don't retry
+      if (err instanceof BlobUploadError && err.status >= 400 && err.status < 500) throw err;
+      if (attempt === CHUNK_MAX_ATTEMPTS - 1) throw err;
+      const delay = CHUNK_RETRY_BASE_MS * Math.pow(2, attempt); // 800ms, 1.6s, 3.2s
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, delay);
+        signal.addEventListener("abort", () => { clearTimeout(timer); reject(new DOMException("Upload aborted", "AbortError")); }, { once: true });
+      });
+    }
+  }
+  throw new Error("Unreachable");
 }
 
 const INIT_UPLOAD = `
@@ -195,15 +218,18 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
       const blobId = `${realFileId}:chunk:${chunk.index}`;
       const ciphertextBuffer = ciphertext.buffer.slice(ciphertext.byteOffset, ciphertext.byteOffset + ciphertext.byteLength) as ArrayBuffer;
       const requestStartMs = performance.now();
-      const uploadResult = await uploadBlobToApi(blobId, ciphertextBuffer, {
-        authToken,
-        extraHeaders: {
-          "X-Upload-Id": uploadId,
-          "X-Chunk-Index": String(chunk.index),
-          "X-Chunk-Count": String(chunkCount),
-          "X-Client-Timestamp": new Date().toISOString(),
-        },
-      });
+      const uploadResult = await withChunkRetry(
+        () => uploadBlobToApi(blobId, ciphertextBuffer, {
+          authToken,
+          extraHeaders: {
+            "X-Upload-Id": uploadId,
+            "X-Chunk-Index": String(chunk.index),
+            "X-Chunk-Count": String(chunkCount),
+            "X-Client-Timestamp": new Date().toISOString(),
+          },
+        }),
+        controller.signal,
+      );
       const requestMs = performance.now() - requestStartMs;
 
       manifest.chunks.push({
@@ -366,6 +392,9 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
 
     return realFileId;
   } catch (error) {
+    // Abort any stray concurrent workers so they don't silently keep uploading
+    // after the upload is already considered failed.
+    if (!controller.signal.aborted) controller.abort();
     logUploadEvent({
       type: "upload_session_failed",
       uploadId,

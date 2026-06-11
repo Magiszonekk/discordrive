@@ -21,39 +21,49 @@ export async function ensureServiceWorker(): Promise<ServiceWorkerRegistration> 
     throw new Error("Service Workers not supported in this browser");
   }
 
-  const existing = await navigator.serviceWorker.getRegistration("/");
-  if (!existing) {
-    await navigator.serviceWorker.register("/stream-sw.js");
-  }
+  // Register listeners synchronously before any await so we cannot miss
+  // controllerchange or SW_ACTIVATED that fires during the async steps below.
+  let claimResolve: (() => void) | undefined;
+  let claimReject: ((e: Error) => void) | undefined;
+  const claimPromise = new Promise<void>((res, rej) => {
+    claimResolve = res;
+    claimReject = rej;
+  });
 
+  const t = setTimeout(() => {
+    navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
+    navigator.serviceWorker.removeEventListener("message", onMessage);
+    claimReject!(new Error("Service Worker did not claim this page. Please refresh and try again."));
+  }, 10_000);
+
+  const cleanup = () => {
+    clearTimeout(t);
+    navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
+    navigator.serviceWorker.removeEventListener("message", onMessage);
+  };
+
+  const onControllerChange = () => { cleanup(); claimResolve!(); };
+  const onMessage = (e: MessageEvent) => {
+    if (e.data?.type === "SW_ACTIVATED") { cleanup(); claimResolve!(); }
+  };
+
+  navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
+  navigator.serviceWorker.addEventListener("message", onMessage);
+
+  // Always register (idempotent; triggers update check when SW file changes).
+  await navigator.serviceWorker.register("/stream-sw.js");
   const reg = await navigator.serviceWorker.ready;
 
-  // SW must control this page before fetch events are intercepted.
-  // On first install or SW update, wait for controllerchange or SW_ACTIVATED message.
-  if (!navigator.serviceWorker.controller) {
-    await new Promise<void>((resolve, reject) => {
-      const t = setTimeout(() => {
-        navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
-        navigator.serviceWorker.removeEventListener("message", onMessage);
-        reject(new Error("Service Worker did not claim this page. Please refresh and try again."));
-      }, 8000);
-
-      const cleanup = () => {
-        clearTimeout(t);
-        navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
-        navigator.serviceWorker.removeEventListener("message", onMessage);
-      };
-
-      const onControllerChange = () => { cleanup(); resolve(); };
-      const onMessage = (e: MessageEvent) => {
-        if (e.data?.type === "SW_ACTIVATED") { cleanup(); resolve(); }
-      };
-
-      navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
-      navigator.serviceWorker.addEventListener("message", onMessage);
-    });
+  if (navigator.serviceWorker.controller) {
+    cleanup();
+    return reg;
   }
 
+  // SW is active but hasn't claimed this page. Ask it to claim now (handles
+  // the case where the initial controllerchange was missed on first install).
+  reg.active?.postMessage({ type: "CLAIM" });
+
+  await claimPromise;
   return reg;
 }
 

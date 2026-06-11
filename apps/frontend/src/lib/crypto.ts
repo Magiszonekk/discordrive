@@ -176,6 +176,26 @@ export async function decryptFileContentChunk(rootFek: CryptoKey, ciphertext: Ui
 
 export { toBase64, fromBase64, generateSalt, wrapARKWithPassword, wrapKey, deriveLoginMaterial };
 
+// === Folder key helpers ===
+
+export async function generateFolderKey(): Promise<CryptoKey> {
+  return crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+}
+
+export async function unwrapFolderKey(wrappedB64: string, filesKey: CryptoKey): Promise<CryptoKey> {
+  const { data, iv } = unpackWrappedKey(fromBase64(wrappedB64));
+  return unwrapKey(data, filesKey, iv, ["encrypt", "decrypt"]);
+}
+
+export async function encryptFolderBody(body: { name: string }, key: CryptoKey): Promise<string> {
+  return encryptMeta(key, JSON.stringify(body));
+}
+
+export async function decryptFolderBody(encryptedB64: string, key: CryptoKey): Promise<{ name: string }> {
+  const json = await decryptMeta(key, encryptedB64);
+  return JSON.parse(json) as { name: string };
+}
+
 export function packWrappedKey(data: ArrayBuffer, iv: Uint8Array): Uint8Array {
   const packed = new Uint8Array(iv.byteLength + data.byteLength);
   packed.set(iv, 0);

@@ -92,6 +92,21 @@ self.addEventListener("message", (event: ExtendableMessageEvent) => {
   const msg = event.data;
   if (!msg || !msg.type) return;
 
+  // Page asks SW to claim it (handles race on first install where the page
+  // missed the initial controllerchange event fired during activation).
+  if (msg.type === "CLAIM") {
+    event.waitUntil(
+      self.clients.claim().then(() =>
+        self.clients.matchAll().then((clients) => {
+          for (const client of clients) {
+            client.postMessage({ type: "SW_ACTIVATED" });
+          }
+        }),
+      ),
+    );
+    return;
+  }
+
   if (msg.type === "REGISTER_STREAM") {
     const port = event.ports[0] ?? null;
     event.waitUntil(

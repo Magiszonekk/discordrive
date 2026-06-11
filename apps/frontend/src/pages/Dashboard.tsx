@@ -1,22 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DownloadStatus } from "@ddv4/types";
 import { useParams } from "react-router";
-import { UploadCloud } from "lucide-react";
+import { FolderPlus, UploadCloud } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { gqlRequest } from "../lib/graphql.js";
-import { unwrapRootFek, decryptMeta } from "../lib/crypto.js";
+import { unwrapRootFek, decryptMeta, unwrapFolderKey, decryptFolderBody } from "../lib/crypto.js";
 import { uploadFile } from "../lib/upload.js";
-import { downloadFile, DOWNLOAD_SUCCESS_EVENT } from "../lib/download.js";
+import { downloadFile, downloadFolderAsZip, DOWNLOAD_SUCCESS_EVENT } from "../lib/download.js";
 import { createOwnerPreview, revokePreview, type PreviewResult } from "../lib/preview.js";
 import { useUploadStore } from "../stores/upload.js";
 import { useDownloadStore } from "../stores/download.js";
 import { useThemeStore } from "../stores/theme.js";
-import { FileTable } from "../components/files/FileTable.js";
+import { FileTable, type FolderItem } from "../components/files/FileTable.js";
 import { UploadProgress } from "../components/files/UploadProgress.js";
 import { DownloadProgress } from "../components/files/DownloadProgress.js";
 import { FolderBreadcrumb } from "../components/files/FolderBreadcrumb.js";
 import { VideoPlayer } from "../components/video/VideoPlayer.js";
 import { ShareModal } from "../components/files/ShareModal.js";
+import { NewFolderModal } from "../components/files/NewFolderModal.js";
+import { RenameFolderModal } from "../components/files/RenameFolderModal.js";
 import { useNotificationStore } from "../stores/notifications.js";
 import { useAuthStore } from "../stores/auth.js";
 import { ImagePreview } from "../components/media/ImagePreview.js";
@@ -24,6 +26,24 @@ import { ImagePreview } from "../components/media/ImagePreview.js";
 const DELETE_FILE_MUTATION = `
   mutation DeleteFile($fileId: ID!) {
     deleteFile(fileId: $fileId)
+  }
+`;
+
+const DELETE_FOLDER_MUTATION = `
+  mutation DeleteFolder($folderId: ID!) {
+    deleteFolder(folderId: $folderId)
+  }
+`;
+
+const MOVE_FILE_MUTATION = `
+  mutation MoveFile($fileId: ID!, $parentFolderId: ID) {
+    moveFile(fileId: $fileId, parentFolderId: $parentFolderId)
+  }
+`;
+
+const MOVE_FOLDER_MUTATION = `
+  mutation MoveFolder($folderId: ID!, $parentFolderId: ID) {
+    moveFolder(folderId: $folderId, parentFolderId: $parentFolderId)
   }
 `;
 
@@ -43,7 +63,10 @@ const FILES_QUERY = `
     }
     folders(parentFolderId: $parentFolderId) {
       id
+      encryptedBody
+      wrappedFolderKey
       itemCount
+      totalSizeBytes
       createdAt
       updatedAt
     }
@@ -65,6 +88,9 @@ export function Dashboard() {
     name: string;
     wrappedFEK?: string;
   } | null>(null);
+  const [showNewFolder, setShowNewFolder] = useState(false);
+  const [renamingFolder, setRenamingFolder] = useState<FolderItem | null>(null);
+  const [zipProgress, setZipProgress] = useState<string | null>(null);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -108,51 +134,67 @@ export function Dashboard() {
         }>;
         folders: Array<{
           id: string;
+          encryptedBody: string;
+          wrappedFolderKey: string;
           itemCount: number;
+          totalSizeBytes: string;
           createdAt: string;
           updatedAt: string;
         }>;
       }>(FILES_QUERY, { parentFolderId: folderId ?? null });
 
-      const files = await Promise.all(
-        result.files.filter((f) => f.status === "READY").map(async (file) => {
-          let name = file.id;
-          let mimeType = "application/octet-stream";
-          try {
-            const fek = await unwrapRootFek(filesKey!, file.wrappedFEK);
-            if (file.encryptedName) name = await decryptMeta(fek, file.encryptedName);
-            if (file.encryptedMimeType) mimeType = await decryptMeta(fek, file.encryptedMimeType);
-          } catch { /* show id as fallback if decrypt fails */ }
-          return {
-            id: file.id,
-            name,
-            mimeType,
-            size: file.totalCiphertextBytes,
-            chunkSize: file.chunkCount > 0 ? Math.ceil(Number(file.totalCiphertextBytes) / file.chunkCount) : 0,
-            chunkCount: file.chunkCount,
-            status: file.status,
-            createdAt: file.createdAt,
-            wrappedFEK: file.wrappedFEK,
-            manifestBlobId: file.primaryManifestBlobId ?? "",
-          };
-        }),
-      );
+      const [files, folders] = await Promise.all([
+        Promise.all(
+          result.files.filter((f) => f.status === "READY").map(async (file) => {
+            let name = file.id;
+            let mimeType = "application/octet-stream";
+            try {
+              const fek = await unwrapRootFek(filesKey!, file.wrappedFEK);
+              if (file.encryptedName) name = await decryptMeta(fek, file.encryptedName);
+              if (file.encryptedMimeType) mimeType = await decryptMeta(fek, file.encryptedMimeType);
+            } catch { /* show id as fallback if decrypt fails */ }
+            return {
+              id: file.id,
+              name,
+              mimeType,
+              size: file.totalCiphertextBytes,
+              chunkSize: file.chunkCount > 0 ? Math.ceil(Number(file.totalCiphertextBytes) / file.chunkCount) : 0,
+              chunkCount: file.chunkCount,
+              status: file.status,
+              createdAt: file.createdAt,
+              wrappedFEK: file.wrappedFEK,
+              manifestBlobId: file.primaryManifestBlobId ?? "",
+            };
+          }),
+        ),
+        Promise.all(
+          result.folders.map(async (folder) => {
+            let name = folder.id;
+            try {
+              const folderKey = await unwrapFolderKey(folder.wrappedFolderKey, filesKey!);
+              const body = await decryptFolderBody(folder.encryptedBody, folderKey);
+              name = body.name;
+            } catch { /* fallback */ }
+            return {
+              id: folder.id,
+              name,
+              fileCount: folder.itemCount,
+              subfolderCount: 0,
+              totalSizeBytes: folder.totalSizeBytes,
+              wrappedFolderKey: folder.wrappedFolderKey,
+              encryptedBody: folder.encryptedBody,
+            };
+          }),
+        ),
+      ]);
 
-      return { files, folders: result.folders };
+      return { files, folders };
     },
     enabled: Boolean(filesKey),
   });
 
   const uiFiles = data?.files ?? [];
-
-  const uiFolders = (data?.folders ?? []).map((folder) => ({
-    id: folder.id,
-    name: folder.id,
-    parentId: null,
-    createdAt: folder.createdAt,
-    subfolderCount: 0,
-    fileCount: folder.itemCount,
-  }));
+  const uiFolders = data?.folders ?? [];
 
   useEffect(() => {
     return () => revokePreview(imagePreview);
@@ -247,6 +289,46 @@ export function Dashboard() {
     [queryClient],
   );
 
+  const handleDownloadFolder = useCallback(async (folder: FolderItem) => {
+    setZipProgress("Collecting files…");
+    try {
+      await downloadFolderAsZip(folder.id, folder.name, (msg) => setZipProgress(msg));
+    } catch (err) {
+      pushNotification("error", err instanceof Error ? err.message : "ZIP download failed");
+    } finally {
+      setZipProgress(null);
+    }
+  }, [pushNotification]);
+
+  const handleDeleteFolder = useCallback(async (folder: FolderItem) => {
+    if (!confirm(`Delete folder "${folder.name}" and all its contents? This cannot be undone.`)) return;
+    try {
+      await gqlRequest(DELETE_FOLDER_MUTATION, { folderId: folder.id });
+      queryClient.invalidateQueries({ queryKey: ["files"] });
+    } catch (err) {
+      pushNotification("error", err instanceof Error ? err.message : "Failed to delete folder");
+    }
+  }, [queryClient, pushNotification]);
+
+  const handleMoveFile = useCallback(async (fileId: string, targetFolderId: string) => {
+    try {
+      await gqlRequest(MOVE_FILE_MUTATION, { fileId, parentFolderId: targetFolderId });
+      queryClient.invalidateQueries({ queryKey: ["files"] });
+    } catch (err) {
+      pushNotification("error", err instanceof Error ? err.message : "Failed to move file");
+    }
+  }, [queryClient, pushNotification]);
+
+  const handleMoveFolder = useCallback(async (folderId: string, targetFolderId: string) => {
+    try {
+      await gqlRequest(MOVE_FOLDER_MUTATION, { folderId, parentFolderId: targetFolderId });
+      queryClient.invalidateQueries({ queryKey: ["files"] });
+      queryClient.invalidateQueries({ queryKey: ["folderPath"] });
+    } catch (err) {
+      pushNotification("error", err instanceof Error ? err.message : "Failed to move folder");
+    }
+  }, [queryClient, pushNotification]);
+
   const handlePlay = useCallback((file: {
     id: string;
     name: string;
@@ -264,19 +346,25 @@ export function Dashboard() {
     });
   }, []);
 
+  const isOsFileDrag = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
+
   const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!isOsFileDrag(e)) return;
     e.preventDefault();
     dragCounterRef.current += 1;
     if (dragCounterRef.current === 1) setIsDragging(true);
   }, []);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (!isOsFileDrag(e)) return;
     e.preventDefault();
     dragCounterRef.current -= 1;
     if (dragCounterRef.current === 0) setIsDragging(false);
   }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
+    // Let folder-drop handlers inside FileTable handle internal item moves
+    if (!isOsFileDrag(e)) return;
     e.preventDefault();
     dragCounterRef.current = 0;
     setIsDragging(false);
@@ -294,7 +382,19 @@ export function Dashboard() {
       onDrop={handleDrop}
     >
       <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <FolderBreadcrumb folderId={folderId ?? null} />
+        <FolderBreadcrumb
+          folderId={folderId ?? null}
+          onMoveFile={(fileId, targetFolderId) =>
+            targetFolderId === null
+              ? gqlRequest(MOVE_FILE_MUTATION, { fileId, parentFolderId: null }).then(() => queryClient.invalidateQueries({ queryKey: ["files"] }))
+              : handleMoveFile(fileId, targetFolderId)
+          }
+          onMoveFolder={(movingFolderId, targetFolderId) =>
+            targetFolderId === null
+              ? gqlRequest(MOVE_FOLDER_MUTATION, { folderId: movingFolderId, parentFolderId: null }).then(() => { queryClient.invalidateQueries({ queryKey: ["files"] }); queryClient.invalidateQueries({ queryKey: ["folderPath"] }); })
+              : handleMoveFolder(movingFolderId, targetFolderId)
+          }
+        />
         <div className="flex w-full gap-2 md:w-auto md:justify-end">
           <input
             type="file"
@@ -303,6 +403,13 @@ export function Dashboard() {
             className="hidden"
             onChange={(e) => e.target.files && handleUpload(e.target.files)}
           />
+          <button
+            onClick={() => setShowNewFolder(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-3 text-sm font-medium text-zinc-200 transition-colors hover:bg-zinc-700 md:py-2"
+          >
+            <FolderPlus size={16} />
+            <span className="hidden md:inline">New Folder</span>
+          </button>
           <button
             onClick={() => fileInputRef.current?.click()}
             className="w-full rounded-lg px-4 py-3 text-sm font-medium text-white md:w-auto md:py-2 transition-opacity hover:opacity-90"
@@ -357,6 +464,33 @@ export function Dashboard() {
           onPlay={handlePlay}
           onDelete={handleDelete}
           onShare={(file) => setSharingFile({ id: file.id, name: file.name, wrappedFEK: file.wrappedFEK })}
+          onDownloadFolder={handleDownloadFolder}
+          onRenameFolder={(folder) => setRenamingFolder(folder)}
+          onDeleteFolder={handleDeleteFolder}
+          onMoveFile={handleMoveFile}
+          onMoveFolder={handleMoveFolder}
+        />
+      )}
+
+      {zipProgress && (
+        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-zinc-700 bg-zinc-900 px-5 py-3 text-sm text-zinc-200 shadow-2xl">
+          {zipProgress}
+        </div>
+      )}
+
+      {showNewFolder && (
+        <NewFolderModal
+          parentFolderId={folderId ?? null}
+          onCreated={() => queryClient.invalidateQueries({ queryKey: ["files"] })}
+          onClose={() => setShowNewFolder(false)}
+        />
+      )}
+
+      {renamingFolder && (
+        <RenameFolderModal
+          folder={renamingFolder}
+          onRenamed={() => queryClient.invalidateQueries({ queryKey: ["files"] })}
+          onClose={() => setRenamingFolder(null)}
         />
       )}
 

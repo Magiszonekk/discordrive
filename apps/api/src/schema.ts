@@ -95,7 +95,10 @@ export function buildSchema() {
       type Folder {
         id: ID!
         parentFolderId: ID
+        encryptedBody: String!
+        wrappedFolderKey: String!
         itemCount: Int!
+        totalSizeBytes: String!
         createdAt: DateTime!
         updatedAt: DateTime!
       }
@@ -197,6 +200,7 @@ export function buildSchema() {
         getLoginChallenge(emailOrUsername: String!): LoginChallenge
         files(parentFolderId: ID): [File!]!
         folders(parentFolderId: ID): [Folder!]!
+        folderPath(folderId: ID!): [Folder!]!
         file(fileId: ID!): File
         shares(fileId: ID!): [SecureShare!]!
         storageUsage: StorageUsage!
@@ -243,6 +247,8 @@ export function buildSchema() {
         moveFile(fileId: ID!, parentFolderId: ID): Boolean!
 
         createFolder(encryptedBodyB64: String!, wrappedFolderKeyB64: String!, parentFolderId: ID): Folder!
+        renameFolder(folderId: ID!, encryptedBodyB64: String!): Boolean!
+        moveFolder(folderId: ID!, parentFolderId: ID): Boolean!
         deleteFolder(folderId: ID!): Boolean!
 
         createShare(
@@ -268,6 +274,11 @@ export function buildSchema() {
       File: {
         totalCiphertextBytes: (parent: { totalCiphertextBytes: bigint | string }) => parent.totalCiphertextBytes.toString(),
         wrappedFEK: (parent: { wrappedFEK: Uint8Array | Buffer }) => Buffer.from(parent.wrappedFEK).toString("base64"),
+      },
+      Folder: {
+        encryptedBody: (parent: { encryptedBody: Uint8Array | Buffer }) => Buffer.from(parent.encryptedBody).toString("base64"),
+        wrappedFolderKey: (parent: { wrappedFolderKey: Uint8Array | Buffer }) => Buffer.from(parent.wrappedFolderKey).toString("base64"),
+        totalSizeBytes: (parent: { totalSizeBytes?: string }) => parent.totalSizeBytes ?? "0",
       },
       Query: {
         getLoginChallenge: async (_parent: unknown, args: { emailOrUsername: string }) => {
@@ -304,6 +315,10 @@ export function buildSchema() {
         folders: async (_parent: unknown, args: { parentFolderId?: string }, ctx: Context) => {
           const auth = requireAuth(ctx);
           return folderResolvers.getFolders(auth.userId, args.parentFolderId ?? null);
+        },
+        folderPath: async (_parent: unknown, args: { folderId: string }, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return folderResolvers.getFolderPath(auth.userId, args.folderId);
         },
         file: async (_parent: unknown, args: { fileId: string }, ctx: Context) => {
           const auth = requireAuth(ctx);
@@ -391,6 +406,14 @@ export function buildSchema() {
         createFolder: async (_parent: unknown, args: { encryptedBodyB64: string; wrappedFolderKeyB64: string; parentFolderId?: string }, ctx: Context) => {
           const auth = requireAuth(ctx);
           return folderResolvers.createFolder(auth.userId, args.encryptedBodyB64, args.wrappedFolderKeyB64, args.parentFolderId ?? null);
+        },
+        renameFolder: async (_parent: unknown, args: { folderId: string; encryptedBodyB64: string }, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return folderResolvers.renameFolder(auth.userId, args.folderId, args.encryptedBodyB64);
+        },
+        moveFolder: async (_parent: unknown, args: { folderId: string; parentFolderId?: string }, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return folderResolvers.moveFolder(auth.userId, args.folderId, args.parentFolderId ?? null);
         },
         deleteFolder: async (_parent: unknown, args: { folderId: string }, ctx: Context) => {
           const auth = requireAuth(ctx);

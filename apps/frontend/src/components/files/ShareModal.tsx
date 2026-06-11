@@ -87,6 +87,7 @@ export function ShareModal({ file, onClose }: Props) {
   const [shares, setShares] = useState<ShareItem[]>([]);
   const [loadingShares, setLoadingShares] = useState(true);
   const [revokingShareId, setRevokingShareId] = useState<string | null>(null);
+  const [showRevoked, setShowRevoked] = useState(false);
   const loadShares = async () => {
     setLoadingShares(true);
     try {
@@ -219,15 +220,25 @@ export function ShareModal({ file, onClose }: Props) {
           </div>
 
           <div>
-            <h3 className="mb-3 text-sm font-medium text-white">Existing share links</h3>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-medium text-white">Existing share links</h3>
+              <button
+                onClick={() => setShowRevoked((v) => !v)}
+                className={`rounded-md px-2 py-1 text-xs transition-colors ${showRevoked ? "bg-zinc-700 text-zinc-200" : "text-zinc-500 hover:text-zinc-300"}`}
+              >
+                {showRevoked ? "Hide revoked" : "Show revoked"}
+              </button>
+            </div>
             <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
               {loadingShares ? (
                 <p className="text-sm text-zinc-500">Loading shares...</p>
-              ) : shares.length === 0 ? (
-                <p className="text-sm text-zinc-500">No share links yet.</p>
-              ) : (
-                <div className="max-h-[22rem] space-y-3 overflow-y-auto pr-0.5">
-                  {[...shares]
+              ) : (() => {
+                const visible = shares.filter((s) => showRevoked || s.status !== "REVOKED");
+                if (shares.length === 0) return <p className="text-sm text-zinc-500">No share links yet.</p>;
+                if (visible.length === 0) return <p className="text-sm text-zinc-500">All links are revoked. <button onClick={() => setShowRevoked(true)} className="text-zinc-400 underline hover:text-zinc-200">Show them</button></p>;
+                return (
+                <div className="max-h-88 space-y-3 overflow-y-auto pr-0.5">
+                  {[...visible]
                     .sort((a, b) => {
                       const aActive = statusLabel(a.status, a.expiresAt) === "Active";
                       const bActive = statusLabel(b.status, b.expiresAt) === "Active";
@@ -270,7 +281,8 @@ export function ShareModal({ file, onClose }: Props) {
                       );
                     })}
                 </div>
-              )}
+                );
+              })()}
             </div>
           </div>
         </div>

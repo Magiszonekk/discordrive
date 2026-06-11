@@ -1,7 +1,9 @@
 // DiscorDrive v4 — Download helpers for secure files v2
 
+import { zipSync } from "fflate";
 import { fetchBlobBody, fetchBlobBodyShared, fetchBlobDescriptor } from "./api.js";
-import { decryptManifest, decryptFileContentChunk, fromBase64, unwrapRootFek, toBase64 } from "./crypto.js";
+import { decryptManifest, decryptFileContentChunk, decryptMeta, fromBase64, unwrapRootFek, toBase64, unwrapFolderKey, decryptFolderBody } from "./crypto.js";
+import { gqlRequest } from "./graphql.js";
 import { useAuthStore } from "../stores/auth.js";
 import { useDownloadStore } from "../stores/download.js";
 import { DownloadStatus } from "@ddv4/types";
@@ -168,6 +170,118 @@ export async function downloadSharedFile(options: SharedDownloadOptions & { sign
     bytes: chunks.reduce((total, chunk) => total + chunk.byteLength, 0),
   };
   return result;
+}
+
+// === Folder ZIP download ===
+
+const FOLDER_TREE_QUERY = `
+  query FolderTree($parentFolderId: ID) {
+    files(parentFolderId: $parentFolderId) {
+      id encryptedName primaryManifestBlobId wrappedFEK chunkCount status
+    }
+    folders(parentFolderId: $parentFolderId) {
+      id encryptedBody wrappedFolderKey
+    }
+  }
+`;
+
+interface FolderTreeFile {
+  id: string;
+  encryptedName: string | null;
+  primaryManifestBlobId: string | null;
+  wrappedFEK: string;
+  chunkCount: number;
+  status: string;
+}
+
+interface FolderTreeFolder {
+  id: string;
+  encryptedBody: string;
+  wrappedFolderKey: string;
+}
+
+async function collectZipEntries(
+  filesKey: CryptoKey,
+  parentFolderId: string | null,
+  pathPrefix: string,
+  entries: Record<string, Uint8Array>,
+): Promise<void> {
+  const result = await gqlRequest<{ files: FolderTreeFile[]; folders: FolderTreeFolder[] }>(
+    FOLDER_TREE_QUERY,
+    { parentFolderId },
+  );
+
+  for (const file of result.files.filter((f) => f.status === "READY" && f.primaryManifestBlobId)) {
+    let fileName = file.id;
+    try {
+      const fek = await unwrapRootFek(filesKey, file.wrappedFEK);
+      if (file.encryptedName) {
+        fileName = await decryptMeta(fek, file.encryptedName);
+      }
+
+      const manifestBody = await fetchBlobBody(file.primaryManifestBlobId!);
+      const manifest = await decryptManifest(fek, toBase64(new Uint8Array(manifestBody)));
+      const sortedChunks = manifest.chunks.slice().sort((a, b) => a.index - b.index);
+
+      const chunkBuffers = await Promise.all(
+        sortedChunks.map((c) => fetchBlobBody(c.blobId).then((buf) => decryptFileContentChunk(fek, new Uint8Array(buf)))),
+      );
+
+      const totalBytes = chunkBuffers.reduce((sum, b) => sum + b.byteLength, 0);
+      const combined = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const buf of chunkBuffers) {
+        combined.set(new Uint8Array(buf), offset);
+        offset += buf.byteLength;
+      }
+
+      const zipPath = pathPrefix ? `${pathPrefix}/${fileName}` : fileName;
+      entries[zipPath] = combined;
+    } catch {
+      // skip files that fail to decrypt
+    }
+  }
+
+  for (const folder of result.folders) {
+    let folderName = folder.id;
+    try {
+      const folderKey = await unwrapFolderKey(folder.wrappedFolderKey, filesKey);
+      const body = await decryptFolderBody(folder.encryptedBody, folderKey);
+      folderName = body.name;
+    } catch { /* fallback to id */ }
+    const subPath = pathPrefix ? `${pathPrefix}/${folderName}` : folderName;
+    await collectZipEntries(filesKey, folder.id, subPath, entries);
+  }
+}
+
+export async function downloadFolderAsZip(
+  folderId: string,
+  folderName: string,
+  onProgress?: (msg: string) => void,
+): Promise<void> {
+  const filesKey = useAuthStore.getState().filesKey;
+  if (!filesKey) throw new Error("Not authenticated");
+
+  onProgress?.("Collecting files…");
+  const entries: Record<string, Uint8Array> = {};
+  await collectZipEntries(filesKey, folderId, "", entries);
+
+  if (Object.keys(entries).length === 0) {
+    throw new Error("Folder is empty or all files failed to decrypt");
+  }
+
+  onProgress?.(`Packing ${Object.keys(entries).length} files…`);
+  const zipped = zipSync(entries, { level: 0 });
+
+  const blob = new Blob([zipped], { type: "application/zip" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${folderName}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function saveBlob(chunks: ArrayBuffer[], fileName: string, mimeType: string) {

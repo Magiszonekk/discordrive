@@ -25,6 +25,13 @@ export interface BlobUploadRequestOptions {
   authToken?: string;
 }
 
+export class BlobUploadError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "BlobUploadError";
+  }
+}
+
 function toUploadBody(data: ArrayBuffer | Uint8Array): ArrayBuffer {
   return data instanceof ArrayBuffer ? data : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
 }
@@ -50,7 +57,7 @@ export async function uploadBlobToApi(
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: "Blob upload failed" }));
-    throw new Error((error as { error: string }).error);
+    throw new BlobUploadError((error as { error: string }).error, response.status);
   }
 
   return response.json() as Promise<BlobUploadResponse>;
