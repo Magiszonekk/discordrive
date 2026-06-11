@@ -14,7 +14,11 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.discordrive.gallery.api.AiVisionClient
 import com.discordrive.gallery.api.DiscorDriveClient
+import com.discordrive.gallery.api.EnrichmentEngine
+import com.discordrive.gallery.api.EnrichmentRecord
+import com.discordrive.gallery.crypto.DdvCrypto
 import kotlin.concurrent.thread
 
 /**
@@ -28,10 +32,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var passwordInput: EditText
     private lateinit var loginButton: Button
     private lateinit var syncButton: Button
+    private lateinit var aiUrlInput: EditText
+    private lateinit var aiKeyInput: EditText
+    private lateinit var aiModelInput: EditText
+    private lateinit var aiScanButton: Button
+    private lateinit var searchInput: EditText
+    private lateinit var searchButton: Button
     private lateinit var statusView: TextView
 
     private var client: DiscorDriveClient? = null
     private var filesKey: ByteArray? = null
+    private val enrichmentCache = mutableMapOf<String, EnrichmentRecord?>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,6 +70,34 @@ class MainActivity : AppCompatActivity() {
             visibility = View.GONE
             setOnClickListener { doSync() }
         }
+        aiUrlInput = EditText(this).apply {
+            hint = "AI endpoint URL"
+            setText("http://10.0.2.2:8317")
+            visibility = View.GONE
+        }
+        aiKeyInput = EditText(this).apply {
+            hint = "AI API key"
+            visibility = View.GONE
+        }
+        aiModelInput = EditText(this).apply {
+            hint = "Model"
+            setText("nex-agi/nex-n2-pro:free")
+            visibility = View.GONE
+        }
+        aiScanButton = Button(this).apply {
+            text = "Analiza AI (tagi + opisy)"
+            visibility = View.GONE
+            setOnClickListener { doAiScan() }
+        }
+        searchInput = EditText(this).apply {
+            hint = "Szukaj w tagach i opisach…"
+            visibility = View.GONE
+        }
+        searchButton = Button(this).apply {
+            text = "Szukaj"
+            visibility = View.GONE
+            setOnClickListener { doSearch() }
+        }
         statusView = TextView(this).apply { text = "DiscorDrive Gallery — niezalogowano" }
 
         root.addView(serverInput)
@@ -66,6 +105,12 @@ class MainActivity : AppCompatActivity() {
         root.addView(passwordInput)
         root.addView(loginButton)
         root.addView(syncButton)
+        root.addView(aiUrlInput)
+        root.addView(aiKeyInput)
+        root.addView(aiModelInput)
+        root.addView(aiScanButton)
+        root.addView(searchInput)
+        root.addView(searchButton)
         root.addView(statusView)
         setContentView(ScrollView(this).apply { addView(root) })
 
@@ -103,7 +148,9 @@ class MainActivity : AppCompatActivity() {
                 filesKey = session.filesKey
                 setStatus("Zalogowano: ${session.user.email}\nSesja urządzenia: ${session.refreshToken != null}")
                 runOnUiThread {
-                    syncButton.visibility = View.VISIBLE
+                    for (v in listOf(syncButton, aiUrlInput, aiKeyInput, aiModelInput, aiScanButton, searchInput, searchButton)) {
+                        v.visibility = View.VISIBLE
+                    }
                     loginButton.isEnabled = true
                 }
             } catch (e: Exception) {
@@ -132,6 +179,96 @@ class MainActivity : AppCompatActivity() {
                 setStatus("Błąd synca: ${e.message}")
             } finally {
                 runOnUiThread { syncButton.isEnabled = true }
+            }
+        }
+    }
+
+    /**
+     * Tags every synced-but-unanalyzed asset: local bytes → dedupe token →
+     * remote fileId → downscaled image → AI → encrypted enrichment blob.
+     * Local originals never leave the device at full resolution.
+     */
+    private fun doAiScan() {
+        val activeClient = client ?: return
+        val key = filesKey ?: return
+        val ai = AiVisionClient(
+            baseUrl = aiUrlInput.text.toString().trim().trimEnd('/'),
+            apiKey = aiKeyInput.text.toString().trim(),
+            model = aiModelInput.text.toString().trim(),
+        )
+        val engine = EnrichmentEngine(activeClient)
+        aiScanButton.isEnabled = false
+
+        thread {
+            try {
+                val scanner = MediaScanner(this)
+                val assets = scanner.scanAll()
+                var analyzed = 0
+                var skipped = 0
+                var failed = 0
+
+                assets.forEachIndexed { index, asset ->
+                    setStatus("AI ${index + 1}/${assets.size}: ${asset.displayName}\n$analyzed przeanalizowanych, $skipped pominiętych, $failed błędów")
+                    try {
+                        val content = scanner.readBytes(asset)
+                        val token = DdvCrypto.b64encode(DdvCrypto.deriveDedupeToken(key, content))
+                        val file = activeClient.fileByDedupeToken(token)
+                        if (file == null || engine.hasEnrichment(file.id)) {
+                            skipped++
+                            return@forEachIndexed
+                        }
+                        val vision = ai.analyzeImage(AiImagePreparer.prepare(this, asset), "image/jpeg")
+                        val record = engine.buildRecord(vision, aiModelInput.text.toString().trim())
+                        engine.saveEnrichment(file.id, file.wrappedFEK, key, record)
+                        enrichmentCache[file.id] = record
+                        analyzed++
+                    } catch (e: Exception) {
+                        failed++
+                        android.util.Log.w("AiScan", "Failed for ${asset.displayName}", e)
+                    }
+                }
+                setStatus("Analiza AI zakończona — ${assets.size} plików\n$analyzed przeanalizowanych, $skipped pominiętych, $failed błędów")
+            } catch (e: Exception) {
+                setStatus("Błąd analizy AI: ${e.message}")
+            } finally {
+                runOnUiThread { aiScanButton.isEnabled = true }
+            }
+        }
+    }
+
+    /** Client-side search over decrypted enrichments (server sees nothing). */
+    private fun doSearch() {
+        val activeClient = client ?: return
+        val key = filesKey ?: return
+        val query = searchInput.text.toString()
+        if (query.isBlank()) return
+        val engine = EnrichmentEngine(activeClient)
+        searchButton.isEnabled = false
+
+        thread {
+            try {
+                setStatus("Szukam „$query”…")
+                val files = activeClient.galleryDelta(null).files
+                    .filter { it.status == "READY" && it.deletedAt == null }
+
+                val results = StringBuilder()
+                var hits = 0
+                for (file in files) {
+                    val record = enrichmentCache.getOrPut(file.id) { engine.loadEnrichment(file, key) } ?: continue
+                    if (engine.matches(record, query)) {
+                        hits++
+                        val name = runCatching {
+                            val rootFek = DdvCrypto.unwrapRootFek(file.wrappedFEK, key)
+                            file.encryptedName?.let { DdvCrypto.decryptMeta(rootFek, it) }
+                        }.getOrNull() ?: file.id
+                        results.append("• $name\n  ${record.description}\n  [${record.tags.joinToString(", ")}]\n\n")
+                    }
+                }
+                setStatus(if (hits == 0) "Brak wyników dla „$query”" else "Wyniki dla „$query” ($hits):\n\n$results")
+            } catch (e: Exception) {
+                setStatus("Błąd wyszukiwania: ${e.message}")
+            } finally {
+                runOnUiThread { searchButton.isEnabled = true }
             }
         }
     }

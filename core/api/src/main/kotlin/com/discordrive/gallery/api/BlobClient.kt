@@ -59,6 +59,30 @@ class BlobClient(
         }
     }
 
+    /** True when the blob's transport record exists (HEAD-like check via metadata). */
+    fun exists(blobId: String): Boolean {
+        val request = Request.Builder()
+            .url("$baseUrl/api/blob/$blobId/meta")
+            .header("Authorization", "Bearer ${requireToken()}")
+            .build()
+        http.newCall(request).execute().use { response -> return response.isSuccessful }
+    }
+
+    /** Like [download] but returns null on 404 instead of throwing. */
+    fun downloadOrNull(blobId: String): ByteArray? {
+        val request = Request.Builder()
+            .url("$baseUrl/api/blob/$blobId")
+            .header("Authorization", "Bearer ${requireToken()}")
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (response.code == 404) return null
+            if (!response.isSuccessful) {
+                throw BlobUploadException("Blob download failed (HTTP ${response.code})", response.code)
+            }
+            return response.body?.bytes()
+        }
+    }
+
     private fun requireToken(): String =
         tokenProvider() ?: throw IllegalStateException("Not authenticated — login first")
 }
