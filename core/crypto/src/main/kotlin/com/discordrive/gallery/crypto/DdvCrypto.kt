@@ -78,6 +78,27 @@ object DdvCrypto {
     fun decryptFileManifest(packed: ByteArray, rootFek: ByteArray): String =
         AesGcm.decryptPacked(deriveFileContentKey(rootFek), packed).toString(Charsets.UTF_8)
 
+    // === Small metadata strings (encryptMeta in the web client) ===
+    // Encrypted DIRECTLY with the given key (rootFek for file name/mime,
+    // folderKey for folder bodies) — not with an HKDF subkey.
+
+    fun encryptMeta(key: ByteArray, plaintext: String, iv: ByteArray = AesGcm.randomIv()): String =
+        b64encode(AesGcm.encryptPacked(key, plaintext.toByteArray(Charsets.UTF_8), iv))
+
+    fun decryptMeta(key: ByteArray, packedB64: String): String =
+        AesGcm.decryptPacked(key, b64decode(packedB64)).toString(Charsets.UTF_8)
+
+    // === Dedupe token (mobile-only; server matches equality blindly) ===
+    // HMAC(HKDF(filesKey, "ddv4-dedupe-v1"), SHA-256(content)) — equality is
+    // checkable per user, content hash never leaves the device.
+
+    const val INFO_DEDUPE = "ddv4-dedupe-v1"
+
+    fun deriveDedupeToken(filesKey: ByteArray, content: ByteArray): ByteArray {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(content)
+        return Hkdf.hmacSha256(Hkdf.deriveBits(filesKey, INFO_DEDUPE), digest)
+    }
+
     // === Shares ===
 
     fun deriveShareWrapKey(linkSecret: ByteArray): ByteArray = Hkdf.deriveBits(linkSecret, INFO_SHARE_WRAP)

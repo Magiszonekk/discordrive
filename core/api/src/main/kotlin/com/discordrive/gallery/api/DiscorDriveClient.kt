@@ -172,6 +172,130 @@ class DiscorDriveClient(
         return json.decodeFromJsonElement(GalleryStateDto.serializer(), data.getValue("setGalleryState"))
     }
 
+    // === Files & folders ===
+
+    fun fileByDedupeToken(dedupeTokenB64: String): FileDto? {
+        val data = graphql.execute(
+            """
+            query Dedupe(${'$'}token: String!) {
+              fileByDedupeToken(dedupeTokenB64: ${'$'}token) {
+                id parentFolderId encryptedName encryptedMimeType primaryManifestBlobId previewBlobId
+                wrappedFEK wrappedFEKPreview dedupeTokenB64 status totalCiphertextBytes chunkCount
+                createdAt updatedAt deletedAt
+              }
+            }
+            """.trimIndent(),
+            buildJsonObject { put("token", JsonPrimitive(dedupeTokenB64)) },
+        )
+        val file = data["fileByDedupeToken"]
+        if (file == null || file is JsonNull) return null
+        return json.decodeFromJsonElement(FileDto.serializer(), file)
+    }
+
+    fun initUpload(
+        parentFolderId: String?,
+        encryptedName: String,
+        encryptedMimeType: String,
+        wrappedFEK: String,
+        dedupeTokenB64: String?,
+        totalCiphertextBytes: String,
+        chunkCount: Int,
+    ): String {
+        val data = graphql.execute(
+            """
+            mutation Init(
+              ${'$'}parentFolderId: ID, ${'$'}encryptedName: String, ${'$'}encryptedMimeType: String,
+              ${'$'}wrappedFEK: String!, ${'$'}dedupeTokenB64: String,
+              ${'$'}totalCiphertextBytes: String!, ${'$'}chunkCount: Int!
+            ) {
+              initUpload(
+                parentFolderId: ${'$'}parentFolderId, encryptedName: ${'$'}encryptedName,
+                encryptedMimeType: ${'$'}encryptedMimeType, wrappedFEK: ${'$'}wrappedFEK,
+                dedupeTokenB64: ${'$'}dedupeTokenB64,
+                totalCiphertextBytes: ${'$'}totalCiphertextBytes, chunkCount: ${'$'}chunkCount
+              ) { fileId status }
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                put("parentFolderId", parentFolderId?.let { JsonPrimitive(it) } ?: JsonNull)
+                put("encryptedName", JsonPrimitive(encryptedName))
+                put("encryptedMimeType", JsonPrimitive(encryptedMimeType))
+                put("wrappedFEK", JsonPrimitive(wrappedFEK))
+                put("dedupeTokenB64", dedupeTokenB64?.let { JsonPrimitive(it) } ?: JsonNull)
+                put("totalCiphertextBytes", JsonPrimitive(totalCiphertextBytes))
+                put("chunkCount", JsonPrimitive(chunkCount))
+            },
+        )
+        return data.getValue("initUpload").jsonObject.getValue("fileId").jsonPrimitive.content
+    }
+
+    fun commitManifest(
+        fileId: String,
+        manifestBlobId: String,
+        totalCiphertextBytes: String,
+        chunkCount: Int,
+        blobs: List<UploadedBlobTransport>,
+    ) {
+        val blobsJson = json.encodeToJsonElement(
+            kotlinx.serialization.builtins.ListSerializer(UploadedBlobTransport.serializer()),
+            blobs,
+        )
+        graphql.execute(
+            """
+            mutation Commit(
+              ${'$'}fileId: ID!, ${'$'}manifestBlobId: String!,
+              ${'$'}totalCiphertextBytes: String!, ${'$'}chunkCount: Int!,
+              ${'$'}blobs: [UploadedBlobTransportInput!]!
+            ) {
+              commitManifest(
+                fileId: ${'$'}fileId, manifestBlobId: ${'$'}manifestBlobId,
+                totalCiphertextBytes: ${'$'}totalCiphertextBytes, chunkCount: ${'$'}chunkCount, blobs: ${'$'}blobs
+              ) { success }
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                put("fileId", JsonPrimitive(fileId))
+                put("manifestBlobId", JsonPrimitive(manifestBlobId))
+                put("totalCiphertextBytes", JsonPrimitive(totalCiphertextBytes))
+                put("chunkCount", JsonPrimitive(chunkCount))
+                put("blobs", blobsJson)
+            },
+        )
+    }
+
+    fun folders(parentFolderId: String?): List<FolderDto> {
+        val data = graphql.execute(
+            """
+            query Folders(${'$'}parentFolderId: ID) {
+              folders(parentFolderId: ${'$'}parentFolderId) {
+                id parentFolderId encryptedBody wrappedFolderKey itemCount createdAt updatedAt
+              }
+            }
+            """.trimIndent(),
+            buildJsonObject { put("parentFolderId", parentFolderId?.let { JsonPrimitive(it) } ?: JsonNull) },
+        )
+        return json.decodeFromJsonElement(
+            kotlinx.serialization.builtins.ListSerializer(FolderDto.serializer()),
+            data.getValue("folders"),
+        )
+    }
+
+    fun createFolder(encryptedBodyB64: String, wrappedFolderKeyB64: String, parentFolderId: String?): String {
+        val data = graphql.execute(
+            """
+            mutation CreateFolder(${'$'}body: String!, ${'$'}key: String!, ${'$'}parentFolderId: ID) {
+              createFolder(encryptedBodyB64: ${'$'}body, wrappedFolderKeyB64: ${'$'}key, parentFolderId: ${'$'}parentFolderId) { id }
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                put("body", JsonPrimitive(encryptedBodyB64))
+                put("key", JsonPrimitive(wrappedFolderKeyB64))
+                put("parentFolderId", parentFolderId?.let { JsonPrimitive(it) } ?: JsonNull)
+            },
+        )
+        return data.getValue("createFolder").jsonObject.getValue("id").jsonPrimitive.content
+    }
+
     // === Upload/resume ===
 
     fun uploadStatus(fileId: String): UploadStatusDto {
