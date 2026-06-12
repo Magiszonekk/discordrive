@@ -18,10 +18,10 @@ import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.snackbar.Snackbar
 import kotlin.concurrent.thread
 
-/** Photo grid — the heart of the app. */
+/** Albums overview — buckets mirrored as collections, like a stock gallery. */
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var adapter: GalleryAdapter
+    private lateinit var adapter: AlbumAdapter
     private lateinit var progress: LinearProgressIndicator
     private lateinit var statusBarText: TextView
     private lateinit var emptyView: TextView
@@ -44,7 +44,7 @@ class MainActivity : AppCompatActivity() {
             when (item.itemId) {
                 R.id.action_search -> startActivity(Intent(this, SearchActivity::class.java))
                 R.id.action_sync -> runSync()
-                R.id.action_ai -> runAiScan()
+                R.id.action_ai -> runAiScan(bucket = null)
                 R.id.action_settings -> startActivity(Intent(this, SettingsActivity::class.java))
             }
             true
@@ -54,20 +54,22 @@ class MainActivity : AppCompatActivity() {
         statusBarText = findViewById(R.id.statusBarText)
         emptyView = findViewById(R.id.emptyView)
 
-        adapter = GalleryAdapter { asset ->
-            startActivity(Intent(this, ViewerActivity::class.java).putExtra("assetId", asset.id))
+        adapter = AlbumAdapter { album ->
+            startActivity(Intent(this, AlbumActivity::class.java).putExtra("bucket", album.name))
         }
         findViewById<RecyclerView>(R.id.grid).apply {
-            layoutManager = GridLayoutManager(this@MainActivity, GalleryAdapter.SPAN_COUNT)
+            layoutManager = GridLayoutManager(this@MainActivity, AlbumAdapter.SPAN_COUNT)
             adapter = this@MainActivity.adapter
+            setPadding(12, 12, 12, 12)
         }
 
         ensureMediaPermission()
+        SyncWorker.applySchedule(this)
     }
 
     override fun onResume() {
         super.onResume()
-        if (SessionManager.isLoggedIn) refreshGrid()
+        if (SessionManager.isLoggedIn) refreshAlbums()
     }
 
     private fun ensureMediaPermission() {
@@ -84,17 +86,23 @@ class MainActivity : AppCompatActivity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        refreshGrid()
+        refreshAlbums()
     }
 
-    private fun refreshGrid() {
+    private fun refreshAlbums() {
         thread {
             val assets = MediaScanner(this).scanAll()
-            val db = AppDb(this)
-            val synced = assets.filter { db.fileIdFor(it) != null }.map { it.id }.toSet()
+            val albums = assets.groupBy { it.bucketName }.map { (name, items) ->
+                Album(
+                    name = name,
+                    count = items.size,
+                    cover = items.first(), // scanAll is newest-first
+                    allVideo = items.all { it.isVideo },
+                )
+            }.sortedByDescending { it.cover.dateAddedSec }
             runOnUiThread {
-                adapter.submit(assets, synced)
-                emptyView.visibility = if (assets.isEmpty()) View.VISIBLE else View.GONE
+                adapter.submit(albums)
+                emptyView.visibility = if (albums.isEmpty()) View.VISIBLE else View.GONE
             }
         }
     }
@@ -122,14 +130,14 @@ class MainActivity : AppCompatActivity() {
                 }
                 setWorking(null)
                 runOnUiThread {
-                    refreshGrid()
+                    refreshAlbums()
                     Snackbar.make(
                         findViewById(R.id.mainRoot),
                         "${getString(R.string.sync_done)}: ↑${result.uploaded}, ${result.deduplicated} dedup, ${result.skipped} pominiętych, ${result.failed} błędów",
                         Snackbar.LENGTH_LONG,
                     ).show()
                 }
-                if (Settings.aiAutoAfterSync(this) && Settings.aiConfigured(this)) runAiScan()
+                if (Settings.aiAutoAfterSync(this) && Settings.aiConfigured(this)) runAiScan(bucket = null)
             } catch (e: Exception) {
                 setWorking(null)
                 runOnUiThread { Snackbar.make(findViewById(R.id.mainRoot), "Błąd: ${e.message}", Snackbar.LENGTH_LONG).show() }
@@ -137,7 +145,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun runAiScan() {
+    private fun runAiScan(bucket: String?) {
         if (working) return
         val client = SessionManager.client ?: return
         val filesKey = SessionManager.filesKey ?: return
@@ -153,8 +161,10 @@ class MainActivity : AppCompatActivity() {
             try {
                 val ai = AiVisionClient(Settings.aiUrl(this), Settings.aiKey(this), Settings.aiModel(this))
                 val runner = SyncRunner(this, client, filesKey)
-                val result = runner.aiScan(ai, Settings.aiModel(this)) { p ->
-                    setWorking("AI ${p.done}/${p.total} · ${p.analyzed} nowych · ${p.failed} błędów\n${p.detail}")
+                val limit = Settings.aiLimit(this)
+                val result = runner.aiScan(ai, Settings.aiModel(this), bucket, limit) { p ->
+                    val limitInfo = if (limit > 0) " (limit $limit)" else ""
+                    setWorking("AI ${p.done}/${p.total}$limitInfo · ${p.analyzed} nowych · ${p.failed} błędów\n${p.detail}")
                 }
                 setWorking(null)
                 runOnUiThread {

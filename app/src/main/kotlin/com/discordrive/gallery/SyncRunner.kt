@@ -1,6 +1,7 @@
 package com.discordrive.gallery
 
 import android.content.Context
+import com.discordrive.gallery.api.AiRateLimitException
 import com.discordrive.gallery.api.AiVisionClient
 import com.discordrive.gallery.api.DiscorDriveClient
 import com.discordrive.gallery.api.EnrichmentEngine
@@ -77,31 +78,58 @@ class SyncRunner(
         return Progress("sync", assets.size, assets.size, "done", uploaded, deduplicated, skipped, 0, failed)
     }
 
-    fun aiScan(ai: AiVisionClient, model: String, onProgress: (Progress) -> Unit): Progress {
-        val assets = scanner.scanAll()
+    /**
+     * AI enrichment pass.
+     * @param bucketFilter analyze only this album (null = whole library)
+     * @param limit max NEW analyses this run (0 = unlimited) — for rate-limited
+     *   gateways (e.g. OpenRouter free: 20/min, 2000/day)
+     * Calls are spaced ~3.2s apart (≤19/min) and 429s wait + retry once.
+     */
+    fun aiScan(
+        ai: AiVisionClient,
+        model: String,
+        bucketFilter: String? = null,
+        limit: Int = 0,
+        onProgress: (Progress) -> Unit,
+    ): Progress {
+        val assets = scanner.scanAll().filter { bucketFilter == null || it.bucketName == bucketFilter }
         val remoteFiles = client.galleryDelta(null).files
             .filter { it.status == "READY" && it.deletedAt == null }
             .associateBy { it.id }
         var analyzed = 0
         var skipped = 0
         var failed = 0
+        var lastCallAtMs = 0L
 
-        assets.forEachIndexed { index, asset ->
+        for ((index, asset) in assets.withIndex()) {
+            if (limit > 0 && analyzed >= limit) break
             onProgress(Progress("ai", index, assets.size, asset.displayName, analyzed = analyzed, skipped = skipped, failed = failed))
             try {
-                val fileId = db.fileIdFor(asset) ?: run { skipped++; return@forEachIndexed }
-                if (db.enrichmentFor(fileId) != null) { skipped++; return@forEachIndexed }
-                val file = remoteFiles[fileId] ?: run { skipped++; return@forEachIndexed }
+                val fileId = db.fileIdFor(asset) ?: run { skipped++; null } ?: continue
+                if (db.enrichmentFor(fileId) != null) { skipped++; continue }
+                val file = remoteFiles[fileId] ?: run { skipped++; null } ?: continue
 
                 // remote may already have it (other device) — cache locally
                 val remote = enrichment.loadEnrichment(file, filesKey)
                 if (remote != null) {
                     db.rememberEnrichment(fileId, remote)
                     skipped++
-                    return@forEachIndexed
+                    continue
                 }
 
-                val vision = ai.analyzeImage(AiImagePreparer.prepare(context, asset), "image/jpeg")
+                // throttle to stay under 20 req/min gateways
+                val sinceLast = System.currentTimeMillis() - lastCallAtMs
+                if (sinceLast < AI_CALL_SPACING_MS) Thread.sleep(AI_CALL_SPACING_MS - sinceLast)
+
+                val prepared = AiImagePreparer.prepare(context, asset)
+                lastCallAtMs = System.currentTimeMillis()
+                val vision = try {
+                    ai.analyzeImage(prepared, "image/jpeg")
+                } catch (rateLimit: AiRateLimitException) {
+                    Thread.sleep(rateLimit.retryAfterSeconds.coerceAtMost(120) * 1000)
+                    lastCallAtMs = System.currentTimeMillis()
+                    ai.analyzeImage(prepared, "image/jpeg")
+                }
                 val record = enrichment.buildRecord(vision, model)
                 enrichment.saveEnrichment(fileId, file.wrappedFEK, filesKey, record)
                 db.rememberEnrichment(fileId, record)
@@ -113,5 +141,9 @@ class SyncRunner(
         }
 
         return Progress("ai", assets.size, assets.size, "done", analyzed = analyzed, skipped = skipped, failed = failed)
+    }
+
+    private companion object {
+        const val AI_CALL_SPACING_MS = 3200L
     }
 }

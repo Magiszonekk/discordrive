@@ -26,6 +26,9 @@ import java.util.concurrent.TimeUnit
  * endpoint. That is a deliberate, per-user trust decision — the resulting
  * tags/description are stored E2EE like everything else.
  */
+class AiRateLimitException(val retryAfterSeconds: Long) :
+    Exception("AI rate limit hit, retry after ${retryAfterSeconds}s")
+
 class AiVisionClient(
     private val baseUrl: String,
     private val apiKey: String,
@@ -84,6 +87,10 @@ class AiVisionClient(
 
         http.newCall(request).execute().use { response ->
             val text = response.body?.string() ?: throw GraphQLException("Empty AI response")
+            if (response.code == 429) {
+                val retryAfter = response.header("Retry-After")?.toLongOrNull() ?: 30L
+                throw AiRateLimitException(retryAfter)
+            }
             if (!response.isSuccessful) throw GraphQLException("AI endpoint HTTP ${response.code}: ${text.take(300)}")
 
             val content = json.parseToJsonElement(text).jsonObject

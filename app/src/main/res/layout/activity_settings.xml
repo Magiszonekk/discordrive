@@ -108,12 +108,69 @@
                     android:inputType="text"/>
             </com.google.android.material.textfield.TextInputLayout>
 
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:hint="@string/settings_ai_limit">
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/aiLimitInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="number"/>
+            </com.google.android.material.textfield.TextInputLayout>
+
             <com.google.android.material.materialswitch.MaterialSwitch
                 android:id="@+id/aiAutoSwitch"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
                 android:text="@string/settings_ai_auto"
+                android:textColor="@color/text"/>
+
+
+            <com.google.android.material.divider.MaterialDivider
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginVertical="20dp"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_bg"
+                android:textColor="@color/accent"
+                android:textSize="14sp"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="@string/settings_bg_hint"
+                android:textColor="@color/text_dim"
+                android:textSize="12sp"/>
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/bgSyncSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/settings_bg_enabled"
+                android:textColor="@color/text"/>
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/bgWifiSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_bg_wifi"
+                android:textColor="@color/text"/>
+
+            <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/bgChargingSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_bg_charging"
                 android:textColor="@color/text"/>
 
             <com.google.android.material.button.MaterialButton

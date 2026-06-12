@@ -40,4 +40,21 @@
     <string name="settings_ai_auto">Analizuj automatycznie po synchronizacji</string>
     <string name="settings_save">Zapisz</string>
     <string name="settings_saved">Zapisano ustawienia</string>
+
+    <!-- Albums -->
+    <plurals name="album_count">
+        <item quantity="one">%d plik</item>
+        <item quantity="few">%d pliki</item>
+        <item quantity="many">%d plików</item>
+        <item quantity="other">%d plików</item>
+    </plurals>
+    <string name="album_ai_action">Analizuj ten album</string>
+
+    <!-- Background sync -->
+    <string name="settings_bg">Synchronizacja w tle</string>
+    <string name="settings_bg_hint">Co ok. 3 godziny aplikacja po cichu zsynchronizuje nowe zdjęcia (sesja odblokowywana z Android Keystore, bez hasła).</string>
+    <string name="settings_bg_enabled">Włącz synchronizację w tle</string>
+    <string name="settings_bg_wifi">Tylko przez Wi-Fi</string>
+    <string name="settings_bg_charging">Tylko podczas ładowania</string>
+    <string name="settings_ai_limit">Limit analiz w jednym przebiegu (0 = bez limitu)</string>
 </resources>
