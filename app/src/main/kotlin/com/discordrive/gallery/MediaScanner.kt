@@ -72,4 +72,9 @@ class MediaScanner(private val context: Context) {
     fun readBytes(asset: MediaAsset): ByteArray =
         context.contentResolver.openInputStream(asset.uri)?.use { it.readBytes() }
             ?: throw IllegalStateException("Cannot open ${asset.uri}")
+
+    /** Streaming access — sync MUST use this; whole-file reads OOM on large videos. */
+    fun openStream(asset: MediaAsset): java.io.InputStream =
+        context.contentResolver.openInputStream(asset.uri)
+            ?: throw IllegalStateException("Cannot open ${asset.uri}")
 }

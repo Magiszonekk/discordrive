@@ -94,10 +94,12 @@ object DdvCrypto {
 
     const val INFO_DEDUPE = "ddv4-dedupe-v1"
 
-    fun deriveDedupeToken(filesKey: ByteArray, content: ByteArray): ByteArray {
-        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(content)
-        return Hkdf.hmacSha256(Hkdf.deriveBits(filesKey, INFO_DEDUPE), digest)
-    }
+    fun deriveDedupeToken(filesKey: ByteArray, content: ByteArray): ByteArray =
+        deriveDedupeTokenFromDigest(filesKey, java.security.MessageDigest.getInstance("SHA-256").digest(content))
+
+    /** Streaming variant: callers hash large content incrementally and pass the SHA-256 digest. */
+    fun deriveDedupeTokenFromDigest(filesKey: ByteArray, contentSha256: ByteArray): ByteArray =
+        Hkdf.hmacSha256(Hkdf.deriveBits(filesKey, INFO_DEDUPE), contentSha256)
 
     // === Shares ===
 

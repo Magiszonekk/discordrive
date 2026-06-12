@@ -7,7 +7,6 @@ import com.discordrive.gallery.api.DiscorDriveClient
 import com.discordrive.gallery.api.EnrichmentEngine
 import com.discordrive.gallery.api.FolderManager
 import com.discordrive.gallery.api.UploadEngine
-import com.discordrive.gallery.crypto.DdvCrypto
 
 /**
  * One sync pass over the device library. Uses the local asset_map so repeat
@@ -40,6 +39,7 @@ class SyncRunner(
 
     fun sync(onProgress: (Progress) -> Unit): Progress {
         val assets = scanner.scanAll()
+        AppLog.i("SyncRunner", "sync start: ${assets.size} assets")
         val folderIds = mutableMapOf<String, String>()
         var uploaded = 0
         var deduplicated = 0
@@ -63,27 +63,28 @@ class SyncRunner(
                     return@forEachIndexed
                 }
 
-                val content = scanner.readBytes(asset)
-                val token = DdvCrypto.b64encode(DdvCrypto.deriveDedupeToken(filesKey, content))
-                val existing = client.fileByDedupeToken(token)
-                if (existing != null) {
-                    db.rememberMapping(asset, existing.id)
-                    deduplicated++
-                    return@forEachIndexed
-                }
-
                 val folderId = folderIds.getOrPut(asset.bucketName) {
                     folderManager.ensureFolder(asset.bucketName, parentFolderId = null, filesKey = filesKey)
                 }
-                val outcome = uploadEngine.uploadFile(content, asset.displayName, asset.mimeType, folderId, filesKey)
+                // streaming: dedupe hash + chunked upload without loading the file into memory
+                val outcome = uploadEngine.uploadStream(
+                    open = { scanner.openStream(asset) },
+                    fileName = asset.displayName,
+                    mimeType = asset.mimeType,
+                    parentFolderId = folderId,
+                    filesKey = filesKey,
+                )
                 db.rememberMapping(asset, outcome.fileId)
-                uploaded++
-            } catch (e: Exception) {
+                if (outcome.deduplicated) deduplicated++ else uploaded++
+            } catch (e: Throwable) {
+                // Throwable, not Exception: an OutOfMemoryError on one corrupt/huge
+                // file must not kill the whole pass (the pre-0.5.0 crash loop)
                 failed++
-                android.util.Log.w("SyncRunner", "Sync failed for ${asset.displayName}", e)
+                AppLog.w("SyncRunner", "sync failed for ${asset.displayName} (${asset.sizeBytes} B, ${asset.mimeType})", e)
             }
         }
 
+        AppLog.i("SyncRunner", "sync done: ↑$uploaded, $deduplicated dedup, $skipped skipped, $failed failed")
         return Progress("sync", assets.size, assets.size, "done", uploaded, deduplicated, skipped, 0, failed)
     }
 
@@ -102,7 +103,7 @@ class SyncRunner(
         onProgress: (Progress) -> Unit,
     ): Progress {
         val assets = scanner.scanAll().filter { bucketFilter == null || it.bucketName == bucketFilter }
-        val remoteFiles = client.galleryDelta(null).files
+        val remoteFiles = client.galleryDeltaAll(null).files
             .filter { it.status == "READY" && it.deletedAt == null }
             .associateBy { it.id }
         var analyzed = 0
@@ -145,10 +146,11 @@ class SyncRunner(
                 analyzed++
             } catch (e: Exception) {
                 failed++
-                android.util.Log.w("SyncRunner", "AI failed for ${asset.displayName}", e)
+                AppLog.w("SyncRunner", "AI failed for ${asset.displayName}", e)
             }
         }
 
+        AppLog.i("SyncRunner", "ai done: $analyzed analyzed, $skipped skipped, $failed failed")
         return Progress("ai", assets.size, assets.size, "done", analyzed = analyzed, skipped = skipped, failed = failed)
     }
 

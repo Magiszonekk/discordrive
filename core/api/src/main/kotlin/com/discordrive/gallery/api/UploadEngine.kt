@@ -44,18 +44,50 @@ class UploadEngine(private val client: DiscorDriveClient) {
         mimeType: String,
         parentFolderId: String?,
         filesKey: ByteArray,
-    ): UploadOutcome {
-        require(content.isNotEmpty()) { "Refusing to upload an empty file" }
+    ): UploadOutcome = uploadStream(
+        open = { java.io.ByteArrayInputStream(content) },
+        fileName = fileName,
+        mimeType = mimeType,
+        parentFolderId = parentFolderId,
+        filesKey = filesKey,
+    )
 
-        val dedupeTokenB64 = DdvCrypto.b64encode(DdvCrypto.deriveDedupeToken(filesKey, content))
+    /**
+     * Streaming upload — never holds more than one 8 MiB chunk in memory, so
+     * arbitrarily large videos upload without OOM. Two passes over the source:
+     * pass 1 hashes for the dedupe token (and measures the real size — the
+     * caller's metadata may be stale), pass 2 encrypts and uploads chunks.
+     * [open] must return a fresh stream over the same content each call.
+     */
+    fun uploadStream(
+        open: () -> java.io.InputStream,
+        fileName: String,
+        mimeType: String,
+        parentFolderId: String?,
+        filesKey: ByteArray,
+    ): UploadOutcome {
+        val sha = java.security.MessageDigest.getInstance("SHA-256")
+        var totalBytes = 0L
+        open().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                sha.update(buffer, 0, read)
+                totalBytes += read
+            }
+        }
+        require(totalBytes > 0) { "Refusing to upload an empty file" }
+
+        val dedupeTokenB64 = DdvCrypto.b64encode(DdvCrypto.deriveDedupeTokenFromDigest(filesKey, sha.digest()))
         client.fileByDedupeToken(dedupeTokenB64)?.let { existing ->
             return UploadOutcome(fileId = existing.id, deduplicated = true)
         }
 
         val rootFek = AesGcm.randomKey()
         val wrappedFEK = DdvCrypto.b64encode(DdvCrypto.wrapKeyPacked(rootFek, filesKey))
-        val chunkCount = (content.size + CHUNK_SIZE_BYTES - 1) / CHUNK_SIZE_BYTES
-        val totalCiphertextBytes = content.size.toLong() + chunkCount.toLong() * CHUNK_OVERHEAD_BYTES
+        val chunkCount = ((totalBytes + CHUNK_SIZE_BYTES - 1) / CHUNK_SIZE_BYTES).toInt()
+        val totalCiphertextBytes = totalBytes + chunkCount.toLong() * CHUNK_OVERHEAD_BYTES
 
         val fileId = client.initUpload(
             parentFolderId = parentFolderId,
@@ -71,19 +103,30 @@ class UploadEngine(private val client: DiscorDriveClient) {
         val transports = mutableListOf<UploadedBlobTransport>()
         val manifestChunks = mutableListOf<FileChunkManifest.ManifestChunk>()
 
-        for (index in 0 until chunkCount) {
-            val from = index * CHUNK_SIZE_BYTES
-            val to = minOf(from + CHUNK_SIZE_BYTES, content.size)
-            val ciphertext = DdvCrypto.encryptChunk(content.copyOfRange(from, to), rootFek)
-            val blobId = "$fileId:chunk:$index"
+        open().use { input ->
+            val buffer = ByteArray(CHUNK_SIZE_BYTES)
+            var streamedBytes = 0L
+            for (index in 0 until chunkCount) {
+                val plainSize = readFully(input, buffer)
+                streamedBytes += plainSize
+                check(plainSize > 0) { "Source ended early — file changed during upload" }
+                val ciphertext = DdvCrypto.encryptChunk(
+                    if (plainSize == buffer.size) buffer else buffer.copyOf(plainSize),
+                    rootFek,
+                )
+                val blobId = "$fileId:chunk:$index"
 
-            val responseBody = client.blobs.upload(blobId, ciphertext, uploadId, index, chunkCount)
-            transports += parseTransport(responseBody)
-            manifestChunks += FileChunkManifest.ManifestChunk(
-                index = index,
-                blobId = blobId,
-                ciphertextSizeBytes = ciphertext.size.toLong(),
-            )
+                val responseBody = client.blobs.upload(blobId, ciphertext, uploadId, index, chunkCount)
+                transports += parseTransport(responseBody)
+                manifestChunks += FileChunkManifest.ManifestChunk(
+                    index = index,
+                    blobId = blobId,
+                    ciphertextSizeBytes = ciphertext.size.toLong(),
+                )
+            }
+            check(streamedBytes == totalBytes && input.read() < 0) {
+                "Source size changed during upload ($totalBytes → ≥$streamedBytes bytes)"
+            }
         }
 
         val manifestJson = json.encodeToString(
@@ -120,6 +163,17 @@ class UploadEngine(private val client: DiscorDriveClient) {
             output.write(DdvCrypto.decryptChunk(client.blobs.download(chunk.blobId), rootFek))
         }
         return output.toByteArray()
+    }
+
+    /** Fills [buffer] as far as the stream allows; returns bytes read (0 at EOF). */
+    private fun readFully(input: java.io.InputStream, buffer: ByteArray): Int {
+        var offset = 0
+        while (offset < buffer.size) {
+            val read = input.read(buffer, offset, buffer.size - offset)
+            if (read < 0) break
+            offset += read
+        }
+        return offset
     }
 
     private fun parseTransport(responseBody: String): UploadedBlobTransport {

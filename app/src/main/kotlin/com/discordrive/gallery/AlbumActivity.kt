@@ -1,26 +1,43 @@
 package com.discordrive.gallery
 
 import android.content.Intent
+import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.discordrive.gallery.api.AiVisionClient
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.snackbar.Snackbar
 import kotlin.concurrent.thread
 
-/** Single album (bucket): photo grid + per-album AI analysis. */
+/**
+ * Single album (bucket): photo grid + per-album AI analysis.
+ *
+ * Selection follows the Google Photos flow: long-press enters selection mode
+ * and selects the item, taps toggle further items, the toolbar turns into a
+ * contextual action bar with batch actions (trash model — no hard delete
+ * outside "delete everywhere").
+ */
 class AlbumActivity : AppCompatActivity() {
 
     private lateinit var bucket: String
+    private lateinit var toolbar: MaterialToolbar
     private lateinit var adapter: GalleryAdapter
     private lateinit var progress: LinearProgressIndicator
     private lateinit var statusBarText: TextView
     private var working = false
+
+    private var currentAssets: List<MediaAsset> = emptyList()
+    private val selectedIds = linkedSetOf<Long>()
+    private var selectionMode = false
+    private var defaultNavIcon: Drawable? = null
+    private lateinit var backCallback: OnBackPressedCallback
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,23 +46,45 @@ class AlbumActivity : AppCompatActivity() {
         setContentView(R.layout.activity_album)
         Insets.apply(findViewById(R.id.albumRoot), bottom = false)
 
-        val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
+        toolbar = findViewById(R.id.toolbar)
+        defaultNavIcon = toolbar.navigationIcon
         toolbar.title = bucket
-        toolbar.setNavigationOnClickListener { finish() }
+        toolbar.setNavigationOnClickListener { if (selectionMode) exitSelection() else finish() }
         toolbar.inflateMenu(R.menu.menu_album)
         toolbar.setOnMenuItemClickListener { item ->
-            if (item.itemId == R.id.action_ai_album) runAlbumAi()
+            when (item.itemId) {
+                R.id.action_ai_album -> runAlbumAi()
+                R.id.action_sel_move -> pickMoveTargetForSelection()
+                R.id.action_sel_delete_cloud -> confirmTrashSelection(alsoLocal = false)
+                R.id.action_sel_delete_everywhere -> confirmTrashSelection(alsoLocal = true)
+                R.id.action_sel_delete_local -> deleteLocalBatch(selectedAssets())
+            }
             true
         }
+
+        backCallback = object : OnBackPressedCallback(false) {
+            override fun handleOnBackPressed() = exitSelection()
+        }
+        onBackPressedDispatcher.addCallback(this, backCallback)
 
         progress = findViewById(R.id.progress)
         statusBarText = findViewById(R.id.statusBarText)
 
         adapter = GalleryAdapter(
             onClick = { asset ->
-                startActivity(Intent(this, ViewerActivity::class.java).putExtra("assetId", asset.id))
+                if (selectionMode) {
+                    toggleSelection(asset)
+                } else {
+                    startActivity(
+                        Intent(this, ViewerActivity::class.java)
+                            .putExtra("assetId", asset.id)
+                            .putExtra("bucket", bucket),
+                    )
+                }
             },
-            onLongClick = { asset -> showAssetActions(asset) },
+            onLongClick = { asset ->
+                if (selectionMode) toggleSelection(asset) else enterSelection(asset)
+            },
         )
         findViewById<RecyclerView>(R.id.grid).apply {
             layoutManager = GridLayoutManager(this@AlbumActivity, GalleryAdapter.SPAN_COUNT)
@@ -63,7 +102,17 @@ class AlbumActivity : AppCompatActivity() {
             val assets = MediaScanner(this).scanAll().filter { it.bucketName == bucket }
             val db = AppDb(this)
             val synced = assets.filter { db.fileIdFor(it) != null }.map { it.id }.toSet()
-            runOnUiThread { adapter.submit(assets, synced) }
+            runOnUiThread {
+                currentAssets = assets
+                // drop selections whose assets disappeared (e.g. deleted locally)
+                selectedIds.retainAll(assets.map { it.id }.toSet())
+                if (selectionMode && selectedIds.isEmpty()) {
+                    exitSelectionUiOnly()
+                }
+                adapter.submit(assets, synced)
+                adapter.setSelection(selectionMode, selectedIds.toSet())
+                if (assets.isEmpty()) finish()
+            }
         }
     }
 
@@ -76,58 +125,120 @@ class AlbumActivity : AppCompatActivity() {
         }
     }
 
-    // === File actions (long-press) — trash model, no hard delete here ===
+    // === Selection mode (Google Photos flow) ===
 
-    private fun showAssetActions(asset: MediaAsset) {
-        val fileId = AppDb(this).fileIdFor(asset)
-        val actions = mutableListOf<Pair<String, () -> Unit>>()
-        if (fileId != null) {
-            actions += getString(R.string.action_move_to_album) to { pickMoveTarget(asset, fileId) }
-            actions += getString(R.string.action_delete_cloud) to { deleteFromCloud(asset, fileId, alsoLocal = false) }
-            actions += getString(R.string.action_delete_everywhere) to { deleteFromCloud(asset, fileId, alsoLocal = true) }
+    private fun enterSelection(asset: MediaAsset) {
+        selectionMode = true
+        selectedIds.add(asset.id)
+        updateSelectionUi()
+    }
+
+    private fun toggleSelection(asset: MediaAsset) {
+        if (!selectedIds.add(asset.id)) selectedIds.remove(asset.id)
+        if (selectedIds.isEmpty()) exitSelection() else updateSelectionUi()
+    }
+
+    private fun exitSelection() {
+        selectedIds.clear()
+        exitSelectionUiOnly()
+    }
+
+    private fun exitSelectionUiOnly() {
+        selectionMode = false
+        updateSelectionUi()
+    }
+
+    private fun updateSelectionUi() {
+        backCallback.isEnabled = selectionMode
+        adapter.setSelection(selectionMode, selectedIds.toSet())
+        toolbar.menu.clear()
+        if (selectionMode) {
+            toolbar.title = getString(R.string.selection_count, selectedIds.size)
+            toolbar.setNavigationIcon(R.drawable.ic_close)
+            toolbar.navigationContentDescription = getString(R.string.selection_exit)
+            toolbar.inflateMenu(R.menu.menu_selection)
+        } else {
+            toolbar.title = bucket
+            toolbar.navigationIcon = defaultNavIcon
+            toolbar.inflateMenu(R.menu.menu_album)
         }
-        actions += getString(R.string.action_delete_local) to { deleteLocal(asset) }
+    }
 
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-            .setTitle(asset.displayName)
-            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
+    private fun selectedAssets(): List<MediaAsset> = currentAssets.filter { it.id in selectedIds }
+
+    // === Batch actions — trash model, no hard delete here ===
+
+    private fun confirmTrashSelection(alsoLocal: Boolean) {
+        val assets = selectedAssets()
+        if (assets.isEmpty()) return
+        MaterialAlertDialogBuilder(this)
+            .setMessage(
+                getString(
+                    if (alsoLocal) R.string.sel_everywhere_confirm else R.string.sel_trash_confirm,
+                    assets.size,
+                ),
+            )
+            .setPositiveButton(R.string.action_delete_cloud) { _, _ -> trashSelection(assets, alsoLocal) }
+            .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
 
-    private fun deleteFromCloud(asset: MediaAsset, fileId: String, alsoLocal: Boolean) {
+    private fun trashSelection(assets: List<MediaAsset>, alsoLocal: Boolean) {
         val client = SessionManager.client ?: return
+        setWorking(getString(R.string.action_delete_cloud) + "…")
         thread {
-            try {
-                client.deleteFile(fileId)
-                runOnUiThread {
-                    Snackbar.make(findViewById(R.id.albumRoot), R.string.deleted_to_trash, Snackbar.LENGTH_LONG).show()
-                    if (alsoLocal) deleteLocal(asset) else refreshGrid()
+            val db = AppDb(this)
+            var trashed = 0
+            var unsynced = 0
+            for (asset in assets) {
+                val fileId = db.fileIdFor(asset) ?: run { unsynced++; null } ?: continue
+                runCatching { client.deleteFile(fileId); trashed++ }
+                    .onFailure { AppLog.w("Album", "trash failed for ${asset.displayName}", it) }
+            }
+            setWorking(null)
+            runOnUiThread {
+                val message = when {
+                    trashed == 0 && unsynced > 0 -> getString(R.string.sel_none_synced)
+                    unsynced > 0 -> getString(R.string.sel_trashed_partial, trashed, unsynced)
+                    else -> getString(R.string.sel_trashed, trashed)
                 }
-            } catch (e: Exception) {
-                runOnUiThread { Snackbar.make(findViewById(R.id.albumRoot), "Błąd: ${e.message}", Snackbar.LENGTH_LONG).show() }
+                Snackbar.make(findViewById(R.id.albumRoot), message, Snackbar.LENGTH_LONG).show()
+                if (alsoLocal) {
+                    deleteLocalBatch(assets)
+                } else {
+                    exitSelection()
+                    refreshGrid()
+                }
             }
         }
     }
 
-    /** MediaStore delete — Android shows its own confirmation dialog. */
-    private fun deleteLocal(asset: MediaAsset) {
+    /** MediaStore delete — Android shows one confirmation dialog for the whole batch. */
+    private fun deleteLocalBatch(assets: List<MediaAsset>) {
+        if (assets.isEmpty()) return
         if (android.os.Build.VERSION.SDK_INT >= 30) {
-            val intent = android.provider.MediaStore.createDeleteRequest(contentResolver, listOf(asset.uri))
+            val intent = android.provider.MediaStore.createDeleteRequest(contentResolver, assets.map { it.uri })
             startIntentSenderForResult(intent.intentSender, REQUEST_DELETE_LOCAL, null, 0, 0, 0)
         } else {
-            runCatching { contentResolver.delete(asset.uri, null, null) }
+            assets.forEach { runCatching { contentResolver.delete(it.uri, null, null) } }
+            exitSelection()
             refreshGrid()
         }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQUEST_DELETE_LOCAL) refreshGrid()
+        if (requestCode == REQUEST_DELETE_LOCAL) {
+            exitSelection()
+            refreshGrid()
+        }
     }
 
-    private fun pickMoveTarget(asset: MediaAsset, fileId: String) {
+    private fun pickMoveTargetForSelection() {
         val client = SessionManager.client ?: return
         val filesKey = SessionManager.filesKey ?: return
+        val assets = selectedAssets()
+        if (assets.isEmpty()) return
         thread {
             try {
                 val folders = client.folders(null).mapNotNull { folder ->
@@ -145,13 +256,13 @@ class AlbumActivity : AppCompatActivity() {
 
                 runOnUiThread {
                     val labels = folders.map { it.first } + getString(R.string.action_new_album)
-                    com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                    MaterialAlertDialogBuilder(this)
                         .setTitle(R.string.action_move_to_album)
                         .setItems(labels.toTypedArray()) { _, which ->
                             if (which < folders.size) {
-                                moveTo(asset, fileId, folders[which].second, folders[which].first)
+                                moveSelectionTo(assets, folders[which].second, folders[which].first)
                             } else {
-                                promptNewAlbum { newId, newName -> moveTo(asset, fileId, newId, newName) }
+                                promptNewAlbum { newId, newName -> moveSelectionTo(assets, newId, newName) }
                             }
                         }
                         .show()
@@ -164,7 +275,7 @@ class AlbumActivity : AppCompatActivity() {
 
     private fun promptNewAlbum(onCreated: (folderId: String, name: String) -> Unit) {
         val input = android.widget.EditText(this).apply { hint = getString(R.string.new_album_hint) }
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle(R.string.action_new_album)
             .setView(input)
             .setPositiveButton(R.string.settings_save) { _, _ ->
@@ -186,16 +297,28 @@ class AlbumActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun moveTo(asset: MediaAsset, fileId: String, folderId: String, folderName: String) {
+    private fun moveSelectionTo(assets: List<MediaAsset>, folderId: String, folderName: String) {
         val client = SessionManager.client ?: return
+        setWorking(getString(R.string.action_move_to_album))
         thread {
-            try {
-                client.moveFile(fileId, folderId)
-                runOnUiThread {
-                    Snackbar.make(findViewById(R.id.albumRoot), getString(R.string.moved_to, folderName), Snackbar.LENGTH_LONG).show()
+            val db = AppDb(this)
+            var moved = 0
+            var unsynced = 0
+            for (asset in assets) {
+                val fileId = db.fileIdFor(asset) ?: run { unsynced++; null } ?: continue
+                runCatching { client.moveFile(fileId, folderId); moved++ }
+                    .onFailure { AppLog.w("Album", "move failed for ${asset.displayName}", it) }
+            }
+            setWorking(null)
+            runOnUiThread {
+                val message = if (moved == 0 && unsynced > 0) {
+                    getString(R.string.sel_none_synced)
+                } else {
+                    getString(R.string.sel_moved, moved, folderName)
                 }
-            } catch (e: Exception) {
-                runOnUiThread { Snackbar.make(findViewById(R.id.albumRoot), "Błąd: ${e.message}", Snackbar.LENGTH_LONG).show() }
+                Snackbar.make(findViewById(R.id.albumRoot), message, Snackbar.LENGTH_LONG).show()
+                exitSelection()
+                refreshGrid()
             }
         }
     }
@@ -235,6 +358,7 @@ class AlbumActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 setWorking(null)
+                AppLog.e("Album", "AI run failed", e)
                 runOnUiThread { Snackbar.make(findViewById(R.id.albumRoot), "Błąd AI: ${e.message}", Snackbar.LENGTH_LONG).show() }
             }
         }

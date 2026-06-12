@@ -26,18 +26,19 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         val filesKey = SessionManager.filesKey ?: return Result.failure()
 
         return try {
+            AppLog.i("SyncWorker", "bg sync run")
             val runner = SyncRunner(ctx, client, filesKey)
             val sync = runner.sync {}
-            android.util.Log.i("SyncWorker", "bg sync: +${sync.uploaded} up, ${sync.deduplicated} dedup, ${sync.failed} failed")
+            AppLog.i("SyncWorker", "bg sync: +${sync.uploaded} up, ${sync.deduplicated} dedup, ${sync.failed} failed")
 
             if (Settings.aiAutoAfterSync(ctx) && Settings.aiConfigured(ctx)) {
                 val ai = AiVisionClient(Settings.aiUrl(ctx), Settings.aiKey(ctx), Settings.aiModel(ctx))
                 val aiResult = runner.aiScan(ai, Settings.aiModel(ctx), bucketFilter = null, limit = Settings.aiLimit(ctx)) {}
-                android.util.Log.i("SyncWorker", "bg ai: ${aiResult.analyzed} analyzed, ${aiResult.failed} failed")
+                AppLog.i("SyncWorker", "bg ai: ${aiResult.analyzed} analyzed, ${aiResult.failed} failed")
             }
             Result.success()
         } catch (e: Exception) {
-            android.util.Log.w("SyncWorker", "bg sync failed", e)
+            AppLog.w("SyncWorker", "bg sync failed", e)
             Result.retry()
         }
     }

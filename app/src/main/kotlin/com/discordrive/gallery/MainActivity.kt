@@ -139,8 +139,9 @@ class MainActivity : AppCompatActivity() {
                     ).show()
                 }
                 if (Settings.aiAutoAfterSync(this) && Settings.aiConfigured(this)) runAiScan(bucket = null)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 setWorking(null)
+                AppLog.e("Main", "sync run failed", e)
                 runOnUiThread { Snackbar.make(findViewById(R.id.mainRoot), "Błąd: ${e.message}", Snackbar.LENGTH_LONG).show() }
             }
         }
@@ -177,6 +178,7 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 setWorking(null)
+                AppLog.e("Main", "AI run failed", e)
                 runOnUiThread { Snackbar.make(findViewById(R.id.mainRoot), "Błąd AI: ${e.message}", Snackbar.LENGTH_LONG).show() }
             }
         }

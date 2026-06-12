@@ -1,61 +1,85 @@
 package com.discordrive.gallery
 
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.recyclerview.widget.RecyclerView
+import androidx.viewpager2.widget.ViewPager2
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
+import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 
-/** Full-screen viewer: image + AI description/tags. Videos open externally. */
+/**
+ * Full-screen viewer with horizontal swipe between the album's items
+ * (gallery-style). Images load full-screen; videos show a poster frame with a
+ * play button that hands off to the system player. Tap toggles the info panel
+ * (name + AI description/tags).
+ */
 class ViewerActivity : AppCompatActivity() {
 
     private var panelVisible = true
+    private var assets: List<MediaAsset> = emptyList()
+
+    private lateinit var infoPanel: View
+    private lateinit var nameView: TextView
+    private lateinit var descriptionView: TextView
+    private lateinit var chips: ChipGroup
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_viewer)
 
         val assetId = intent.getLongExtra("assetId", -1)
-        val image = findViewById<ImageView>(R.id.fullImage)
-        val infoPanel = findViewById<View>(R.id.infoPanel)
-        val nameView = findViewById<TextView>(R.id.fileName)
-        val descriptionView = findViewById<TextView>(R.id.description)
-        val chips = findViewById<ChipGroup>(R.id.tagChips)
-
-        image.setOnClickListener {
-            panelVisible = !panelVisible
-            infoPanel.visibility = if (panelVisible) View.VISIBLE else View.GONE
-        }
+        val bucket = intent.getStringExtra("bucket")
+        val pager = findViewById<ViewPager2>(R.id.pager)
+        infoPanel = findViewById(R.id.infoPanel)
+        nameView = findViewById(R.id.fileName)
+        descriptionView = findViewById(R.id.description)
+        chips = findViewById(R.id.tagChips)
 
         thread {
-            val asset = MediaScanner(this).findById(assetId) ?: run { finish(); return@thread }
-
-            if (asset.isVideo) {
-                // v1: hand off to the system player
-                runOnUiThread {
-                    startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(asset.uri, asset.mimeType))
-                    finish()
-                }
+            val all = MediaScanner(this).scanAll()
+            val scoped = if (bucket != null) all.filter { it.bucketName == bucket } else all
+            val list = if (scoped.any { it.id == assetId }) scoped else all
+            val start = list.indexOfFirst { it.id == assetId }
+            if (start < 0) {
+                runOnUiThread { finish() }
                 return@thread
             }
 
-            val bitmap = contentResolver.openInputStream(asset.uri)?.use { stream ->
-                BitmapFactory.decodeStream(stream, null, BitmapFactory.Options().apply { inSampleSize = sampleSizeFor(asset) })
-            }
-            val enrichmentRecord = AppDb(this).fileIdFor(asset)?.let { AppDb(this).enrichmentFor(it) }
-
             runOnUiThread {
-                bitmap?.let(image::setImageBitmap)
-                nameView.text = asset.displayName
-                if (enrichmentRecord != null) {
-                    descriptionView.text = enrichmentRecord.description
+                assets = list
+                pager.adapter = PageAdapter()
+                pager.setCurrentItem(start, false)
+                pager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
+                    override fun onPageSelected(position: Int) = showInfo(assets[position])
+                })
+                showInfo(assets[start])
+            }
+        }
+    }
+
+    private fun showInfo(asset: MediaAsset) {
+        nameView.text = asset.displayName
+        descriptionView.text = ""
+        chips.removeAllViews()
+        thread {
+            val db = AppDb(this)
+            val record = db.fileIdFor(asset)?.let { db.enrichmentFor(it) }
+            runOnUiThread {
+                if (nameView.text != asset.displayName) return@runOnUiThread // already swiped on
+                if (record != null) {
+                    descriptionView.text = record.description
                     chips.removeAllViews()
-                    enrichmentRecord.tags.take(10).forEach { tag ->
+                    record.tags.take(10).forEach { tag ->
                         chips.addView(Chip(this).apply { text = tag; isClickable = false })
                     }
                 } else {
@@ -65,12 +89,63 @@ class ViewerActivity : AppCompatActivity() {
         }
     }
 
-    private fun sampleSizeFor(asset: MediaAsset): Int {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        contentResolver.openInputStream(asset.uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-        val screenMax = maxOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
-        var sample = 1
-        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= screenMax) sample *= 2
-        return sample
+    private fun togglePanel() {
+        panelVisible = !panelVisible
+        infoPanel.visibility = if (panelVisible) View.VISIBLE else View.GONE
+    }
+
+    private fun playVideo(asset: MediaAsset) {
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(asset.uri, asset.mimeType))
+        }
+    }
+
+    private inner class PageAdapter : RecyclerView.Adapter<PageAdapter.PageHolder>() {
+
+        private val decoder = Executors.newFixedThreadPool(2)
+
+        inner class PageHolder(view: View) : RecyclerView.ViewHolder(view) {
+            val image: ImageView = view.findViewById(R.id.pageImage)
+            val play: ImageView = view.findViewById(R.id.pagePlay)
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = PageHolder(
+            LayoutInflater.from(parent.context).inflate(R.layout.item_viewer_page, parent, false),
+        )
+
+        override fun getItemCount() = assets.size
+
+        override fun onBindViewHolder(holder: PageHolder, position: Int) {
+            val asset = assets[position]
+            holder.image.tag = asset.id
+            holder.image.setImageDrawable(null)
+            holder.play.visibility = if (asset.isVideo) View.VISIBLE else View.GONE
+            holder.image.setOnClickListener { togglePanel() }
+            holder.play.setOnClickListener { playVideo(asset) }
+
+            decoder.execute {
+                val bitmap = if (asset.isVideo) {
+                    runCatching {
+                        contentResolver.loadThumbnail(asset.uri, android.util.Size(1280, 1280), null)
+                    }.getOrNull()
+                } else {
+                    decodeScaled(asset)
+                }
+                runOnUiThread {
+                    if (holder.image.tag == asset.id && bitmap != null) holder.image.setImageBitmap(bitmap)
+                }
+            }
+        }
+
+        private fun decodeScaled(asset: MediaAsset): Bitmap? = runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            contentResolver.openInputStream(asset.uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            val screenMax = maxOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= screenMax) sample *= 2
+            contentResolver.openInputStream(asset.uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, BitmapFactory.Options().apply { inSampleSize = sample })
+            }
+        }.getOrNull()
     }
 }

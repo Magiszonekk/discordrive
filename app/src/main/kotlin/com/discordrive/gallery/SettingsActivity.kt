@@ -55,6 +55,9 @@ class SettingsActivity : AppCompatActivity() {
             Snackbar.make(findViewById(R.id.settingsRoot), R.string.settings_saved, Snackbar.LENGTH_SHORT).show()
         }
 
+        findViewById<Button>(R.id.copyLogsButton).setOnClickListener { copyLogs() }
+        findViewById<Button>(R.id.sendLogsButton).setOnClickListener { sendLogs() }
+
         findViewById<Button>(R.id.logoutButton).setOnClickListener {
             SessionManager.logout(this)
             startActivity(Intent(this, LoginActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -62,5 +65,50 @@ class SettingsActivity : AppCompatActivity() {
 
         findViewById<TextView>(R.id.versionInfo).text =
             "DiscorDrive Gallery v${packageManager.getPackageInfo(packageName, 0).versionName}"
+    }
+
+    // === Diagnostics ===
+
+    private fun copyLogs() {
+        val text = AppLog.readAll()
+        if (text.isBlank()) {
+            Snackbar.make(findViewById(R.id.settingsRoot), R.string.diag_empty, Snackbar.LENGTH_SHORT).show()
+            return
+        }
+        val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("DiscorDrive Gallery logs", text))
+        Snackbar.make(findViewById(R.id.settingsRoot), R.string.diag_copied, Snackbar.LENGTH_SHORT).show()
+    }
+
+    /** E2EE log upload: encrypted with the filesKey, stored as gallery state `log:<timestamp>`. */
+    private fun sendLogs() {
+        val client = SessionManager.client
+        val filesKey = SessionManager.filesKey
+        if (client == null || filesKey == null) {
+            Snackbar.make(findViewById(R.id.settingsRoot), "Zaloguj się ponownie", Snackbar.LENGTH_SHORT).show()
+            return
+        }
+        val text = AppLog.readAll()
+        if (text.isBlank()) {
+            Snackbar.make(findViewById(R.id.settingsRoot), R.string.diag_empty, Snackbar.LENGTH_SHORT).show()
+            return
+        }
+        kotlin.concurrent.thread {
+            try {
+                val header = "DiscorDrive Gallery v${packageManager.getPackageInfo(packageName, 0).versionName} · " +
+                    "Android ${android.os.Build.VERSION.RELEASE} (SDK ${android.os.Build.VERSION.SDK_INT}) · " +
+                    "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}\n"
+                val key = "log:" + java.time.Instant.now().toString()
+                client.setGalleryState(key, com.discordrive.gallery.crypto.DdvCrypto.encryptMeta(filesKey, header + text))
+                runOnUiThread {
+                    Snackbar.make(findViewById(R.id.settingsRoot), getString(R.string.diag_sent, key), Snackbar.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                AppLog.w("Settings", "log upload failed", e)
+                runOnUiThread {
+                    Snackbar.make(findViewById(R.id.settingsRoot), "Błąd wysyłki: ${e.message}", Snackbar.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 }

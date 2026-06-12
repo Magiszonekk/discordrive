@@ -39,7 +39,11 @@ class SearchActivity : AppCompatActivity() {
 
         adapter = ResultAdapter { result ->
             result.asset?.let {
-                startActivity(Intent(this, ViewerActivity::class.java).putExtra("assetId", it.id))
+                startActivity(
+                    Intent(this, ViewerActivity::class.java)
+                        .putExtra("assetId", it.id)
+                        .putExtra("bucket", it.bucketName),
+                )
             }
         }
         findViewById<RecyclerView>(R.id.results).apply {
@@ -73,7 +77,7 @@ class SearchActivity : AppCompatActivity() {
                 val engine = EnrichmentEngine(client)
 
                 // ensure enrichment cache covers all remote files (fetch missing once)
-                val remoteFiles = client.galleryDelta(null).files
+                val remoteFiles = client.galleryDeltaAll(null).files
                     .filter { it.status == "READY" && it.deletedAt == null }
                 val known = db.enrichedFileIds()
                 val missing = remoteFiles.filter { it.id !in known }

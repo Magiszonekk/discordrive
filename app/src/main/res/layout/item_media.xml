@@ -23,6 +23,16 @@
         android:importantForAccessibility="no"/>
 
     <ImageView
+        android:id="@+id/checkBadge"
+        android:layout_width="22dp"
+        android:layout_height="22dp"
+        android:layout_gravity="top|start"
+        android:layout_margin="6dp"
+        android:src="@drawable/ic_circle_outline"
+        android:visibility="gone"
+        android:importantForAccessibility="no"/>
+
+    <ImageView
         android:id="@+id/cloudBadge"
         android:layout_width="22dp"
         android:layout_height="22dp"

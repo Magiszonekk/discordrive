@@ -79,4 +79,23 @@
     <string name="trash_restored">Przywrócono „%s”</string>
     <string name="trash_deleted_at">Usunięto: %s</string>
     <string name="search_cloud_only">☁️ tylko w chmurze</string>
+
+    <!-- Multi-select -->
+    <string name="selection_count">Zaznaczono: %d</string>
+    <string name="selection_exit">Zakończ zaznaczanie</string>
+    <string name="sel_trash_confirm">Przenieść do kosza %d plików? Będzie można je przywrócić przez 30 dni.</string>
+    <string name="sel_everywhere_confirm">Usunąć %d plików z chmury (do kosza) i z telefonu?</string>
+    <string name="sel_trashed">Do kosza: %d plików</string>
+    <string name="sel_trashed_partial">Do kosza: %1$d plików (%2$d niezsynchronizowanych pominięto)</string>
+    <string name="sel_moved">Przeniesiono %1$d plików do „%2$s”</string>
+    <string name="sel_none_synced">Żaden z zaznaczonych plików nie jest jeszcze zsynchronizowany</string>
+
+    <!-- Diagnostics -->
+    <string name="settings_diag">Diagnostyka</string>
+    <string name="settings_diag_hint">Aplikacja zapisuje logi (w tym crashe) do pliku na urządzeniu. Wysyłka na serwer jest szyfrowana end-to-end Twoim kluczem.</string>
+    <string name="diag_copy">Kopiuj logi</string>
+    <string name="diag_send">Wyślij logi na serwer</string>
+    <string name="diag_copied">Skopiowano logi do schowka</string>
+    <string name="diag_sent">Wysłano logi (%s)</string>
+    <string name="diag_empty">Brak logów</string>
 </resources>

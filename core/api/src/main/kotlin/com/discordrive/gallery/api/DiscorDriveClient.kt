@@ -140,6 +140,28 @@ class DiscorDriveClient(
         return json.decodeFromJsonElement(GalleryDeltaDto.serializer(), data.getValue("galleryDelta"))
     }
 
+    /**
+     * Drains all delta pages (server caps a page at 1000 rows, cursor advances
+     * to the last returned row). Returns every file/folder changed since [since],
+     * deduplicated by id keeping the newest occurrence.
+     */
+    fun galleryDeltaAll(since: String? = null): GalleryDeltaDto {
+        val files = LinkedHashMap<String, FileDto>()
+        val folders = LinkedHashMap<String, FolderDto>()
+        var cursor = since
+        var lastCursor: String? = null
+        while (true) {
+            val page = galleryDelta(cursor)
+            if (page.files.isEmpty() && page.folders.isEmpty()) break
+            page.files.forEach { files[it.id] = it }
+            page.folders.forEach { folders[it.id] = it }
+            if (page.cursor == lastCursor) break // safety: cursor stopped advancing
+            lastCursor = page.cursor
+            cursor = page.cursor
+        }
+        return GalleryDeltaDto(cursor = lastCursor ?: since.orEmpty(), files = files.values.toList(), folders = folders.values.toList())
+    }
+
     fun getGalleryState(key: String): GalleryStateDto? {
         val data = graphql.execute(
             """
