@@ -296,6 +296,58 @@ class DiscorDriveClient(
         return data.getValue("createFolder").jsonObject.getValue("id").jsonPrimitive.content
     }
 
+    // === File management (trash model: deletes are soft, purge is explicit) ===
+
+    fun deleteFile(fileId: String): Boolean = boolMutation("deleteFile", fileId)
+
+    fun restoreFile(fileId: String): Boolean = boolMutation("restoreFile", fileId)
+
+    fun purgeFile(fileId: String): Boolean = boolMutation("purgeFile", fileId)
+
+    private fun boolMutation(name: String, fileId: String): Boolean {
+        val data = graphql.execute(
+            "mutation M(${'$'}fileId: ID!) { $name(fileId: ${'$'}fileId) }",
+            buildJsonObject { put("fileId", JsonPrimitive(fileId)) },
+        )
+        return data.getValue(name).jsonPrimitive.content.toBoolean()
+    }
+
+    fun emptyTrash(): Int {
+        val data = graphql.execute("mutation { emptyTrash }")
+        return data.getValue("emptyTrash").jsonPrimitive.content.toInt()
+    }
+
+    fun trashedFiles(): List<FileDto> {
+        val data = graphql.execute(
+            """
+            query {
+              trashedFiles {
+                id parentFolderId encryptedName encryptedMimeType primaryManifestBlobId previewBlobId
+                wrappedFEK wrappedFEKPreview dedupeTokenB64 status totalCiphertextBytes chunkCount
+                createdAt updatedAt deletedAt
+              }
+            }
+            """.trimIndent(),
+        )
+        return json.decodeFromJsonElement(
+            kotlinx.serialization.builtins.ListSerializer(FileDto.serializer()),
+            data.getValue("trashedFiles"),
+        )
+    }
+
+    fun moveFile(fileId: String, parentFolderId: String?): Boolean {
+        val data = graphql.execute(
+            """mutation Move(${'$'}fileId: ID!, ${'$'}parentFolderId: ID) {
+              moveFile(fileId: ${'$'}fileId, parentFolderId: ${'$'}parentFolderId)
+            }""",
+            buildJsonObject {
+                put("fileId", JsonPrimitive(fileId))
+                put("parentFolderId", parentFolderId?.let { JsonPrimitive(it) } ?: JsonNull)
+            },
+        )
+        return data.getValue("moveFile").jsonPrimitive.content.toBoolean()
+    }
+
     // === Upload/resume ===
 
     fun uploadStatus(fileId: String): UploadStatusDto {

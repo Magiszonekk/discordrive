@@ -49,7 +49,16 @@ class SyncRunner(
         assets.forEachIndexed { index, asset ->
             onProgress(Progress("sync", index, assets.size, asset.displayName, uploaded, deduplicated, skipped, 0, failed))
             try {
-                if (db.fileIdFor(asset) != null) {
+                val mappedFileId = db.fileIdFor(asset)
+                if (mappedFileId != null) {
+                    // drift repair: file moved between buckets locally → mirror in cloud
+                    if (db.mappedBucketFor(asset) != asset.bucketName) {
+                        val folderId = folderIds.getOrPut(asset.bucketName) {
+                            folderManager.ensureFolder(asset.bucketName, parentFolderId = null, filesKey = filesKey)
+                        }
+                        client.moveFile(mappedFileId, folderId)
+                        db.rememberMapping(asset, mappedFileId)
+                    }
                     skipped++
                     return@forEachIndexed
                 }

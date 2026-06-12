@@ -137,7 +137,9 @@ class SearchActivity : AppCompatActivity() {
 
         override fun onBindViewHolder(holder: Holder, position: Int) {
             val result = results[position]
-            holder.name.text = result.name
+            holder.name.text = if (result.asset == null) {
+                "${result.name} · ${holder.itemView.context.getString(R.string.search_cloud_only)}"
+            } else result.name
             holder.description.text = result.record.description
             holder.tags.text = result.record.tags.joinToString("  ") { "#$it" }
             holder.thumb.setImageDrawable(null)

@@ -28,6 +28,7 @@
 
         <activity android:name=".MainActivity" android:exported="false" />
         <activity android:name=".AlbumActivity" android:exported="false" />
+        <activity android:name=".TrashActivity" android:exported="false" />
         <activity android:name=".SearchActivity" android:exported="false" />
         <activity android:name=".SettingsActivity" android:exported="false" />
         <activity

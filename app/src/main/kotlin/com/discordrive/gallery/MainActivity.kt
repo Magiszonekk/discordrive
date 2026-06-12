@@ -46,6 +46,7 @@ class MainActivity : AppCompatActivity() {
                 R.id.action_sync -> runSync()
                 R.id.action_ai -> runAiScan(bucket = null)
                 R.id.action_settings -> startActivity(Intent(this, SettingsActivity::class.java))
+                R.id.action_trash -> startActivity(Intent(this, TrashActivity::class.java))
             }
             true
         }

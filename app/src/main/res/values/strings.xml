@@ -57,4 +57,26 @@
     <string name="settings_bg_wifi">Tylko przez Wi-Fi</string>
     <string name="settings_bg_charging">Tylko podczas ładowania</string>
     <string name="settings_ai_limit">Limit analiz w jednym przebiegu (0 = bez limitu)</string>
+
+    <!-- File actions / trash -->
+    <string name="action_move_to_album">Przenieś do albumu…</string>
+    <string name="action_delete_cloud">Usuń z chmury (do kosza)</string>
+    <string name="action_delete_local">Usuń z telefonu</string>
+    <string name="action_delete_everywhere">Usuń wszędzie</string>
+    <string name="action_new_album">➕ Nowy album…</string>
+    <string name="new_album_hint">Nazwa albumu</string>
+    <string name="moved_to">Przeniesiono do „%s”</string>
+    <string name="deleted_to_trash">Przeniesiono do kosza (30 dni na przywrócenie)</string>
+    <string name="trash_title">Kosz</string>
+    <string name="trash_hint">Pliki w koszu są trwale usuwane po 30 dniach.</string>
+    <string name="trash_empty">Kosz jest pusty</string>
+    <string name="trash_restore">Przywróć</string>
+    <string name="trash_purge">Usuń trwale</string>
+    <string name="trash_purge_confirm">Trwale usunąć „%s”? Tej operacji nie można cofnąć.</string>
+    <string name="trash_empty_action">Opróżnij kosz</string>
+    <string name="trash_empty_confirm">Trwale usunąć wszystkie pliki z kosza? Tej operacji nie można cofnąć.</string>
+    <string name="trash_emptied">Usunięto trwale %d plików</string>
+    <string name="trash_restored">Przywrócono „%s”</string>
+    <string name="trash_deleted_at">Usunięto: %s</string>
+    <string name="search_cloud_only">☁️ tylko w chmurze</string>
 </resources>

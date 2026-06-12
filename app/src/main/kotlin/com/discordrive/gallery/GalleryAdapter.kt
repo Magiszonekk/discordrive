@@ -8,6 +8,7 @@ import androidx.recyclerview.widget.RecyclerView
 
 class GalleryAdapter(
     private val onClick: (MediaAsset) -> Unit,
+    private val onLongClick: ((MediaAsset) -> Unit)? = null,
 ) : RecyclerView.Adapter<GalleryAdapter.Holder>() {
 
     private var assets: List<MediaAsset> = emptyList()
@@ -42,6 +43,12 @@ class GalleryAdapter(
             if (asset.id in syncedAssetIds) R.drawable.ic_cloud_done else R.drawable.ic_cloud_pending,
         )
         holder.itemView.setOnClickListener { onClick(asset) }
+        onLongClick?.let { handler ->
+            holder.itemView.setOnLongClickListener {
+                handler(asset)
+                true
+            }
+        }
     }
 
     companion object {

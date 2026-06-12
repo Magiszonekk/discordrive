@@ -13,7 +13,7 @@ import kotlinx.serialization.json.Json
  *    recomputing dedupe tokens / re-uploading on every pass)
  *  - enrichment: decrypted AI tags/descriptions cache for instant search
  */
-class AppDb(context: Context) : SQLiteOpenHelper(context, "gallery.db", null, 1) {
+class AppDb(context: Context) : SQLiteOpenHelper(context, "gallery.db", null, 2) {
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -23,6 +23,7 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "gallery.db", null, 1)
                 asset_id INTEGER NOT NULL,
                 size_bytes INTEGER NOT NULL,
                 file_id TEXT NOT NULL,
+                bucket TEXT,
                 PRIMARY KEY (asset_id, size_bytes)
             )""",
         )
@@ -35,9 +36,9 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "gallery.db", null, 1)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        db.execSQL("DROP TABLE IF EXISTS asset_map")
-        db.execSQL("DROP TABLE IF EXISTS enrichment")
-        onCreate(db)
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE asset_map ADD COLUMN bucket TEXT")
+        }
     }
 
     // === asset ↔ remote file mapping ===
@@ -55,9 +56,23 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "gallery.db", null, 1)
                 put("asset_id", asset.id)
                 put("size_bytes", asset.sizeBytes)
                 put("file_id", fileId)
+                put("bucket", asset.bucketName)
             },
             SQLiteDatabase.CONFLICT_REPLACE,
         )
+    }
+
+    /** Bucket the asset was in when last synced (drift detection). */
+    fun mappedBucketFor(asset: MediaAsset): String? =
+        readableDatabase.rawQuery(
+            "SELECT bucket FROM asset_map WHERE asset_id = ? AND size_bytes = ?",
+            arrayOf(asset.id.toString(), asset.sizeBytes.toString()),
+        ).use { if (it.moveToFirst()) it.getString(0) else null }
+
+    /** Removes all local traces of a remote file (after purge). */
+    fun forgetFile(fileId: String) {
+        writableDatabase.delete("asset_map", "file_id = ?", arrayOf(fileId))
+        writableDatabase.delete("enrichment", "file_id = ?", arrayOf(fileId))
     }
 
     fun mappedFileIds(): Set<String> =
