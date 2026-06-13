@@ -5,11 +5,10 @@
     android:layout_height="match_parent"
     android:background="@android:color/black">
 
-    <ImageView
+    <com.discordrive.gallery.ZoomableImageView
         android:id="@+id/pageImage"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:scaleType="fitCenter"
         android:contentDescription="@string/app_name"/>
 
     <androidx.media3.ui.PlayerView

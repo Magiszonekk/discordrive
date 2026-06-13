@@ -1,0 +1,13 @@
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item android:id="@+id/action_viewer_info" android:title="@string/viewer_info_title"
+        app:showAsAction="never"/>
+    <item android:id="@+id/action_viewer_move" android:title="@string/action_move_to_album"
+        app:showAsAction="never"/>
+    <item android:id="@+id/action_viewer_delete_cloud" android:title="@string/action_delete_cloud"
+        app:showAsAction="never"/>
+    <item android:id="@+id/action_viewer_delete_everywhere" android:title="@string/action_delete_everywhere"
+        app:showAsAction="never"/>
+    <item android:id="@+id/action_viewer_delete_local" android:title="@string/action_delete_local"
+        app:showAsAction="never"/>
+</menu>

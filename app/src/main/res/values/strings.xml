@@ -67,6 +67,21 @@
     <string name="viewer_clear_ai">Usuń analizę AI</string>
     <string name="viewer_analyze_ai">Analizuj AI</string>
     <string name="viewer_analyzing">Analizuję…</string>
+    <string name="viewer_not_synced">Zdjęcie nie jest jeszcze zsynchronizowane</string>
+    <string name="viewer_info_title">Informacje o pliku</string>
+    <string name="viewer_info_loading">Wczytuję informacje…</string>
+    <string name="viewer_info_name">Nazwa: %1$s</string>
+    <string name="viewer_info_album">Album: %1$s</string>
+    <string name="viewer_info_type">Typ: %1$s</string>
+    <string name="viewer_info_size">Rozmiar: %1$s</string>
+    <string name="viewer_info_date">Dodano: %1$s</string>
+    <string name="viewer_info_cloud">Chmura: %1$s</string>
+    <string name="viewer_info_cloud_no">niezsynchronizowane</string>
+    <string name="viewer_info_cloud_synced">zsynchronizowane</string>
+    <string name="viewer_info_cloud_yes">zsynchronizowane (%1$s)</string>
+    <string name="viewer_info_ai">Analiza AI (cache): %1$s</string>
+    <string name="viewer_info_yes">tak</string>
+    <string name="viewer_info_no">nie</string>
 
     <!-- Background sync -->
     <string name="settings_bg">Synchronizacja w tle</string>
