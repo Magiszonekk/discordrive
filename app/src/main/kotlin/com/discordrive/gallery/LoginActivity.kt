@@ -27,9 +27,9 @@ class LoginActivity : AppCompatActivity() {
         val progress = findViewById<LinearProgressIndicator>(R.id.loginProgress)
         val status = findViewById<TextView>(R.id.loginStatus)
 
-        // Prefill the last-used server/email to speed up re-login.
+        // Prefill server (defaults to the configured/Settings server) + last email.
         val prefs = getSharedPreferences("session", MODE_PRIVATE)
-        (SessionManager.serverUrl ?: prefs.getString("serverUrl", null))?.let { serverInput.setText(it) }
+        serverInput.setText(SessionManager.serverUrl ?: Settings.serverUrl(this))
         (SessionManager.email ?: prefs.getString("email", null))?.let { emailInput.setText(it) }
 
         // Try silent session restore first (e.g. session existed but client was cleared).

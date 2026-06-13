@@ -32,6 +32,7 @@ class SettingsActivity : SessionActivity() {
         findViewById<Button>(R.id.logoutButton).visibility =
             if (loggedIn) android.view.View.VISIBLE else android.view.View.GONE
 
+        val serverUrl = findViewById<EditText>(R.id.serverUrlInput)
         val aiUrl = findViewById<EditText>(R.id.aiUrlInput)
         val aiKey = findViewById<EditText>(R.id.aiKeyInput)
         val aiModel = findViewById<EditText>(R.id.aiModelInput)
@@ -41,6 +42,7 @@ class SettingsActivity : SessionActivity() {
         val bgWifi = findViewById<MaterialSwitch>(R.id.bgWifiSwitch)
         val bgCharging = findViewById<MaterialSwitch>(R.id.bgChargingSwitch)
 
+        serverUrl.setText(Settings.serverUrl(this))
         aiUrl.setText(Settings.aiUrl(this))
         aiKey.setText(Settings.aiKey(this))
         aiModel.setText(Settings.aiModel(this))
@@ -53,6 +55,7 @@ class SettingsActivity : SessionActivity() {
         findViewById<Button>(R.id.saveButton).setOnClickListener {
             Settings.save(
                 this,
+                serverUrl = serverUrl.text.toString(),
                 aiUrl = aiUrl.text.toString(),
                 aiKey = aiKey.text.toString(),
                 aiModel = aiModel.text.toString(),

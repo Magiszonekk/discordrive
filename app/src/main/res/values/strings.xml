@@ -34,6 +34,8 @@
     <string name="settings_logout">Wyloguj</string>
     <string name="settings_login">Zaloguj się</string>
     <string name="settings_not_logged_in">Niezalogowany — galeria działa offline. Zaloguj się, by synchronizować i odzyskać ustawienia.</string>
+    <string name="settings_server_url">Serwer DiscorDrive (URL)</string>
+    <string name="settings_server_hint">Adres instancji DiscorDrive używanej do logowania. Domyślnie instancja testowa — podaj własny adres, jeśli hostujesz DiscorDrive samodzielnie. Zmiana działa przy następnym logowaniu.</string>
     <string name="settings_ai">Sztuczna inteligencja</string>
     <string name="settings_ai_hint">Endpoint w formacie OpenAI (/v1/chat/completions). Obrazy są zmniejszane przed wysłaniem. Tagi i opisy są szyfrowane end-to-end.</string>
     <string name="settings_ai_url">AI endpoint URL</string>

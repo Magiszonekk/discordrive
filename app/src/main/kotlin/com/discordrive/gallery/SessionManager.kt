@@ -38,6 +38,10 @@ object SessionManager {
             .putString("serverUrl", server)
             .putString("email", session.user.email)
             .apply()
+        // keep the configured server (Settings) in sync with what we logged into
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).edit()
+            .putString("serverUrl", server)
+            .apply()
 
         // Recover E2EE settings backup (AI endpoint/key/toggles) for this account.
         runCatching { SettingsSync.pull(context, newClient, session.filesKey) }

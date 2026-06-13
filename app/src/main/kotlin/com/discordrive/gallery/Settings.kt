@@ -8,6 +8,13 @@ object Settings {
 
     private fun prefs(context: Context) = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
+    /** Default DiscorDrive instance (our test server) — self-hosters can change it. */
+    const val DEFAULT_SERVER = "https://example.com"
+
+    /** Configured DiscorDrive server URL used at login (defaults to [DEFAULT_SERVER]). */
+    fun serverUrl(context: Context): String =
+        prefs(context).getString("serverUrl", DEFAULT_SERVER)?.ifBlank { DEFAULT_SERVER } ?: DEFAULT_SERVER
+
     fun aiUrl(context: Context): String = prefs(context).getString("aiUrl", "") ?: ""
     fun aiModel(context: Context): String = prefs(context).getString("aiModel", "nex-agi/nex-n2-pro:free") ?: ""
     fun aiKey(context: Context): String = SecureStore(context).getString(SecureStore.AI_KEY) ?: ""
@@ -24,6 +31,7 @@ object Settings {
 
     fun save(
         context: Context,
+        serverUrl: String,
         aiUrl: String,
         aiKey: String,
         aiModel: String,
@@ -34,6 +42,7 @@ object Settings {
         bgChargingOnly: Boolean,
     ) {
         prefs(context).edit()
+            .putString("serverUrl", serverUrl.trim().trimEnd('/').ifBlank { DEFAULT_SERVER })
             .putString("aiUrl", aiUrl.trim().trimEnd('/'))
             .putString("aiModel", aiModel.trim())
             .putBoolean("aiAuto", aiAuto)
@@ -49,6 +58,7 @@ object Settings {
     /** All settings (incl. the AI key) as JSON, for E2EE cloud backup. */
     fun toJson(context: Context): String = JSONObject().apply {
         put("schemaVersion", 1)
+        put("serverUrl", serverUrl(context))
         put("aiUrl", aiUrl(context))
         put("aiModel", aiModel(context))
         put("aiKey", aiKey(context))
@@ -64,6 +74,7 @@ object Settings {
         val o = JSONObject(jsonStr)
         save(
             context,
+            serverUrl = o.optString("serverUrl", serverUrl(context)),
             aiUrl = o.optString("aiUrl", aiUrl(context)),
             aiKey = o.optString("aiKey", ""), // blank → save() keeps the existing key
             aiModel = o.optString("aiModel", aiModel(context)),
