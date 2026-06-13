@@ -67,6 +67,7 @@ class MainActivity : SessionActivity() {
         ensureMediaPermission()
         SyncWorker.applySchedule(this)
         tryRestoreQuietly() // background auto-login; UI works regardless
+        Updater.check(this) // offer in-app update if a newer APK is published
     }
 
     override fun onResume() {

@@ -90,6 +90,8 @@ class SettingsActivity : SessionActivity() {
 
         findViewById<TextView>(R.id.versionInfo).text =
             "DiscorDrive Gallery v${packageManager.getPackageInfo(packageName, 0).versionName}"
+
+        findViewById<Button>(R.id.checkUpdateButton).setOnClickListener { Updater.check(this, manual = true) }
     }
 
     /** Deletes every AI analysis (cloud enrichment blobs + local cache). */

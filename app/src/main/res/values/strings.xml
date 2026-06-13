@@ -39,6 +39,15 @@
     <string name="settings_account">Konto</string>
     <string name="settings_logout">Wyloguj</string>
     <string name="settings_login">Zaloguj się</string>
+    <string name="update_check">Sprawdź aktualizacje</string>
+    <string name="update_check_failed">Nie udało się sprawdzić aktualizacji</string>
+    <string name="update_up_to_date">Masz najnowszą wersję</string>
+    <string name="update_available_title">Dostępna aktualizacja</string>
+    <string name="update_available_msg">Nowa wersja %1$s jest dostępna. Zaktualizować teraz?</string>
+    <string name="update_install">Aktualizuj</string>
+    <string name="update_later">Później</string>
+    <string name="update_downloading">Pobieranie aktualizacji…</string>
+    <string name="update_need_permission">Aby zainstalować aktualizację, zezwól tej aplikacji na instalowanie nieznanych aplikacji.</string>
     <string name="settings_not_logged_in">Niezalogowany — galeria działa offline. Zaloguj się, by synchronizować i odzyskać ustawienia.</string>
     <string name="settings_server_url">Serwer DiscorDrive (URL)</string>
     <string name="settings_server_hint">Adres instancji DiscorDrive używanej do logowania. Domyślnie instancja testowa — podaj własny adres, jeśli hostujesz DiscorDrive samodzielnie. Zmiana działa przy następnym logowaniu.</string>
