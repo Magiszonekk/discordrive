@@ -236,6 +236,25 @@ class DiscorDriveClient(
         return json.decodeFromJsonElement(FileDto.serializer(), file)
     }
 
+    /** Single file by id (e.g. to fetch wrappedFEK for on-demand enrichment). */
+    fun file(fileId: String): FileDto? {
+        val data = graphql.execute(
+            """
+            query File(${'$'}id: ID!) {
+              file(fileId: ${'$'}id) {
+                id parentFolderId encryptedName encryptedMimeType primaryManifestBlobId previewBlobId
+                wrappedFEK wrappedFEKPreview dedupeTokenB64 status totalCiphertextBytes chunkCount
+                createdAt updatedAt deletedAt
+              }
+            }
+            """.trimIndent(),
+            buildJsonObject { put("id", JsonPrimitive(fileId)) },
+        )
+        val file = data["file"]
+        if (file == null || file is JsonNull) return null
+        return json.decodeFromJsonElement(FileDto.serializer(), file)
+    }
+
     fun initUpload(
         parentFolderId: String?,
         encryptedName: String,

@@ -5,6 +5,7 @@ import com.discordrive.gallery.api.AiRateLimitException
 import com.discordrive.gallery.api.AiVisionClient
 import com.discordrive.gallery.api.DiscorDriveClient
 import com.discordrive.gallery.api.EnrichmentEngine
+import com.discordrive.gallery.api.EnrichmentRecord
 import com.discordrive.gallery.api.FolderManager
 import com.discordrive.gallery.api.UploadEngine
 
@@ -156,6 +157,30 @@ class SyncRunner(
 
         AppLog.i("SyncRunner", "ai done: $analyzed analyzed, $skipped skipped, $failed failed")
         return Progress("ai", assets.size, assets.size, "done", analyzed = analyzed, skipped = skipped, failed = failed)
+    }
+
+    /**
+     * On-demand AI analysis of one already-synced asset (re)analyzes
+     * unconditionally and stores the result. Throws on failure so the caller
+     * can surface a message. Uses the album description as context.
+     */
+    fun analyzeOne(ai: AiVisionClient, model: String, asset: MediaAsset): EnrichmentRecord {
+        val fileId = db.fileIdFor(asset)
+            ?: throw IllegalStateException("Zdjęcie nie jest jeszcze zsynchronizowane")
+        val file = client.file(fileId)
+            ?: throw IllegalStateException("Nie znaleziono pliku w chmurze")
+        val hint = AlbumDescriptions.load(client, filesKey, asset.bucketName)
+        val prepared = AiImagePreparer.prepare(context, asset)
+        val vision = try {
+            ai.analyzeImage(prepared, "image/jpeg", hint)
+        } catch (rateLimit: AiRateLimitException) {
+            Thread.sleep(rateLimit.retryAfterSeconds.coerceAtMost(120) * 1000)
+            ai.analyzeImage(prepared, "image/jpeg", hint)
+        }
+        val record = enrichment.buildRecord(vision, model)
+        enrichment.saveEnrichment(fileId, file.wrappedFEK, filesKey, record)
+        db.rememberEnrichment(fileId, record)
+        return record
     }
 
     private companion object {

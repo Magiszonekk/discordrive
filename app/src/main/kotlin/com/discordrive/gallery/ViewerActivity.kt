@@ -10,6 +10,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
+import com.discordrive.gallery.api.AiVisionClient
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
@@ -36,6 +37,7 @@ class ViewerActivity : SessionActivity() {
     private lateinit var descriptionView: TextView
     private lateinit var chips: ChipGroup
     private lateinit var clearAiButton: View
+    private lateinit var analyzeAiButton: View
 
     // Single inline player, attached to whichever video page is playing.
     private var player: ExoPlayer? = null
@@ -56,6 +58,8 @@ class ViewerActivity : SessionActivity() {
         chips = findViewById(R.id.tagChips)
         clearAiButton = findViewById(R.id.clearAiButton)
         clearAiButton.setOnClickListener { deleteCurrentAnalysis() }
+        analyzeAiButton = findViewById(R.id.analyzeAiButton)
+        analyzeAiButton.setOnClickListener { analyzeCurrent() }
 
         thread {
             val all = MediaScanner(this).scanAll()
@@ -88,9 +92,11 @@ class ViewerActivity : SessionActivity() {
         descriptionView.text = ""
         chips.removeAllViews()
         clearAiButton.visibility = View.GONE
+        analyzeAiButton.visibility = View.GONE
         thread {
             val db = AppDb(this)
-            val record = db.fileIdFor(asset)?.let { db.enrichmentFor(it) }
+            val fileId = db.fileIdFor(asset)
+            val record = fileId?.let { db.enrichmentFor(it) }
             runOnUiThread {
                 if (shownAsset?.id != asset.id) return@runOnUiThread // already swiped on
                 if (record != null) {
@@ -102,6 +108,42 @@ class ViewerActivity : SessionActivity() {
                     clearAiButton.visibility = View.VISIBLE
                 } else {
                     descriptionView.text = getString(R.string.viewer_no_enrichment)
+                    // offer analysis only for synced photos (needs the cloud file's key)
+                    analyzeAiButton.visibility = if (fileId != null) View.VISIBLE else View.GONE
+                }
+            }
+        }
+    }
+
+    /** Analyzes just this photo with AI on demand and shows the result. */
+    private fun analyzeCurrent() {
+        val asset = shownAsset ?: return
+        if (!Settings.aiConfigured(this)) {
+            Snackbar.make(findViewById(R.id.viewerRoot), "Skonfiguruj AI w ustawieniach", Snackbar.LENGTH_LONG)
+                .setAction(R.string.action_settings) {
+                    startActivity(android.content.Intent(this, SettingsActivity::class.java))
+                }.show()
+            return
+        }
+        requireSession {
+            val client = SessionManager.client ?: return@requireSession
+            val filesKey = SessionManager.filesKey ?: return@requireSession
+            analyzeAiButton.visibility = View.GONE
+            descriptionView.text = getString(R.string.viewer_analyzing)
+            thread {
+                try {
+                    val ai = AiVisionClient(Settings.aiUrl(this), Settings.aiKey(this), Settings.aiModel(this))
+                    SyncRunner(this, client, filesKey).analyzeOne(ai, Settings.aiModel(this), asset)
+                    runOnUiThread { if (shownAsset?.id == asset.id) showInfo(asset) }
+                } catch (e: Exception) {
+                    AppLog.w("Viewer", "single AI failed for ${asset.displayName}", e)
+                    runOnUiThread {
+                        if (shownAsset?.id == asset.id) {
+                            descriptionView.text = getString(R.string.viewer_no_enrichment)
+                            analyzeAiButton.visibility = View.VISIBLE
+                        }
+                        Snackbar.make(findViewById(R.id.viewerRoot), "Błąd AI: ${e.message}", Snackbar.LENGTH_LONG).show()
+                    }
                 }
             }
         }
