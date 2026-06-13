@@ -65,6 +65,9 @@ object SessionManager {
             filesKey = ark
             email = savedEmail
             serverUrl = server
+            // Recover E2EE settings (AI endpoint/key) if local config is unset —
+            // login() pulls unconditionally, but the common path is silent restore.
+            runCatching { SettingsSync.pullIfMissing(context, newClient, ark) }
         }.isSuccess
     }
 

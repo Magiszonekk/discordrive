@@ -1,6 +1,7 @@
 package com.discordrive.gallery
 
 import android.Manifest
+import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -135,12 +136,17 @@ class MainActivity : SessionActivity() {
         val client = SessionManager.client ?: return@requireSession
         val filesKey = SessionManager.filesKey ?: return@requireSession
         setWorking(getString(R.string.action_sync) + "…")
+        // Same live notification as background sync (progress + speed + pause/resume).
+        SyncNotifications.ensureChannel(this)
+        SyncController.begin()
 
         thread {
+            val tracker = SyncProgressTracker(this)
             try {
                 val runner = SyncRunner(this, client, filesKey)
                 val result = runner.sync { p ->
                     setWorking("Sync ${p.done}/${p.total} · ↑${p.uploaded} · ${p.deduplicated} dedup · ${p.failed} błędów\n${p.detail}")
+                    tracker.onProgress(p)
                 }
                 setWorking(null)
                 runOnUiThread {
@@ -156,6 +162,9 @@ class MainActivity : SessionActivity() {
                 setWorking(null)
                 AppLog.e("Main", "sync run failed", e)
                 runOnUiThread { Snackbar.make(findViewById(R.id.mainRoot), "Błąd: ${e.message}", Snackbar.LENGTH_LONG).show() }
+            } finally {
+                SyncController.end()
+                getSystemService(NotificationManager::class.java).cancel(SyncNotifications.NOTIF_ID)
             }
         }
     }

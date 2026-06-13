@@ -76,3 +76,26 @@ object SyncNotifications {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 }
+
+/**
+ * Drives the live sync notification from SyncRunner progress: computes a rolling
+ * upload speed and refreshes the notification at most ~once/second. Shared by the
+ * background worker (foreground service) and the in-app manual sync.
+ */
+class SyncProgressTracker(private val context: Context) {
+    private var lastBytes = 0L
+    private var lastTimeMs = System.currentTimeMillis()
+    private var lastNotifyMs = 0L
+
+    fun onProgress(p: SyncRunner.Progress) {
+        val now = System.currentTimeMillis()
+        if (now - lastNotifyMs < 1000) return
+        val dtMs = (now - lastTimeMs).coerceAtLeast(1)
+        val speed = ((p.bytesDone - lastBytes) * 1000 / dtMs).coerceAtLeast(0)
+        lastBytes = p.bytesDone
+        lastTimeMs = now
+        lastNotifyMs = now
+        SyncController.update(p.done, p.total, speed)
+        SyncNotifications.refresh(context)
+    }
+}

@@ -28,4 +28,16 @@ object SettingsSync {
         runCatching { Settings.applyJson(context, json) }
         return true
     }
+
+    /**
+     * Restores the backup only when the local config looks unset (e.g. after a
+     * silent token-restore on a fresh install / post-logout, where the AI key
+     * lives in the cleared Keystore). Avoids clobbering local edits on every
+     * background restore.
+     */
+    fun pullIfMissing(context: Context, client: DiscorDriveClient, filesKey: ByteArray) {
+        if (Settings.aiKey(context).isBlank() || Settings.aiUrl(context).isBlank()) {
+            pull(context, client, filesKey)
+        }
+    }
 }

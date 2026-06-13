@@ -37,21 +37,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
             val runner = SyncRunner(ctx, client, filesKey)
 
             // Live notification: progress + rolling upload speed, throttled to ~1s.
-            var lastBytes = 0L
-            var lastTimeMs = System.currentTimeMillis()
-            var lastNotifyMs = 0L
-            val sync = runner.sync { p ->
-                val now = System.currentTimeMillis()
-                if (now - lastNotifyMs >= 1000) {
-                    val dtMs = (now - lastTimeMs).coerceAtLeast(1)
-                    val speed = ((p.bytesDone - lastBytes) * 1000 / dtMs).coerceAtLeast(0)
-                    lastBytes = p.bytesDone
-                    lastTimeMs = now
-                    lastNotifyMs = now
-                    SyncController.update(p.done, p.total, speed)
-                    SyncNotifications.refresh(ctx)
-                }
-            }
+            val tracker = SyncProgressTracker(ctx)
+            val sync = runner.sync { tracker.onProgress(it) }
             AppLog.i("SyncWorker", "bg sync: +${sync.uploaded} up, ${sync.deduplicated} dedup, ${sync.failed} failed")
 
             if (Settings.aiAutoAfterSync(ctx) && Settings.aiConfigured(ctx)) {
