@@ -42,7 +42,6 @@ class MainActivity : SessionActivity() {
                 R.id.action_sync -> runSync()
                 R.id.action_ai -> runAiScan(bucket = null)
                 R.id.action_settings -> startActivity(Intent(this, SettingsActivity::class.java))
-                R.id.action_trash -> requireSession { startActivity(Intent(this, TrashActivity::class.java)) }
             }
             true
         }
@@ -52,7 +51,11 @@ class MainActivity : SessionActivity() {
         emptyView = findViewById(R.id.emptyView)
 
         adapter = AlbumAdapter { album ->
-            startActivity(Intent(this, AlbumActivity::class.java).putExtra("bucket", album.name))
+            if (album.isTrash) {
+                requireSession { startActivity(Intent(this, TrashActivity::class.java)) }
+            } else {
+                startActivity(Intent(this, AlbumActivity::class.java).putExtra("bucket", album.name))
+            }
         }
         findViewById<RecyclerView>(R.id.grid).apply {
             layoutManager = GridLayoutManager(this@MainActivity, AlbumAdapter.SPAN_COUNT)
@@ -98,9 +101,17 @@ class MainActivity : SessionActivity() {
                     cover = items.first(), // scanAll is newest-first
                     allVideo = items.all { it.isVideo },
                 )
-            }.sortedByDescending { it.cover.dateAddedSec }
+            }.sortedByDescending { it.cover?.dateAddedSec ?: 0L }
+            // Trash is a regular tile, always pinned to the very end.
+            val withTrash = albums + Album(
+                name = getString(R.string.trash_title),
+                count = 0,
+                cover = null,
+                allVideo = false,
+                isTrash = true,
+            )
             runOnUiThread {
-                adapter.submit(albums)
+                adapter.submit(withTrash)
                 emptyView.visibility = if (albums.isEmpty()) View.VISIBLE else View.GONE
             }
         }

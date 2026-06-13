@@ -11,8 +11,9 @@ import com.google.android.material.card.MaterialCardView
 data class Album(
     val name: String,
     val count: Int,
-    val cover: MediaAsset,
+    val cover: MediaAsset?,
     val allVideo: Boolean,
+    val isTrash: Boolean = false,
 )
 
 class AlbumAdapter(
@@ -30,6 +31,7 @@ class AlbumAdapter(
         val card: MaterialCardView = view.findViewById(R.id.albumCard)
         val cover: ImageView = view.findViewById(R.id.albumCover)
         val videoIcon: ImageView = view.findViewById(R.id.albumVideoIcon)
+        val trashIcon: ImageView = view.findViewById(R.id.albumTrashIcon)
         val name: TextView = view.findViewById(R.id.albumName)
         val count: TextView = view.findViewById(R.id.albumCount)
     }
@@ -48,12 +50,24 @@ class AlbumAdapter(
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val album = albums[position]
-        ThumbLoader.load(holder.itemView.context, album.cover, holder.cover, 512)
-        holder.videoIcon.visibility = if (album.allVideo) View.VISIBLE else View.GONE
-        holder.name.text = album.name
-        holder.count.text = holder.itemView.context.resources.getQuantityString(
-            R.plurals.album_count, album.count, album.count,
-        )
+        val ctx = holder.itemView.context
+        if (album.isTrash) {
+            // plain themed tile with a centered trash icon (no photo preview)
+            holder.cover.setImageDrawable(null)
+            holder.cover.setBackgroundColor(ctx.getColor(R.color.surface_high))
+            holder.trashIcon.visibility = View.VISIBLE
+            holder.videoIcon.visibility = View.GONE
+            holder.name.text = album.name
+            holder.count.visibility = View.GONE
+        } else {
+            holder.trashIcon.visibility = View.GONE
+            holder.count.visibility = View.VISIBLE
+            holder.cover.setBackgroundColor(ctx.getColor(R.color.surface_high))
+            album.cover?.let { ThumbLoader.load(ctx, it, holder.cover, 512) }
+            holder.videoIcon.visibility = if (album.allVideo) View.VISIBLE else View.GONE
+            holder.name.text = album.name
+            holder.count.text = ctx.resources.getQuantityString(R.plurals.album_count, album.count, album.count)
+        }
         holder.itemView.setOnClickListener { onClick(album) }
     }
 
