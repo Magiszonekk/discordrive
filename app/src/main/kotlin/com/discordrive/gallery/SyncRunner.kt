@@ -66,7 +66,8 @@ class SyncRunner(
             null
         }
 
-        assets.forEachIndexed { index, asset ->
+        var consecutiveNetFails = 0
+        for ((index, asset) in assets.withIndex()) {
             SyncController.awaitIfPaused() // honour notification Pause/Resume
             onProgress(Progress("sync", index, assets.size, asset.displayName, uploaded, deduplicated, skipped, 0, failed, bytesDone))
             try {
@@ -82,7 +83,8 @@ class SyncRunner(
                         db.rememberMapping(asset, mappedFileId)
                     }
                     skipped++
-                    return@forEachIndexed
+                    consecutiveNetFails = 0
+                    continue
                 }
                 if (mappedFileId != null) {
                     // stale mapping (cloud file gone) → drop it and re-upload below
@@ -108,11 +110,22 @@ class SyncRunner(
                     uploaded++
                     bytesDone += asset.sizeBytes
                 }
+                consecutiveNetFails = 0
             } catch (e: Throwable) {
                 // Throwable, not Exception: an OutOfMemoryError on one corrupt/huge
                 // file must not kill the whole pass (the pre-0.5.0 crash loop)
                 failed++
                 AppLog.w("SyncRunner", "sync failed for ${asset.displayName} (${asset.sizeBytes} B, ${asset.mimeType})", e)
+                // If the server is unreachable, bail out fast instead of grinding
+                // through thousands of identical DNS failures (slow + log spam).
+                if (isUnreachable(e)) {
+                    if (++consecutiveNetFails >= NET_FAIL_ABORT) {
+                        AppLog.w("SyncRunner", "aborting sync — server unreachable ($consecutiveNetFails consecutive network failures)")
+                        break
+                    }
+                } else {
+                    consecutiveNetFails = 0
+                }
             }
         }
 
@@ -227,7 +240,18 @@ class SyncRunner(
             ai.analyzeImage(AiImagePreparer.prepare(context, asset), "image/jpeg", hint)
         }
 
+    /** True if the failure looks like the server is unreachable (no network / DNS / connect). */
+    private fun isUnreachable(error: Throwable): Boolean {
+        var c: Throwable? = error
+        while (c != null) {
+            if (c is java.net.UnknownHostException || c is java.net.ConnectException || c is java.net.SocketTimeoutException) return true
+            c = c.cause
+        }
+        return false
+    }
+
     private companion object {
         const val AI_CALL_SPACING_MS = 3200L
+        const val NET_FAIL_ABORT = 8 // bail after this many consecutive network failures
     }
 }

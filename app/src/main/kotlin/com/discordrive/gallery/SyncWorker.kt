@@ -29,7 +29,11 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         val filesKey = SessionManager.filesKey ?: return Result.failure()
 
         SyncNotifications.ensureChannel(ctx)
-        SyncController.begin()
+        // Don't run a 2nd sync on top of a manual one (avoids the dual-progress bug).
+        if (!SyncController.tryBegin()) {
+            AppLog.i("SyncWorker", "sync already running — skipping bg pass")
+            return Result.success()
+        }
         setForegroundAsync(foregroundInfo(ctx))
 
         return try {

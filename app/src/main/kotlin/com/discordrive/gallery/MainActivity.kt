@@ -136,10 +136,14 @@ class MainActivity : SessionActivity() {
         if (working) return@requireSession
         val client = SessionManager.client ?: return@requireSession
         val filesKey = SessionManager.filesKey ?: return@requireSession
+        // Serialize with the background worker — refuse if a sync is already running.
+        if (!SyncController.tryBegin()) {
+            Snackbar.make(findViewById(R.id.mainRoot), R.string.sync_already_running, Snackbar.LENGTH_SHORT).show()
+            return@requireSession
+        }
         setWorking(getString(R.string.action_sync) + "…")
         // Same live notification as background sync (progress + speed + pause/resume).
         SyncNotifications.ensureChannel(this)
-        SyncController.begin()
 
         thread {
             val tracker = SyncProgressTracker(this)
