@@ -81,6 +81,7 @@ class ViewerActivity : SessionActivity() {
         toolbar.inflateMenu(R.menu.menu_viewer)
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
+                R.id.action_viewer_sync -> syncCurrent()
                 R.id.action_viewer_info -> showInfoDialog()
                 R.id.action_viewer_move -> moveCurrent()
                 R.id.action_viewer_delete_cloud -> confirmDelete(alsoLocal = false)
@@ -220,7 +221,32 @@ class ViewerActivity : SessionActivity() {
         }
     }
 
-    // === Overflow actions (move / delete / info) ===
+    // === Overflow actions (sync / move / delete / info) ===
+
+    /** Uploads just this photo (skips/dedupes if already synced). */
+    private fun syncCurrent() {
+        val asset = shownAsset ?: return
+        requireSession {
+            val client = SessionManager.client ?: return@requireSession
+            val filesKey = SessionManager.filesKey ?: return@requireSession
+            snack(getString(R.string.action_sync_this) + "…")
+            thread {
+                try {
+                    val result = SyncRunner(this, client, filesKey).syncAssets(listOf(asset)) { }
+                    runOnUiThread {
+                        snack(
+                            if (result.uploaded > 0) getString(R.string.sync_one_done)
+                            else getString(R.string.sync_one_already),
+                        )
+                        if (shownAsset?.id == asset.id) showInfo(asset) // refresh cloud status / analyze button
+                    }
+                } catch (e: Throwable) {
+                    AppLog.e("Viewer", "single sync failed", e)
+                    runOnUiThread { snack("Błąd: ${e.message}") }
+                }
+            }
+        }
+    }
 
     private fun moveCurrent() {
         val asset = shownAsset ?: return

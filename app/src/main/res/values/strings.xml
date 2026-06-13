@@ -93,6 +93,10 @@
 
     <!-- File actions / trash -->
     <string name="action_move_to_album">Przenieś do albumu…</string>
+    <string name="action_sync_selected">Synchronizuj zaznaczone</string>
+    <string name="action_sync_this">Synchronizuj to zdjęcie</string>
+    <string name="sync_one_done">Zsynchronizowano</string>
+    <string name="sync_one_already">Już zsynchronizowane</string>
     <string name="action_delete_cloud">Usuń z chmury (do kosza)</string>
     <string name="action_delete_local">Usuń z telefonu</string>
     <string name="action_delete_everywhere">Usuń wszędzie</string>

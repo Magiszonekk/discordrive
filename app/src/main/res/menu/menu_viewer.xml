@@ -1,5 +1,7 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item android:id="@+id/action_viewer_sync" android:title="@string/action_sync_this"
+        app:showAsAction="never"/>
     <item android:id="@+id/action_viewer_info" android:title="@string/viewer_info_title"
         app:showAsAction="never"/>
     <item android:id="@+id/action_viewer_move" android:title="@string/action_move_to_album"

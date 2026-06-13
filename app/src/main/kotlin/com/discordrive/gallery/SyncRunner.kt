@@ -38,9 +38,11 @@ class SyncRunner(
         val failed: Int = 0,
     )
 
-    fun sync(onProgress: (Progress) -> Unit): Progress {
-        val assets = scanner.scanAll()
-        AppLog.i("SyncRunner", "sync start: ${assets.size} assets")
+    fun sync(onProgress: (Progress) -> Unit): Progress = syncAssets(scanner.scanAll(), onProgress)
+
+    /** Syncs only the given assets (a single photo or a multi-selection). */
+    fun syncAssets(assets: List<MediaAsset>, onProgress: (Progress) -> Unit): Progress {
+        AppLog.i("SyncRunner", "sync start: ${assets.size} assets (subset)")
         val folderIds = mutableMapOf<String, String>()
         var uploaded = 0
         var deduplicated = 0

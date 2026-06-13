@@ -56,6 +56,7 @@ class AlbumActivity : SessionActivity() {
                 R.id.action_ai_album -> requireSession { runAlbumAi() }
                 R.id.action_album_desc -> requireSession { editAlbumDescription() }
                 R.id.action_album_clear_ai -> requireSession { confirmClearAlbumAnalyses() }
+                R.id.action_sel_sync -> requireSession { syncSelection() }
                 R.id.action_sel_move -> requireSession { pickMoveTargetForSelection() }
                 R.id.action_sel_delete_cloud -> requireSession { confirmTrashSelection(alsoLocal = false) }
                 R.id.action_sel_delete_everywhere -> requireSession { confirmTrashSelection(alsoLocal = true) }
@@ -286,6 +287,37 @@ class AlbumActivity : SessionActivity() {
         if (requestCode == REQUEST_DELETE_LOCAL) {
             exitSelection()
             refreshGrid()
+        }
+    }
+
+    /** Uploads only the selected assets (skips/dedupes ones already synced). */
+    private fun syncSelection() {
+        if (working) return
+        val client = SessionManager.client ?: return
+        val filesKey = SessionManager.filesKey ?: return
+        val assets = selectedAssets()
+        if (assets.isEmpty()) return
+        setWorking("${getString(R.string.action_sync_selected)}…")
+        thread {
+            try {
+                val result = SyncRunner(this, client, filesKey).syncAssets(assets) { p ->
+                    setWorking("Sync ${p.done}/${p.total} · ↑${p.uploaded} · ${p.deduplicated} dedup · ${p.failed} błędów")
+                }
+                setWorking(null)
+                runOnUiThread {
+                    Snackbar.make(
+                        findViewById(R.id.albumRoot),
+                        "${getString(R.string.sync_done)}: ↑${result.uploaded}, ${result.deduplicated} dedup, ${result.failed} błędów",
+                        Snackbar.LENGTH_LONG,
+                    ).show()
+                    exitSelection()
+                    refreshGrid()
+                }
+            } catch (e: Throwable) {
+                setWorking(null)
+                AppLog.e("Album", "selection sync failed", e)
+                runOnUiThread { Snackbar.make(findViewById(R.id.albumRoot), "Błąd: ${e.message}", Snackbar.LENGTH_LONG).show() }
+            }
         }
     }
 
