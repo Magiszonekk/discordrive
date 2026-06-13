@@ -65,41 +65,24 @@ class SearchActivity : AppCompatActivity() {
     }
 
     private fun search(query: String) {
-        if (query.isBlank()) return
-        val client = SessionManager.client ?: return
-        val filesKey = SessionManager.filesKey ?: return
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) return
         progress.visibility = View.VISIBLE
         status.visibility = View.GONE
 
+        // Search the LOCAL enrichment cache (filled by AI scans) over tags +
+        // description. No network → instant, works offline, and no more 429 from
+        // mass-downloading every file's enrichment blob on each search.
         thread {
             try {
                 val db = AppDb(this)
-                val engine = EnrichmentEngine(client)
-
-                // ensure enrichment cache covers all remote files (fetch missing once)
-                val remoteFiles = client.galleryDeltaAll(null).files
-                    .filter { it.status == "READY" && it.deletedAt == null }
-                val known = db.enrichedFileIds()
-                val missing = remoteFiles.filter { it.id !in known }
-                if (missing.isNotEmpty()) {
-                    runOnUiThread { status.visibility = View.VISIBLE; status.text = getString(R.string.search_indexing) }
-                    for (file in missing) {
-                        engine.loadEnrichment(file, filesKey)?.let { db.rememberEnrichment(file.id, it) }
-                    }
-                }
-
-                val fileById = remoteFiles.associateBy { it.id }
                 val assetsById = MediaScanner(this).scanAll().associateBy { it.id }
                 val results = db.allEnrichments().mapNotNull { (fileId, record) ->
-                    if (!engine.matches(record, query)) return@mapNotNull null
-                    val file = fileById[fileId]
-                    val name = file?.let { dto ->
-                        runCatching {
-                            val rootFek = DdvCrypto.unwrapRootFek(dto.wrappedFEK, filesKey)
-                            dto.encryptedName?.let { DdvCrypto.decryptMeta(rootFek, it) }
-                        }.getOrNull()
-                    } ?: fileId
-                    Result(fileId, name, record, db.assetIdForFile(fileId)?.let { assetsById[it] })
+                    val hit = record.description.lowercase().contains(q) ||
+                        record.tags.any { it.lowercase().contains(q) }
+                    if (!hit) return@mapNotNull null
+                    val asset = db.assetIdForFile(fileId)?.let { assetsById[it] }
+                    Result(fileId, asset?.displayName ?: fileId, record, asset)
                 }.sortedBy { it.name }
 
                 runOnUiThread {

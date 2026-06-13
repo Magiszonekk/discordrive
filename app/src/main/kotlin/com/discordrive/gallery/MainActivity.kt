@@ -38,7 +38,7 @@ class MainActivity : SessionActivity() {
         toolbar.inflateMenu(R.menu.menu_main)
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
-                R.id.action_search -> requireSession { startActivity(Intent(this, SearchActivity::class.java)) }
+                R.id.action_search -> startActivity(Intent(this, SearchActivity::class.java)) // local cache, offline OK
                 R.id.action_sync -> runSync()
                 R.id.action_ai -> runAiScan(bucket = null)
                 R.id.action_settings -> startActivity(Intent(this, SettingsActivity::class.java))
