@@ -19,6 +19,7 @@
     <string name="empty_gallery">Brak multimediów na urządzeniu.\nZrób zdjęcie albo nadaj uprawnienia w ustawieniach systemu.</string>
     <string name="sync_done">Synchronizacja zakończona</string>
     <string name="sync_already_running">Synchronizacja już trwa</string>
+    <string name="sync_started_bg">Synchronizacja uruchomiona — działa w tle (postęp w powiadomieniu)</string>
     <string name="sync_notif_channel">Synchronizacja w tle</string>
     <string name="sync_notif_title">Synchronizacja</string>
     <string name="sync_notif_paused">Synchronizacja wstrzymana</string>

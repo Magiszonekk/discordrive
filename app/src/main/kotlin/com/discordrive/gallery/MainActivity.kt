@@ -1,7 +1,6 @@
 package com.discordrive.gallery
 
 import android.Manifest
-import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -66,6 +65,10 @@ class MainActivity : SessionActivity() {
 
         ensureMediaPermission()
         SyncWorker.applySchedule(this)
+        // Refresh cloud badges live when a foreground sync finishes.
+        SyncWorker.nowWorkLiveData(this).observe(this) { infos ->
+            if (infos.any { it.state.isFinished }) refreshAlbums()
+        }
         tryRestoreQuietly() // background auto-login; UI works regardless
         Updater.check(this) // offer in-app update if a newer APK is published
     }
@@ -133,45 +136,11 @@ class MainActivity : SessionActivity() {
     }
 
     private fun runSync() = requireSession {
-        if (working) return@requireSession
-        val client = SessionManager.client ?: return@requireSession
-        val filesKey = SessionManager.filesKey ?: return@requireSession
-        // Serialize with the background worker — refuse if a sync is already running.
-        if (!SyncController.tryBegin()) {
-            Snackbar.make(findViewById(R.id.mainRoot), R.string.sync_already_running, Snackbar.LENGTH_SHORT).show()
-            return@requireSession
-        }
-        setWorking(getString(R.string.action_sync) + "…")
-        // Same live notification as background sync (progress + speed + pause/resume).
-        SyncNotifications.ensureChannel(this)
-
-        thread {
-            val tracker = SyncProgressTracker(this)
-            try {
-                val runner = SyncRunner(this, client, filesKey)
-                val result = runner.sync { p ->
-                    setWorking("Sync ${p.done}/${p.total} · ↑${p.uploaded} · ${p.deduplicated} dedup · ${p.failed} błędów\n${p.detail}")
-                    tracker.onProgress(p)
-                }
-                setWorking(null)
-                runOnUiThread {
-                    refreshAlbums()
-                    Snackbar.make(
-                        findViewById(R.id.mainRoot),
-                        "${getString(R.string.sync_done)}: ↑${result.uploaded}, ${result.deduplicated} dedup, ${result.skipped} pominiętych, ${result.failed} błędów",
-                        Snackbar.LENGTH_LONG,
-                    ).show()
-                }
-                if (Settings.aiAutoAfterSync(this) && Settings.aiConfigured(this)) runAiScan(bucket = null)
-            } catch (e: Throwable) {
-                setWorking(null)
-                AppLog.e("Main", "sync run failed", e)
-                runOnUiThread { Snackbar.make(findViewById(R.id.mainRoot), "Błąd: ${e.message}", Snackbar.LENGTH_LONG).show() }
-            } finally {
-                SyncController.end()
-                getSystemService(NotificationManager::class.java).cancel(SyncNotifications.NOTIF_ID)
-            }
-        }
+        // Run as a foreground-service job (WorkManager) so it keeps going when the
+        // app is backgrounded or the screen turns off — progress/pause live in the
+        // notification. (A second tap is a no-op: the worker serializes via tryBegin.)
+        SyncWorker.runNow(this)
+        Snackbar.make(findViewById(R.id.mainRoot), R.string.sync_started_bg, Snackbar.LENGTH_LONG).show()
     }
 
     private fun runAiScan(bucket: String?) = requireSession {

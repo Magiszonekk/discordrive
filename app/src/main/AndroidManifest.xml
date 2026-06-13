@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
@@ -39,6 +40,13 @@
             android:theme="@style/Theme.Gallery.Viewer" />
 
         <receiver android:name=".SyncActionReceiver" android:exported="false" />
+
+        <!-- Android 14+: declare the FGS type on WorkManager's foreground service
+             so setForeground(dataSync) is allowed (else startForeground throws). -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

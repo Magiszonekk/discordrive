@@ -5,8 +5,11 @@ import android.content.Context
 import android.content.pm.ServiceInfo
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.Worker
@@ -60,6 +63,13 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         }
     }
 
+    // Required for EXPEDITED one-time work (runNow): WorkManager promotes to a
+    // foreground service via this BEFORE doWork — without it the worker throws.
+    override fun getForegroundInfo(): ForegroundInfo {
+        SyncNotifications.ensureChannel(applicationContext)
+        return foregroundInfo(applicationContext)
+    }
+
     private fun foregroundInfo(ctx: Context): ForegroundInfo =
         ForegroundInfo(
             SyncNotifications.NOTIF_ID,
@@ -69,6 +79,24 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
 
     companion object {
         private const val WORK_NAME = "ddv4-bg-sync"
+        private const val NOW_WORK_NAME = "ddv4-sync-now"
+
+        /**
+         * Runs a sync immediately as a foreground service, so it keeps going when
+         * the user leaves the app or the screen turns off (a manual sync used to
+         * run in the Activity thread and got killed on backgrounding). KEEP = if a
+         * sync is already running/queued, don't start another.
+         */
+        fun runNow(context: Context) {
+            val request = OneTimeWorkRequestBuilder<SyncWorker>()
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(NOW_WORK_NAME, ExistingWorkPolicy.KEEP, request)
+        }
+
+        /** LiveData of the manual-sync job state (so the UI can refresh on completion). */
+        fun nowWorkLiveData(context: Context) =
+            WorkManager.getInstance(context).getWorkInfosForUniqueWorkLiveData(NOW_WORK_NAME)
 
         /** (Re)schedules or cancels periodic sync according to settings. */
         fun applySchedule(context: Context) {
