@@ -108,6 +108,11 @@
     <string name="settings_bg_charging">Tylko podczas ładowania</string>
     <string name="settings_ai_limit">Limit analiz w jednym przebiegu (0 = bez limitu)</string>
     <string name="settings_ai_concurrency">Równoległe zapytania AI (np. 2 dla 2 kont)</string>
+    <string name="settings_transcribe">Transkrypcja audio (opcjonalnie)</string>
+    <string name="settings_transcribe_hint">Endpoint mowa-na-tekst (format OpenAI /v1/audio/transcriptions). Gdy ustawiony, analiza wideo dorzuca transkrypcję ścieżki dźwiękowej jako kontekst. Puste = wyłączone.</string>
+    <string name="settings_transcribe_url">URL transkrypcji</string>
+    <string name="settings_transcribe_key">Klucz transkrypcji</string>
+    <string name="settings_transcribe_model">Model transkrypcji (np. whisper-1)</string>
 
     <!-- File actions / trash -->
     <string name="action_move_to_album">Przenieś do albumu…</string>

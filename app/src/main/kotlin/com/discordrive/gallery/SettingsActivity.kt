@@ -38,6 +38,9 @@ class SettingsActivity : SessionActivity() {
         val aiModel = findViewById<EditText>(R.id.aiModelInput)
         val aiLimit = findViewById<EditText>(R.id.aiLimitInput)
         val aiConcurrency = findViewById<EditText>(R.id.aiConcurrencyInput)
+        val transcribeUrl = findViewById<EditText>(R.id.transcribeUrlInput)
+        val transcribeKey = findViewById<EditText>(R.id.transcribeKeyInput)
+        val transcribeModel = findViewById<EditText>(R.id.transcribeModelInput)
         val aiAuto = findViewById<MaterialSwitch>(R.id.aiAutoSwitch)
         val bgSync = findViewById<MaterialSwitch>(R.id.bgSyncSwitch)
         val bgWifi = findViewById<MaterialSwitch>(R.id.bgWifiSwitch)
@@ -49,6 +52,9 @@ class SettingsActivity : SessionActivity() {
         aiModel.setText(Settings.aiModel(this))
         aiLimit.setText(Settings.aiLimit(this).toString())
         aiConcurrency.setText(Settings.aiConcurrency(this).toString())
+        transcribeUrl.setText(Settings.transcriptionUrl(this))
+        transcribeKey.setText(Settings.transcriptionKey(this))
+        transcribeModel.setText(Settings.transcriptionModel(this))
         aiAuto.isChecked = Settings.aiAutoAfterSync(this)
         bgSync.isChecked = Settings.bgSyncEnabled(this)
         bgWifi.isChecked = Settings.bgWifiOnly(this)
@@ -64,6 +70,9 @@ class SettingsActivity : SessionActivity() {
                 aiAuto = aiAuto.isChecked,
                 aiLimit = aiLimit.text.toString().toIntOrNull() ?: 50,
                 aiConcurrency = aiConcurrency.text.toString().toIntOrNull() ?: 1,
+                transcribeUrl = transcribeUrl.text.toString(),
+                transcribeKey = transcribeKey.text.toString(),
+                transcribeModel = transcribeModel.text.toString(),
                 bgSync = bgSync.isChecked,
                 bgWifiOnly = bgWifi.isChecked,
                 bgChargingOnly = bgCharging.isChecked,

@@ -28,6 +28,13 @@ object Settings {
 
     fun aiConfigured(context: Context): Boolean = aiUrl(context).isNotBlank() && aiModel(context).isNotBlank()
 
+    // Optional speech-to-text endpoint (OpenAI /v1/audio/transcriptions format) —
+    // adds an audio transcript as context to video AI analysis. Off when URL blank.
+    fun transcriptionUrl(context: Context): String = prefs(context).getString("transcribeUrl", "") ?: ""
+    fun transcriptionModel(context: Context): String = prefs(context).getString("transcribeModel", "whisper-1") ?: "whisper-1"
+    fun transcriptionKey(context: Context): String = SecureStore(context).getString(SecureStore.TRANSCRIBE_KEY) ?: ""
+    fun transcriptionConfigured(context: Context): Boolean = transcriptionUrl(context).isNotBlank()
+
     fun bgSyncEnabled(context: Context): Boolean = prefs(context).getBoolean("bgSync", false)
     fun bgWifiOnly(context: Context): Boolean = prefs(context).getBoolean("bgWifiOnly", true)
     fun bgChargingOnly(context: Context): Boolean = prefs(context).getBoolean("bgChargingOnly", false)
@@ -41,6 +48,9 @@ object Settings {
         aiAuto: Boolean,
         aiLimit: Int,
         aiConcurrency: Int,
+        transcribeUrl: String,
+        transcribeKey: String,
+        transcribeModel: String,
         bgSync: Boolean,
         bgWifiOnly: Boolean,
         bgChargingOnly: Boolean,
@@ -52,11 +62,14 @@ object Settings {
             .putBoolean("aiAuto", aiAuto)
             .putInt("aiLimit", aiLimit.coerceIn(0, 10_000))
             .putInt("aiConcurrency", aiConcurrency.coerceIn(1, 8))
+            .putString("transcribeUrl", transcribeUrl.trim().trimEnd('/'))
+            .putString("transcribeModel", transcribeModel.trim().ifBlank { "whisper-1" })
             .putBoolean("bgSync", bgSync)
             .putBoolean("bgWifiOnly", bgWifiOnly)
             .putBoolean("bgChargingOnly", bgChargingOnly)
             .apply()
         if (aiKey.isNotBlank()) SecureStore(context).putString(SecureStore.AI_KEY, aiKey.trim())
+        if (transcribeKey.isNotBlank()) SecureStore(context).putString(SecureStore.TRANSCRIBE_KEY, transcribeKey.trim())
         SyncWorker.applySchedule(context)
     }
 
@@ -70,6 +83,9 @@ object Settings {
         put("aiAuto", aiAutoAfterSync(context))
         put("aiLimit", aiLimit(context))
         put("aiConcurrency", aiConcurrency(context))
+        put("transcribeUrl", transcriptionUrl(context))
+        put("transcribeModel", transcriptionModel(context))
+        put("transcribeKey", transcriptionKey(context))
         put("bgSync", bgSyncEnabled(context))
         put("bgWifiOnly", bgWifiOnly(context))
         put("bgChargingOnly", bgChargingOnly(context))
@@ -87,6 +103,9 @@ object Settings {
             aiAuto = o.optBoolean("aiAuto", aiAutoAfterSync(context)),
             aiLimit = o.optInt("aiLimit", aiLimit(context)),
             aiConcurrency = o.optInt("aiConcurrency", aiConcurrency(context)),
+            transcribeUrl = o.optString("transcribeUrl", transcriptionUrl(context)),
+            transcribeKey = o.optString("transcribeKey", ""), // blank → save() keeps existing
+            transcribeModel = o.optString("transcribeModel", transcriptionModel(context)),
             bgSync = o.optBoolean("bgSync", bgSyncEnabled(context)),
             bgWifiOnly = o.optBoolean("bgWifiOnly", bgWifiOnly(context)),
             bgChargingOnly = o.optBoolean("bgChargingOnly", bgChargingOnly(context)),

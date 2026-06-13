@@ -72,6 +72,7 @@ class AiVisionClient(
     fun analyzeVideo(
         frames: List<ByteArray>,
         albumHint: String? = null,
+        transcript: String? = null,
         framesPerRequest: Int = FRAMES_PER_REQUEST,
         interBatchDelayMs: Long = 0L,
     ): VisionResult {
@@ -82,7 +83,7 @@ class AiVisionClient(
         var description = ""
         batches.forEachIndexed { index, batch ->
             if (index > 0 && interBatchDelayMs > 0) Thread.sleep(interBatchDelayMs)
-            val result = postAndParse(buildBody(videoPrompt(index, batches.size, albumHint, carried), batch.map { dataUrl(it) }))
+            val result = postAndParse(buildBody(videoPrompt(index, batches.size, albumHint, carried, transcript), batch.map { dataUrl(it) }))
             if (result.description.isNotBlank()) description = result.description
             carried = description
             tags.addAll(result.tags)
@@ -90,13 +91,14 @@ class AiVisionClient(
         return VisionResult(description, tags.toList())
     }
 
-    private fun videoPrompt(partIndex: Int, partCount: Int, albumHint: String?, carried: String?): String = buildString {
+    private fun videoPrompt(partIndex: Int, partCount: Int, albumHint: String?, carried: String?, transcript: String?): String = buildString {
         append(albumPrefix(albumHint))
         append("To są klatki z jednego filmu w kolejności chronologicznej")
         if (partCount > 1) append(" (część ${partIndex + 1} z $partCount)")
         append(". ")
+        if (!transcript.isNullOrBlank()) append("Transkrypcja audio (ścieżka dźwiękowa) filmu: \"${transcript.trim().take(2000)}\"\n")
         if (!carried.isNullOrBlank()) append("Dotychczasowy opis filmu: ${carried.trim()}\n")
-        append("Opisz CAŁY film na podstawie tych oraz wcześniejszych klatek. ")
+        append("Opisz CAŁY film na podstawie tych oraz wcześniejszych klatek i transkrypcji audio. ")
         append("Odpowiedz TYLKO czystym JSON bez markdown, w formacie: ")
         append("""{"description":"jedno-dwa zdania po polsku co dzieje się na filmie","tags":["6-10 tagów po polsku, krótkie, małymi literami"]}""")
         append(" Jeśli na klatkach jest tekst, uwzględnij go w opisie i tagach.")

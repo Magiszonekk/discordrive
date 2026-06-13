@@ -291,10 +291,33 @@ class SyncRunner(
      */
     private fun runVision(ai: AiVisionClient, asset: MediaAsset, hint: String?): AiVisionClient.VisionResult =
         if (asset.isVideo) {
-            ai.analyzeVideo(AiImagePreparer.prepareVideoFrames(context, asset), hint, interBatchDelayMs = AI_CALL_SPACING_MS)
+            ai.analyzeVideo(
+                AiImagePreparer.prepareVideoFrames(context, asset),
+                hint,
+                transcript = transcribeVideo(asset),
+                interBatchDelayMs = AI_CALL_SPACING_MS,
+            )
         } else {
             ai.analyzeImage(AiImagePreparer.prepare(context, asset), "image/jpeg", hint)
         }
+
+    /** Optional audio transcript for a video, when a transcription endpoint is configured. */
+    private fun transcribeVideo(asset: MediaAsset): String? {
+        if (!Settings.transcriptionConfigured(context)) return null
+        return runCatching {
+            val audio = AudioExtractor.extractAudio(context, asset) ?: return null
+            try {
+                com.discordrive.gallery.api.TranscriptionClient(
+                    Settings.transcriptionUrl(context),
+                    Settings.transcriptionKey(context),
+                    Settings.transcriptionModel(context),
+                ).transcribe(audio)
+            } finally {
+                audio.delete()
+            }
+        }.onFailure { AppLog.w("SyncRunner", "transcription failed for ${asset.displayName}", it) }
+            .getOrNull()?.takeIf { it.isNotBlank() }
+    }
 
     /** True if the failure looks like the server is unreachable (no network / DNS / connect). */
     private fun isUnreachable(error: Throwable): Boolean {

@@ -71,5 +71,6 @@ class SecureStore(context: Context) {
         const val ARK = "ark"
         const val REFRESH_TOKEN = "refresh_token"
         const val AI_KEY = "ai_key"
+        const val TRANSCRIBE_KEY = "transcribe_key"
     }
 }
