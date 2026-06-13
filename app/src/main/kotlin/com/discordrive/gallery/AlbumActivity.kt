@@ -38,6 +38,7 @@ class AlbumActivity : AppCompatActivity() {
     private var selectionMode = false
     private var defaultNavIcon: Drawable? = null
     private lateinit var backCallback: OnBackPressedCallback
+    private var albumDescription: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,6 +55,7 @@ class AlbumActivity : AppCompatActivity() {
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 R.id.action_ai_album -> runAlbumAi()
+                R.id.action_album_desc -> editAlbumDescription()
                 R.id.action_sel_move -> pickMoveTargetForSelection()
                 R.id.action_sel_delete_cloud -> confirmTrashSelection(alsoLocal = false)
                 R.id.action_sel_delete_everywhere -> confirmTrashSelection(alsoLocal = true)
@@ -95,6 +97,57 @@ class AlbumActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshGrid()
+        loadAlbumDescription()
+    }
+
+    /** Loads the (E2EE) album description into the toolbar subtitle, in the background. */
+    private fun loadAlbumDescription() {
+        val client = SessionManager.client ?: return
+        val filesKey = SessionManager.filesKey ?: return
+        thread {
+            val desc = AlbumDescriptions.load(client, filesKey, bucket)
+            runOnUiThread {
+                albumDescription = desc
+                if (!selectionMode) toolbar.subtitle = desc
+            }
+        }
+    }
+
+    /** Dialog to add/edit the per-album description used as AI context. */
+    private fun editAlbumDescription() {
+        val client = SessionManager.client ?: return
+        val filesKey = SessionManager.filesKey ?: return
+        val input = android.widget.EditText(this).apply {
+            hint = getString(R.string.album_desc_hint)
+            setText(albumDescription ?: "")
+            setSelection(text.length)
+            isSingleLine = false
+            minLines = 2
+            maxLines = 5
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.album_desc_title, bucket))
+            .setMessage(R.string.album_desc_help)
+            .setView(input)
+            .setPositiveButton(R.string.settings_save) { _, _ ->
+                val text = input.text.toString().trim()
+                thread {
+                    runCatching { AlbumDescriptions.save(client, filesKey, bucket, text) }
+                        .onSuccess {
+                            runOnUiThread {
+                                albumDescription = text.ifBlank { null }
+                                if (!selectionMode) toolbar.subtitle = albumDescription
+                                Snackbar.make(findViewById(R.id.albumRoot), R.string.album_desc_saved, Snackbar.LENGTH_SHORT).show()
+                            }
+                        }
+                        .onFailure { e ->
+                            AppLog.w("Album", "save album description failed", e)
+                            runOnUiThread { Snackbar.make(findViewById(R.id.albumRoot), "Błąd: ${e.message}", Snackbar.LENGTH_LONG).show() }
+                        }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun refreshGrid() {
@@ -154,11 +207,13 @@ class AlbumActivity : AppCompatActivity() {
         toolbar.menu.clear()
         if (selectionMode) {
             toolbar.title = getString(R.string.selection_count, selectedIds.size)
+            toolbar.subtitle = null
             toolbar.setNavigationIcon(R.drawable.ic_close)
             toolbar.navigationContentDescription = getString(R.string.selection_exit)
             toolbar.inflateMenu(R.menu.menu_selection)
         } else {
             toolbar.title = bucket
+            toolbar.subtitle = albumDescription
             toolbar.navigationIcon = defaultNavIcon
             toolbar.inflateMenu(R.menu.menu_album)
         }

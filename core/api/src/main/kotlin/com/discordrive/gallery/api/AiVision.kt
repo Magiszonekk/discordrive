@@ -49,8 +49,18 @@ class AiVisionClient(
             """{"description":"jedno-dwa zdania po polsku co przedstawia obraz","tags":["6-10 tagów po polsku, krótkie, małymi literami"]}""" +
             " Jeśli na obrazie jest tekst, uwzględnij go w opisie i tagach."
 
-    fun analyzeImage(imageBytes: ByteArray, mimeType: String): VisionResult {
+    /**
+     * @param albumHint optional user-provided context for the album this image
+     *   belongs to (e.g. "zapisane z Pinteresta, najczęściej memy") — prepended
+     *   to the prompt so tags/description reflect it.
+     */
+    fun analyzeImage(imageBytes: ByteArray, mimeType: String, albumHint: String? = null): VisionResult {
         val dataUrl = "data:$mimeType;base64,${Base64.getEncoder().encodeToString(imageBytes)}"
+        val effectivePrompt = if (!albumHint.isNullOrBlank()) {
+            "Kontekst albumu (podpowiedź użytkownika): ${albumHint.trim()}\n$prompt"
+        } else {
+            prompt
+        }
 
         val body = buildJsonObject {
             put("model", model)
@@ -64,7 +74,7 @@ class AiVisionClient(
                             put(
                                 "content",
                                 buildJsonArray {
-                                    add(buildJsonObject { put("type", "text"); put("text", prompt) })
+                                    add(buildJsonObject { put("type", "text"); put("text", effectivePrompt) })
                                     add(
                                         buildJsonObject {
                                             put("type", "image_url")

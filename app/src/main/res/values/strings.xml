@@ -49,6 +49,11 @@
         <item quantity="other">%d plików</item>
     </plurals>
     <string name="album_ai_action">Analizuj ten album</string>
+    <string name="album_desc_action">Opis albumu</string>
+    <string name="album_desc_title">Opis albumu „%1$s”</string>
+    <string name="album_desc_hint">np. zapisane z Pinteresta, najczęściej memy</string>
+    <string name="album_desc_help">Używane jako dodatkowy kontekst przy analizie AI zdjęć z tego albumu.</string>
+    <string name="album_desc_saved">Zapisano opis albumu</string>
 
     <!-- Background sync -->
     <string name="settings_bg">Synchronizacja w tle</string>

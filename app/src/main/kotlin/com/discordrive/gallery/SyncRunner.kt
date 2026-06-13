@@ -106,6 +106,9 @@ class SyncRunner(
         val remoteFiles = client.galleryDeltaAll(null).files
             .filter { it.status == "READY" && it.deletedAt == null }
             .associateBy { it.id }
+        // per-album context hints for the AI prompt (fetched once per bucket)
+        val albumHints = assets.map { it.bucketName }.toSet()
+            .associateWith { AlbumDescriptions.load(client, filesKey, it) }
         var analyzed = 0
         var skipped = 0
         var failed = 0
@@ -132,13 +135,14 @@ class SyncRunner(
                 if (sinceLast < AI_CALL_SPACING_MS) Thread.sleep(AI_CALL_SPACING_MS - sinceLast)
 
                 val prepared = AiImagePreparer.prepare(context, asset)
+                val hint = albumHints[asset.bucketName]
                 lastCallAtMs = System.currentTimeMillis()
                 val vision = try {
-                    ai.analyzeImage(prepared, "image/jpeg")
+                    ai.analyzeImage(prepared, "image/jpeg", hint)
                 } catch (rateLimit: AiRateLimitException) {
                     Thread.sleep(rateLimit.retryAfterSeconds.coerceAtMost(120) * 1000)
                     lastCallAtMs = System.currentTimeMillis()
-                    ai.analyzeImage(prepared, "image/jpeg")
+                    ai.analyzeImage(prepared, "image/jpeg", hint)
                 }
                 val record = enrichment.buildRecord(vision, model)
                 enrichment.saveEnrichment(fileId, file.wrappedFEK, filesKey, record)
