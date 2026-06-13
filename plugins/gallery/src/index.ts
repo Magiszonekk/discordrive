@@ -11,6 +11,7 @@
 import type { DdvPlugin } from "@ddv4/plugin-sdk";
 import { getState, listStates, setState, deleteState } from "./state.js";
 import { getDelta } from "./delta.js";
+import { deleteEnrichments } from "./enrichment.js";
 
 // Matches the API server's GraphQL context (apps/api/src/schema.ts)
 interface Ctx {
@@ -52,6 +53,11 @@ const typeDefs = /* GraphQL */ `
   extend type Mutation {
     setGalleryState(key: String!, valueB64: String!, expectedVersion: Int): GalleryState!
     deleteGalleryState(key: String!): Boolean!
+    """
+    Deletes AI enrichment blobs (\`{fileId}:enrichment\`). Pass specific fileIds,
+    or null/empty to clear the whole library. Returns the number deleted.
+    """
+    deleteEnrichments(fileIds: [String!]): Int!
   }
 `;
 
@@ -82,6 +88,10 @@ const resolvers = {
     deleteGalleryState: async (_parent: unknown, args: { key: string }, ctx: Ctx) => {
       const auth = requireAuth(ctx);
       return deleteState(auth.userId, args.key);
+    },
+    deleteEnrichments: async (_parent: unknown, args: { fileIds?: string[] | null }, ctx: Ctx) => {
+      const auth = requireAuth(ctx);
+      return deleteEnrichments(auth.userId, args.fileIds ?? null);
     },
   },
 };
