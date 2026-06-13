@@ -51,22 +51,43 @@ class SyncRunner(
         var failed = 0
         var bytesDone = 0L
 
+        // Detect stale local mappings — files the local DB marks as synced but
+        // that no longer exist in the cloud (purged, or deleted on another
+        // device). Validate once against the server so they are RE-UPLOADED
+        // instead of silently skipped. On fetch failure (offline) we trust the
+        // local map to avoid a spurious mass re-upload.
+        val remoteIds: Set<String>? = if (assets.any { db.fileIdFor(it) != null }) {
+            runCatching {
+                client.galleryDeltaAll(null).files
+                    .filter { it.status == "READY" && it.deletedAt == null }
+                    .map { it.id }.toSet()
+            }.getOrNull()
+        } else {
+            null
+        }
+
         assets.forEachIndexed { index, asset ->
             SyncController.awaitIfPaused() // honour notification Pause/Resume
             onProgress(Progress("sync", index, assets.size, asset.displayName, uploaded, deduplicated, skipped, 0, failed, bytesDone))
             try {
                 val mappedFileId = db.fileIdFor(asset)
-                if (mappedFileId != null) {
+                val stillInCloud = mappedFileId != null && (remoteIds == null || mappedFileId in remoteIds)
+                if (stillInCloud) {
                     // drift repair: file moved between buckets locally → mirror in cloud
                     if (db.mappedBucketFor(asset) != asset.bucketName) {
                         val folderId = folderIds.getOrPut(asset.bucketName) {
                             folderManager.ensureFolder(asset.bucketName, parentFolderId = null, filesKey = filesKey)
                         }
-                        client.moveFile(mappedFileId, folderId)
+                        client.moveFile(mappedFileId!!, folderId)
                         db.rememberMapping(asset, mappedFileId)
                     }
                     skipped++
                     return@forEachIndexed
+                }
+                if (mappedFileId != null) {
+                    // stale mapping (cloud file gone) → drop it and re-upload below
+                    AppLog.w("SyncRunner", "stale mapping: ${asset.displayName} (cloud file $mappedFileId gone) — re-uploading")
+                    db.forgetFile(mappedFileId)
                 }
 
                 val folderId = folderIds.getOrPut(asset.bucketName) {
@@ -176,8 +197,11 @@ class SyncRunner(
     fun analyzeOne(ai: AiVisionClient, model: String, asset: MediaAsset): EnrichmentRecord {
         val fileId = db.fileIdFor(asset)
             ?: throw IllegalStateException("Zdjęcie nie jest jeszcze zsynchronizowane")
-        val file = client.file(fileId)
-            ?: throw IllegalStateException("Nie znaleziono pliku w chmurze")
+        val file = client.file(fileId) ?: run {
+            // stale mapping — clear it so the badge corrects and a re-sync re-uploads
+            db.forgetFile(fileId)
+            throw IllegalStateException("Plik zniknął z chmury — uruchom synchronizację ponownie")
+        }
         val hint = AlbumDescriptions.load(client, filesKey, asset.bucketName)
         val vision = try {
             runVision(ai, asset, hint)
