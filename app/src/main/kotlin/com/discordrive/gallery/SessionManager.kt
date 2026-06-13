@@ -38,6 +38,9 @@ object SessionManager {
             .putString("serverUrl", server)
             .putString("email", session.user.email)
             .apply()
+
+        // Recover E2EE settings backup (AI endpoint/key/toggles) for this account.
+        runCatching { SettingsSync.pull(context, newClient, session.filesKey) }
     }
 
     /** Restores a persisted session (refresh token → fresh JWT). Blocking. */

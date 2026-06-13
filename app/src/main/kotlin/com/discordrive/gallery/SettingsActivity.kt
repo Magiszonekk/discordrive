@@ -19,8 +19,18 @@ class SettingsActivity : SessionActivity() {
 
         findViewById<MaterialToolbar>(R.id.toolbar).setNavigationOnClickListener { finish() }
 
+        val loggedIn = SessionManager.isLoggedIn
         findViewById<TextView>(R.id.accountInfo).text =
-            "${SessionManager.email ?: "—"}\n${SessionManager.serverUrl ?: "—"}"
+            if (loggedIn) "${SessionManager.email ?: "—"}\n${SessionManager.serverUrl ?: "—"}"
+            else getString(R.string.settings_not_logged_in)
+        findViewById<Button>(R.id.loginButton).apply {
+            visibility = if (loggedIn) android.view.View.GONE else android.view.View.VISIBLE
+            // requireSession restores or shows login, then recreate() refreshes this screen
+            // (and pulls the E2EE settings backup applied during login).
+            setOnClickListener { requireSession { recreate() } }
+        }
+        findViewById<Button>(R.id.logoutButton).visibility =
+            if (loggedIn) android.view.View.VISIBLE else android.view.View.GONE
 
         val aiUrl = findViewById<EditText>(R.id.aiUrlInput)
         val aiKey = findViewById<EditText>(R.id.aiKeyInput)
@@ -53,6 +63,15 @@ class SettingsActivity : SessionActivity() {
                 bgChargingOnly = bgCharging.isChecked,
             )
             Snackbar.make(findViewById(R.id.settingsRoot), R.string.settings_saved, Snackbar.LENGTH_SHORT).show()
+            // Back up settings E2EE so they follow the account (best-effort).
+            val client = SessionManager.client
+            val filesKey = SessionManager.filesKey
+            if (client != null && filesKey != null) {
+                kotlin.concurrent.thread {
+                    runCatching { SettingsSync.push(this, client, filesKey) }
+                        .onFailure { AppLog.w("Settings", "settings backup push failed", it) }
+                }
+            }
         }
 
         findViewById<Button>(R.id.copyLogsButton).setOnClickListener { copyLogs() }
