@@ -2,6 +2,7 @@ package com.discordrive.gallery.api
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -49,49 +50,94 @@ class AiVisionClient(
             """{"description":"jedno-dwa zdania po polsku co przedstawia obraz","tags":["6-10 tagów po polsku, krótkie, małymi literami"]}""" +
             " Jeśli na obrazie jest tekst, uwzględnij go w opisie i tagach."
 
+    private fun albumPrefix(albumHint: String?): String =
+        if (!albumHint.isNullOrBlank()) "Kontekst albumu (podpowiedź użytkownika): ${albumHint.trim()}\n" else ""
+
     /**
      * @param albumHint optional user-provided context for the album this image
      *   belongs to (e.g. "zapisane z Pinteresta, najczęściej memy") — prepended
      *   to the prompt so tags/description reflect it.
      */
-    fun analyzeImage(imageBytes: ByteArray, mimeType: String, albumHint: String? = null): VisionResult {
-        val dataUrl = "data:$mimeType;base64,${Base64.getEncoder().encodeToString(imageBytes)}"
-        val effectivePrompt = if (!albumHint.isNullOrBlank()) {
-            "Kontekst albumu (podpowiedź użytkownika): ${albumHint.trim()}\n$prompt"
-        } else {
-            prompt
-        }
+    fun analyzeImage(imageBytes: ByteArray, mimeType: String, albumHint: String? = null): VisionResult =
+        postAndParse(buildBody(albumPrefix(albumHint) + prompt, listOf(dataUrl(imageBytes, mimeType))))
 
-        val body = buildJsonObject {
-            put("model", model)
-            put("max_tokens", 400)
-            put(
-                "messages",
-                buildJsonArray {
-                    add(
-                        buildJsonObject {
-                            put("role", "user")
-                            put(
-                                "content",
-                                buildJsonArray {
-                                    add(buildJsonObject { put("type", "text"); put("text", effectivePrompt) })
+    /**
+     * Analyzes a video from several sampled frames (chronological). To stay
+     * within model limits, frames are sent in batches of [framesPerRequest];
+     * when there is more than one batch each subsequent request carries the
+     * running description forward as context, and the final batch synthesizes
+     * the whole clip. [interBatchDelayMs] spaces requests for rate-limited
+     * gateways (set by the caller). Tags are merged + de-duplicated.
+     */
+    fun analyzeVideo(
+        frames: List<ByteArray>,
+        albumHint: String? = null,
+        framesPerRequest: Int = FRAMES_PER_REQUEST,
+        interBatchDelayMs: Long = 0L,
+    ): VisionResult {
+        if (frames.isEmpty()) throw GraphQLException("No video frames to analyze")
+        val batches = frames.chunked(framesPerRequest.coerceAtLeast(1))
+        val tags = LinkedHashSet<String>()
+        var carried: String? = null
+        var description = ""
+        batches.forEachIndexed { index, batch ->
+            if (index > 0 && interBatchDelayMs > 0) Thread.sleep(interBatchDelayMs)
+            val result = postAndParse(buildBody(videoPrompt(index, batches.size, albumHint, carried), batch.map { dataUrl(it) }))
+            if (result.description.isNotBlank()) description = result.description
+            carried = description
+            tags.addAll(result.tags)
+        }
+        return VisionResult(description, tags.toList())
+    }
+
+    private fun videoPrompt(partIndex: Int, partCount: Int, albumHint: String?, carried: String?): String = buildString {
+        append(albumPrefix(albumHint))
+        append("To są klatki z jednego filmu w kolejności chronologicznej")
+        if (partCount > 1) append(" (część ${partIndex + 1} z $partCount)")
+        append(". ")
+        if (!carried.isNullOrBlank()) append("Dotychczasowy opis filmu: ${carried.trim()}\n")
+        append("Opisz CAŁY film na podstawie tych oraz wcześniejszych klatek. ")
+        append("Odpowiedz TYLKO czystym JSON bez markdown, w formacie: ")
+        append("""{"description":"jedno-dwa zdania po polsku co dzieje się na filmie","tags":["6-10 tagów po polsku, krótkie, małymi literami"]}""")
+        append(" Jeśli na klatkach jest tekst, uwzględnij go w opisie i tagach.")
+    }
+
+    private fun dataUrl(bytes: ByteArray, mime: String = "image/jpeg"): String =
+        "data:$mime;base64,${Base64.getEncoder().encodeToString(bytes)}"
+
+    private fun buildBody(promptText: String, imageDataUrls: List<String>): JsonObject = buildJsonObject {
+        put("model", model)
+        put("max_tokens", 500)
+        put(
+            "messages",
+            buildJsonArray {
+                add(
+                    buildJsonObject {
+                        put("role", "user")
+                        put(
+                            "content",
+                            buildJsonArray {
+                                add(buildJsonObject { put("type", "text"); put("text", promptText) })
+                                imageDataUrls.forEach { url ->
                                     add(
                                         buildJsonObject {
                                             put("type", "image_url")
-                                            put("image_url", buildJsonObject { put("url", dataUrl) })
+                                            put("image_url", buildJsonObject { put("url", url) })
                                         },
                                     )
-                                },
-                            )
-                        },
-                    )
-                },
-            )
-        }
+                                }
+                            },
+                        )
+                    },
+                )
+            },
+        )
+    }
 
+    private fun postAndParse(body: JsonObject): VisionResult {
         val request = Request.Builder()
             .url("$baseUrl/v1/chat/completions")
-            .post(json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), body).toRequestBody(mediaType))
+            .post(json.encodeToString(JsonObject.serializer(), body).toRequestBody(mediaType))
             .header("Authorization", "Bearer $apiKey")
             .build()
 
@@ -110,6 +156,10 @@ class AiVisionClient(
 
             return parseVisionJson(content)
         }
+    }
+
+    companion object {
+        const val FRAMES_PER_REQUEST = 4
     }
 
     /** Tolerates markdown fences and stray prose around the JSON object. */

@@ -135,15 +135,14 @@ class SyncRunner(
                 val sinceLast = System.currentTimeMillis() - lastCallAtMs
                 if (sinceLast < AI_CALL_SPACING_MS) Thread.sleep(AI_CALL_SPACING_MS - sinceLast)
 
-                val prepared = AiImagePreparer.prepare(context, asset)
                 val hint = albumHints[asset.bucketName]
                 lastCallAtMs = System.currentTimeMillis()
                 val vision = try {
-                    ai.analyzeImage(prepared, "image/jpeg", hint)
+                    runVision(ai, asset, hint)
                 } catch (rateLimit: AiRateLimitException) {
                     Thread.sleep(rateLimit.retryAfterSeconds.coerceAtMost(120) * 1000)
                     lastCallAtMs = System.currentTimeMillis()
-                    ai.analyzeImage(prepared, "image/jpeg", hint)
+                    runVision(ai, asset, hint)
                 }
                 val record = enrichment.buildRecord(vision, model)
                 enrichment.saveEnrichment(fileId, file.wrappedFEK, filesKey, record)
@@ -170,18 +169,29 @@ class SyncRunner(
         val file = client.file(fileId)
             ?: throw IllegalStateException("Nie znaleziono pliku w chmurze")
         val hint = AlbumDescriptions.load(client, filesKey, asset.bucketName)
-        val prepared = AiImagePreparer.prepare(context, asset)
         val vision = try {
-            ai.analyzeImage(prepared, "image/jpeg", hint)
+            runVision(ai, asset, hint)
         } catch (rateLimit: AiRateLimitException) {
             Thread.sleep(rateLimit.retryAfterSeconds.coerceAtMost(120) * 1000)
-            ai.analyzeImage(prepared, "image/jpeg", hint)
+            runVision(ai, asset, hint)
         }
         val record = enrichment.buildRecord(vision, model)
         enrichment.saveEnrichment(fileId, file.wrappedFEK, filesKey, record)
         db.rememberEnrichment(fileId, record)
         return record
     }
+
+    /**
+     * Images → single downscaled frame; videos → several frames sampled across
+     * the duration, analyzed frame-by-frame (batched, requests spaced by the
+     * same throttle as image calls).
+     */
+    private fun runVision(ai: AiVisionClient, asset: MediaAsset, hint: String?): AiVisionClient.VisionResult =
+        if (asset.isVideo) {
+            ai.analyzeVideo(AiImagePreparer.prepareVideoFrames(context, asset), hint, interBatchDelayMs = AI_CALL_SPACING_MS)
+        } else {
+            ai.analyzeImage(AiImagePreparer.prepare(context, asset), "image/jpeg", hint)
+        }
 
     private companion object {
         const val AI_CALL_SPACING_MS = 3200L
