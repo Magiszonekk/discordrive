@@ -36,6 +36,7 @@ class SyncRunner(
         val skipped: Int = 0,
         val analyzed: Int = 0,
         val failed: Int = 0,
+        val bytesDone: Long = 0,
     )
 
     fun sync(onProgress: (Progress) -> Unit): Progress = syncAssets(scanner.scanAll(), onProgress)
@@ -48,9 +49,11 @@ class SyncRunner(
         var deduplicated = 0
         var skipped = 0
         var failed = 0
+        var bytesDone = 0L
 
         assets.forEachIndexed { index, asset ->
-            onProgress(Progress("sync", index, assets.size, asset.displayName, uploaded, deduplicated, skipped, 0, failed))
+            SyncController.awaitIfPaused() // honour notification Pause/Resume
+            onProgress(Progress("sync", index, assets.size, asset.displayName, uploaded, deduplicated, skipped, 0, failed, bytesDone))
             try {
                 val mappedFileId = db.fileIdFor(asset)
                 if (mappedFileId != null) {
@@ -78,7 +81,12 @@ class SyncRunner(
                     filesKey = filesKey,
                 )
                 db.rememberMapping(asset, outcome.fileId)
-                if (outcome.deduplicated) deduplicated++ else uploaded++
+                if (outcome.deduplicated) {
+                    deduplicated++
+                } else {
+                    uploaded++
+                    bytesDone += asset.sizeBytes
+                }
             } catch (e: Throwable) {
                 // Throwable, not Exception: an OutOfMemoryError on one corrupt/huge
                 // file must not kill the whole pass (the pre-0.5.0 crash loop)
@@ -88,7 +96,7 @@ class SyncRunner(
         }
 
         AppLog.i("SyncRunner", "sync done: ↑$uploaded, $deduplicated dedup, $skipped skipped, $failed failed")
-        return Progress("sync", assets.size, assets.size, "done", uploaded, deduplicated, skipped, 0, failed)
+        return Progress("sync", assets.size, assets.size, "done", uploaded, deduplicated, skipped, 0, failed, bytesDone)
     }
 
     /**

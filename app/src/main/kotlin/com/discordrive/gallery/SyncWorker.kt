@@ -1,8 +1,11 @@
 package com.discordrive.gallery
 
+import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.ServiceInfo
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ForegroundInfo
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -25,10 +28,30 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         val client = SessionManager.client ?: return Result.failure()
         val filesKey = SessionManager.filesKey ?: return Result.failure()
 
+        SyncNotifications.ensureChannel(ctx)
+        SyncController.begin()
+        setForegroundAsync(foregroundInfo(ctx))
+
         return try {
             AppLog.i("SyncWorker", "bg sync run")
             val runner = SyncRunner(ctx, client, filesKey)
-            val sync = runner.sync {}
+
+            // Live notification: progress + rolling upload speed, throttled to ~1s.
+            var lastBytes = 0L
+            var lastTimeMs = System.currentTimeMillis()
+            var lastNotifyMs = 0L
+            val sync = runner.sync { p ->
+                val now = System.currentTimeMillis()
+                if (now - lastNotifyMs >= 1000) {
+                    val dtMs = (now - lastTimeMs).coerceAtLeast(1)
+                    val speed = ((p.bytesDone - lastBytes) * 1000 / dtMs).coerceAtLeast(0)
+                    lastBytes = p.bytesDone
+                    lastTimeMs = now
+                    lastNotifyMs = now
+                    SyncController.update(p.done, p.total, speed)
+                    SyncNotifications.refresh(ctx)
+                }
+            }
             AppLog.i("SyncWorker", "bg sync: +${sync.uploaded} up, ${sync.deduplicated} dedup, ${sync.failed} failed")
 
             if (Settings.aiAutoAfterSync(ctx) && Settings.aiConfigured(ctx)) {
@@ -40,8 +63,18 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         } catch (e: Exception) {
             AppLog.w("SyncWorker", "bg sync failed", e)
             Result.retry()
+        } finally {
+            SyncController.end()
+            ctx.getSystemService(NotificationManager::class.java).cancel(SyncNotifications.NOTIF_ID)
         }
     }
+
+    private fun foregroundInfo(ctx: Context): ForegroundInfo =
+        ForegroundInfo(
+            SyncNotifications.NOTIF_ID,
+            SyncNotifications.build(ctx),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+        )
 
     companion object {
         private const val WORK_NAME = "ddv4-bg-sync"
