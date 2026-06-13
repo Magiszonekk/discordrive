@@ -1,6 +1,5 @@
 package com.discordrive.gallery
 
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Bundle
@@ -10,6 +9,9 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import com.google.android.material.chip.Chip
@@ -20,8 +22,8 @@ import kotlin.concurrent.thread
 /**
  * Full-screen viewer with horizontal swipe between the album's items
  * (gallery-style). Images load full-screen; videos show a poster frame with a
- * play button that hands off to the system player. Tap toggles the info panel
- * (name + AI description/tags).
+ * play button; tapping play streams the file inline via ExoPlayer (no external
+ * app). Tap toggles the info panel (name + AI description/tags).
  */
 class ViewerActivity : AppCompatActivity() {
 
@@ -32,6 +34,12 @@ class ViewerActivity : AppCompatActivity() {
     private lateinit var nameView: TextView
     private lateinit var descriptionView: TextView
     private lateinit var chips: ChipGroup
+
+    // Single inline player, attached to whichever video page is playing.
+    private var player: ExoPlayer? = null
+    private var activePlayerView: PlayerView? = null
+    private var activeImage: ImageView? = null
+    private var activePlay: ImageView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,7 +68,10 @@ class ViewerActivity : AppCompatActivity() {
                 pager.adapter = PageAdapter()
                 pager.setCurrentItem(start, false)
                 pager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
-                    override fun onPageSelected(position: Int) = showInfo(assets[position])
+                    override fun onPageSelected(position: Int) {
+                        stopPlayback() // releases any video playing on the previous page
+                        showInfo(assets[position])
+                    }
                 })
                 showInfo(assets[start])
             }
@@ -94,10 +105,42 @@ class ViewerActivity : AppCompatActivity() {
         infoPanel.visibility = if (panelVisible) View.VISIBLE else View.GONE
     }
 
-    private fun playVideo(asset: MediaAsset) {
-        runCatching {
-            startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(asset.uri, asset.mimeType))
-        }
+    /** Attaches the shared player to the tapped video page and starts inline playback. */
+    private fun startPlayback(playerView: PlayerView, image: ImageView, play: ImageView, asset: MediaAsset) {
+        stopPlayback()
+        val p = ExoPlayer.Builder(this).build()
+        playerView.player = p
+        playerView.visibility = View.VISIBLE
+        image.visibility = View.GONE
+        play.visibility = View.GONE
+        p.setMediaItem(MediaItem.fromUri(asset.uri))
+        p.prepare()
+        p.playWhenReady = true
+        player = p
+        activePlayerView = playerView
+        activeImage = image
+        activePlay = play
+    }
+
+    private fun stopPlayback() {
+        player?.release()
+        player = null
+        activePlayerView?.let { it.player = null; it.visibility = View.GONE }
+        activeImage?.visibility = View.VISIBLE
+        activePlay?.visibility = View.VISIBLE
+        activePlayerView = null
+        activeImage = null
+        activePlay = null
+    }
+
+    override fun onPause() {
+        super.onPause()
+        player?.pause()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopPlayback()
     }
 
     private inner class PageAdapter : RecyclerView.Adapter<PageAdapter.PageHolder>() {
@@ -107,6 +150,7 @@ class ViewerActivity : AppCompatActivity() {
         inner class PageHolder(view: View) : RecyclerView.ViewHolder(view) {
             val image: ImageView = view.findViewById(R.id.pageImage)
             val play: ImageView = view.findViewById(R.id.pagePlay)
+            val playerView: PlayerView = view.findViewById(R.id.playerView)
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = PageHolder(
@@ -119,9 +163,13 @@ class ViewerActivity : AppCompatActivity() {
             val asset = assets[position]
             holder.image.tag = asset.id
             holder.image.setImageDrawable(null)
+            // reset any recycled player state
+            holder.playerView.player = null
+            holder.playerView.visibility = View.GONE
+            holder.image.visibility = View.VISIBLE
             holder.play.visibility = if (asset.isVideo) View.VISIBLE else View.GONE
             holder.image.setOnClickListener { togglePanel() }
-            holder.play.setOnClickListener { playVideo(asset) }
+            holder.play.setOnClickListener { startPlayback(holder.playerView, holder.image, holder.play, asset) }
 
             decoder.execute {
                 val bitmap = if (asset.isVideo) {
