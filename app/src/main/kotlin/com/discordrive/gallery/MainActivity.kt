@@ -191,7 +191,7 @@ class MainActivity : SessionActivity() {
                 val ai = AiVisionClient(Settings.aiUrl(this), Settings.aiKey(this), Settings.aiModel(this))
                 val runner = SyncRunner(this, client, filesKey)
                 val limit = Settings.aiLimit(this)
-                val result = runner.aiScan(ai, Settings.aiModel(this), bucket, limit) { p ->
+                val result = runner.aiScan(ai, Settings.aiModel(this), bucket, limit, concurrency = Settings.aiConcurrency(this)) { p ->
                     val limitInfo = if (limit > 0) " (limit $limit)" else ""
                     setWorking("AI ${p.done}/${p.total}$limitInfo · ${p.analyzed} nowych · ${p.failed} błędów\n${p.detail}")
                 }

@@ -47,7 +47,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
 
             if (Settings.aiAutoAfterSync(ctx) && Settings.aiConfigured(ctx)) {
                 val ai = AiVisionClient(Settings.aiUrl(ctx), Settings.aiKey(ctx), Settings.aiModel(ctx))
-                val aiResult = runner.aiScan(ai, Settings.aiModel(ctx), bucketFilter = null, limit = Settings.aiLimit(ctx)) {}
+                val aiResult = runner.aiScan(ai, Settings.aiModel(ctx), bucketFilter = null, limit = Settings.aiLimit(ctx), concurrency = Settings.aiConcurrency(ctx)) {}
                 AppLog.i("SyncWorker", "bg ai: ${aiResult.analyzed} analyzed, ${aiResult.failed} failed")
             }
             Result.success()

@@ -106,6 +106,7 @@
     <string name="settings_bg_wifi">Tylko przez Wi-Fi</string>
     <string name="settings_bg_charging">Tylko podczas ładowania</string>
     <string name="settings_ai_limit">Limit analiz w jednym przebiegu (0 = bez limitu)</string>
+    <string name="settings_ai_concurrency">Równoległe zapytania AI (np. 2 dla 2 kont)</string>
 
     <!-- File actions / trash -->
     <string name="action_move_to_album">Przenieś do albumu…</string>

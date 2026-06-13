@@ -161,13 +161,16 @@ class SyncRunner(
      * @param bucketFilter analyze only this album (null = whole library)
      * @param limit max NEW analyses this run (0 = unlimited) — for rate-limited
      *   gateways (e.g. OpenRouter free: 20/min, 2000/day)
-     * Calls are spaced ~3.2s apart (≤19/min) and 429s wait + retry once.
+     * @param concurrency parallel AI requests (default 1). Each worker self-spaces
+     *   its calls ~3.2s apart (≤19/min), so a gateway fronting N accounts can use
+     *   concurrency=N for ~N×19/min. 429s wait + retry once.
      */
     fun aiScan(
         ai: AiVisionClient,
         model: String,
         bucketFilter: String? = null,
         limit: Int = 0,
+        concurrency: Int = 1,
         onProgress: (Progress) -> Unit,
     ): Progress {
         val assets = scanner.scanAll().filter { bucketFilter == null || it.bucketName == bucketFilter }
@@ -177,52 +180,82 @@ class SyncRunner(
         // per-album context hints for the AI prompt (fetched once per bucket)
         val albumHints = assets.map { it.bucketName }.toSet()
             .associateWith { AlbumDescriptions.load(client, filesKey, it) }
-        var analyzed = 0
-        var skipped = 0
-        var failed = 0
-        var lastCallAtMs = 0L
 
-        for ((index, asset) in assets.withIndex()) {
-            if (limit > 0 && analyzed >= limit) break
-            onProgress(Progress("ai", index, assets.size, asset.displayName, analyzed = analyzed, skipped = skipped, failed = failed))
-            try {
-                val fileId = db.fileIdFor(asset) ?: run { skipped++; null } ?: continue
-                if (db.enrichmentFor(fileId) != null) { skipped++; continue }
-                val file = remoteFiles[fileId] ?: run { skipped++; null } ?: continue
+        val total = assets.size
+        val analyzed = AtomicInteger(0)
+        val skipped = AtomicInteger(0)
+        val failed = AtomicInteger(0)
+        val done = AtomicInteger(0)
+        val reserved = AtomicInteger(0) // NEW-analysis slots claimed against [limit]
+        val cursor = AtomicInteger(0)
+        val stop = AtomicBoolean(false)
 
-                // remote may already have it (other device) — cache locally
-                val remote = enrichment.loadEnrichment(file, filesKey)
-                if (remote != null) {
-                    db.rememberEnrichment(fileId, remote)
-                    skipped++
-                    continue
-                }
+        fun report(detail: String) = onProgress(
+            Progress("ai", done.get(), total, detail, analyzed = analyzed.get(), skipped = skipped.get(), failed = failed.get()),
+        )
 
-                // throttle to stay under 20 req/min gateways
-                val sinceLast = System.currentTimeMillis() - lastCallAtMs
-                if (sinceLast < AI_CALL_SPACING_MS) Thread.sleep(AI_CALL_SPACING_MS - sinceLast)
+        val workerCount = concurrency.coerceIn(1, 8)
+        val pool = Executors.newFixedThreadPool(workerCount)
+        val worker = Callable {
+            var lastCallAtMs = 0L
+            while (!stop.get()) {
+                val i = cursor.getAndIncrement()
+                if (i >= assets.size) break
+                val asset = assets[i]
+                try {
+                    val fileId = db.fileIdFor(asset)
+                    if (fileId == null || db.enrichmentFor(fileId) != null) { skipped.incrementAndGet(); continue }
+                    val file = remoteFiles[fileId] ?: run { skipped.incrementAndGet(); null } ?: continue
 
-                val hint = albumHints[asset.bucketName]
-                lastCallAtMs = System.currentTimeMillis()
-                val vision = try {
-                    runVision(ai, asset, hint)
-                } catch (rateLimit: AiRateLimitException) {
-                    Thread.sleep(rateLimit.retryAfterSeconds.coerceAtMost(120) * 1000)
+                    // remote may already have it (other device) — cache locally
+                    val remote = enrichment.loadEnrichment(file, filesKey)
+                    if (remote != null) {
+                        db.rememberEnrichment(fileId, remote)
+                        skipped.incrementAndGet()
+                        continue
+                    }
+
+                    // claim a slot against the per-run limit (counts each API attempt)
+                    if (limit > 0 && reserved.incrementAndGet() > limit) {
+                        reserved.decrementAndGet()
+                        stop.set(true)
+                        break
+                    }
+
+                    // per-worker throttle (≤19/min each → ~workerCount×19/min total)
+                    val sinceLast = System.currentTimeMillis() - lastCallAtMs
+                    if (sinceLast < AI_CALL_SPACING_MS) Thread.sleep(AI_CALL_SPACING_MS - sinceLast)
+
+                    val hint = albumHints[asset.bucketName]
                     lastCallAtMs = System.currentTimeMillis()
-                    runVision(ai, asset, hint)
+                    val vision = try {
+                        runVision(ai, asset, hint)
+                    } catch (rateLimit: AiRateLimitException) {
+                        Thread.sleep(rateLimit.retryAfterSeconds.coerceAtMost(120) * 1000)
+                        lastCallAtMs = System.currentTimeMillis()
+                        runVision(ai, asset, hint)
+                    }
+                    val record = enrichment.buildRecord(vision, model)
+                    enrichment.saveEnrichment(fileId, file.wrappedFEK, filesKey, record)
+                    db.rememberEnrichment(fileId, record)
+                    analyzed.incrementAndGet()
+                } catch (e: Exception) {
+                    failed.incrementAndGet()
+                    AppLog.w("SyncRunner", "AI failed for ${asset.displayName}", e)
+                } finally {
+                    done.incrementAndGet()
+                    report(asset.displayName)
                 }
-                val record = enrichment.buildRecord(vision, model)
-                enrichment.saveEnrichment(fileId, file.wrappedFEK, filesKey, record)
-                db.rememberEnrichment(fileId, record)
-                analyzed++
-            } catch (e: Exception) {
-                failed++
-                AppLog.w("SyncRunner", "AI failed for ${asset.displayName}", e)
             }
         }
+        try {
+            pool.invokeAll(List(workerCount) { worker })
+        } finally {
+            pool.shutdownNow()
+        }
 
-        AppLog.i("SyncRunner", "ai done: $analyzed analyzed, $skipped skipped, $failed failed")
-        return Progress("ai", assets.size, assets.size, "done", analyzed = analyzed, skipped = skipped, failed = failed)
+        AppLog.i("SyncRunner", "ai done: ${analyzed.get()} analyzed, ${skipped.get()} skipped, ${failed.get()} failed (x$workerCount)")
+        return Progress("ai", total, total, "done", analyzed = analyzed.get(), skipped = skipped.get(), failed = failed.get())
     }
 
     /**

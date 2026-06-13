@@ -37,6 +37,7 @@ class SettingsActivity : SessionActivity() {
         val aiKey = findViewById<EditText>(R.id.aiKeyInput)
         val aiModel = findViewById<EditText>(R.id.aiModelInput)
         val aiLimit = findViewById<EditText>(R.id.aiLimitInput)
+        val aiConcurrency = findViewById<EditText>(R.id.aiConcurrencyInput)
         val aiAuto = findViewById<MaterialSwitch>(R.id.aiAutoSwitch)
         val bgSync = findViewById<MaterialSwitch>(R.id.bgSyncSwitch)
         val bgWifi = findViewById<MaterialSwitch>(R.id.bgWifiSwitch)
@@ -47,6 +48,7 @@ class SettingsActivity : SessionActivity() {
         aiKey.setText(Settings.aiKey(this))
         aiModel.setText(Settings.aiModel(this))
         aiLimit.setText(Settings.aiLimit(this).toString())
+        aiConcurrency.setText(Settings.aiConcurrency(this).toString())
         aiAuto.isChecked = Settings.aiAutoAfterSync(this)
         bgSync.isChecked = Settings.bgSyncEnabled(this)
         bgWifi.isChecked = Settings.bgWifiOnly(this)
@@ -61,6 +63,7 @@ class SettingsActivity : SessionActivity() {
                 aiModel = aiModel.text.toString(),
                 aiAuto = aiAuto.isChecked,
                 aiLimit = aiLimit.text.toString().toIntOrNull() ?: 50,
+                aiConcurrency = aiConcurrency.text.toString().toIntOrNull() ?: 1,
                 bgSync = bgSync.isChecked,
                 bgWifiOnly = bgWifi.isChecked,
                 bgChargingOnly = bgCharging.isChecked,

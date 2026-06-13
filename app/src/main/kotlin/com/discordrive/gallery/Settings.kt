@@ -23,6 +23,9 @@ object Settings {
     /** Max analyses per run (rate-limited gateways); 0 = unlimited. */
     fun aiLimit(context: Context): Int = prefs(context).getInt("aiLimit", 50)
 
+    /** Parallel AI requests (e.g. a gateway fronting N OpenRouter accounts → N). */
+    fun aiConcurrency(context: Context): Int = prefs(context).getInt("aiConcurrency", 1).coerceIn(1, 8)
+
     fun aiConfigured(context: Context): Boolean = aiUrl(context).isNotBlank() && aiModel(context).isNotBlank()
 
     fun bgSyncEnabled(context: Context): Boolean = prefs(context).getBoolean("bgSync", false)
@@ -37,6 +40,7 @@ object Settings {
         aiModel: String,
         aiAuto: Boolean,
         aiLimit: Int,
+        aiConcurrency: Int,
         bgSync: Boolean,
         bgWifiOnly: Boolean,
         bgChargingOnly: Boolean,
@@ -47,6 +51,7 @@ object Settings {
             .putString("aiModel", aiModel.trim())
             .putBoolean("aiAuto", aiAuto)
             .putInt("aiLimit", aiLimit.coerceIn(0, 10_000))
+            .putInt("aiConcurrency", aiConcurrency.coerceIn(1, 8))
             .putBoolean("bgSync", bgSync)
             .putBoolean("bgWifiOnly", bgWifiOnly)
             .putBoolean("bgChargingOnly", bgChargingOnly)
@@ -64,6 +69,7 @@ object Settings {
         put("aiKey", aiKey(context))
         put("aiAuto", aiAutoAfterSync(context))
         put("aiLimit", aiLimit(context))
+        put("aiConcurrency", aiConcurrency(context))
         put("bgSync", bgSyncEnabled(context))
         put("bgWifiOnly", bgWifiOnly(context))
         put("bgChargingOnly", bgChargingOnly(context))
@@ -80,6 +86,7 @@ object Settings {
             aiModel = o.optString("aiModel", aiModel(context)),
             aiAuto = o.optBoolean("aiAuto", aiAutoAfterSync(context)),
             aiLimit = o.optInt("aiLimit", aiLimit(context)),
+            aiConcurrency = o.optInt("aiConcurrency", aiConcurrency(context)),
             bgSync = o.optBoolean("bgSync", bgSyncEnabled(context)),
             bgWifiOnly = o.optBoolean("bgWifiOnly", bgWifiOnly(context)),
             bgChargingOnly = o.optBoolean("bgChargingOnly", bgChargingOnly(context)),
