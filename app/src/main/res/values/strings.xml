@@ -128,6 +128,8 @@
     <string name="settings_diag_hint">Aplikacja zapisuje logi (w tym crashe) do pliku na urządzeniu. Wysyłka na serwer jest szyfrowana end-to-end Twoim kluczem.</string>
     <string name="diag_copy">Kopiuj logi</string>
     <string name="diag_send">Wyślij logi na serwer</string>
+    <string name="diag_clear">Wyczyść logi</string>
+    <string name="diag_cleared">Logi wyczyszczone</string>
     <string name="diag_copied">Skopiowano logi do schowka</string>
     <string name="diag_sent">Wysłano logi (%s)</string>
     <string name="diag_empty">Brak logów</string>

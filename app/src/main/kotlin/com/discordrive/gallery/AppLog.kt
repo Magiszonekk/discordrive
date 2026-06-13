@@ -65,6 +65,13 @@ object AppLog {
     @Synchronized
     fun sizeBytes(): Long = (logFile?.length() ?: 0) + (rotatedFile?.length() ?: 0)
 
+    /** Wipes the log files so the next "send logs" only carries fresh entries. */
+    @Synchronized
+    fun clear() {
+        runCatching { logFile?.delete() }
+        runCatching { rotatedFile?.delete() }
+    }
+
     private fun stackTraceOf(error: Throwable): String =
         StringWriter().also { error.printStackTrace(PrintWriter(it)) }.toString().trimEnd()
 }

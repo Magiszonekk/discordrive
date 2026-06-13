@@ -79,6 +79,7 @@ class SettingsActivity : SessionActivity() {
 
         findViewById<Button>(R.id.copyLogsButton).setOnClickListener { copyLogs() }
         findViewById<Button>(R.id.sendLogsButton).setOnClickListener { sendLogs() }
+        findViewById<Button>(R.id.clearLogsButton).setOnClickListener { clearLogs() }
         findViewById<Button>(R.id.clearAiButton).setOnClickListener { confirmClearAllAnalyses() }
 
         findViewById<Button>(R.id.logoutButton).setOnClickListener {
@@ -123,6 +124,11 @@ class SettingsActivity : SessionActivity() {
         val clipboard = getSystemService(android.content.ClipboardManager::class.java)
         clipboard.setPrimaryClip(android.content.ClipData.newPlainText("DiscorDrive Gallery logs", text))
         Snackbar.make(findViewById(R.id.settingsRoot), R.string.diag_copied, Snackbar.LENGTH_SHORT).show()
+    }
+
+    private fun clearLogs() {
+        AppLog.clear()
+        Snackbar.make(findViewById(R.id.settingsRoot), R.string.diag_cleared, Snackbar.LENGTH_SHORT).show()
     }
 
     /** E2EE log upload: encrypted with the filesKey, stored as gallery state `log:<timestamp>`. */
