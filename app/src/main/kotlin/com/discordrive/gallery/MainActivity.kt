@@ -7,7 +7,6 @@ import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.GridLayoutManager
@@ -19,7 +18,7 @@ import com.google.android.material.snackbar.Snackbar
 import kotlin.concurrent.thread
 
 /** Albums overview — buckets mirrored as collections, like a stock gallery. */
-class MainActivity : AppCompatActivity() {
+class MainActivity : SessionActivity() {
 
     private lateinit var adapter: AlbumAdapter
     private lateinit var progress: LinearProgressIndicator
@@ -29,11 +28,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (!SessionManager.isLoggedIn) {
-            startActivity(Intent(this, LoginActivity::class.java))
-            finish()
-            return
-        }
+        // No login gate: the gallery opens straight into local media (works
+        // offline). A session is only requested when a cloud action needs it.
 
         setContentView(R.layout.activity_main)
         Insets.apply(findViewById(R.id.mainRoot), bottom = false)
@@ -42,11 +38,11 @@ class MainActivity : AppCompatActivity() {
         toolbar.inflateMenu(R.menu.menu_main)
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
-                R.id.action_search -> startActivity(Intent(this, SearchActivity::class.java))
+                R.id.action_search -> requireSession { startActivity(Intent(this, SearchActivity::class.java)) }
                 R.id.action_sync -> runSync()
                 R.id.action_ai -> runAiScan(bucket = null)
                 R.id.action_settings -> startActivity(Intent(this, SettingsActivity::class.java))
-                R.id.action_trash -> startActivity(Intent(this, TrashActivity::class.java))
+                R.id.action_trash -> requireSession { startActivity(Intent(this, TrashActivity::class.java)) }
             }
             true
         }
@@ -66,11 +62,13 @@ class MainActivity : AppCompatActivity() {
 
         ensureMediaPermission()
         SyncWorker.applySchedule(this)
+        tryRestoreQuietly() // background auto-login; UI works regardless
     }
 
     override fun onResume() {
         super.onResume()
-        if (SessionManager.isLoggedIn) refreshAlbums()
+        refreshAlbums()
+        tryRestoreQuietly() // periodic best-effort re-login
     }
 
     private fun ensureMediaPermission() {
@@ -117,10 +115,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun runSync() {
-        if (working) return
-        val client = SessionManager.client ?: return
-        val filesKey = SessionManager.filesKey ?: return
+    private fun runSync() = requireSession {
+        if (working) return@requireSession
+        val client = SessionManager.client ?: return@requireSession
+        val filesKey = SessionManager.filesKey ?: return@requireSession
         setWorking(getString(R.string.action_sync) + "…")
 
         thread {
@@ -147,15 +145,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun runAiScan(bucket: String?) {
-        if (working) return
-        val client = SessionManager.client ?: return
-        val filesKey = SessionManager.filesKey ?: return
+    private fun runAiScan(bucket: String?) = requireSession {
+        if (working) return@requireSession
+        val client = SessionManager.client ?: return@requireSession
+        val filesKey = SessionManager.filesKey ?: return@requireSession
         if (!Settings.aiConfigured(this)) {
             Snackbar.make(findViewById(R.id.mainRoot), "Skonfiguruj AI w ustawieniach", Snackbar.LENGTH_LONG)
                 .setAction(R.string.action_settings) { startActivity(Intent(this, SettingsActivity::class.java)) }
                 .show()
-            return
+            return@requireSession
         }
         setWorking(getString(R.string.action_ai) + "…")
 

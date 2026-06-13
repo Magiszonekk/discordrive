@@ -5,12 +5,12 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.snackbar.Snackbar
 
-class SettingsActivity : AppCompatActivity() {
+class SettingsActivity : SessionActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,14 +57,37 @@ class SettingsActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.copyLogsButton).setOnClickListener { copyLogs() }
         findViewById<Button>(R.id.sendLogsButton).setOnClickListener { sendLogs() }
+        findViewById<Button>(R.id.clearAiButton).setOnClickListener { confirmClearAllAnalyses() }
 
         findViewById<Button>(R.id.logoutButton).setOnClickListener {
             SessionManager.logout(this)
-            startActivity(Intent(this, LoginActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK))
+            // Offline-first: drop back into the local gallery, don't force login.
+            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK))
         }
 
         findViewById<TextView>(R.id.versionInfo).text =
             "DiscorDrive Gallery v${packageManager.getPackageInfo(packageName, 0).versionName}"
+    }
+
+    /** Deletes every AI analysis (cloud enrichment blobs + local cache). */
+    private fun confirmClearAllAnalyses() = requireSession {
+        val client = SessionManager.client ?: return@requireSession
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.settings_clear_ai)
+            .setMessage(R.string.settings_clear_ai_confirm)
+            .setPositiveButton(R.string.action_delete_cloud) { _, _ ->
+                kotlin.concurrent.thread {
+                    val deleted = runCatching { client.deleteEnrichments(null) }
+                        .onFailure { AppLog.w("Settings", "clear all AI failed", it) }
+                        .getOrDefault(0)
+                    AppDb(this).clearAllEnrichments()
+                    runOnUiThread {
+                        Snackbar.make(findViewById(R.id.settingsRoot), getString(R.string.ai_cleared, deleted), Snackbar.LENGTH_LONG).show()
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     // === Diagnostics ===

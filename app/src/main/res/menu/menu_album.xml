@@ -4,4 +4,6 @@
         android:icon="@drawable/ic_ai" app:showAsAction="always"/>
     <item android:id="@+id/action_album_desc" android:title="@string/album_desc_action"
         app:showAsAction="never"/>
+    <item android:id="@+id/action_album_clear_ai" android:title="@string/album_clear_ai_action"
+        app:showAsAction="never"/>
 </menu>

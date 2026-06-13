@@ -113,6 +113,22 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "gallery.db", null, 2)
             buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) }
         }
 
+    /** File ids that have a cached enrichment AND are mapped to the given bucket. */
+    fun enrichedFileIdsInBucket(bucket: String): Set<String> =
+        readableDatabase.rawQuery(
+            "SELECT e.file_id FROM enrichment e JOIN asset_map a ON a.file_id = e.file_id WHERE a.bucket = ?",
+            arrayOf(bucket),
+        ).use { cursor -> buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+
+    /** Removes one file's cached enrichment (keeps its asset_map mapping). */
+    fun forgetEnrichment(fileId: String) {
+        writableDatabase.delete("enrichment", "file_id = ?", arrayOf(fileId))
+    }
+
+    fun clearAllEnrichments() {
+        writableDatabase.delete("enrichment", null, null)
+    }
+
     fun allEnrichments(): Map<String, EnrichmentRecord> =
         readableDatabase.rawQuery("SELECT file_id, record_json FROM enrichment", null).use { cursor ->
             buildMap {

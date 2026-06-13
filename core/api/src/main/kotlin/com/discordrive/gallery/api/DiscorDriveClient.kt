@@ -3,6 +3,7 @@ package com.discordrive.gallery.api
 import com.discordrive.gallery.crypto.Argon2Params
 import com.discordrive.gallery.crypto.DdvCrypto
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -192,6 +193,27 @@ class DiscorDriveClient(
             },
         )
         return json.decodeFromJsonElement(GalleryStateDto.serializer(), data.getValue("setGalleryState"))
+    }
+
+    /**
+     * Deletes AI enrichment blobs. [fileIds] = specific files; null/empty =
+     * the whole library. Returns how many enrichment blobs were removed.
+     */
+    fun deleteEnrichments(fileIds: List<String>?): Int {
+        val data = graphql.execute(
+            """
+            mutation DeleteEnrichments(${'$'}fileIds: [String!]) {
+              deleteEnrichments(fileIds: ${'$'}fileIds)
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                put(
+                    "fileIds",
+                    if (fileIds == null) JsonNull else JsonArray(fileIds.map { JsonPrimitive(it) }),
+                )
+            },
+        )
+        return data.getValue("deleteEnrichments").jsonPrimitive.content.toInt()
     }
 
     // === Files & folders ===

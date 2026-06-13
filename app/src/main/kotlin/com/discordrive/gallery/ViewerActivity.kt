@@ -8,7 +8,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
@@ -16,6 +15,7 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
+import com.google.android.material.snackbar.Snackbar
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 
@@ -25,15 +25,17 @@ import kotlin.concurrent.thread
  * play button; tapping play streams the file inline via ExoPlayer (no external
  * app). Tap toggles the info panel (name + AI description/tags).
  */
-class ViewerActivity : AppCompatActivity() {
+class ViewerActivity : SessionActivity() {
 
     private var panelVisible = true
     private var assets: List<MediaAsset> = emptyList()
+    private var shownAsset: MediaAsset? = null
 
     private lateinit var infoPanel: View
     private lateinit var nameView: TextView
     private lateinit var descriptionView: TextView
     private lateinit var chips: ChipGroup
+    private lateinit var clearAiButton: View
 
     // Single inline player, attached to whichever video page is playing.
     private var player: ExoPlayer? = null
@@ -52,6 +54,8 @@ class ViewerActivity : AppCompatActivity() {
         nameView = findViewById(R.id.fileName)
         descriptionView = findViewById(R.id.description)
         chips = findViewById(R.id.tagChips)
+        clearAiButton = findViewById(R.id.clearAiButton)
+        clearAiButton.setOnClickListener { deleteCurrentAnalysis() }
 
         thread {
             val all = MediaScanner(this).scanAll()
@@ -79,22 +83,50 @@ class ViewerActivity : AppCompatActivity() {
     }
 
     private fun showInfo(asset: MediaAsset) {
+        shownAsset = asset
         nameView.text = asset.displayName
         descriptionView.text = ""
         chips.removeAllViews()
+        clearAiButton.visibility = View.GONE
         thread {
             val db = AppDb(this)
             val record = db.fileIdFor(asset)?.let { db.enrichmentFor(it) }
             runOnUiThread {
-                if (nameView.text != asset.displayName) return@runOnUiThread // already swiped on
+                if (shownAsset?.id != asset.id) return@runOnUiThread // already swiped on
                 if (record != null) {
                     descriptionView.text = record.description
                     chips.removeAllViews()
                     record.tags.take(10).forEach { tag ->
                         chips.addView(Chip(this).apply { text = tag; isClickable = false })
                     }
+                    clearAiButton.visibility = View.VISIBLE
                 } else {
                     descriptionView.text = getString(R.string.viewer_no_enrichment)
+                }
+            }
+        }
+    }
+
+    /** Deletes this photo's AI analysis (cloud blob + local cache). */
+    private fun deleteCurrentAnalysis() {
+        val asset = shownAsset ?: return
+        requireSession {
+            val client = SessionManager.client ?: return@requireSession
+            clearAiButton.visibility = View.GONE
+            thread {
+                val db = AppDb(this)
+                val fileId = db.fileIdFor(asset)
+                if (fileId != null) {
+                    runCatching { client.deleteEnrichments(listOf(fileId)) }
+                        .onFailure { AppLog.w("Viewer", "delete analysis failed", it) }
+                    db.forgetEnrichment(fileId)
+                }
+                runOnUiThread {
+                    if (shownAsset?.id == asset.id) {
+                        descriptionView.text = getString(R.string.viewer_no_enrichment)
+                        chips.removeAllViews()
+                    }
+                    Snackbar.make(findViewById(R.id.viewerRoot), getString(R.string.ai_cleared, 1), Snackbar.LENGTH_SHORT).show()
                 }
             }
         }

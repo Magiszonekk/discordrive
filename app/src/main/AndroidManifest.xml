@@ -19,7 +19,7 @@
         android:theme="@style/Theme.Gallery">
 
         <activity
-            android:name=".LoginActivity"
+            android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -27,7 +27,7 @@
             </intent-filter>
         </activity>
 
-        <activity android:name=".MainActivity" android:exported="false" />
+        <activity android:name=".LoginActivity" android:exported="false" />
         <activity android:name=".AlbumActivity" android:exported="false" />
         <activity android:name=".TrashActivity" android:exported="false" />
         <activity android:name=".SearchActivity" android:exported="false" />

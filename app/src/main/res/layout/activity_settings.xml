@@ -219,6 +219,38 @@
                     android:text="@string/diag_send"/>
             </LinearLayout>
 
+            <!-- Analizy AI -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="@color/text_dim"
+                android:alpha="0.2"
+                android:layout_marginVertical="20dp"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_clear_ai"
+                android:textColor="@color/accent"
+                android:textSize="14sp"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="@string/settings_clear_ai_summary"
+                android:textColor="@color/text_dim"
+                android:textSize="12sp"/>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/clearAiButton"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/settings_clear_ai"/>
+
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/saveButton"
                 android:layout_width="match_parent"

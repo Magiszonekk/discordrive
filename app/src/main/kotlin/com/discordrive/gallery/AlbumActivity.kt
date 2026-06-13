@@ -6,7 +6,6 @@ import android.os.Bundle
 import android.view.View
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
-import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.discordrive.gallery.api.AiVisionClient
@@ -24,7 +23,7 @@ import kotlin.concurrent.thread
  * contextual action bar with batch actions (trash model — no hard delete
  * outside "delete everywhere").
  */
-class AlbumActivity : AppCompatActivity() {
+class AlbumActivity : SessionActivity() {
 
     private lateinit var bucket: String
     private lateinit var toolbar: MaterialToolbar
@@ -54,11 +53,12 @@ class AlbumActivity : AppCompatActivity() {
         toolbar.inflateMenu(R.menu.menu_album)
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
-                R.id.action_ai_album -> runAlbumAi()
-                R.id.action_album_desc -> editAlbumDescription()
-                R.id.action_sel_move -> pickMoveTargetForSelection()
-                R.id.action_sel_delete_cloud -> confirmTrashSelection(alsoLocal = false)
-                R.id.action_sel_delete_everywhere -> confirmTrashSelection(alsoLocal = true)
+                R.id.action_ai_album -> requireSession { runAlbumAi() }
+                R.id.action_album_desc -> requireSession { editAlbumDescription() }
+                R.id.action_album_clear_ai -> requireSession { confirmClearAlbumAnalyses() }
+                R.id.action_sel_move -> requireSession { pickMoveTargetForSelection() }
+                R.id.action_sel_delete_cloud -> requireSession { confirmTrashSelection(alsoLocal = false) }
+                R.id.action_sel_delete_everywhere -> requireSession { confirmTrashSelection(alsoLocal = true) }
                 R.id.action_sel_delete_local -> deleteLocalBatch(selectedAssets())
             }
             true
@@ -380,6 +380,31 @@ class AlbumActivity : AppCompatActivity() {
 
     private companion object {
         const val REQUEST_DELETE_LOCAL = 42
+    }
+
+    /** Deletes all AI analyses for files in this album (cloud + local cache). */
+    private fun confirmClearAlbumAnalyses() {
+        val client = SessionManager.client ?: return
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.album_clear_ai_action)
+            .setMessage(getString(R.string.album_clear_ai_confirm, bucket))
+            .setPositiveButton(R.string.action_delete_cloud) { _, _ ->
+                setWorking("${getString(R.string.album_clear_ai_action)}…")
+                thread {
+                    val db = AppDb(this)
+                    val fileIds = db.enrichedFileIdsInBucket(bucket).toList()
+                    val deleted = runCatching {
+                        if (fileIds.isNotEmpty()) client.deleteEnrichments(fileIds) else 0
+                    }.onFailure { AppLog.w("Album", "clear album AI failed", it) }.getOrDefault(0)
+                    fileIds.forEach { db.forgetEnrichment(it) }
+                    setWorking(null)
+                    runOnUiThread {
+                        Snackbar.make(findViewById(R.id.albumRoot), getString(R.string.ai_cleared, deleted), Snackbar.LENGTH_LONG).show()
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun runAlbumAi() {

@@ -54,6 +54,13 @@
     <string name="album_desc_hint">np. zapisane z Pinteresta, najczęściej memy</string>
     <string name="album_desc_help">Używane jako dodatkowy kontekst przy analizie AI zdjęć z tego albumu.</string>
     <string name="album_desc_saved">Zapisano opis albumu</string>
+    <string name="album_clear_ai_action">Usuń analizy AI z albumu</string>
+    <string name="album_clear_ai_confirm">Usunąć wszystkie analizy AI (tagi i opisy) zdjęć z albumu „%1$s”? Zdjęcia i tak zostają.</string>
+    <string name="ai_cleared">Usunięto analiz AI: %1$d</string>
+    <string name="settings_clear_ai">Usuń wszystkie analizy AI</string>
+    <string name="settings_clear_ai_summary">Kasuje tagi i opisy AI wszystkich zdjęć (w chmurze i lokalnie). Same zdjęcia zostają.</string>
+    <string name="settings_clear_ai_confirm">Usunąć analizy AI WSZYSTKICH zdjęć? Tej operacji nie można cofnąć — trzeba będzie przeanalizować ponownie.</string>
+    <string name="viewer_clear_ai">Usuń analizę AI</string>
 
     <!-- Background sync -->
     <string name="settings_bg">Synchronizacja w tle</string>

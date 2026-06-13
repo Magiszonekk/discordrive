@@ -40,5 +40,17 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"/>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/clearAiButton"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:minHeight="0dp"
+            android:paddingHorizontal="4dp"
+            android:text="@string/viewer_clear_ai"
+            android:textColor="@color/accent"
+            android:visibility="gone"/>
     </LinearLayout>
 </FrameLayout>
