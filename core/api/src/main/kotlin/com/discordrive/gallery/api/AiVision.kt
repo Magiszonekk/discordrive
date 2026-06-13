@@ -107,7 +107,7 @@ class AiVisionClient(
 
     private fun buildBody(promptText: String, imageDataUrls: List<String>): JsonObject = buildJsonObject {
         put("model", model)
-        put("max_tokens", 500)
+        put("max_tokens", 1024)
         put(
             "messages",
             buildJsonArray {
@@ -162,15 +162,40 @@ class AiVisionClient(
         const val FRAMES_PER_REQUEST = 4
     }
 
-    /** Tolerates markdown fences and stray prose around the JSON object. */
+    /**
+     * Tolerates markdown fences/prose AND truncated responses: a verbose model
+     * can hit max_tokens mid-JSON (no closing brace), so we fall back to pulling
+     * the description + any complete tags out of the partial text instead of
+     * failing the whole analysis.
+     */
     internal fun parseVisionJson(content: String): VisionResult {
+        // 1) happy path — a complete {...} object
         val start = content.indexOf('{')
-        val end = content.lastIndexOf('}')
-        require(start >= 0 && end > start) { "AI response contains no JSON object: ${content.take(200)}" }
-        val obj = json.parseToJsonElement(content.substring(start, end + 1)).jsonObject
-        return VisionResult(
-            description = obj["description"]?.jsonPrimitive?.content ?: "",
-            tags = obj["tags"]?.jsonArray?.mapNotNull { (it as? JsonPrimitive)?.content?.lowercase() } ?: emptyList(),
-        )
+        if (start >= 0) {
+            val end = content.lastIndexOf('}')
+            if (end > start) {
+                runCatching {
+                    val obj = json.parseToJsonElement(content.substring(start, end + 1)).jsonObject
+                    return VisionResult(
+                        description = obj["description"]?.jsonPrimitive?.content ?: "",
+                        tags = obj["tags"]?.jsonArray?.mapNotNull { (it as? JsonPrimitive)?.content?.lowercase() } ?: emptyList(),
+                    )
+                }
+            }
+        }
+
+        // 2) salvage a truncated / malformed response
+        val description = Regex("\"description\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)")
+            .find(content)?.groupValues?.get(1)
+            ?.replace("\\\"", "\"")?.replace("\\n", " ")?.trim()
+            .orEmpty()
+        val tagsBlock = content.substringAfter("\"tags\"", "").substringAfter('[', "").substringBefore(']')
+        val tags = Regex("\"((?:[^\"\\\\]|\\\\.)+)\"").findAll(tagsBlock)
+            .map { it.groupValues[1].lowercase() }.toList()
+
+        require(description.isNotBlank() || tags.isNotEmpty()) {
+            "AI response contains no JSON object: ${content.take(200)}"
+        }
+        return VisionResult(description, tags)
     }
 }

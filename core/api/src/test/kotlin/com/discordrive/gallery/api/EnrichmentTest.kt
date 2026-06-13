@@ -31,6 +31,23 @@ class AiVisionParseTest {
         assertEquals("Zrzut ekranu", result.description)
         assertEquals(listOf("screenshot", "tekst"), result.tags) // lowercased
     }
+
+    @Test
+    fun `salvages a response truncated mid-description`() {
+        // verbose model hit max_tokens — no closing quote/brace, no tags
+        val content = """{"description":"Osoba w cosplayu z długą fioletową peruką robi selfie w lustrze"""
+        val result = client.parseVisionJson(content)
+        assertTrue(result.description.startsWith("Osoba w cosplayu"))
+        assertTrue(result.tags.isEmpty())
+    }
+
+    @Test
+    fun `salvages a response truncated mid-tags keeping complete tags`() {
+        val content = """{"description":"Kot na kanapie","tags":["kot","kanap"""
+        val result = client.parseVisionJson(content)
+        assertEquals("Kot na kanapie", result.description)
+        assertEquals(listOf("kot"), result.tags) // the half-written "kanap…" is dropped
+    }
 }
 
 class EnrichmentEngineTest {
