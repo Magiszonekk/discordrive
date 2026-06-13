@@ -87,6 +87,7 @@ class SyncProgressTracker(private val context: Context) {
     private var lastTimeMs = System.currentTimeMillis()
     private var lastNotifyMs = 0L
 
+    @Synchronized // called from parallel upload workers
     fun onProgress(p: SyncRunner.Progress) {
         val now = System.currentTimeMillis()
         if (now - lastNotifyMs < 1000) return

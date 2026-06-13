@@ -8,6 +8,12 @@ import com.discordrive.gallery.api.EnrichmentEngine
 import com.discordrive.gallery.api.EnrichmentRecord
 import com.discordrive.gallery.api.FolderManager
 import com.discordrive.gallery.api.UploadEngine
+import java.util.concurrent.Callable
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * One sync pass over the device library. Uses the local asset_map so repeat
@@ -41,21 +47,21 @@ class SyncRunner(
 
     fun sync(onProgress: (Progress) -> Unit): Progress = syncAssets(scanner.scanAll(), onProgress)
 
-    /** Syncs only the given assets (a single photo or a multi-selection). */
+    /**
+     * Syncs the given assets, uploading [UPLOAD_CONCURRENCY] files in parallel.
+     * Many small files are latency-bound (each file = a few sequential round
+     * trips + Discord blob writes), so overlapping files is the real speed-up —
+     * the server is built for concurrent uploads (multiple senders + limiter).
+     * Counters are atomic; the per-bucket folder cache serializes folder
+     * creation via computeIfAbsent. Pause + unreachable-abort still apply.
+     */
     fun syncAssets(assets: List<MediaAsset>, onProgress: (Progress) -> Unit): Progress {
-        AppLog.i("SyncRunner", "sync start: ${assets.size} assets (subset)")
-        val folderIds = mutableMapOf<String, String>()
-        var uploaded = 0
-        var deduplicated = 0
-        var skipped = 0
-        var failed = 0
-        var bytesDone = 0L
+        AppLog.i("SyncRunner", "sync start: ${assets.size} assets, concurrency=$UPLOAD_CONCURRENCY")
 
         // Detect stale local mappings — files the local DB marks as synced but
-        // that no longer exist in the cloud (purged, or deleted on another
-        // device). Validate once against the server so they are RE-UPLOADED
-        // instead of silently skipped. On fetch failure (offline) we trust the
-        // local map to avoid a spurious mass re-upload.
+        // that no longer exist in the cloud (purged / deleted elsewhere). Validate
+        // once so they are RE-UPLOADED, not skipped. On fetch failure (offline) we
+        // trust the local map to avoid a spurious mass re-upload.
         val remoteIds: Set<String>? = if (assets.any { db.fileIdFor(it) != null }) {
             runCatching {
                 client.galleryDeltaAll(null).files
@@ -66,71 +72,88 @@ class SyncRunner(
             null
         }
 
-        var consecutiveNetFails = 0
-        for ((index, asset) in assets.withIndex()) {
-            SyncController.awaitIfPaused() // honour notification Pause/Resume
-            onProgress(Progress("sync", index, assets.size, asset.displayName, uploaded, deduplicated, skipped, 0, failed, bytesDone))
-            try {
-                val mappedFileId = db.fileIdFor(asset)
-                val stillInCloud = mappedFileId != null && (remoteIds == null || mappedFileId in remoteIds)
-                if (stillInCloud) {
-                    // drift repair: file moved between buckets locally → mirror in cloud
-                    if (db.mappedBucketFor(asset) != asset.bucketName) {
-                        val folderId = folderIds.getOrPut(asset.bucketName) {
-                            folderManager.ensureFolder(asset.bucketName, parentFolderId = null, filesKey = filesKey)
-                        }
-                        client.moveFile(mappedFileId!!, folderId)
-                        db.rememberMapping(asset, mappedFileId)
-                    }
-                    skipped++
-                    consecutiveNetFails = 0
-                    continue
-                }
-                if (mappedFileId != null) {
-                    // stale mapping (cloud file gone) → drop it and re-upload below
-                    AppLog.w("SyncRunner", "stale mapping: ${asset.displayName} (cloud file $mappedFileId gone) — re-uploading")
-                    db.forgetFile(mappedFileId)
-                }
+        val total = assets.size
+        val uploaded = AtomicInteger(0)
+        val deduplicated = AtomicInteger(0)
+        val skipped = AtomicInteger(0)
+        val failed = AtomicInteger(0)
+        val bytesDone = AtomicLong(0)
+        val done = AtomicInteger(0)
+        val consecutiveNetFails = AtomicInteger(0)
+        val aborted = AtomicBoolean(false)
+        val folderIds = ConcurrentHashMap<String, String>()
 
-                val folderId = folderIds.getOrPut(asset.bucketName) {
-                    folderManager.ensureFolder(asset.bucketName, parentFolderId = null, filesKey = filesKey)
-                }
-                // streaming: dedupe hash + chunked upload without loading the file into memory
-                val outcome = uploadEngine.uploadStream(
-                    open = { scanner.openStream(asset) },
-                    fileName = asset.displayName,
-                    mimeType = asset.mimeType,
-                    parentFolderId = folderId,
-                    filesKey = filesKey,
-                )
-                db.rememberMapping(asset, outcome.fileId)
-                if (outcome.deduplicated) {
-                    deduplicated++
-                } else {
-                    uploaded++
-                    bytesDone += asset.sizeBytes
-                }
-                consecutiveNetFails = 0
-            } catch (e: Throwable) {
-                // Throwable, not Exception: an OutOfMemoryError on one corrupt/huge
-                // file must not kill the whole pass (the pre-0.5.0 crash loop)
-                failed++
-                AppLog.w("SyncRunner", "sync failed for ${asset.displayName} (${asset.sizeBytes} B, ${asset.mimeType})", e)
-                // If the server is unreachable, bail out fast instead of grinding
-                // through thousands of identical DNS failures (slow + log spam).
-                if (isUnreachable(e)) {
-                    if (++consecutiveNetFails >= NET_FAIL_ABORT) {
-                        AppLog.w("SyncRunner", "aborting sync — server unreachable ($consecutiveNetFails consecutive network failures)")
-                        break
+        fun report(detail: String) = onProgress(
+            Progress("sync", done.get(), total, detail, uploaded.get(), deduplicated.get(), skipped.get(), 0, failed.get(), bytesDone.get()),
+        )
+        fun folderFor(bucket: String): String =
+            folderIds.computeIfAbsent(bucket) { folderManager.ensureFolder(it, parentFolderId = null, filesKey = filesKey) }
+
+        val pool = Executors.newFixedThreadPool(UPLOAD_CONCURRENCY)
+        try {
+            val tasks = assets.map { asset ->
+                Callable {
+                    if (aborted.get()) { done.incrementAndGet(); return@Callable }
+                    SyncController.awaitIfPaused() // honour notification Pause/Resume
+                    try {
+                        val mappedFileId = db.fileIdFor(asset)
+                        val stillInCloud = mappedFileId != null && (remoteIds == null || mappedFileId in remoteIds)
+                        if (stillInCloud) {
+                            // drift repair: file moved between buckets locally → mirror in cloud
+                            if (db.mappedBucketFor(asset) != asset.bucketName) {
+                                client.moveFile(mappedFileId!!, folderFor(asset.bucketName))
+                                db.rememberMapping(asset, mappedFileId)
+                            }
+                            skipped.incrementAndGet()
+                            consecutiveNetFails.set(0)
+                            return@Callable
+                        }
+                        if (mappedFileId != null) {
+                            AppLog.w("SyncRunner", "stale mapping: ${asset.displayName} (cloud file $mappedFileId gone) — re-uploading")
+                            db.forgetFile(mappedFileId)
+                        }
+                        val outcome = uploadEngine.uploadStream(
+                            open = { scanner.openStream(asset) },
+                            fileName = asset.displayName,
+                            mimeType = asset.mimeType,
+                            parentFolderId = folderFor(asset.bucketName),
+                            filesKey = filesKey,
+                        )
+                        db.rememberMapping(asset, outcome.fileId)
+                        if (outcome.deduplicated) {
+                            deduplicated.incrementAndGet()
+                        } else {
+                            uploaded.incrementAndGet()
+                            bytesDone.addAndGet(asset.sizeBytes)
+                        }
+                        consecutiveNetFails.set(0)
+                    } catch (e: Throwable) {
+                        // Throwable, not Exception: an OutOfMemoryError on one corrupt/huge
+                        // file must not kill the whole pass (the pre-0.5.0 crash loop)
+                        failed.incrementAndGet()
+                        AppLog.w("SyncRunner", "sync failed for ${asset.displayName} (${asset.sizeBytes} B, ${asset.mimeType})", e)
+                        // Server unreachable → stop fast instead of grinding through
+                        // thousands of identical network failures (slow + log spam).
+                        if (isUnreachable(e)) {
+                            if (consecutiveNetFails.incrementAndGet() >= NET_FAIL_ABORT && aborted.compareAndSet(false, true)) {
+                                AppLog.w("SyncRunner", "aborting sync — server unreachable")
+                            }
+                        } else {
+                            consecutiveNetFails.set(0)
+                        }
+                    } finally {
+                        done.incrementAndGet()
+                        report(asset.displayName)
                     }
-                } else {
-                    consecutiveNetFails = 0
                 }
             }
+            pool.invokeAll(tasks) // blocks until every task finishes (or aborts)
+        } finally {
+            pool.shutdownNow()
         }
 
-        AppLog.i("SyncRunner", "sync done: ↑$uploaded, $deduplicated dedup, $skipped skipped, $failed failed")
-        return Progress("sync", assets.size, assets.size, "done", uploaded, deduplicated, skipped, 0, failed, bytesDone)
+        AppLog.i("SyncRunner", "sync done: ↑${uploaded.get()}, ${deduplicated.get()} dedup, ${skipped.get()} skipped, ${failed.get()} failed")
+        return Progress("sync", total, total, "done", uploaded.get(), deduplicated.get(), skipped.get(), 0, failed.get(), bytesDone.get())
     }
 
     /**
@@ -253,5 +276,6 @@ class SyncRunner(
     private companion object {
         const val AI_CALL_SPACING_MS = 3200L
         const val NET_FAIL_ABORT = 8 // bail after this many consecutive network failures
+        const val UPLOAD_CONCURRENCY = 4 // files uploaded in parallel
     }
 }
