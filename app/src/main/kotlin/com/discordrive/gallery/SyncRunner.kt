@@ -45,7 +45,12 @@ class SyncRunner(
         val bytesDone: Long = 0,
     )
 
-    fun sync(onProgress: (Progress) -> Unit): Progress = syncAssets(scanner.scanAll(), onProgress)
+    fun sync(onProgress: (Progress) -> Unit): Progress {
+        // Repopulate the local AI-enrichment cache from the E2EE cloud index, so a
+        // new device gets all analyses without re-analyzing (and search works).
+        runCatching { EnrichmentIndex.pull(client, filesKey, db) }
+        return syncAssets(scanner.scanAll(), onProgress)
+    }
 
     /**
      * Syncs the given assets, uploading [UPLOAD_CONCURRENCY] files in parallel.
@@ -255,6 +260,8 @@ class SyncRunner(
         }
 
         AppLog.i("SyncRunner", "ai done: ${analyzed.get()} analyzed, ${skipped.get()} skipped, ${failed.get()} failed (x$workerCount)")
+        // Back up the enrichment cache to the E2EE cloud index so other/new devices get it.
+        if (analyzed.get() > 0) EnrichmentIndex.push(client, filesKey, db)
         return Progress("ai", total, total, "done", analyzed = analyzed.get(), skipped = skipped.get(), failed = failed.get())
     }
 
@@ -281,6 +288,7 @@ class SyncRunner(
         val record = enrichment.buildRecord(vision, model)
         enrichment.saveEnrichment(fileId, file.wrappedFEK, filesKey, record)
         db.rememberEnrichment(fileId, record)
+        EnrichmentIndex.push(client, filesKey, db) // keep the E2EE cloud index current
         return record
     }
 

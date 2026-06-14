@@ -209,6 +209,7 @@ class ViewerActivity : SessionActivity() {
                     runCatching { client.deleteEnrichments(listOf(fileId)) }
                         .onFailure { AppLog.w("Viewer", "delete analysis failed", it) }
                     db.forgetEnrichment(fileId)
+                    SessionManager.filesKey?.let { EnrichmentIndex.push(client, it, db) } // reflect in cloud index
                 }
                 runOnUiThread {
                     if (shownAsset?.id == asset.id) {

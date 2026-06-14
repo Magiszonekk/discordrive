@@ -117,7 +117,9 @@ class SettingsActivity : SessionActivity() {
                     val deleted = runCatching { client.deleteEnrichments(null) }
                         .onFailure { AppLog.w("Settings", "clear all AI failed", it) }
                         .getOrDefault(0)
-                    AppDb(this).clearAllEnrichments()
+                    val db = AppDb(this)
+                    db.clearAllEnrichments()
+                    SessionManager.filesKey?.let { EnrichmentIndex.push(client, it, db) } // reflect clear in cloud index
                     runOnUiThread {
                         Snackbar.make(findViewById(R.id.settingsRoot), getString(R.string.ai_cleared, deleted), Snackbar.LENGTH_LONG).show()
                     }
