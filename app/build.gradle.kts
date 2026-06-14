@@ -12,8 +12,8 @@ android {
         // 29+: MediaStore loadThumbnail + clean scoped storage
         minSdk = 29
         targetSdk = 35
-        versionCode = 27
-        versionName = "0.10.1"
+        versionCode = 28
+        versionName = "0.10.2"
     }
 
     compileOptions {

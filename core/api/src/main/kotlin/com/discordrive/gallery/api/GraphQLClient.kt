@@ -30,7 +30,17 @@ class GraphQLClient(
     @Volatile
     var authToken: String? = null
 
-    fun execute(query: String, variables: JsonObject? = null): JsonObject {
+    /**
+     * Called when a request fails authentication (expired 1h JWT). Should refresh
+     * [authToken] via the stored refresh token and return true to retry once —
+     * without it the session silently dies ~1h after the process starts.
+     */
+    @Volatile
+    var onAuthError: (() -> Boolean)? = null
+
+    fun execute(query: String, variables: JsonObject? = null): JsonObject = execute(query, variables, retry = true)
+
+    private fun execute(query: String, variables: JsonObject?, retry: Boolean): JsonObject {
         val body = buildJsonObject {
             put("query", kotlinx.serialization.json.JsonPrimitive(query))
             if (variables != null) put("variables", variables)
@@ -50,6 +60,10 @@ class GraphQLClient(
                 val messages = errors.jsonArray.joinToString("; ") { err ->
                     err.jsonObject["message"]?.jsonPrimitive?.content ?: err.toString()
                 }
+                // Expired token → refresh once and retry transparently.
+                if (retry && isAuthError(messages) && onAuthError?.invoke() == true) {
+                    return execute(query, variables, retry = false)
+                }
                 throw GraphQLException(messages)
             }
 
@@ -57,6 +71,11 @@ class GraphQLClient(
                 ?: throw GraphQLException("Response has no data (HTTP ${response.code})")
         }
     }
+
+    private fun isAuthError(message: String): Boolean =
+        message.contains("authentication", ignoreCase = true) ||
+            message.contains("unauthor", ignoreCase = true) ||
+            message.contains("token", ignoreCase = true)
 
     fun field(data: JsonObject, name: String): JsonElement =
         data[name] ?: throw GraphQLException("Missing field '$name' in response")

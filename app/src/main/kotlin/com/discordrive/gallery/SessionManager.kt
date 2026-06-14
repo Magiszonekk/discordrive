@@ -20,7 +20,18 @@ object SessionManager {
     var serverUrl: String? = null
         private set
 
+    @Volatile
+    private var refreshToken: String? = null
+
     val isLoggedIn: Boolean get() = client != null && filesKey != null
+
+    /** Refreshes the access JWT on expiry (so the session doesn't die after 1h). */
+    private fun installAuthRefresh(c: DiscorDriveClient) {
+        c.graphql.onAuthError = {
+            val rt = refreshToken
+            rt != null && runCatching { c.refreshAccessToken(rt) }.isSuccess
+        }
+    }
 
     fun login(context: Context, server: String, user: String, password: String) {
         val newClient = DiscorDriveClient(server)
@@ -30,6 +41,8 @@ object SessionManager {
         filesKey = session.filesKey
         email = session.user.email
         serverUrl = server
+        refreshToken = session.refreshToken
+        installAuthRefresh(newClient)
 
         val secure = SecureStore(context)
         secure.putBytes(SecureStore.ARK, session.ark)
@@ -65,6 +78,8 @@ object SessionManager {
             filesKey = ark
             email = savedEmail
             serverUrl = server
+            this.refreshToken = refreshToken
+            installAuthRefresh(newClient)
             // Recover E2EE settings (AI endpoint/key) if local config is unset —
             // login() pulls unconditionally, but the common path is silent restore.
             runCatching { SettingsSync.pullIfMissing(context, newClient, ark) }
@@ -76,11 +91,12 @@ object SessionManager {
         filesKey = null
         email = null
         serverUrl = null
+        refreshToken = null
         SecureStore(context).clear()
         context.getSharedPreferences("session", Context.MODE_PRIVATE).edit().clear().apply()
-        AppDb(context).writableDatabase.use { db ->
-            db.execSQL("DELETE FROM asset_map")
-            db.execSQL("DELETE FROM enrichment")
-        }
+        // NOTE: deliberately keep asset_map + enrichment. They're per-account local
+        // caches (asset→fileId map, decrypted AI tags) — wiping them on logout forced
+        // a full re-upload + re-analyze on the next login. Stale entries self-heal via
+        // the cloud-existence check in syncAssets, so they're safe to keep.
     }
 }
