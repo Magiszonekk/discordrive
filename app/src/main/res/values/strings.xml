@@ -27,6 +27,8 @@
     <string name="sync_notif_paused_fmt">%1$s — wstrzymano</string>
     <string name="sync_notif_progress">%1$d / %2$d</string>
     <string name="sync_notif_pause">Pauza</string>
+    <string name="sync_notif_cancel">Anuluj</string>
+    <string name="sync_notif_cancelling_fmt">%1$s — anulowanie…</string>
     <string name="ai_notif_new">nowych</string>
     <string name="sync_notif_resume">Wznów</string>
     <string name="badge_synced_desc">Zsynchronizowane</string>

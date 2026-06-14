@@ -28,33 +28,41 @@ object SyncNotifications {
         val done = SyncController.done
         val total = SyncController.total
         val paused = SyncController.paused
+        val cancelled = SyncController.cancelled
 
         val base = SyncController.label.ifBlank { context.getString(R.string.sync_notif_title) }
-        val title = if (paused) context.getString(R.string.sync_notif_paused_fmt, base) else base
+        val title = when {
+            cancelled -> context.getString(R.string.sync_notif_cancelling_fmt, base)
+            paused -> context.getString(R.string.sync_notif_paused_fmt, base)
+            else -> base
+        }
         val text = buildString {
             if (total > 0) append(context.getString(R.string.sync_notif_progress, done, total))
-            if (!paused && SyncController.detail.isNotBlank()) {
+            if (!paused && !cancelled && SyncController.detail.isNotBlank()) {
                 if (isNotEmpty()) append("  ·  ")
                 append(SyncController.detail)
             }
         }
 
-        val action = if (paused) {
-            NotificationCompat.Action(0, context.getString(R.string.sync_notif_resume), broadcast(context, SyncActionReceiver.ACTION_RESUME))
-        } else {
-            NotificationCompat.Action(0, context.getString(R.string.sync_notif_pause), broadcast(context, SyncActionReceiver.ACTION_PAUSE))
-        }
-
-        return NotificationCompat.Builder(context, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_sync)
             .setContentTitle(title)
             .setContentText(text)
             .setContentIntent(contentIntent(context))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setProgress(total.coerceAtLeast(1), done, total == 0)
-            .addAction(action)
-            .build()
+            .setProgress(total.coerceAtLeast(1), done, total == 0 || cancelled)
+
+        if (!cancelled) {
+            val pauseResume = if (paused) {
+                NotificationCompat.Action(0, context.getString(R.string.sync_notif_resume), broadcast(context, SyncActionReceiver.ACTION_RESUME))
+            } else {
+                NotificationCompat.Action(0, context.getString(R.string.sync_notif_pause), broadcast(context, SyncActionReceiver.ACTION_PAUSE))
+            }
+            builder.addAction(pauseResume)
+            builder.addAction(NotificationCompat.Action(0, context.getString(R.string.sync_notif_cancel), broadcast(context, SyncActionReceiver.ACTION_CANCEL)))
+        }
+        return builder.build()
     }
 
     /** Re-renders the notification (used by the action receiver for instant feedback). */

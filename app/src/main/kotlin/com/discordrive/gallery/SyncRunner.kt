@@ -98,8 +98,9 @@ class SyncRunner(
         try {
             val tasks = assets.map { asset ->
                 Callable {
-                    if (aborted.get()) { done.incrementAndGet(); return@Callable }
+                    if (aborted.get() || SyncController.cancelled) { done.incrementAndGet(); return@Callable }
                     SyncController.awaitIfPaused() // honour notification Pause/Resume
+                    if (SyncController.cancelled) { done.incrementAndGet(); return@Callable }
                     try {
                         val mappedFileId = db.fileIdFor(asset)
                         val stillInCloud = mappedFileId != null && (remoteIds == null || mappedFileId in remoteIds)
@@ -203,8 +204,9 @@ class SyncRunner(
         val pool = Executors.newFixedThreadPool(workerCount)
         val worker = Callable {
             var lastCallAtMs = 0L
-            while (!stop.get()) {
+            while (!stop.get() && !SyncController.cancelled) {
                 SyncController.awaitIfPaused() // honour the notification Pause/Resume
+                if (SyncController.cancelled) break
                 val i = cursor.getAndIncrement()
                 if (i >= assets.size) break
                 val asset = assets[i]
