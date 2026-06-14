@@ -15,27 +15,31 @@ object SyncController {
         private set
 
     // Last progress snapshot (for the notification to render on pause/resume).
+    // [label] = job title ("Synchronizacja" / "Analiza AI"); [detail] = right-side
+    // text (upload speed for sync, "N nowych" for AI).
     @Volatile var done: Int = 0
     @Volatile var total: Int = 0
-    @Volatile var bytesPerSec: Long = 0
+    @Volatile var label: String = ""
+    @Volatile var detail: String = ""
     @Volatile var active: Boolean = false
 
-    fun pause() { paused = true; bytesPerSec = 0 }
+    fun pause() { paused = true; detail = "" }
     fun resume() { paused = false }
 
-    /** Atomically claims the sync slot; false if a sync is already running. */
+    /** Atomically claims the job slot; false if a sync/AI job is already running. */
     fun tryBegin(): Boolean {
         if (!running.compareAndSet(false, true)) return false
-        paused = false; done = 0; total = 0; bytesPerSec = 0; active = true
+        paused = false; done = 0; total = 0; label = ""; detail = ""; active = true
         return true
     }
 
-    fun end() { active = false; paused = false; bytesPerSec = 0; running.set(false) }
+    fun end() { active = false; paused = false; detail = ""; running.set(false) }
 
-    fun update(done: Int, total: Int, bytesPerSec: Long) {
+    fun update(done: Int, total: Int, label: String, detail: String) {
         this.done = done
         this.total = total
-        this.bytesPerSec = bytesPerSec
+        this.label = label
+        this.detail = detail
     }
 
     /** Blocks the worker thread while paused (polled, interrupt-safe). */

@@ -144,39 +144,15 @@ class MainActivity : SessionActivity() {
     }
 
     private fun runAiScan(bucket: String?) = requireSession {
-        if (working) return@requireSession
-        val client = SessionManager.client ?: return@requireSession
-        val filesKey = SessionManager.filesKey ?: return@requireSession
         if (!Settings.aiConfigured(this)) {
             Snackbar.make(findViewById(R.id.mainRoot), "Skonfiguruj AI w ustawieniach", Snackbar.LENGTH_LONG)
                 .setAction(R.string.action_settings) { startActivity(Intent(this, SettingsActivity::class.java)) }
                 .show()
             return@requireSession
         }
-        setWorking(getString(R.string.action_ai) + "…")
-
-        thread {
-            try {
-                val ai = AiVisionClient(Settings.aiUrl(this), Settings.aiKey(this), Settings.aiModel(this))
-                val runner = SyncRunner(this, client, filesKey)
-                val limit = Settings.aiLimit(this)
-                val result = runner.aiScan(ai, Settings.aiModel(this), bucket, limit, concurrency = Settings.aiConcurrency(this)) { p ->
-                    val limitInfo = if (limit > 0) " (limit $limit)" else ""
-                    setWorking("AI ${p.done}/${p.total}$limitInfo · ${p.analyzed} nowych · ${p.failed} błędów\n${p.detail}")
-                }
-                setWorking(null)
-                runOnUiThread {
-                    Snackbar.make(
-                        findViewById(R.id.mainRoot),
-                        "Analiza AI: ${result.analyzed} nowych, ${result.skipped} pominiętych, ${result.failed} błędów",
-                        Snackbar.LENGTH_LONG,
-                    ).show()
-                }
-            } catch (e: Exception) {
-                setWorking(null)
-                AppLog.e("Main", "AI run failed", e)
-                runOnUiThread { Snackbar.make(findViewById(R.id.mainRoot), "Błąd AI: ${e.message}", Snackbar.LENGTH_LONG).show() }
-            }
-        }
+        // Foreground-service job (like sync): survives backgrounding, shows progress
+        // + pause/resume in the notification.
+        SyncWorker.runNow(this, SyncWorker.MODE_AI, bucket)
+        Snackbar.make(findViewById(R.id.mainRoot), R.string.ai_started_bg, Snackbar.LENGTH_LONG).show()
     }
 }

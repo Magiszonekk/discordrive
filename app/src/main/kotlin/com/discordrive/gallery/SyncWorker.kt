@@ -31,35 +31,58 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         val client = SessionManager.client ?: return Result.failure()
         val filesKey = SessionManager.filesKey ?: return Result.failure()
 
+        val mode = inputData.getString(KEY_MODE) ?: MODE_SYNC
+        val bucket = inputData.getString(KEY_BUCKET)
+
         SyncNotifications.ensureChannel(ctx)
-        // Don't run a 2nd sync on top of a manual one (avoids the dual-progress bug).
+        // One job at a time (sync OR AI) — avoids two jobs fighting over the notification.
         if (!SyncController.tryBegin()) {
-            AppLog.i("SyncWorker", "sync already running — skipping bg pass")
+            AppLog.i("SyncWorker", "a job is already running — skipping")
             return Result.success()
         }
+        // Initial notification title reflects the job (before the first progress tick).
+        SyncController.update(0, 0, ctx.getString(if (mode == MODE_AI) R.string.action_ai else R.string.sync_notif_title), "")
         setForegroundAsync(foregroundInfo(ctx))
 
         return try {
-            AppLog.i("SyncWorker", "bg sync run")
             val runner = SyncRunner(ctx, client, filesKey)
-
-            // Live notification: progress + rolling upload speed, throttled to ~1s.
-            val tracker = SyncProgressTracker(ctx)
-            val sync = runner.sync { tracker.onProgress(it) }
-            AppLog.i("SyncWorker", "bg sync: +${sync.uploaded} up, ${sync.deduplicated} dedup, ${sync.failed} failed")
-
-            if (Settings.aiAutoAfterSync(ctx) && Settings.aiConfigured(ctx)) {
-                val ai = AiVisionClient(Settings.aiUrl(ctx), Settings.aiKey(ctx), Settings.aiModel(ctx))
-                val aiResult = runner.aiScan(ai, Settings.aiModel(ctx), bucketFilter = null, limit = Settings.aiLimit(ctx), concurrency = Settings.aiConcurrency(ctx)) {}
-                AppLog.i("SyncWorker", "bg ai: ${aiResult.analyzed} analyzed, ${aiResult.failed} failed")
+            if (mode == MODE_AI) {
+                runAi(ctx, runner, bucket)
+            } else {
+                AppLog.i("SyncWorker", "sync run")
+                val sync = runner.sync { newSyncTracker(ctx).onProgress(it) }
+                AppLog.i("SyncWorker", "sync: +${sync.uploaded} up, ${sync.deduplicated} dedup, ${sync.failed} failed")
+                if (Settings.aiAutoAfterSync(ctx) && Settings.aiConfigured(ctx)) runAi(ctx, runner, null)
             }
             Result.success()
         } catch (e: Exception) {
-            AppLog.w("SyncWorker", "bg sync failed", e)
+            AppLog.w("SyncWorker", "$mode job failed", e)
             Result.retry()
         } finally {
             SyncController.end()
             ctx.getSystemService(NotificationManager::class.java).cancel(SyncNotifications.NOTIF_ID)
+        }
+    }
+
+    private fun runAi(ctx: Context, runner: SyncRunner, bucket: String?) {
+        if (!Settings.aiConfigured(ctx)) return
+        val ai = AiVisionClient(Settings.aiUrl(ctx), Settings.aiKey(ctx), Settings.aiModel(ctx))
+        val tracker = JobProgressTracker(ctx, ctx.getString(R.string.action_ai)) { "${it.analyzed} ${ctx.getString(R.string.ai_notif_new)}" }
+        val r = runner.aiScan(ai, Settings.aiModel(ctx), bucketFilter = bucket, limit = Settings.aiLimit(ctx), concurrency = Settings.aiConcurrency(ctx)) { tracker.onProgress(it) }
+        AppLog.i("SyncWorker", "ai: ${r.analyzed} analyzed, ${r.failed} failed")
+    }
+
+    /** Sync tracker: title "Synchronizacja", detail = rolling upload speed. */
+    private fun newSyncTracker(ctx: Context): JobProgressTracker {
+        var lastBytes = 0L
+        var lastTimeMs = System.currentTimeMillis()
+        return JobProgressTracker(ctx, ctx.getString(R.string.sync_notif_title)) { p ->
+            val now = System.currentTimeMillis()
+            val dtMs = (now - lastTimeMs).coerceAtLeast(1)
+            val speed = ((p.bytesDone - lastBytes) * 1000 / dtMs).coerceAtLeast(0)
+            lastBytes = p.bytesDone
+            lastTimeMs = now
+            if (speed > 0) "↑ ${android.text.format.Formatter.formatShortFileSize(ctx, speed)}/s" else ""
         }
     }
 
@@ -80,16 +103,27 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
     companion object {
         private const val WORK_NAME = "ddv4-bg-sync"
         private const val NOW_WORK_NAME = "ddv4-sync-now"
+        const val KEY_MODE = "mode"
+        const val KEY_BUCKET = "bucket"
+        const val MODE_SYNC = "sync"
+        const val MODE_AI = "ai"
 
         /**
-         * Runs a sync immediately as a foreground service, so it keeps going when
-         * the user leaves the app or the screen turns off (a manual sync used to
-         * run in the Activity thread and got killed on backgrounding). KEEP = if a
-         * sync is already running/queued, don't start another.
+         * Runs a sync or AI pass immediately as a foreground service, so it keeps
+         * going when the user leaves the app / screen off (it used to run in the
+         * Activity thread and got killed). KEEP = don't start a 2nd while one runs.
+         * @param mode [MODE_SYNC] (sync + optional auto-AI) or [MODE_AI]
+         * @param bucket for AI: analyze only this album (null = whole library)
          */
-        fun runNow(context: Context) {
+        fun runNow(context: Context, mode: String = MODE_SYNC, bucket: String? = null) {
             val request = OneTimeWorkRequestBuilder<SyncWorker>()
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .setInputData(
+                    androidx.work.Data.Builder()
+                        .putString(KEY_MODE, mode)
+                        .apply { bucket?.let { putString(KEY_BUCKET, it) } }
+                        .build(),
+                )
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(NOW_WORK_NAME, ExistingWorkPolicy.KEEP, request)
         }

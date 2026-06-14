@@ -204,6 +204,7 @@ class SyncRunner(
         val worker = Callable {
             var lastCallAtMs = 0L
             while (!stop.get()) {
+                SyncController.awaitIfPaused() // honour the notification Pause/Resume
                 val i = cursor.getAndIncrement()
                 if (i >= assets.size) break
                 val asset = assets[i]

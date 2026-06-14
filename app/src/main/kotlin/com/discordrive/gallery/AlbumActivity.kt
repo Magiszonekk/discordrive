@@ -441,39 +441,14 @@ class AlbumActivity : SessionActivity() {
     }
 
     private fun runAlbumAi() {
-        if (working) return
-        val client = SessionManager.client ?: return
-        val filesKey = SessionManager.filesKey ?: return
         if (!Settings.aiConfigured(this)) {
             Snackbar.make(findViewById(R.id.albumRoot), "Skonfiguruj AI w ustawieniach", Snackbar.LENGTH_LONG)
                 .setAction(R.string.action_settings) { startActivity(Intent(this, SettingsActivity::class.java)) }
                 .show()
             return
         }
-        setWorking("${getString(R.string.album_ai_action)}…")
-
-        thread {
-            try {
-                val ai = AiVisionClient(Settings.aiUrl(this), Settings.aiKey(this), Settings.aiModel(this))
-                val runner = SyncRunner(this, client, filesKey)
-                val limit = Settings.aiLimit(this)
-                val result = runner.aiScan(ai, Settings.aiModel(this), bucketFilter = bucket, limit = limit, concurrency = Settings.aiConcurrency(this)) { p ->
-                    val limitInfo = if (limit > 0) " (limit $limit)" else ""
-                    setWorking("AI ${p.done}/${p.total}$limitInfo · ${p.analyzed} nowych · ${p.failed} błędów\n${p.detail}")
-                }
-                setWorking(null)
-                runOnUiThread {
-                    Snackbar.make(
-                        findViewById(R.id.albumRoot),
-                        "Album „$bucket”: ${result.analyzed} przeanalizowanych, ${result.skipped} pominiętych, ${result.failed} błędów",
-                        Snackbar.LENGTH_LONG,
-                    ).show()
-                }
-            } catch (e: Exception) {
-                setWorking(null)
-                AppLog.e("Album", "AI run failed", e)
-                runOnUiThread { Snackbar.make(findViewById(R.id.albumRoot), "Błąd AI: ${e.message}", Snackbar.LENGTH_LONG).show() }
-            }
-        }
+        // Foreground-service job: survives backgrounding, progress + pause in notification.
+        SyncWorker.runNow(this, SyncWorker.MODE_AI, bucket)
+        Snackbar.make(findViewById(R.id.albumRoot), R.string.ai_started_bg, Snackbar.LENGTH_LONG).show()
     }
 }

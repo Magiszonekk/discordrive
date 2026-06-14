@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.text.format.Formatter
 import androidx.core.app.NotificationCompat
 
 /** Live "background sync" notification with progress, speed and Pause/Resume. */
@@ -30,12 +29,13 @@ object SyncNotifications {
         val total = SyncController.total
         val paused = SyncController.paused
 
-        val title = context.getString(if (paused) R.string.sync_notif_paused else R.string.sync_notif_title)
+        val base = SyncController.label.ifBlank { context.getString(R.string.sync_notif_title) }
+        val title = if (paused) context.getString(R.string.sync_notif_paused_fmt, base) else base
         val text = buildString {
             if (total > 0) append(context.getString(R.string.sync_notif_progress, done, total))
-            if (!paused && SyncController.bytesPerSec > 0) {
+            if (!paused && SyncController.detail.isNotBlank()) {
                 if (isNotEmpty()) append("  ·  ")
-                append("↑ ").append(Formatter.formatShortFileSize(context, SyncController.bytesPerSec)).append("/s")
+                append(SyncController.detail)
             }
         }
 
@@ -78,25 +78,24 @@ object SyncNotifications {
 }
 
 /**
- * Drives the live sync notification from SyncRunner progress: computes a rolling
- * upload speed and refreshes the notification at most ~once/second. Shared by the
- * background worker (foreground service) and the in-app manual sync.
+ * Drives the live job notification from SyncRunner progress, throttled to ~1s.
+ * [label] is the notification title ("Synchronizacja" / "Analiza AI"); [detailOf]
+ * produces the right-side text (upload speed for sync, "N nowych" for AI) and may
+ * keep state across calls. Shared by sync + AI foreground-service jobs.
  */
-class SyncProgressTracker(private val context: Context) {
-    private var lastBytes = 0L
-    private var lastTimeMs = System.currentTimeMillis()
+class JobProgressTracker(
+    private val context: Context,
+    private val label: String,
+    private val detailOf: (SyncRunner.Progress) -> String,
+) {
     private var lastNotifyMs = 0L
 
-    @Synchronized // called from parallel upload workers
+    @Synchronized // called from parallel workers
     fun onProgress(p: SyncRunner.Progress) {
         val now = System.currentTimeMillis()
         if (now - lastNotifyMs < 1000) return
-        val dtMs = (now - lastTimeMs).coerceAtLeast(1)
-        val speed = ((p.bytesDone - lastBytes) * 1000 / dtMs).coerceAtLeast(0)
-        lastBytes = p.bytesDone
-        lastTimeMs = now
         lastNotifyMs = now
-        SyncController.update(p.done, p.total, speed)
+        SyncController.update(p.done, p.total, label, detailOf(p))
         SyncNotifications.refresh(context)
     }
 }
