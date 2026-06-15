@@ -165,6 +165,27 @@ class UploadEngine(private val client: DiscorDriveClient) {
         return output.toByteArray()
     }
 
+    /**
+     * Streams a file's decrypted bytes to [out], one 8 MiB chunk at a time — never
+     * holds the whole file in memory, so large videos download without OOM.
+     * Returns the number of plaintext bytes written.
+     */
+    fun downloadToStream(file: FileDto, filesKey: ByteArray, out: java.io.OutputStream): Long {
+        val manifestBlobId = requireNotNull(file.primaryManifestBlobId) { "File has no manifest" }
+        val rootFek = DdvCrypto.unwrapRootFek(file.wrappedFEK, filesKey)
+        val manifestJson = DdvCrypto.decryptFileManifest(client.blobs.download(manifestBlobId), rootFek)
+        val manifest = json.decodeFromString(FileChunkManifest.serializer(), manifestJson)
+
+        var written = 0L
+        for (chunk in manifest.chunks.sortedBy { it.index }) {
+            val plain = DdvCrypto.decryptChunk(client.blobs.download(chunk.blobId), rootFek)
+            out.write(plain)
+            written += plain.size
+        }
+        out.flush()
+        return written
+    }
+
     /** Fills [buffer] as far as the stream allows; returns bytes read (0 at EOF). */
     private fun readFully(input: java.io.InputStream, buffer: ByteArray): Int {
         var offset = 0

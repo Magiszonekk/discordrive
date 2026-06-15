@@ -8,6 +8,7 @@ import com.discordrive.gallery.api.EnrichmentEngine
 import com.discordrive.gallery.api.EnrichmentRecord
 import com.discordrive.gallery.api.FolderManager
 import com.discordrive.gallery.api.UploadEngine
+import com.discordrive.gallery.crypto.DdvCrypto
 import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -42,6 +43,7 @@ class SyncRunner(
         val skipped: Int = 0,
         val analyzed: Int = 0,
         val failed: Int = 0,
+        val downloaded: Int = 0,
         val bytesDone: Long = 0,
     )
 
@@ -89,7 +91,7 @@ class SyncRunner(
         val folderIds = ConcurrentHashMap<String, String>()
 
         fun report(detail: String) = onProgress(
-            Progress("sync", done.get(), total, detail, uploaded.get(), deduplicated.get(), skipped.get(), 0, failed.get(), bytesDone.get()),
+            Progress("sync", done.get(), total, detail, uploaded.get(), deduplicated.get(), skipped.get(), 0, failed.get(), bytesDone = bytesDone.get()),
         )
         fun folderFor(bucket: String): String =
             folderIds.computeIfAbsent(bucket) { folderManager.ensureFolder(it, parentFolderId = null, filesKey = filesKey) }
@@ -159,7 +161,60 @@ class SyncRunner(
         }
 
         AppLog.i("SyncRunner", "sync done: ↑${uploaded.get()}, ${deduplicated.get()} dedup, ${skipped.get()} skipped, ${failed.get()} failed")
-        return Progress("sync", total, total, "done", uploaded.get(), deduplicated.get(), skipped.get(), 0, failed.get(), bytesDone.get())
+        return Progress("sync", total, total, "done", uploaded.get(), deduplicated.get(), skipped.get(), 0, failed.get(), bytesDone = bytesDone.get())
+    }
+
+    /**
+     * Sync FROM cloud: download files that exist in the cloud but not locally
+     * (e.g. on a new device) back into the device gallery (MediaStore). Files
+     * already in asset_map are skipped. Honours pause/cancel.
+     */
+    fun downloadFromCloud(onProgress: (Progress) -> Unit): Progress {
+        val remote = client.galleryDeltaAll(null).files.filter { it.status == "READY" && it.deletedAt == null }
+        val have = db.mappedFileIds()
+        val missing = remote.filter { it.id !in have }
+        // folderId → bucket name (decrypted), to restore into the right album
+        val folderNames = client.folders(null).associate { f ->
+            f.id to runCatching {
+                val key = DdvCrypto.unwrapKeyPacked(DdvCrypto.b64decode(f.wrappedFolderKey), filesKey)
+                val body = DdvCrypto.decryptMeta(key, f.encryptedBody)
+                (kotlinx.serialization.json.Json.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject)
+                    .getValue("name").let { (it as kotlinx.serialization.json.JsonPrimitive).content }
+            }.getOrNull()
+        }
+        val total = missing.size
+        var downloaded = 0
+        var failed = 0
+        var bytesDone = 0L
+        AppLog.i("SyncRunner", "download from cloud: $total missing of ${remote.size}")
+
+        for ((index, file) in missing.withIndex()) {
+            SyncController.awaitIfPaused()
+            if (SyncController.cancelled) break
+            onProgress(Progress("download", index, total, "", failed = failed, downloaded = downloaded, bytesDone = bytesDone))
+            try {
+                val rootFek = DdvCrypto.unwrapRootFek(file.wrappedFEK, filesKey)
+                val name = file.encryptedName?.let { DdvCrypto.decryptMeta(rootFek, it) } ?: file.id
+                val mime = file.encryptedMimeType?.let { DdvCrypto.decryptMeta(rootFek, it) } ?: "application/octet-stream"
+                val bucket = file.parentFolderId?.let { folderNames[it] } ?: "DiscorDrive"
+                val result = CloudDownloader.writeToGallery(context, file, filesKey, name, mime, bucket, uploadEngine)
+                if (result != null) {
+                    db.rememberMapping(
+                        MediaAsset(result.assetId, android.net.Uri.EMPTY, name, bucket, mime, result.bytes, System.currentTimeMillis() / 1000, mime.startsWith("video/")),
+                        file.id,
+                    )
+                    downloaded++
+                    bytesDone += result.bytes
+                } else {
+                    failed++
+                }
+            } catch (e: Throwable) {
+                failed++
+                AppLog.w("SyncRunner", "download failed for ${file.id}", e)
+            }
+        }
+        AppLog.i("SyncRunner", "download done: $downloaded downloaded, $failed failed")
+        return Progress("download", total, total, "done", failed = failed, downloaded = downloaded, bytesDone = bytesDone)
     }
 
     /**

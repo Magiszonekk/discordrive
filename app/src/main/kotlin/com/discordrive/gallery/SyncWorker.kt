@@ -41,18 +41,29 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
             return Result.success()
         }
         // Initial notification title reflects the job (before the first progress tick).
-        SyncController.update(0, 0, ctx.getString(if (mode == MODE_AI) R.string.action_ai else R.string.sync_notif_title), "")
+        val initialLabel = when (mode) {
+            MODE_AI -> R.string.action_ai
+            MODE_DOWNLOAD -> R.string.sync_from_cloud
+            else -> R.string.sync_notif_title
+        }
+        SyncController.update(0, 0, ctx.getString(initialLabel), "")
         setForegroundAsync(foregroundInfo(ctx))
 
         return try {
             val runner = SyncRunner(ctx, client, filesKey)
-            if (mode == MODE_AI) {
-                runAi(ctx, runner, bucket)
-            } else {
-                AppLog.i("SyncWorker", "sync run")
-                val sync = runner.sync { newSyncTracker(ctx).onProgress(it) }
-                AppLog.i("SyncWorker", "sync: +${sync.uploaded} up, ${sync.deduplicated} dedup, ${sync.failed} failed")
-                if (Settings.aiAutoAfterSync(ctx) && Settings.aiConfigured(ctx)) runAi(ctx, runner, null)
+            when (mode) {
+                MODE_AI -> runAi(ctx, runner, bucket)
+                MODE_DOWNLOAD -> {
+                    val tracker = newSpeedTracker(ctx, ctx.getString(R.string.sync_from_cloud), "↓")
+                    val r = runner.downloadFromCloud { tracker.onProgress(it) }
+                    AppLog.i("SyncWorker", "download: ${r.downloaded} downloaded, ${r.failed} failed")
+                }
+                else -> {
+                    AppLog.i("SyncWorker", "sync run")
+                    val sync = runner.sync { newSpeedTracker(ctx, ctx.getString(R.string.sync_notif_title), "↑").onProgress(it) }
+                    AppLog.i("SyncWorker", "sync: +${sync.uploaded} up, ${sync.deduplicated} dedup, ${sync.failed} failed")
+                    if (Settings.aiAutoAfterSync(ctx) && Settings.aiConfigured(ctx)) runAi(ctx, runner, null)
+                }
             }
             Result.success()
         } catch (e: Exception) {
@@ -72,17 +83,17 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         AppLog.i("SyncWorker", "ai: ${r.analyzed} analyzed, ${r.failed} failed")
     }
 
-    /** Sync tracker: title "Synchronizacja", detail = rolling upload speed. */
-    private fun newSyncTracker(ctx: Context): JobProgressTracker {
+    /** Tracker showing a rolling transfer speed ([arrow] = ↑ for sync, ↓ for download). */
+    private fun newSpeedTracker(ctx: Context, label: String, arrow: String): JobProgressTracker {
         var lastBytes = 0L
         var lastTimeMs = System.currentTimeMillis()
-        return JobProgressTracker(ctx, ctx.getString(R.string.sync_notif_title)) { p ->
+        return JobProgressTracker(ctx, label) { p ->
             val now = System.currentTimeMillis()
             val dtMs = (now - lastTimeMs).coerceAtLeast(1)
             val speed = ((p.bytesDone - lastBytes) * 1000 / dtMs).coerceAtLeast(0)
             lastBytes = p.bytesDone
             lastTimeMs = now
-            if (speed > 0) "↑ ${android.text.format.Formatter.formatShortFileSize(ctx, speed)}/s" else ""
+            if (speed > 0) "$arrow ${android.text.format.Formatter.formatShortFileSize(ctx, speed)}/s" else ""
         }
     }
 
@@ -107,6 +118,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         const val KEY_BUCKET = "bucket"
         const val MODE_SYNC = "sync"
         const val MODE_AI = "ai"
+        const val MODE_DOWNLOAD = "download"
 
         /**
          * Runs a sync or AI pass immediately as a foreground service, so it keeps

@@ -89,6 +89,19 @@ class SettingsActivity : SessionActivity() {
             }
         }
 
+        findViewById<Button>(R.id.syncToCloudButton).setOnClickListener {
+            requireSession {
+                SyncWorker.runNow(this, SyncWorker.MODE_SYNC)
+                Snackbar.make(findViewById(R.id.settingsRoot), R.string.sync_started_bg, Snackbar.LENGTH_LONG).show()
+            }
+        }
+        findViewById<Button>(R.id.syncFromCloudButton).setOnClickListener {
+            requireSession {
+                SyncWorker.runNow(this, SyncWorker.MODE_DOWNLOAD)
+                Snackbar.make(findViewById(R.id.settingsRoot), R.string.download_started_bg, Snackbar.LENGTH_LONG).show()
+            }
+        }
+
         findViewById<Button>(R.id.copyLogsButton).setOnClickListener { copyLogs() }
         findViewById<Button>(R.id.sendLogsButton).setOnClickListener { sendLogs() }
         findViewById<Button>(R.id.clearLogsButton).setOnClickListener { clearLogs() }
