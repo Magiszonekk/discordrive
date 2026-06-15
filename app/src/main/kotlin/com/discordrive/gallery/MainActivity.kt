@@ -36,6 +36,11 @@ class MainActivity : SessionActivity() {
 
         val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
         toolbar.inflateMenu(R.menu.menu_main)
+        // Accent the AI action so the chosen colour shows up on the home screen too.
+        val accent = com.google.android.material.color.MaterialColors.getColor(
+            toolbar, com.google.android.material.R.attr.colorPrimary,
+        )
+        toolbar.menu.findItem(R.id.action_ai)?.icon?.mutate()?.setTint(accent)
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 R.id.action_search -> startActivity(Intent(this, SearchActivity::class.java)) // local cache, offline OK

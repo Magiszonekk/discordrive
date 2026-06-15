@@ -18,7 +18,7 @@
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
             app:title="@string/app_name"
-            app:titleTextColor="@color/text"
+            app:titleTextColor="?attr/colorPrimary"
             app:layout_scrollFlags="scroll|enterAlways"/>
 
         <com.google.android.material.progressindicator.LinearProgressIndicator
