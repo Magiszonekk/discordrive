@@ -39,6 +39,30 @@ object Settings {
     fun bgWifiOnly(context: Context): Boolean = prefs(context).getBoolean("bgWifiOnly", true)
     fun bgChargingOnly(context: Context): Boolean = prefs(context).getBoolean("bgChargingOnly", false)
 
+    // === Accent colour (UI theme) ===
+
+    /** A selectable accent. [overlayStyle] is null for the default (blue) theme. */
+    data class Accent(val key: String, val labelRes: Int, val overlayStyle: Int?)
+
+    val ACCENTS = listOf(
+        Accent("blue", R.string.accent_blue, null),
+        Accent("purple", R.string.accent_purple, R.style.ThemeOverlay_Gallery_Purple),
+        Accent("green", R.string.accent_green, R.style.ThemeOverlay_Gallery_Green),
+        Accent("orange", R.string.accent_orange, R.style.ThemeOverlay_Gallery_Orange),
+        Accent("pink", R.string.accent_pink, R.style.ThemeOverlay_Gallery_Pink),
+        Accent("teal", R.string.accent_teal, R.style.ThemeOverlay_Gallery_Teal),
+    )
+
+    fun accentKey(context: Context): String = prefs(context).getString("accent", "blue") ?: "blue"
+
+    fun setAccent(context: Context, key: String) {
+        prefs(context).edit().putString("accent", key).apply()
+    }
+
+    /** Theme overlay res id for the chosen accent, or null for the default blue. */
+    fun accentOverlay(context: Context): Int? =
+        ACCENTS.firstOrNull { it.key == accentKey(context) }?.overlayStyle
+
     fun save(
         context: Context,
         serverUrl: String,
@@ -89,11 +113,13 @@ object Settings {
         put("bgSync", bgSyncEnabled(context))
         put("bgWifiOnly", bgWifiOnly(context))
         put("bgChargingOnly", bgChargingOnly(context))
+        put("accent", accentKey(context))
     }.toString()
 
     /** Applies settings restored from the E2EE backup; missing fields keep current values. */
     fun applyJson(context: Context, jsonStr: String) {
         val o = JSONObject(jsonStr)
+        if (o.has("accent")) setAccent(context, o.optString("accent", accentKey(context)))
         save(
             context,
             serverUrl = o.optString("serverUrl", serverUrl(context)),

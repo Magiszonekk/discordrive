@@ -62,6 +62,34 @@
     <string name="settings_login">Zaloguj się</string>
     <string name="update_check">Sprawdź aktualizacje</string>
     <string name="update_check_failed">Nie udało się sprawdzić aktualizacji</string>
+
+    <!-- Wygląd / akcent -->
+    <string name="settings_appearance">Wygląd</string>
+    <string name="settings_appearance_hint">Kolor akcentu używany w przyciskach, przełącznikach i elementach interfejsu.</string>
+    <string name="settings_accent">Kolor akcentu</string>
+    <string name="accent_picker_title">Wybierz kolor akcentu</string>
+    <string name="accent_changed">Zmieniono kolor akcentu</string>
+    <string name="accent_blue">Niebieski</string>
+    <string name="accent_purple">Fioletowy</string>
+    <string name="accent_green">Zielony</string>
+    <string name="accent_orange">Pomarańczowy</string>
+    <string name="accent_pink">Różowy</string>
+    <string name="accent_teal">Turkusowy</string>
+
+    <!-- Strefa niebezpieczna -->
+    <string name="settings_danger">Strefa niebezpieczna</string>
+    <string name="settings_danger_hint">Operacje nieodwracalne — każda wymaga potwierdzenia.</string>
+    <string name="danger_wipe_cloud">Wyczyść dane w chmurze</string>
+    <string name="danger_wipe_local">Usuń wszystkie zdjęcia i wideo z telefonu</string>
+    <string name="danger_wipe_cloud_title">Wyczyść dane w chmurze?</string>
+    <string name="danger_wipe_cloud_msg">Trwale usunie z chmury WSZYSTKIE pliki, foldery i analizy AI tego konta. Kopie lokalne na telefonie pozostaną. Tej operacji nie można cofnąć.</string>
+    <string name="danger_wipe_cloud_confirm">Usuń z chmury</string>
+    <string name="danger_wipe_cloud_progress">Usuwanie z chmury…</string>
+    <string name="danger_wipe_cloud_done">Usunięto z chmury: %1$d plików, %2$d folderów</string>
+    <string name="danger_wipe_local_title">Usunąć wszystkie zdjęcia i wideo z telefonu?</string>
+    <string name="danger_wipe_local_msg">Usunie z pamięci urządzenia wszystkie zdjęcia i filmy (%1$d). Pliki zsynchronizowane do chmury pozostaną w chmurze. Tej operacji nie można cofnąć.</string>
+    <string name="danger_wipe_local_confirm">Usuń z telefonu</string>
+    <string name="danger_wipe_local_empty">Brak lokalnych zdjęć i filmów do usunięcia</string>
     <string name="update_up_to_date">Masz najnowszą wersję</string>
     <string name="update_available_title">Dostępna aktualizacja</string>
     <string name="update_available_msg">Nowa wersja %1$s jest dostępna. Zaktualizować teraz?</string>

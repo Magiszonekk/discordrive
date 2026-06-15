@@ -20,4 +20,27 @@
     <style name="Theme.Gallery.Viewer" parent="Theme.Gallery">
         <item name="android:windowBackground">@android:color/black</item>
     </style>
+
+    <!-- Accent overlays applied at runtime via Theme.applyStyle (see App). Blue is the
+         default Theme.Gallery, so it needs no overlay. -->
+    <style name="ThemeOverlay.Gallery.Purple" parent="">
+        <item name="colorPrimary">@color/accent_purple</item>
+        <item name="colorPrimaryContainer">@color/accent_purple_dim</item>
+    </style>
+    <style name="ThemeOverlay.Gallery.Green" parent="">
+        <item name="colorPrimary">@color/accent_green</item>
+        <item name="colorPrimaryContainer">@color/accent_green_dim</item>
+    </style>
+    <style name="ThemeOverlay.Gallery.Orange" parent="">
+        <item name="colorPrimary">@color/accent_orange</item>
+        <item name="colorPrimaryContainer">@color/accent_orange_dim</item>
+    </style>
+    <style name="ThemeOverlay.Gallery.Pink" parent="">
+        <item name="colorPrimary">@color/accent_pink</item>
+        <item name="colorPrimaryContainer">@color/accent_pink_dim</item>
+    </style>
+    <style name="ThemeOverlay.Gallery.Teal" parent="">
+        <item name="colorPrimary">@color/accent_teal</item>
+        <item name="colorPrimaryContainer">@color/accent_teal_dim</item>
+    </style>
 </resources>

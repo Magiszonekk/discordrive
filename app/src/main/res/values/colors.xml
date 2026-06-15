@@ -11,4 +11,17 @@
     <color name="badge_synced">#34C77B</color>
     <color name="badge_pending">#9C9CA6</color>
     <color name="scrim">#99000000</color>
+    <color name="danger">#E5484D</color>
+
+    <!-- Selectable accent palette (paired bright + dim container). Blue == default theme. -->
+    <color name="accent_purple">#9B6CFF</color>
+    <color name="accent_purple_dim">#3A2C66</color>
+    <color name="accent_green">#2FBF71</color>
+    <color name="accent_green_dim">#1C4D33</color>
+    <color name="accent_orange">#FF8A3D</color>
+    <color name="accent_orange_dim">#6E3C1A</color>
+    <color name="accent_pink">#FF5C8A</color>
+    <color name="accent_pink_dim">#6E2840</color>
+    <color name="accent_teal">#1FB6B6</color>
+    <color name="accent_teal_dim">#145454</color>
 </resources>

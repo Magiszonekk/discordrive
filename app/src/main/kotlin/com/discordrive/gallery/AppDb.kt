@@ -95,6 +95,11 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "gallery.db", null, 3)
             arrayOf(asset.id.toString(), asset.sizeBytes.toString()),
         ).use { if (it.moveToFirst()) it.getString(0) else null }
 
+    /** Drops every local sync mapping (used when the cloud is wiped). */
+    fun clearAssetMap() {
+        writableDatabase.delete("asset_map", null, null)
+    }
+
     /** Removes all local traces of a remote file (after purge). */
     fun forgetFile(fileId: String) {
         writableDatabase.delete("asset_map", "file_id = ?", arrayOf(fileId))

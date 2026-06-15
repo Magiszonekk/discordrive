@@ -29,7 +29,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/settings_account"
-                android:textColor="@color/accent"
+                android:textColor="?attr/colorPrimary"
                 android:textSize="14sp"
                 android:textStyle="bold"/>
 
@@ -82,12 +82,43 @@
                 android:layout_height="wrap_content"
                 android:layout_marginVertical="20dp"/>
 
+            <!-- Wygląd -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_appearance"
+                android:textColor="?attr/colorPrimary"
+                android:textSize="14sp"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="@string/settings_appearance_hint"
+                android:textColor="@color/text_dim"
+                android:textSize="12sp"/>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/accentButton"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                app:icon="@drawable/ic_palette"
+                android:text="@string/settings_accent"/>
+
+            <com.google.android.material.divider.MaterialDivider
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginVertical="20dp"/>
+
             <!-- Synchronizacja -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/sync_section"
-                android:textColor="@color/accent"
+                android:textColor="?attr/colorPrimary"
                 android:textSize="14sp"
                 android:textStyle="bold"/>
 
@@ -133,7 +164,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/settings_ai"
-                android:textColor="@color/accent"
+                android:textColor="?attr/colorPrimary"
                 android:textSize="14sp"
                 android:textStyle="bold"/>
 
@@ -225,7 +256,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/settings_transcribe"
-                android:textColor="@color/accent"
+                android:textColor="?attr/colorPrimary"
                 android:textSize="14sp"
                 android:textStyle="bold"/>
 
@@ -283,7 +314,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/settings_bg"
-                android:textColor="@color/accent"
+                android:textColor="?attr/colorPrimary"
                 android:textSize="14sp"
                 android:textStyle="bold"/>
 
@@ -327,7 +358,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/settings_diag"
-                android:textColor="@color/accent"
+                android:textColor="?attr/colorPrimary"
                 android:textSize="14sp"
                 android:textStyle="bold"/>
 
@@ -383,7 +414,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/settings_clear_ai"
-                android:textColor="@color/accent"
+                android:textColor="?attr/colorPrimary"
                 android:textSize="14sp"
                 android:textStyle="bold"/>
 
@@ -427,6 +458,54 @@
                 android:layout_gravity="center"
                 android:layout_marginTop="4dp"
                 android:text="@string/update_check"/>
+
+            <!-- Strefa niebezpieczna -->
+            <com.google.android.material.divider.MaterialDivider
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginVertical="20dp"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_danger"
+                android:textColor="@color/danger"
+                android:textSize="14sp"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="@string/settings_danger_hint"
+                android:textColor="@color/text_dim"
+                android:textSize="12sp"/>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/wipeCloudButton"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/danger_wipe_cloud"
+                android:textColor="@color/danger"
+                app:strokeColor="@color/danger"
+                app:iconTint="@color/danger"/>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/wipeLocalButton"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/danger_wipe_local"
+                android:textColor="@color/danger"
+                app:strokeColor="@color/danger"
+                app:iconTint="@color/danger"/>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="24dp"/>
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

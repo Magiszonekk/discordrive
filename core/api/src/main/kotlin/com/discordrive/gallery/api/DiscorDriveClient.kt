@@ -397,6 +397,14 @@ class DiscorDriveClient(
         return data.getValue("emptyTrash").jsonPrimitive.content.toInt()
     }
 
+    fun deleteFolder(folderId: String): Boolean {
+        val data = graphql.execute(
+            "mutation D(${'$'}folderId: ID!) { deleteFolder(folderId: ${'$'}folderId) }",
+            buildJsonObject { put("folderId", JsonPrimitive(folderId)) },
+        )
+        return data.getValue("deleteFolder").jsonPrimitive.content.toBoolean()
+    }
+
     fun trashedFiles(): List<FileDto> {
         val data = graphql.execute(
             """

@@ -2,15 +2,26 @@ package com.discordrive.gallery
 
 import android.content.Intent
 import android.os.Bundle
+import android.provider.MediaStore
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.snackbar.Snackbar
+import kotlin.concurrent.thread
 
 class SettingsActivity : SessionActivity() {
+
+    private val wipeLocalLauncher =
+        registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                Snackbar.make(findViewById(R.id.settingsRoot), R.string.danger_wipe_local, Snackbar.LENGTH_SHORT).show()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -99,6 +110,10 @@ class SettingsActivity : SessionActivity() {
             requireSession { chooseDownloadMode() }
         }
 
+        findViewById<Button>(R.id.accentButton).setOnClickListener { pickAccent() }
+        findViewById<Button>(R.id.wipeCloudButton).setOnClickListener { confirmWipeCloud() }
+        findViewById<Button>(R.id.wipeLocalButton).setOnClickListener { confirmWipeLocal() }
+
         findViewById<Button>(R.id.copyLogsButton).setOnClickListener { copyLogs() }
         findViewById<Button>(R.id.sendLogsButton).setOnClickListener { sendLogs() }
         findViewById<Button>(R.id.clearLogsButton).setOnClickListener { clearLogs() }
@@ -132,6 +147,110 @@ class SettingsActivity : SessionActivity() {
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    // === Appearance ===
+
+    /** Single-choice accent picker; applies immediately by recreating the screen. */
+    private fun pickAccent() {
+        val labels = Settings.ACCENTS.map { getString(it.labelRes) }.toTypedArray()
+        val current = Settings.ACCENTS.indexOfFirst { it.key == Settings.accentKey(this) }.coerceAtLeast(0)
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.accent_picker_title)
+            .setSingleChoiceItems(labels, current) { dialog, which ->
+                Settings.setAccent(this, Settings.ACCENTS[which].key)
+                dialog.dismiss()
+                backupSettings()
+                Snackbar.make(findViewById(R.id.settingsRoot), R.string.accent_changed, Snackbar.LENGTH_SHORT).show()
+                recreate() // re-inflate with the new accent overlay
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    /** Best-effort E2EE push of the settings backup (so the pick follows the account). */
+    private fun backupSettings() {
+        val client = SessionManager.client ?: return
+        val filesKey = SessionManager.filesKey ?: return
+        thread {
+            runCatching { SettingsSync.push(this, client, filesKey) }
+                .onFailure { AppLog.w("Settings", "settings backup push failed", it) }
+        }
+    }
+
+    // === Danger zone ===
+
+    /** Confirms, then permanently deletes ALL files, folders and AI analyses from the cloud. */
+    private fun confirmWipeCloud() = requireSession {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.danger_wipe_cloud_title)
+            .setMessage(R.string.danger_wipe_cloud_msg)
+            .setPositiveButton(R.string.danger_wipe_cloud_confirm) { _, _ -> wipeCloud() }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun wipeCloud() {
+        val client = SessionManager.client ?: return
+        val bar = Snackbar.make(findViewById(R.id.settingsRoot), R.string.danger_wipe_cloud_progress, Snackbar.LENGTH_INDEFINITE)
+        bar.show()
+        thread {
+            var files = 0
+            var folders = 0
+            runCatching {
+                // 1) trash every live file, then purge the whole trash (chunks + manifests + Discord msgs)
+                val live = client.galleryDeltaAll(null).files.filter { it.deletedAt == null }
+                for (f in live) runCatching { client.deleteFile(f.id); files++ }
+                    .onFailure { AppLog.w("Settings", "wipe: deleteFile ${f.id} failed", it) }
+                runCatching { client.emptyTrash() }.onFailure { AppLog.w("Settings", "wipe: emptyTrash failed", it) }
+                // 2) remove now-empty folders
+                for (folder in client.folders(null)) runCatching { client.deleteFolder(folder.id); folders++ }
+                    .onFailure { AppLog.w("Settings", "wipe: deleteFolder ${folder.id} failed", it) }
+                // 3) AI enrichments (all)
+                runCatching { client.deleteEnrichments(null) }.onFailure { AppLog.w("Settings", "wipe: deleteEnrichments failed", it) }
+                // 4) reset the stale local sync state + cached previews
+                val db = AppDb(this)
+                db.clearAssetMap(); db.clearCloudItems(); db.clearAllEnrichments()
+                java.io.File(filesDir, "previews").deleteRecursively()
+            }.onFailure { AppLog.e("Settings", "wipe cloud failed", it) }
+            runOnUiThread {
+                bar.dismiss()
+                Snackbar.make(findViewById(R.id.settingsRoot), getString(R.string.danger_wipe_cloud_done, files, folders), Snackbar.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /** Confirms, then deletes every local photo/video from the device (MediaStore). */
+    private fun confirmWipeLocal() {
+        thread {
+            val assets = MediaScanner(this).scanAll() // local-only uris
+            runOnUiThread {
+                if (assets.isEmpty()) {
+                    Snackbar.make(findViewById(R.id.settingsRoot), R.string.danger_wipe_local_empty, Snackbar.LENGTH_SHORT).show()
+                    return@runOnUiThread
+                }
+                MaterialAlertDialogBuilder(this)
+                    .setTitle(R.string.danger_wipe_local_title)
+                    .setMessage(getString(R.string.danger_wipe_local_msg, assets.size))
+                    .setPositiveButton(R.string.danger_wipe_local_confirm) { _, _ -> wipeLocal(assets) }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            }
+        }
+    }
+
+    private fun wipeLocal(assets: List<MediaAsset>) {
+        val uris = assets.map { it.uri }
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            // Android shows its own batch delete confirmation for these uris.
+            val request = MediaStore.createDeleteRequest(contentResolver, uris)
+            wipeLocalLauncher.launch(IntentSenderRequest.Builder(request.intentSender).build())
+        } else {
+            thread {
+                uris.forEach { runCatching { contentResolver.delete(it, null, null) } }
+                runOnUiThread { Snackbar.make(findViewById(R.id.settingsRoot), R.string.danger_wipe_local, Snackbar.LENGTH_SHORT).show() }
+            }
+        }
     }
 
     /** Deletes every AI analysis (cloud enrichment blobs + local cache). */
