@@ -1,10 +1,13 @@
 package com.discordrive.gallery
 
+import android.content.res.ColorStateList
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
+import androidx.core.widget.ImageViewCompat
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.color.MaterialColors
 
 class GalleryAdapter(
     private val onClick: (MediaAsset) -> Unit,
@@ -49,8 +52,17 @@ class GalleryAdapter(
         val asset = assets[position]
         ThumbLoader.load(holder.itemView.context, asset, holder.thumb)
         holder.playIcon.visibility = if (asset.isVideo) View.VISIBLE else View.GONE
-        holder.cloudBadge.setImageResource(
-            if (asset.id in syncedAssetIds) R.drawable.ic_cloud_done else R.drawable.ic_cloud_pending,
+        val isSynced = asset.id in syncedAssetIds
+        holder.cloudBadge.setImageResource(if (isSynced) R.drawable.ic_cloud_done else R.drawable.ic_cloud_pending)
+        // Synced badge follows the accent colour; pending keeps the drawable's own grey.
+        // ImageViewCompat tints reliably on AppCompatImageView (plain imageTintList didn't take).
+        ImageViewCompat.setImageTintList(
+            holder.cloudBadge,
+            if (isSynced) {
+                ColorStateList.valueOf(MaterialColors.getColor(holder.cloudBadge, com.google.android.material.R.attr.colorPrimary))
+            } else {
+                ColorStateList.valueOf(holder.itemView.context.getColor(R.color.badge_pending))
+            },
         )
 
         val selected = selectionMode && asset.id in selectedIds
