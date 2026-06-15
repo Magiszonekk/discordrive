@@ -27,6 +27,14 @@
     <string name="sync_from_cloud_action">Pobierz z chmury</string>
     <string name="sync_from_cloud">Pobieranie z chmury</string>
     <string name="download_started_bg">Pobieranie z chmury uruchomione — działa w tle (postęp w powiadomieniu)</string>
+    <string name="download_full_files">Pełne pliki (do galerii urządzenia)</string>
+    <string name="download_previews_only">Tylko podglądy (galeria offline)</string>
+    <string name="previews_started_bg">Pobieranie podglądów uruchomione — działa w tle (postęp w powiadomieniu)</string>
+    <string name="sync_previews">Pobieranie podglądów</string>
+    <string name="sync_previews_done">podglądów</string>
+    <string name="viewer_needs_session">Pobranie pełnego pliku wymaga zalogowania</string>
+    <string name="viewer_fetching_video">Pobieranie wideo z chmury…</string>
+    <string name="viewer_cloud_only">Ten element jest tylko w chmurze (brak lokalnej kopii)</string>
     <string name="sync_notif_channel">Synchronizacja w tle</string>
     <string name="sync_notif_title">Synchronizacja</string>
     <string name="sync_notif_paused">Synchronizacja wstrzymana</string>

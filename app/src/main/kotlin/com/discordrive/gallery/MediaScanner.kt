@@ -14,6 +14,10 @@ data class MediaAsset(
     val sizeBytes: Long,
     val dateAddedSec: Long,
     val isVideo: Boolean,
+    /** Non-null => a cloud-only item (no local file); the remote DiscorDrive file id. */
+    val cloudFileId: String? = null,
+    /** Local path to a cached preview JPEG, for cloud-only items shown offline. */
+    val previewPath: String? = null,
 )
 
 /**
@@ -22,12 +26,31 @@ data class MediaAsset(
  */
 class MediaScanner(private val context: Context) {
 
+    /** Local device media only — the source of truth for what sync uploads. */
     fun scanAll(): List<MediaAsset> =
         (scan(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, isVideo = false) +
             scan(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, isVideo = true))
             .sortedByDescending { it.dateAddedSec }
 
-    fun findById(assetId: Long): MediaAsset? = scanAll().firstOrNull { it.id == assetId }
+    /**
+     * Local media PLUS cloud-only items (downloaded as previews) — what the
+     * gallery UI shows so a previews-only library is browsable offline. Cloud
+     * items whose file already exists locally are dropped to avoid duplicates.
+     * NOTE: the uploader must keep using [scanAll] (cloud-only items have no
+     * local bytes to upload).
+     */
+    fun scanGallery(): List<MediaAsset> {
+        val local = scanAll()
+        val cloudOnly = runCatching {
+            val db = AppDb(context)
+            val localFileIds = db.mappedFileIds()
+            db.cloudItemsAsAssets().filter { it.cloudFileId !in localFileIds }
+        }.getOrDefault(emptyList())
+        if (cloudOnly.isEmpty()) return local
+        return (local + cloudOnly).sortedByDescending { it.dateAddedSec }
+    }
+
+    fun findById(assetId: Long): MediaAsset? = scanGallery().firstOrNull { it.id == assetId }
 
     private fun scan(collection: Uri, isVideo: Boolean): List<MediaAsset> {
         val projection = arrayOf(

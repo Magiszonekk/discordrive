@@ -69,15 +69,18 @@ class SyncRunner(
         // that no longer exist in the cloud (purged / deleted elsewhere). Validate
         // once so they are RE-UPLOADED, not skipped. On fetch failure (offline) we
         // trust the local map to avoid a spurious mass re-upload.
-        val remoteIds: Set<String>? = if (assets.any { db.fileIdFor(it) != null }) {
-            runCatching {
-                client.galleryDeltaAll(null).files
-                    .filter { it.status == "READY" && it.deletedAt == null }
-                    .map { it.id }.toSet()
-            }.getOrNull()
-        } else {
-            null
-        }
+        // Map (not just id set) so we can also see which already-synced files are
+        // still missing a cloud preview and backfill it from the local original.
+        val remoteFiles: Map<String, com.discordrive.gallery.api.FileDto>? =
+            if (assets.any { db.fileIdFor(it) != null }) {
+                runCatching {
+                    client.galleryDeltaAll(null).files
+                        .filter { it.status == "READY" && it.deletedAt == null }
+                        .associateBy { it.id }
+                }.getOrNull()
+            } else {
+                null
+            }
 
         val total = assets.size
         val uploaded = AtomicInteger(0)
@@ -105,12 +108,16 @@ class SyncRunner(
                     if (SyncController.cancelled) { done.incrementAndGet(); return@Callable }
                     try {
                         val mappedFileId = db.fileIdFor(asset)
-                        val stillInCloud = mappedFileId != null && (remoteIds == null || mappedFileId in remoteIds)
+                        val stillInCloud = mappedFileId != null && (remoteFiles == null || mappedFileId in remoteFiles)
                         if (stillInCloud) {
                             // drift repair: file moved between buckets locally → mirror in cloud
                             if (db.mappedBucketFor(asset) != asset.bucketName) {
                                 client.moveFile(mappedFileId!!, folderFor(asset.bucketName))
                                 db.rememberMapping(asset, mappedFileId)
+                            }
+                            // backfill a preview for files uploaded before previews existed
+                            if (remoteFiles?.get(mappedFileId)?.previewBlobId == null) {
+                                makeAndUploadPreview(asset, mappedFileId!!)
                             }
                             skipped.incrementAndGet()
                             consecutiveNetFails.set(0)
@@ -133,6 +140,9 @@ class SyncRunner(
                         } else {
                             uploaded.incrementAndGet()
                             bytesDone.addAndGet(asset.sizeBytes)
+                            // attach an E2EE preview so this file can later be browsed
+                            // offline in previews-only mode (best-effort)
+                            makeAndUploadPreview(asset, outcome.fileId)
                         }
                         consecutiveNetFails.set(0)
                     } catch (e: Throwable) {
@@ -173,15 +183,7 @@ class SyncRunner(
         val remote = client.galleryDeltaAll(null).files.filter { it.status == "READY" && it.deletedAt == null }
         val have = db.mappedFileIds()
         val missing = remote.filter { it.id !in have }
-        // folderId → bucket name (decrypted), to restore into the right album
-        val folderNames = client.folders(null).associate { f ->
-            f.id to runCatching {
-                val key = DdvCrypto.unwrapKeyPacked(DdvCrypto.b64decode(f.wrappedFolderKey), filesKey)
-                val body = DdvCrypto.decryptMeta(key, f.encryptedBody)
-                (kotlinx.serialization.json.Json.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject)
-                    .getValue("name").let { (it as kotlinx.serialization.json.JsonPrimitive).content }
-            }.getOrNull()
-        }
+        val folderNames = folderNameMap() // folderId → decrypted bucket name
         val total = missing.size
         var downloaded = 0
         var failed = 0
@@ -216,6 +218,78 @@ class SyncRunner(
         AppLog.i("SyncRunner", "download done: $downloaded downloaded, $failed failed")
         return Progress("download", total, total, "done", failed = failed, downloaded = downloaded, bytesDone = bytesDone)
     }
+
+    /**
+     * Sync FROM cloud, previews only: downloads each cloud file's small E2EE
+     * preview (not the full bytes) into app-private storage and records a
+     * cloud-only gallery item, so a fresh device gets a browsable, offline
+     * gallery cheaply. The full file is fetched on demand when an item is opened.
+     * Files without a cloud preview (uploaded before previews existed) are
+     * skipped — a "Wyślij do chmury" pass from the owning device backfills them.
+     */
+    fun downloadPreviewsFromCloud(onProgress: (Progress) -> Unit): Progress {
+        val remote = client.galleryDeltaAll(null).files.filter { it.status == "READY" && it.deletedAt == null }
+        val haveLocal = db.mappedFileIds()
+        val haveCloud = db.cloudItemFileIds()
+        val missing = remote.filter { it.previewBlobId != null && it.id !in haveLocal && it.id !in haveCloud }
+        val folderNames = folderNameMap()
+        val previewDir = java.io.File(context.filesDir, "previews").apply { mkdirs() }
+        val total = missing.size
+        var downloaded = 0
+        var failed = 0
+        AppLog.i("SyncRunner", "download previews: $total of ${remote.size} (no preview: ${remote.count { it.previewBlobId == null }})")
+
+        for ((index, file) in missing.withIndex()) {
+            SyncController.awaitIfPaused()
+            if (SyncController.cancelled) break
+            onProgress(Progress("preview", index, total, "", downloaded = downloaded, failed = failed))
+            try {
+                val bytes = uploadEngine.downloadPreview(file, filesKey) ?: run { failed++; null } ?: continue
+                val rootFek = DdvCrypto.unwrapRootFek(file.wrappedFEK, filesKey)
+                val name = file.encryptedName?.let { DdvCrypto.decryptMeta(rootFek, it) } ?: file.id
+                val mime = file.encryptedMimeType?.let { DdvCrypto.decryptMeta(rootFek, it) } ?: "application/octet-stream"
+                val bucket = file.parentFolderId?.let { folderNames[it] } ?: "DiscorDrive"
+                val dateSec = runCatching { java.time.Instant.parse(file.createdAt).epochSecond }
+                    .getOrDefault(System.currentTimeMillis() / 1000)
+                val out = java.io.File(previewDir, file.id.replace(Regex("[^A-Za-z0-9_-]"), "_") + ".jpg")
+                out.writeBytes(bytes)
+                db.rememberCloudItem(
+                    fileId = file.id,
+                    bucket = bucket,
+                    name = name,
+                    mime = mime,
+                    sizeBytes = file.totalCiphertextBytes.toLongOrNull() ?: 0L,
+                    dateAddedSec = dateSec,
+                    isVideo = mime.startsWith("video/"),
+                    previewPath = out.absolutePath,
+                )
+                downloaded++
+            } catch (e: Throwable) {
+                failed++
+                AppLog.w("SyncRunner", "preview download failed for ${file.id}", e)
+            }
+        }
+        AppLog.i("SyncRunner", "previews done: $downloaded downloaded, $failed failed")
+        return Progress("preview", total, total, "done", downloaded = downloaded, failed = failed)
+    }
+
+    /** Best-effort: builds a small JPEG preview from the local asset, uploads it E2EE. */
+    private fun makeAndUploadPreview(asset: MediaAsset, fileId: String) {
+        runCatching {
+            uploadEngine.uploadPreview(fileId, AiImagePreparer.prepare(context, asset), filesKey)
+        }.onFailure { AppLog.w("SyncRunner", "preview upload failed for ${asset.displayName}", it) }
+    }
+
+    /** folderId → decrypted bucket name, for restoring items into the right album. */
+    private fun folderNameMap(): Map<String, String?> =
+        client.folders(null).associate { f ->
+            f.id to runCatching {
+                val key = DdvCrypto.unwrapKeyPacked(DdvCrypto.b64decode(f.wrappedFolderKey), filesKey)
+                val body = DdvCrypto.decryptMeta(key, f.encryptedBody)
+                (kotlinx.serialization.json.Json.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject)
+                    .getValue("name").let { (it as kotlinx.serialization.json.JsonPrimitive).content }
+            }.getOrNull()
+        }
 
     /**
      * AI enrichment pass.

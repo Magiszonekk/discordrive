@@ -44,6 +44,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         val initialLabel = when (mode) {
             MODE_AI -> R.string.action_ai
             MODE_DOWNLOAD -> R.string.sync_from_cloud
+            MODE_DOWNLOAD_PREVIEWS -> R.string.sync_previews
             else -> R.string.sync_notif_title
         }
         SyncController.update(0, 0, ctx.getString(initialLabel), "")
@@ -57,6 +58,13 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
                     val tracker = newSpeedTracker(ctx, ctx.getString(R.string.sync_from_cloud), "↓")
                     val r = runner.downloadFromCloud { tracker.onProgress(it) }
                     AppLog.i("SyncWorker", "download: ${r.downloaded} downloaded, ${r.failed} failed")
+                }
+                MODE_DOWNLOAD_PREVIEWS -> {
+                    val tracker = JobProgressTracker(ctx, ctx.getString(R.string.sync_previews)) {
+                        "${it.downloaded} ${ctx.getString(R.string.sync_previews_done)}"
+                    }
+                    val r = runner.downloadPreviewsFromCloud { tracker.onProgress(it) }
+                    AppLog.i("SyncWorker", "previews: ${r.downloaded} downloaded, ${r.failed} failed")
                 }
                 else -> {
                     AppLog.i("SyncWorker", "sync run")
@@ -119,6 +127,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         const val MODE_SYNC = "sync"
         const val MODE_AI = "ai"
         const val MODE_DOWNLOAD = "download"
+        const val MODE_DOWNLOAD_PREVIEWS = "download_previews"
 
         /**
          * Runs a sync or AI pass immediately as a foreground service, so it keeps

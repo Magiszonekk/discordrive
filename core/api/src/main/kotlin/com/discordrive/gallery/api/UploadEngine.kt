@@ -150,6 +150,32 @@ class UploadEngine(private val client: DiscorDriveClient) {
         return UploadOutcome(fileId = fileId, deduplicated = false)
     }
 
+    /**
+     * Generates an E2EE preview for an already-committed file: the preview bytes
+     * (a small JPEG produced by the caller) get their own random FEK, are
+     * encrypted as a single chunk, uploaded as the `<fileId>:preview` blob, and
+     * attached via setFilePreview. The preview FEK is wrapped with [filesKey] so
+     * any device with the account can decrypt it. Best-effort — callers ignore
+     * failures so a preview hiccup never fails the file upload.
+     */
+    fun uploadPreview(fileId: String, previewBytes: ByteArray, filesKey: ByteArray) {
+        val previewFek = AesGcm.randomKey()
+        val ciphertext = DdvCrypto.encryptChunk(previewBytes, previewFek)
+        val blobId = "$fileId:preview"
+        client.blobs.upload(blobId, ciphertext, UUID.randomUUID().toString(), 0, 1)
+        val wrappedFEKPreview = DdvCrypto.b64encode(DdvCrypto.wrapKeyPacked(previewFek, filesKey))
+        client.setFilePreview(fileId, blobId, wrappedFEKPreview)
+    }
+
+    /** Decrypts a file's preview blob to JPEG bytes, or null if it has none. */
+    fun downloadPreview(file: FileDto, filesKey: ByteArray): ByteArray? {
+        val blobId = file.previewBlobId ?: return null
+        val wrapped = file.wrappedFEKPreview ?: return null
+        val previewFek = DdvCrypto.unwrapKeyPacked(DdvCrypto.b64decode(wrapped), filesKey)
+        val ciphertext = client.blobs.downloadOrNull(blobId) ?: return null
+        return DdvCrypto.decryptChunk(ciphertext, previewFek)
+    }
+
     /** Downloads and decrypts a whole file (verification / small files). */
     fun downloadFile(file: FileDto, filesKey: ByteArray): ByteArray {
         val manifestBlobId = requireNotNull(file.primaryManifestBlobId) { "File has no manifest" }

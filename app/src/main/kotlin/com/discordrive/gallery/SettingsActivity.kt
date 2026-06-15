@@ -96,10 +96,7 @@ class SettingsActivity : SessionActivity() {
             }
         }
         findViewById<Button>(R.id.syncFromCloudButton).setOnClickListener {
-            requireSession {
-                SyncWorker.runNow(this, SyncWorker.MODE_DOWNLOAD)
-                Snackbar.make(findViewById(R.id.settingsRoot), R.string.download_started_bg, Snackbar.LENGTH_LONG).show()
-            }
+            requireSession { chooseDownloadMode() }
         }
 
         findViewById<Button>(R.id.copyLogsButton).setOnClickListener { copyLogs() }
@@ -117,6 +114,24 @@ class SettingsActivity : SessionActivity() {
             "DiscorDrive Gallery v${packageManager.getPackageInfo(packageName, 0).versionName}"
 
         findViewById<Button>(R.id.checkUpdateButton).setOnClickListener { Updater.check(this, manual = true) }
+    }
+
+    /** Asks whether to pull full files or just previews (offline gallery) from the cloud. */
+    private fun chooseDownloadMode() {
+        val options = arrayOf(
+            getString(R.string.download_full_files),
+            getString(R.string.download_previews_only),
+        )
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.sync_from_cloud_action)
+            .setItems(options) { _, which ->
+                val mode = if (which == 0) SyncWorker.MODE_DOWNLOAD else SyncWorker.MODE_DOWNLOAD_PREVIEWS
+                SyncWorker.runNow(this, mode)
+                val msg = if (which == 0) R.string.download_started_bg else R.string.previews_started_bg
+                Snackbar.make(findViewById(R.id.settingsRoot), msg, Snackbar.LENGTH_LONG).show()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     /** Deletes every AI analysis (cloud enrichment blobs + local cache). */

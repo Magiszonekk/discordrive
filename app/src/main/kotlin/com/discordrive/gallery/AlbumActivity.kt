@@ -153,9 +153,9 @@ class AlbumActivity : SessionActivity() {
 
     private fun refreshGrid() {
         thread {
-            val assets = MediaScanner(this).scanAll().filter { it.bucketName == bucket }
+            val assets = MediaScanner(this).scanGallery().filter { it.bucketName == bucket }
             val db = AppDb(this)
-            val synced = assets.filter { db.fileIdFor(it) != null }.map { it.id }.toSet()
+            val synced = assets.filter { db.fileIdForAny(it) != null }.map { it.id }.toSet()
             runOnUiThread {
                 currentAssets = assets
                 // drop selections whose assets disappeared (e.g. deleted locally)
@@ -247,9 +247,14 @@ class AlbumActivity : SessionActivity() {
             var trashed = 0
             var unsynced = 0
             for (asset in assets) {
-                val fileId = db.fileIdFor(asset) ?: run { unsynced++; null } ?: continue
-                runCatching { client.deleteFile(fileId); trashed++ }
-                    .onFailure { AppLog.w("Album", "trash failed for ${asset.displayName}", it) }
+                val fileId = db.fileIdForAny(asset) ?: run { unsynced++; null } ?: continue
+                runCatching {
+                    client.deleteFile(fileId); trashed++
+                    if (asset.cloudFileId != null) { // cloud-only: drop its local preview entry
+                        asset.previewPath?.let { p -> runCatching { java.io.File(p).delete() } }
+                        db.forgetCloudItem(asset.cloudFileId)
+                    }
+                }.onFailure { AppLog.w("Album", "trash failed for ${asset.displayName}", it) }
             }
             setWorking(null)
             runOnUiThread {
@@ -271,12 +276,14 @@ class AlbumActivity : SessionActivity() {
 
     /** MediaStore delete — Android shows one confirmation dialog for the whole batch. */
     private fun deleteLocalBatch(assets: List<MediaAsset>) {
-        if (assets.isEmpty()) return
+        // cloud-only items have no local copy — only real MediaStore uris can be deleted
+        val local = assets.filter { it.cloudFileId == null }
+        if (local.isEmpty()) { exitSelection(); refreshGrid(); return }
         if (android.os.Build.VERSION.SDK_INT >= 30) {
-            val intent = android.provider.MediaStore.createDeleteRequest(contentResolver, assets.map { it.uri })
+            val intent = android.provider.MediaStore.createDeleteRequest(contentResolver, local.map { it.uri })
             startIntentSenderForResult(intent.intentSender, REQUEST_DELETE_LOCAL, null, 0, 0, 0)
         } else {
-            assets.forEach { runCatching { contentResolver.delete(it.uri, null, null) } }
+            local.forEach { runCatching { contentResolver.delete(it.uri, null, null) } }
             exitSelection()
             refreshGrid()
         }
@@ -295,7 +302,7 @@ class AlbumActivity : SessionActivity() {
         if (working) return
         val client = SessionManager.client ?: return
         val filesKey = SessionManager.filesKey ?: return
-        val assets = selectedAssets()
+        val assets = selectedAssets().filter { it.cloudFileId == null } // cloud-only items have no local bytes to upload
         if (assets.isEmpty()) return
         setWorking("${getString(R.string.action_sync_selected)}…")
         thread {
@@ -392,7 +399,7 @@ class AlbumActivity : SessionActivity() {
             var moved = 0
             var unsynced = 0
             for (asset in assets) {
-                val fileId = db.fileIdFor(asset) ?: run { unsynced++; null } ?: continue
+                val fileId = db.fileIdForAny(asset) ?: run { unsynced++; null } ?: continue
                 runCatching { client.moveFile(fileId, folderId); moved++ }
                     .onFailure { AppLog.w("Album", "move failed for ${asset.displayName}", it) }
             }

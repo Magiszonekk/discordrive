@@ -3,6 +3,7 @@ package com.discordrive.gallery
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Bundle
 import android.text.format.Formatter
 import android.view.LayoutInflater
@@ -16,6 +17,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import com.discordrive.gallery.api.AiVisionClient
+import com.discordrive.gallery.api.UploadEngine
 import com.discordrive.gallery.crypto.DdvCrypto
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.RecyclerView
@@ -114,7 +116,7 @@ class ViewerActivity : SessionActivity() {
     /** (Re)loads the album's assets and focuses one (or a fallback index). */
     private fun loadAssets(focusAssetId: Long, fallbackIndex: Int) {
         thread {
-            val all = MediaScanner(this).scanAll()
+            val all = MediaScanner(this).scanGallery()
             val scoped = bucket?.let { b -> all.filter { it.bucketName == b } }
                 ?.takeIf { it.isNotEmpty() } ?: all
             runOnUiThread {
@@ -142,7 +144,7 @@ class ViewerActivity : SessionActivity() {
         analyzeAiButton.visibility = View.GONE
         thread {
             val db = AppDb(this)
-            val fileId = db.fileIdFor(asset)
+            val fileId = db.fileIdForAny(asset)
             val record = fileId?.let { db.enrichmentFor(it) }
             runOnUiThread {
                 if (shownAsset?.id != asset.id) return@runOnUiThread // already swiped on
@@ -155,8 +157,10 @@ class ViewerActivity : SessionActivity() {
                     clearAiButton.visibility = View.VISIBLE
                 } else {
                     descriptionView.text = getString(R.string.viewer_no_enrichment)
-                    // offer analysis only for synced photos (needs the cloud file's key)
-                    analyzeAiButton.visibility = if (fileId != null) View.VISIBLE else View.GONE
+                    // offer analysis only for synced photos with a local file (vision
+                    // reads the original — cloud-only previews can't be analyzed here)
+                    analyzeAiButton.visibility =
+                        if (fileId != null && asset.cloudFileId == null) View.VISIBLE else View.GONE
                 }
             }
         }
@@ -227,6 +231,7 @@ class ViewerActivity : SessionActivity() {
     /** Uploads just this photo (skips/dedupes if already synced). */
     private fun syncCurrent() {
         val asset = shownAsset ?: return
+        if (asset.cloudFileId != null) { snack(getString(R.string.viewer_cloud_only)); return } // already in cloud, no local bytes
         requireSession {
             val client = SessionManager.client ?: return@requireSession
             val filesKey = SessionManager.filesKey ?: return@requireSession
@@ -255,7 +260,7 @@ class ViewerActivity : SessionActivity() {
             val client = SessionManager.client ?: return@requireSession
             val filesKey = SessionManager.filesKey ?: return@requireSession
             thread {
-                val fileId = AppDb(this).fileIdFor(asset)
+                val fileId = AppDb(this).fileIdForAny(asset)
                 if (fileId == null) {
                     runOnUiThread { snack(getString(R.string.viewer_not_synced)) }
                     return@thread
@@ -313,12 +318,21 @@ class ViewerActivity : SessionActivity() {
         requireSession {
             val client = SessionManager.client ?: return@requireSession
             thread {
-                val fileId = AppDb(this).fileIdFor(asset)
+                val db = AppDb(this)
+                val fileId = db.fileIdForAny(asset)
                 val trashed = fileId != null && runCatching { client.deleteFile(fileId) }
                     .onFailure { AppLog.w("Viewer", "trash failed", it) }.getOrDefault(false)
+                // cloud-only item trashed → drop its local preview entry so it vanishes from the grid
+                if (trashed && asset.cloudFileId != null) {
+                    asset.previewPath?.let { runCatching { java.io.File(it).delete() } }
+                    db.forgetCloudItem(asset.cloudFileId)
+                }
                 runOnUiThread {
                     snack(if (trashed) getString(R.string.sel_trashed, 1) else getString(R.string.sel_none_synced))
-                    if (alsoLocal) deleteCurrentLocal() // removes the device copy too
+                    when {
+                        alsoLocal && asset.cloudFileId == null -> deleteCurrentLocal() // removes the device copy too
+                        asset.cloudFileId != null -> reloadAfterLocalRemoval() // no local copy; just refresh
+                    }
                 }
             }
         }
@@ -326,6 +340,7 @@ class ViewerActivity : SessionActivity() {
 
     private fun deleteCurrentLocal() {
         val asset = shownAsset ?: return
+        if (asset.cloudFileId != null) { snack(getString(R.string.viewer_cloud_only)); return } // no local copy
         if (android.os.Build.VERSION.SDK_INT >= 30) {
             val request = android.provider.MediaStore.createDeleteRequest(contentResolver, listOf(asset.uri))
             localDeleteLauncher.launch(IntentSenderRequest.Builder(request.intentSender).build())
@@ -340,7 +355,7 @@ class ViewerActivity : SessionActivity() {
         snack(getString(R.string.viewer_info_loading))
         thread {
             val db = AppDb(this)
-            val fileId = db.fileIdFor(asset)
+            val fileId = db.fileIdForAny(asset)
             val hasLocalAi = fileId?.let { db.enrichmentFor(it) != null } ?: false
             // best-effort cloud status (only if a session is already live)
             val remoteStatus = if (fileId != null && SessionManager.isLoggedIn) {
@@ -385,13 +400,43 @@ class ViewerActivity : SessionActivity() {
 
     /** Attaches the shared player to the tapped video page and starts inline playback. */
     private fun startPlayback(playerView: PlayerView, image: ImageView, play: ImageView, asset: MediaAsset) {
+        if (asset.cloudFileId != null) {
+            startCloudPlayback(playerView, image, play, asset) // fetch full file on demand, then play
+        } else {
+            playFromUri(playerView, image, play, asset.uri)
+        }
+    }
+
+    /** Downloads a cloud-only video's full file to cache, then plays it inline. */
+    private fun startCloudPlayback(playerView: PlayerView, image: ImageView, play: ImageView, asset: MediaAsset) {
+        val client = SessionManager.client
+        val filesKey = SessionManager.filesKey
+        val fileId = asset.cloudFileId ?: return
+        if (client == null || filesKey == null) { snack(getString(R.string.viewer_needs_session)); return }
+        snack(getString(R.string.viewer_fetching_video))
+        thread {
+            try {
+                val file = client.file(fileId) ?: error("file gone")
+                val cache = java.io.File(cacheDir, "cloud-video-${asset.id}.bin")
+                java.io.FileOutputStream(cache).use { UploadEngine(client).downloadToStream(file, filesKey, it) }
+                runOnUiThread {
+                    if (shownAsset?.id == asset.id) playFromUri(playerView, image, play, Uri.fromFile(cache))
+                }
+            } catch (e: Throwable) {
+                AppLog.w("Viewer", "cloud video fetch failed for ${asset.displayName}", e)
+                runOnUiThread { snack("Błąd: ${e.message}") }
+            }
+        }
+    }
+
+    private fun playFromUri(playerView: PlayerView, image: ImageView, play: ImageView, uri: Uri) {
         stopPlayback()
         val p = ExoPlayer.Builder(this).build()
         playerView.player = p
         playerView.visibility = View.VISIBLE
         image.visibility = View.GONE
         play.visibility = View.GONE
-        p.setMediaItem(MediaItem.fromUri(asset.uri))
+        p.setMediaItem(MediaItem.fromUri(uri))
         p.prepare()
         p.playWhenReady = true
         player = p
@@ -480,28 +525,69 @@ class ViewerActivity : SessionActivity() {
             holder.play.setOnClickListener { startPlayback(holder.playerView, holder.image, holder.play, asset) }
 
             decoder.execute {
-                val bitmap = if (asset.isVideo) {
-                    runCatching {
+                // First paint: a fast local image. Cloud-only items use their cached
+                // preview; local items decode the MediaStore file / video thumbnail.
+                val initial = when {
+                    asset.previewPath != null -> decodeFile(asset.previewPath)
+                    asset.isVideo -> runCatching {
                         contentResolver.loadThumbnail(asset.uri, android.util.Size(1280, 1280), null)
                     }.getOrNull()
-                } else {
-                    decodeScaled(asset)
+                    else -> decodeScaled(asset)
                 }
                 runOnUiThread {
-                    if (holder.image.tag == asset.id && bitmap != null) holder.image.setImageBitmap(bitmap)
+                    if (holder.image.tag == asset.id && initial != null) holder.image.setImageBitmap(initial)
                 }
+                // Cloud-only photo: fetch the full file on demand and swap in the sharp
+                // image for zoom (video full files are fetched on the play tap instead).
+                if (asset.cloudFileId != null && !asset.isVideo) fetchFullImage(holder, asset)
             }
+        }
+
+        /** Downloads a cloud-only photo's full bytes and swaps the sharp image in. */
+        private fun fetchFullImage(holder: PageHolder, asset: MediaAsset) {
+            val client = SessionManager.client ?: return // offline → keep the preview
+            val filesKey = SessionManager.filesKey ?: return
+            val fileId = asset.cloudFileId ?: return
+            runCatching {
+                val file = client.file(fileId) ?: return
+                val bytes = UploadEngine(client).downloadFile(file, filesKey)
+                val bmp = decodeScaledBytes(bytes) ?: return
+                runOnUiThread {
+                    if (holder.image.tag == asset.id) holder.image.setImageBitmap(bmp)
+                }
+            }.onFailure { AppLog.w("Viewer", "full image fetch failed for ${asset.displayName}", it) }
         }
 
         private fun decodeScaled(asset: MediaAsset): Bitmap? = runCatching {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             contentResolver.openInputStream(asset.uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-            val screenMax = maxOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
-            var sample = 1
-            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= screenMax) sample *= 2
+            val sample = sampleSizeFor(bounds.outWidth, bounds.outHeight)
             contentResolver.openInputStream(asset.uri)?.use { stream ->
                 BitmapFactory.decodeStream(stream, null, BitmapFactory.Options().apply { inSampleSize = sample })
             }
         }.getOrNull()
+
+        private fun decodeFile(path: String): Bitmap? = runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, bounds)
+            BitmapFactory.decodeFile(path, BitmapFactory.Options().apply {
+                inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight)
+            })
+        }.getOrNull()
+
+        private fun decodeScaledBytes(bytes: ByteArray): Bitmap? = runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
+                inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight)
+            })
+        }.getOrNull()
+
+        private fun sampleSizeFor(w: Int, h: Int): Int {
+            val screenMax = maxOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+            var sample = 1
+            while (maxOf(w, h) / (sample * 2) >= screenMax) sample *= 2
+            return sample
+        }
     }
 }

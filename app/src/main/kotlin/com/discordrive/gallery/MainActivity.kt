@@ -102,7 +102,7 @@ class MainActivity : SessionActivity() {
 
     private fun refreshAlbums() {
         thread {
-            val assets = MediaScanner(this).scanAll()
+            val assets = MediaScanner(this).scanGallery()
             val albums = assets.groupBy { it.bucketName }.map { (name, items) ->
                 Album(
                     name = name,

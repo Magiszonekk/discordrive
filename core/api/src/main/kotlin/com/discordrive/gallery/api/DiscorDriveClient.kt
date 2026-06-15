@@ -326,6 +326,23 @@ class DiscorDriveClient(
         )
     }
 
+    /** Attaches an already-uploaded, client-encrypted preview blob to a file. */
+    fun setFilePreview(fileId: String, previewBlobId: String, wrappedFEKPreview: String): Boolean {
+        val data = graphql.execute(
+            """
+            mutation SetPreview(${'$'}fileId: ID!, ${'$'}previewBlobId: String!, ${'$'}wrappedFEKPreview: String!) {
+              setFilePreview(fileId: ${'$'}fileId, previewBlobId: ${'$'}previewBlobId, wrappedFEKPreview: ${'$'}wrappedFEKPreview)
+            }
+            """.trimIndent(),
+            buildJsonObject {
+                put("fileId", JsonPrimitive(fileId))
+                put("previewBlobId", JsonPrimitive(previewBlobId))
+                put("wrappedFEKPreview", JsonPrimitive(wrappedFEKPreview))
+            },
+        )
+        return data.getValue("setFilePreview").jsonPrimitive.content.toBoolean()
+    }
+
     fun folders(parentFolderId: String?): List<FolderDto> {
         val data = graphql.execute(
             """

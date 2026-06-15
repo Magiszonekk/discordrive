@@ -2,6 +2,7 @@ package com.discordrive.gallery
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -32,7 +33,9 @@ object ThumbLoader {
         target.setImageDrawable(null)
 
         executor.execute {
-            val bitmap = decode(context, asset.uri, sizePx) ?: return@execute
+            // cloud-only items have no MediaStore uri — decode their cached preview file
+            val bitmap = (asset.previewPath?.let { decodeFile(it, sizePx) }
+                ?: decode(context, asset.uri, sizePx)) ?: return@execute
             cache.put(asset.id, bitmap)
             mainHandler.post {
                 if (target.tag == asset.id) target.setImageBitmap(bitmap)
@@ -42,4 +45,13 @@ object ThumbLoader {
 
     private fun decode(context: Context, uri: Uri, sizePx: Int): Bitmap? =
         runCatching { context.contentResolver.loadThumbnail(uri, Size(sizePx, sizePx), null) }.getOrNull()
+
+    /** Decodes a local preview JPEG, downsampled to roughly [sizePx]. */
+    private fun decodeFile(path: String, sizePx: Int): Bitmap? = runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(path, bounds)
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= sizePx) sample *= 2
+        BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })
+    }.getOrNull()
 }
