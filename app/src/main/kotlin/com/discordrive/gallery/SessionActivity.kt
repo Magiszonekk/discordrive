@@ -1,6 +1,7 @@
 package com.discordrive.gallery
 
 import android.content.Intent
+import android.os.Bundle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import kotlin.concurrent.thread
@@ -22,6 +23,22 @@ import kotlin.concurrent.thread
 abstract class SessionActivity : AppCompatActivity() {
 
     private var pendingAction: (() -> Unit)? = null
+
+    /** Accent this screen was inflated with; if it changes elsewhere, recreate on resume. */
+    private var appliedAccent: String? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        appliedAccent = Settings.accentKey(this)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // The accent picker only recreates the Settings screen; activities already
+        // on the back stack keep their old theme until they re-create. Pick up a
+        // changed accent when the user returns here.
+        if (appliedAccent != null && appliedAccent != Settings.accentKey(this)) recreate()
+    }
 
     private val loginLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
