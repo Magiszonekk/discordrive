@@ -12,6 +12,7 @@
     <color name="badge_pending">#9C9CA6</color>
     <color name="scrim">#99000000</color>
     <color name="danger">#E5484D</color>
+    <color name="danger_dim">#2AE5484D</color>
 
     <!-- Selectable accent palette (paired bright + dim container). Blue == default theme. -->
     <color name="accent_purple">#9B6CFF</color>

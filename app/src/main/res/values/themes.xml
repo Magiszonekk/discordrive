@@ -21,6 +21,45 @@
         <item name="android:windowBackground">@android:color/black</item>
     </style>
 
+    <!-- Settings screen building blocks: rounded section cards on the window
+         background, soft filled inputs and tonal buttons (no outlined wireframe). -->
+    <style name="SettingsCard" parent="Widget.Material3.CardView.Filled">
+        <item name="cardBackgroundColor">@color/surface</item>
+        <item name="cardCornerRadius">20dp</item>
+        <item name="cardElevation">0dp</item>
+        <item name="strokeWidth">0dp</item>
+        <item name="android:layout_marginBottom">12dp</item>
+    </style>
+    <style name="SettingsSectionTitle">
+        <item name="android:textSize">13sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">?attr/colorPrimary</item>
+    </style>
+    <style name="SettingsSectionHint">
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">@color/text_dim</item>
+        <item name="android:layout_marginTop">4dp</item>
+    </style>
+    <style name="Widget.Gallery.TextInput" parent="Widget.Material3.TextInputLayout.FilledBox">
+        <item name="boxBackgroundColor">@color/surface_high</item>
+        <item name="boxStrokeWidth">0dp</item>
+        <item name="boxStrokeWidthFocused">1dp</item>
+        <item name="boxCornerRadiusTopStart">14dp</item>
+        <item name="boxCornerRadiusTopEnd">14dp</item>
+        <item name="boxCornerRadiusBottomStart">14dp</item>
+        <item name="boxCornerRadiusBottomEnd">14dp</item>
+    </style>
+    <style name="Widget.Gallery.Button.Card" parent="Widget.Material3.Button.TonalButton">
+        <item name="backgroundTint">@color/surface_high</item>
+        <item name="android:textColor">?attr/colorPrimary</item>
+        <item name="iconTint">?attr/colorPrimary</item>
+    </style>
+    <style name="Widget.Gallery.Button.Danger" parent="Widget.Material3.Button.TonalButton">
+        <item name="backgroundTint">@color/danger_dim</item>
+        <item name="android:textColor">@color/danger</item>
+        <item name="iconTint">@color/danger</item>
+    </style>
+
     <!-- Accent overlays applied at runtime via Theme.applyStyle (see App). Blue is the
          default Theme.Gallery, so it needs no overlay. -->
     <style name="ThemeOverlay.Gallery.Purple" parent="">

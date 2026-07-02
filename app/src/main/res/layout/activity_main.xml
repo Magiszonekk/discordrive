@@ -13,13 +13,14 @@
         android:layout_height="wrap_content"
         app:liftOnScroll="true">
 
+        <!-- Pinned (no scrollFlags): the hide-on-scroll bar felt jumpy and was
+             inconsistent with the album screen. -->
         <com.google.android.material.appbar.MaterialToolbar
             android:id="@+id/toolbar"
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
             app:title="@string/app_name"
-            app:titleTextColor="?attr/colorPrimary"
-            app:layout_scrollFlags="scroll|enterAlways"/>
+            app:titleTextColor="?attr/colorPrimary"/>
 
         <com.google.android.material.progressindicator.LinearProgressIndicator
             android:id="@+id/progress"

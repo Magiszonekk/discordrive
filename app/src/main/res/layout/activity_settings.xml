@@ -22,444 +22,461 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:paddingHorizontal="12dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="16dp">
 
             <!-- Konto -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/settings_account"
-                android:textColor="?attr/colorPrimary"
-                android:textSize="14sp"
-                android:textStyle="bold"/>
-
-            <TextView
-                android:id="@+id/accountInfo"
+            <com.google.android.material.card.MaterialCardView style="@style/SettingsCard"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:textColor="@color/text"
-                android:textSize="14sp"/>
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/loginButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:visibility="gone"
-                android:text="@string/settings_login"/>
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/logoutButton"
-                style="@style/Widget.Material3.Button.OutlinedButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/settings_logout"/>
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="@string/settings_server_hint"
-                android:textColor="@color/text_dim"
-                android:textSize="12sp"/>
-
-            <com.google.android.material.textfield.TextInputLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:hint="@string/settings_server_url">
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/serverUrlInput"
+                android:layout_height="wrap_content">
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:inputType="textUri"/>
-            </com.google.android.material.textfield.TextInputLayout>
+                    android:orientation="vertical"
+                    android:padding="18dp">
 
-            <com.google.android.material.divider.MaterialDivider
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginVertical="20dp"/>
+                    <TextView style="@style/SettingsSectionTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_account"/>
+
+                    <TextView
+                        android:id="@+id/accountInfo"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:textColor="@color/text"
+                        android:textSize="14sp"/>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/loginButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:visibility="gone"
+                        android:text="@string/settings_login"/>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/logoutButton"
+                        style="@style/Widget.Gallery.Button.Card"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text="@string/settings_logout"/>
+
+                    <TextView style="@style/SettingsSectionHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="14dp"
+                        android:text="@string/settings_server_hint"/>
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.Gallery.TextInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:hint="@string/settings_server_url">
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/serverUrlInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="textUri"/>
+                    </com.google.android.material.textfield.TextInputLayout>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
 
             <!-- Wygląd -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/settings_appearance"
-                android:textColor="?attr/colorPrimary"
-                android:textSize="14sp"
-                android:textStyle="bold"/>
-
-            <TextView
+            <com.google.android.material.card.MaterialCardView style="@style/SettingsCard"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="@string/settings_appearance_hint"
-                android:textColor="@color/text_dim"
-                android:textSize="12sp"/>
+                android:layout_height="wrap_content">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="18dp">
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/accentButton"
-                style="@style/Widget.Material3.Button.OutlinedButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                app:icon="@drawable/ic_palette"
-                android:text="@string/settings_accent"/>
+                    <TextView style="@style/SettingsSectionTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_appearance"/>
 
-            <com.google.android.material.divider.MaterialDivider
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginVertical="20dp"/>
+                    <TextView style="@style/SettingsSectionHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_appearance_hint"/>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/accentButton"
+                        style="@style/Widget.Gallery.Button.Card"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        app:icon="@drawable/ic_palette"
+                        android:text="@string/settings_accent"/>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
 
             <!-- Synchronizacja -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/sync_section"
-                android:textColor="?attr/colorPrimary"
-                android:textSize="14sp"
-                android:textStyle="bold"/>
-
-            <TextView
+            <com.google.android.material.card.MaterialCardView style="@style/SettingsCard"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="@string/sync_section_hint"
-                android:textColor="@color/text_dim"
-                android:textSize="12sp"/>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:orientation="horizontal">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/syncToCloudButton"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginEnd="8dp"
-                    android:text="@string/sync_to_cloud_action"/>
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/syncFromCloudButton"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/sync_from_cloud_action"/>
-            </LinearLayout>
-
-            <com.google.android.material.divider.MaterialDivider
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginVertical="20dp"/>
-
-            <!-- AI -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/settings_ai"
-                android:textColor="?attr/colorPrimary"
-                android:textSize="14sp"
-                android:textStyle="bold"/>
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="@string/settings_ai_hint"
-                android:textColor="@color/text_dim"
-                android:textSize="12sp"/>
-
-            <com.google.android.material.textfield.TextInputLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:hint="@string/settings_ai_url">
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/aiUrlInput"
+                android:layout_height="wrap_content">
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:inputType="textUri"/>
-            </com.google.android.material.textfield.TextInputLayout>
+                    android:orientation="vertical"
+                    android:padding="18dp">
 
-            <com.google.android.material.textfield.TextInputLayout
+                    <TextView style="@style/SettingsSectionTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/sync_section"/>
+
+                    <TextView style="@style/SettingsSectionHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/sync_section_hint"/>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/syncToCloudButton"
+                            style="@style/Widget.Gallery.Button.Card"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="8dp"
+                            android:text="@string/sync_to_cloud_action"/>
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/syncFromCloudButton"
+                            style="@style/Widget.Gallery.Button.Card"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/sync_from_cloud_action"/>
+                    </LinearLayout>
+
+                    <TextView style="@style/SettingsSectionHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:text="@string/settings_bg_hint"/>
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/bgSyncSwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="@string/settings_bg_enabled"
+                        android:textColor="@color/text"/>
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/bgWifiSwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_bg_wifi"
+                        android:textColor="@color/text"/>
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/bgChargingSwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_bg_charging"
+                        android:textColor="@color/text"/>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Sztuczna inteligencja -->
+            <com.google.android.material.card.MaterialCardView style="@style/SettingsCard"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:hint="@string/settings_ai_key"
-                app:passwordToggleEnabled="true">
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/aiKeyInput"
+                android:layout_height="wrap_content">
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:inputType="textPassword"/>
-            </com.google.android.material.textfield.TextInputLayout>
+                    android:orientation="vertical"
+                    android:padding="18dp">
 
-            <com.google.android.material.textfield.TextInputLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:hint="@string/settings_ai_model">
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/aiModelInput"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:inputType="text"/>
-            </com.google.android.material.textfield.TextInputLayout>
+                    <TextView style="@style/SettingsSectionTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_ai"/>
 
-            <Button
-                android:id="@+id/aiModelsButton"
-                style="@style/Widget.Material3.Button.TextButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/settings_fetch_models"/>
+                    <TextView style="@style/SettingsSectionHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_ai_hint"/>
 
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.Gallery.TextInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:hint="@string/settings_ai_url">
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/aiUrlInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="textUri"/>
+                    </com.google.android.material.textfield.TextInputLayout>
 
-            <com.google.android.material.textfield.TextInputLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:hint="@string/settings_ai_limit">
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/aiLimitInput"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:inputType="number"/>
-            </com.google.android.material.textfield.TextInputLayout>
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.Gallery.TextInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:hint="@string/settings_ai_key"
+                        app:passwordToggleEnabled="true">
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/aiKeyInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="textPassword"/>
+                    </com.google.android.material.textfield.TextInputLayout>
 
-            <com.google.android.material.textfield.TextInputLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:hint="@string/settings_ai_concurrency">
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/aiConcurrencyInput"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:inputType="number"/>
-            </com.google.android.material.textfield.TextInputLayout>
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.Gallery.TextInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:hint="@string/settings_ai_model">
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/aiModelInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="text"/>
+                    </com.google.android.material.textfield.TextInputLayout>
 
-            <com.google.android.material.materialswitch.MaterialSwitch
-                android:id="@+id/aiAutoSwitch"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:text="@string/settings_ai_auto"
-                android:textColor="@color/text"/>
+                    <Button
+                        android:id="@+id/aiModelsButton"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_fetch_models"/>
 
-            <com.google.android.material.divider.MaterialDivider
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginVertical="20dp"/>
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.Gallery.TextInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:hint="@string/settings_ai_limit">
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/aiLimitInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="number"/>
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.Gallery.TextInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:hint="@string/settings_ai_concurrency">
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/aiConcurrencyInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="number"/>
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/aiAutoSwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text="@string/settings_ai_auto"
+                        android:textColor="@color/text"/>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/clearAiButton"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:textColor="@color/danger"
+                        android:text="@string/settings_clear_ai"/>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
 
             <!-- Transkrypcja audio (opcjonalnie) -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/settings_transcribe"
-                android:textColor="?attr/colorPrimary"
-                android:textSize="14sp"
-                android:textStyle="bold"/>
-
-            <TextView
+            <com.google.android.material.card.MaterialCardView style="@style/SettingsCard"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="@string/settings_transcribe_hint"
-                android:textColor="@color/text_dim"
-                android:textSize="12sp"/>
-
-            <com.google.android.material.textfield.TextInputLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:hint="@string/settings_transcribe_url">
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/transcribeUrlInput"
+                android:layout_height="wrap_content">
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:inputType="textUri"/>
-            </com.google.android.material.textfield.TextInputLayout>
+                    android:orientation="vertical"
+                    android:padding="18dp">
 
-            <com.google.android.material.textfield.TextInputLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:hint="@string/settings_transcribe_key"
-                app:passwordToggleEnabled="true">
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/transcribeKeyInput"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:inputType="textPassword"/>
-            </com.google.android.material.textfield.TextInputLayout>
+                    <TextView style="@style/SettingsSectionTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_transcribe"/>
 
-            <com.google.android.material.textfield.TextInputLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:hint="@string/settings_transcribe_model">
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/transcribeModelInput"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:inputType="text"/>
-            </com.google.android.material.textfield.TextInputLayout>
+                    <TextView style="@style/SettingsSectionHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_transcribe_hint"/>
 
-            <Button
-                android:id="@+id/transcribeModelsButton"
-                style="@style/Widget.Material3.Button.TextButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/settings_fetch_models"/>
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.Gallery.TextInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:hint="@string/settings_transcribe_url">
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/transcribeUrlInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="textUri"/>
+                    </com.google.android.material.textfield.TextInputLayout>
 
-            <com.google.android.material.divider.MaterialDivider
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginVertical="20dp"/>
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.Gallery.TextInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:hint="@string/settings_transcribe_key"
+                        app:passwordToggleEnabled="true">
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/transcribeKeyInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="textPassword"/>
+                    </com.google.android.material.textfield.TextInputLayout>
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/settings_bg"
-                android:textColor="?attr/colorPrimary"
-                android:textSize="14sp"
-                android:textStyle="bold"/>
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="@style/Widget.Gallery.TextInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:hint="@string/settings_transcribe_model">
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/transcribeModelInput"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="text"/>
+                    </com.google.android.material.textfield.TextInputLayout>
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="@string/settings_bg_hint"
-                android:textColor="@color/text_dim"
-                android:textSize="12sp"/>
-
-            <com.google.android.material.materialswitch.MaterialSwitch
-                android:id="@+id/bgSyncSwitch"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="@string/settings_bg_enabled"
-                android:textColor="@color/text"/>
-
-            <com.google.android.material.materialswitch.MaterialSwitch
-                android:id="@+id/bgWifiSwitch"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/settings_bg_wifi"
-                android:textColor="@color/text"/>
-
-            <com.google.android.material.materialswitch.MaterialSwitch
-                android:id="@+id/bgChargingSwitch"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/settings_bg_charging"
-                android:textColor="@color/text"/>
-
-            <com.google.android.material.divider.MaterialDivider
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginVertical="20dp"/>
+                    <Button
+                        android:id="@+id/transcribeModelsButton"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_fetch_models"/>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
 
             <!-- Diagnostyka -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/settings_diag"
-                android:textColor="?attr/colorPrimary"
-                android:textSize="14sp"
-                android:textStyle="bold"/>
-
-            <TextView
+            <com.google.android.material.card.MaterialCardView style="@style/SettingsCard"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="@string/settings_diag_hint"
-                android:textColor="@color/text_dim"
-                android:textSize="12sp"/>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:orientation="horizontal">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/copyLogsButton"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
-                    android:layout_width="0dp"
+                android:layout_height="wrap_content">
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:layout_marginEnd="8dp"
-                    android:text="@string/diag_copy"/>
+                    android:orientation="vertical"
+                    android:padding="18dp">
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/sendLogsButton"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
-                    android:layout_width="0dp"
+                    <TextView style="@style/SettingsSectionTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_diag"/>
+
+                    <TextView style="@style/SettingsSectionHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_diag_hint"/>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/copyLogsButton"
+                            style="@style/Widget.Gallery.Button.Card"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:layout_marginEnd="8dp"
+                            android:text="@string/diag_copy"/>
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/sendLogsButton"
+                            style="@style/Widget.Gallery.Button.Card"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/diag_send"/>
+                    </LinearLayout>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/clearLogsButton"
+                        style="@style/Widget.Material3.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/diag_clear"/>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Strefa niebezpieczna -->
+            <com.google.android.material.card.MaterialCardView style="@style/SettingsCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/diag_send"/>
-            </LinearLayout>
+                    android:orientation="vertical"
+                    android:padding="18dp">
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/clearLogsButton"
-                style="@style/Widget.Material3.Button.TextButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="@string/diag_clear"/>
+                    <TextView style="@style/SettingsSectionTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/danger"
+                        android:text="@string/settings_danger"/>
 
-            <!-- Analizy AI -->
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="@color/text_dim"
-                android:alpha="0.2"
-                android:layout_marginVertical="20dp"/>
+                    <TextView style="@style/SettingsSectionHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_danger_hint"/>
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/settings_clear_ai"
-                android:textColor="?attr/colorPrimary"
-                android:textSize="14sp"
-                android:textStyle="bold"/>
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/wipeCloudButton"
+                        style="@style/Widget.Gallery.Button.Danger"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:text="@string/danger_wipe_cloud"/>
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="@string/settings_clear_ai_summary"
-                android:textColor="@color/text_dim"
-                android:textSize="12sp"/>
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/clearAiButton"
-                style="@style/Widget.Material3.Button.OutlinedButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/settings_clear_ai"/>
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/wipeLocalButton"
+                        style="@style/Widget.Gallery.Button.Danger"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="@string/danger_wipe_local"/>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/saveButton"
                 android:layout_width="match_parent"
                 android:layout_height="52dp"
-                android:layout_marginTop="20dp"
+                android:layout_marginTop="8dp"
                 android:text="@string/settings_save"/>
 
             <TextView
                 android:id="@+id/versionInfo"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
+                android:layout_marginTop="20dp"
                 android:gravity="center"
                 android:textColor="@color/text_dim"
                 android:textSize="12sp"/>
@@ -470,56 +487,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="center"
-                android:layout_marginTop="4dp"
                 android:text="@string/update_check"/>
-
-            <!-- Strefa niebezpieczna -->
-            <com.google.android.material.divider.MaterialDivider
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginVertical="20dp"/>
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/settings_danger"
-                android:textColor="@color/danger"
-                android:textSize="14sp"
-                android:textStyle="bold"/>
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="@string/settings_danger_hint"
-                android:textColor="@color/text_dim"
-                android:textSize="12sp"/>
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/wipeCloudButton"
-                style="@style/Widget.Material3.Button.OutlinedButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:text="@string/danger_wipe_cloud"
-                android:textColor="@color/danger"
-                app:strokeColor="@color/danger"
-                app:iconTint="@color/danger"/>
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/wipeLocalButton"
-                style="@style/Widget.Material3.Button.OutlinedButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/danger_wipe_local"
-                android:textColor="@color/danger"
-                app:strokeColor="@color/danger"
-                app:iconTint="@color/danger"/>
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="24dp"/>
         </LinearLayout>
     </ScrollView>
 </LinearLayout>
