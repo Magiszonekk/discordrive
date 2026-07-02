@@ -13,14 +13,36 @@
         android:layout_height="wrap_content"
         app:liftOnScroll="true">
 
-        <!-- Pinned (no scrollFlags): the hide-on-scroll bar felt jumpy and was
-             inconsistent with the album screen. -->
+        <!-- snap keeps the hide-on-scroll bar from resting half-open (the old
+             jumpy feel); the title is a two-tone logo instead of a plain title. -->
         <com.google.android.material.appbar.MaterialToolbar
             android:id="@+id/toolbar"
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
-            app:title="@string/app_name"
-            app:titleTextColor="?attr/colorPrimary"/>
+            app:layout_scrollFlags="scroll|enterAlways|snap">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/logo_brand"
+                    android:textColor="?attr/colorPrimary"
+                    android:textSize="20sp"
+                    android:fontFamily="sans-serif-black"/>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/logo_suffix"
+                    android:textColor="@color/text"
+                    android:textSize="20sp"
+                    android:fontFamily="sans-serif-black"/>
+            </LinearLayout>
+        </com.google.android.material.appbar.MaterialToolbar>
 
         <com.google.android.material.progressindicator.LinearProgressIndicator
             android:id="@+id/progress"

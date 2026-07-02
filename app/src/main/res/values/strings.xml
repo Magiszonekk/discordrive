@@ -105,6 +105,9 @@
     <string name="settings_ai_url">AI endpoint URL</string>
     <string name="settings_ai_key">Klucz API</string>
     <string name="settings_ai_model">Model</string>
+    <string name="logo_brand">DiscorDrive</string>
+    <!-- quoted: Android trims a bare leading space in resources -->
+    <string name="logo_suffix">" Gallery"</string>
     <string name="date_today">Dzisiaj</string>
     <string name="date_yesterday">Wczoraj</string>
     <string name="viewer_edit_ai">Edytuj</string>

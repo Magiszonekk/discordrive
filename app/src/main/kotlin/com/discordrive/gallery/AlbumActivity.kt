@@ -210,6 +210,17 @@ class AlbumActivity : SessionActivity() {
     private fun updateSelectionUi() {
         backCallback.isEnabled = selectionMode
         adapter.setSelection(selectionMode, selectedIds.toSet())
+        // Selection actions live on the toolbar, so it must not scroll away
+        // while selecting; the hide-on-scroll flags come back on exit.
+        (toolbar.layoutParams as com.google.android.material.appbar.AppBarLayout.LayoutParams).scrollFlags =
+            if (selectionMode) {
+                0
+            } else {
+                com.google.android.material.appbar.AppBarLayout.LayoutParams.SCROLL_FLAG_SCROLL or
+                    com.google.android.material.appbar.AppBarLayout.LayoutParams.SCROLL_FLAG_ENTER_ALWAYS or
+                    com.google.android.material.appbar.AppBarLayout.LayoutParams.SCROLL_FLAG_SNAP
+            }
+        if (selectionMode) findViewById<com.google.android.material.appbar.AppBarLayout>(R.id.appBar).setExpanded(true)
         toolbar.menu.clear()
         if (selectionMode) {
             toolbar.title = getString(R.string.selection_count, selectedIds.size)

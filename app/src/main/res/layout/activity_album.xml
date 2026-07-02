@@ -9,6 +9,7 @@
     <!-- No fitsSystemWindows: the root is already inset-padded (Insets.apply),
          so the flag stacked a SECOND status-bar-sized gap on top of the bar. -->
     <com.google.android.material.appbar.AppBarLayout
+        android:id="@+id/appBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         app:liftOnScroll="true">
@@ -18,7 +19,8 @@
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
             app:navigationIcon="?attr/homeAsUpIndicator"
-            app:titleTextColor="@color/text"/>
+            app:titleTextColor="@color/text"
+            app:layout_scrollFlags="scroll|enterAlways|snap"/>
 
         <com.google.android.material.progressindicator.LinearProgressIndicator
             android:id="@+id/progress"
