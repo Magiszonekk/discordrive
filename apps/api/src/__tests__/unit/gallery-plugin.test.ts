@@ -181,6 +181,64 @@ describe("gallery plugin — delta sync", () => {
     expect(delta.files).toEqual([]);
     expect(delta.folders).toEqual([]);
   });
+
+  // Drains pages the way the Android client does (galleryDeltaAll).
+  async function drainDelta(pageSize: number) {
+    const fileIds = new Set<string>();
+    const folderIds = new Set<string>();
+    let cursor: Date | null = null;
+    let lastCursor: Date | null = null;
+    for (let guard = 0; guard < 50; guard++) {
+      const page = await getDelta(ownerUserId, cursor, pageSize);
+      if (page.files.length === 0 && page.folders.length === 0) break;
+      page.files.forEach((f) => fileIds.add(f.id));
+      page.folders.forEach((f) => folderIds.add(f.id));
+      if (lastCursor && page.cursor.getTime() === lastCursor.getTime()) break;
+      lastCursor = page.cursor;
+      cursor = page.cursor;
+    }
+    return { fileIds, folderIds };
+  }
+
+  function fileAt(updatedAt: Date) {
+    return db.file.create({
+      data: { ownerUserId, wrappedFEK: Buffer.from("fek"), status: "READY", updatedAt },
+    });
+  }
+
+  it("does not skip files when a full page coincides with a newer folder (cursor cap)", async () => {
+    const base = Date.now() - 600_000;
+    const files = [];
+    for (let i = 1; i <= 5; i++) files.push(await fileAt(new Date(base + i * 1000)));
+    // the poisoned pill: a folder updated well after the oldest files — the old
+    // cursor logic jumped past files 3-5 as soon as the file page was full
+    const folder = await db.folder.create({
+      data: {
+        ownerUserId,
+        encryptedBody: Buffer.from("body"),
+        wrappedFolderKey: Buffer.from("key"),
+        updatedAt: new Date(base + 60_000),
+      },
+    });
+
+    const drained = await drainDelta(2);
+    expect([...drained.fileIds].sort()).toEqual(files.map((f) => f.id).sort());
+    expect(drained.folderIds.has(folder.id)).toBe(true);
+  });
+
+  it("re-fetches boundary rows when a full page ends on a shared timestamp", async () => {
+    const base = Date.now() - 600_000;
+    const t2 = new Date(base + 2000);
+    const files = [
+      await fileAt(new Date(base + 1000)),
+      await fileAt(t2),
+      await fileAt(t2), // same updatedAt as previous — lands on a page boundary
+      await fileAt(new Date(base + 3000)),
+    ];
+
+    const drained = await drainDelta(2);
+    expect([...drained.fileIds].sort()).toEqual(files.map((f) => f.id).sort());
+  });
 });
 
 describe("gallery plugin — GraphQL surface", () => {
