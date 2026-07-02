@@ -20,6 +20,8 @@ data class EnrichmentRecord(
     val tags: List<String>,
     val description: String,
     val ocrText: String? = null,
+    /** Full audio transcript (videos) — searchable, so quotes can be found. */
+    val transcript: String? = null,
     val model: String,
     val analyzedAt: String,
 )
@@ -51,18 +53,22 @@ class EnrichmentEngine(private val client: DiscorDriveClient) {
         }.getOrNull()
     }
 
-    fun buildRecord(vision: AiVisionClient.VisionResult, model: String): EnrichmentRecord =
+    fun buildRecord(vision: AiVisionClient.VisionResult, model: String, transcript: String? = null): EnrichmentRecord =
         EnrichmentRecord(
             tags = vision.tags,
             description = vision.description,
+            transcript = transcript,
             model = model,
             analyzedAt = Instant.now().toString(),
         )
 
-    /** Case-insensitive match against tags + description. */
+    /** Case-insensitive match against tags, description, OCR text and transcript. */
     fun matches(record: EnrichmentRecord, query: String): Boolean {
         val q = query.trim().lowercase()
         if (q.isEmpty()) return false
-        return record.description.lowercase().contains(q) || record.tags.any { it.contains(q) }
+        return record.description.lowercase().contains(q) ||
+            record.tags.any { it.contains(q) } ||
+            record.ocrText?.lowercase()?.contains(q) == true ||
+            record.transcript?.lowercase()?.contains(q) == true
     }
 }

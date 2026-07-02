@@ -107,6 +107,12 @@
     <string name="settings_ai_model">Model</string>
     <string name="date_today">Dzisiaj</string>
     <string name="date_yesterday">Wczoraj</string>
+    <string name="viewer_edit_ai">Edytuj</string>
+    <string name="edit_ai_title">Edytuj analizę</string>
+    <string name="edit_ai_desc_hint">Opis</string>
+    <string name="edit_ai_tags_hint">Tagi</string>
+    <string name="edit_ai_tags_help">Oddziel tagi przecinkami</string>
+    <string name="edit_ai_saved">Zapisano zmiany analizy</string>
     <string name="settings_fetch_models">Wybierz model z listy</string>
     <string name="models_picker_title">Dostępne modele</string>
     <string name="models_fetching">Pobieranie listy modeli…</string>

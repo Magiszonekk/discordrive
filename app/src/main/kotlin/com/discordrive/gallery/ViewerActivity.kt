@@ -54,6 +54,7 @@ class ViewerActivity : SessionActivity() {
     private lateinit var descriptionView: TextView
     private lateinit var chips: ChipGroup
     private lateinit var clearAiButton: View
+    private lateinit var editAiButton: View
     private lateinit var analyzeAiButton: View
 
     private val localDeleteLauncher =
@@ -97,6 +98,8 @@ class ViewerActivity : SessionActivity() {
         chips = findViewById(R.id.tagChips)
         clearAiButton = findViewById(R.id.clearAiButton)
         clearAiButton.setOnClickListener { deleteCurrentAnalysis() }
+        editAiButton = findViewById(R.id.editAiButton)
+        editAiButton.setOnClickListener { editCurrentAnalysis() }
         analyzeAiButton = findViewById(R.id.analyzeAiButton)
         analyzeAiButton.setOnClickListener { analyzeCurrent() }
 
@@ -141,6 +144,7 @@ class ViewerActivity : SessionActivity() {
         descriptionView.text = ""
         chips.removeAllViews()
         clearAiButton.visibility = View.GONE
+        editAiButton.visibility = View.GONE
         analyzeAiButton.visibility = View.GONE
         thread {
             val db = AppDb(this)
@@ -155,6 +159,7 @@ class ViewerActivity : SessionActivity() {
                         chips.addView(Chip(this).apply { text = tag; isClickable = false })
                     }
                     clearAiButton.visibility = View.VISIBLE
+                    editAiButton.visibility = View.VISIBLE
                 } else {
                     descriptionView.text = getString(R.string.viewer_no_enrichment)
                     // offer analysis only for synced photos with a local file (vision
@@ -195,6 +200,67 @@ class ViewerActivity : SessionActivity() {
                         }
                         Snackbar.make(findViewById(R.id.viewerRoot), "Błąd AI: ${e.message}", Snackbar.LENGTH_LONG).show()
                     }
+                }
+            }
+        }
+    }
+
+    /**
+     * Manual correction of the AI analysis: dialog with the description and
+     * comma-separated tags; the edited record is re-encrypted and uploaded
+     * like a fresh analysis (per-file blob + local cache + cloud index), so
+     * it syncs to other devices. The transcript/OCR fields are preserved.
+     */
+    private fun editCurrentAnalysis() {
+        val asset = shownAsset ?: return
+        requireSession {
+            val client = SessionManager.client ?: return@requireSession
+            val filesKey = SessionManager.filesKey ?: return@requireSession
+            thread {
+                val db = AppDb(this)
+                val fileId = db.fileIdForAny(asset) ?: return@thread
+                val record = db.enrichmentFor(fileId) ?: return@thread
+                runOnUiThread {
+                    if (shownAsset?.id != asset.id) return@runOnUiThread
+                    val view = LayoutInflater.from(this).inflate(R.layout.dialog_edit_enrichment, null)
+                    val descInput = view.findViewById<TextView>(R.id.editDescription)
+                    val tagsInput = view.findViewById<TextView>(R.id.editTags)
+                    descInput.text = record.description
+                    tagsInput.text = record.tags.joinToString(", ")
+                    MaterialAlertDialogBuilder(this)
+                        .setTitle(R.string.edit_ai_title)
+                        .setView(view)
+                        .setPositiveButton(R.string.settings_save) { _, _ ->
+                            val newDesc = descInput.text.toString().trim()
+                            val newTags = tagsInput.text.toString()
+                                .split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
+                            saveEditedAnalysis(asset, fileId, record.copy(description = newDesc, tags = newTags))
+                        }
+                        .setNegativeButton(android.R.string.cancel, null)
+                        .show()
+                }
+            }
+        }
+    }
+
+    private fun saveEditedAnalysis(asset: MediaAsset, fileId: String, updated: com.discordrive.gallery.api.EnrichmentRecord) {
+        val client = SessionManager.client ?: return
+        val filesKey = SessionManager.filesKey ?: return
+        thread {
+            try {
+                val file = client.file(fileId) ?: throw IllegalStateException("Plik zniknął z chmury")
+                val db = AppDb(this)
+                com.discordrive.gallery.api.EnrichmentEngine(client).saveEnrichment(fileId, file.wrappedFEK, filesKey, updated)
+                db.rememberEnrichment(fileId, updated)
+                EnrichmentIndex.push(client, filesKey, db) // keep the E2EE cloud index current
+                runOnUiThread {
+                    if (shownAsset?.id == asset.id) showInfo(asset)
+                    Snackbar.make(findViewById(R.id.viewerRoot), R.string.edit_ai_saved, Snackbar.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                AppLog.w("Viewer", "edit analysis failed", e)
+                runOnUiThread {
+                    Snackbar.make(findViewById(R.id.viewerRoot), "Błąd zapisu: ${e.message}", Snackbar.LENGTH_LONG).show()
                 }
             }
         }

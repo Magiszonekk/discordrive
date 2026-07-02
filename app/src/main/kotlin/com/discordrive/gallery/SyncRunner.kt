@@ -373,15 +373,16 @@ class SyncRunner(
                     if (sinceLast < AI_CALL_SPACING_MS) Thread.sleep(AI_CALL_SPACING_MS - sinceLast)
 
                     val hint = albumHints[asset.bucketName]
+                    val transcript = if (asset.isVideo) transcribeVideo(asset) else null
                     lastCallAtMs = System.currentTimeMillis()
                     val vision = try {
-                        runVision(ai, asset, hint)
+                        runVision(ai, asset, hint, transcript)
                     } catch (rateLimit: AiRateLimitException) {
                         Thread.sleep(rateLimit.retryAfterSeconds.coerceAtMost(120) * 1000)
                         lastCallAtMs = System.currentTimeMillis()
-                        runVision(ai, asset, hint)
+                        runVision(ai, asset, hint, transcript)
                     }
-                    val record = enrichment.buildRecord(vision, model)
+                    val record = enrichment.buildRecord(vision, model, transcript)
                     enrichment.saveEnrichment(fileId, file.wrappedFEK, filesKey, record)
                     db.rememberEnrichment(fileId, record)
                     analyzed.incrementAndGet()
@@ -420,13 +421,14 @@ class SyncRunner(
             throw IllegalStateException("Plik zniknął z chmury — uruchom synchronizację ponownie")
         }
         val hint = AlbumDescriptions.load(client, filesKey, asset.bucketName)
+        val transcript = if (asset.isVideo) transcribeVideo(asset) else null
         val vision = try {
-            runVision(ai, asset, hint)
+            runVision(ai, asset, hint, transcript)
         } catch (rateLimit: AiRateLimitException) {
             Thread.sleep(rateLimit.retryAfterSeconds.coerceAtMost(120) * 1000)
-            runVision(ai, asset, hint)
+            runVision(ai, asset, hint, transcript)
         }
-        val record = enrichment.buildRecord(vision, model)
+        val record = enrichment.buildRecord(vision, model, transcript)
         enrichment.saveEnrichment(fileId, file.wrappedFEK, filesKey, record)
         db.rememberEnrichment(fileId, record)
         EnrichmentIndex.push(client, filesKey, db) // keep the E2EE cloud index current
@@ -436,14 +438,16 @@ class SyncRunner(
     /**
      * Images → single downscaled frame; videos → several frames sampled across
      * the duration, analyzed frame-by-frame (batched, requests spaced by the
-     * same throttle as image calls).
+     * same throttle as image calls). The transcript is computed by the CALLER
+     * (once, outside the rate-limit retry) and stored in the record so search
+     * can match spoken quotes.
      */
-    private fun runVision(ai: AiVisionClient, asset: MediaAsset, hint: String?): AiVisionClient.VisionResult =
+    private fun runVision(ai: AiVisionClient, asset: MediaAsset, hint: String?, transcript: String?): AiVisionClient.VisionResult =
         if (asset.isVideo) {
             ai.analyzeVideo(
                 AiImagePreparer.prepareVideoFrames(context, asset),
                 hint,
-                transcript = transcribeVideo(asset),
+                transcript = transcript,
                 interBatchDelayMs = AI_CALL_SPACING_MS,
             )
         } else {

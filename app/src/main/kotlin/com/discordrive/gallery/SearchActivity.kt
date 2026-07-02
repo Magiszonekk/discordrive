@@ -79,7 +79,9 @@ class SearchActivity : AppCompatActivity() {
                 val assetsById = MediaScanner(this).scanAll().associateBy { it.id }
                 val results = db.allEnrichments().mapNotNull { (fileId, record) ->
                     val hit = record.description.lowercase().contains(q) ||
-                        record.tags.any { it.lowercase().contains(q) }
+                        record.tags.any { it.lowercase().contains(q) } ||
+                        record.ocrText?.lowercase()?.contains(q) == true ||
+                        record.transcript?.lowercase()?.contains(q) == true // video quotes
                     if (!hit) return@mapNotNull null
                     val asset = db.assetIdForFile(fileId)?.let { assetsById[it] }
                     Result(fileId, asset?.displayName ?: fileId, record, asset)
