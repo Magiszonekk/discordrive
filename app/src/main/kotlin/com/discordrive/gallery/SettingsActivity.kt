@@ -100,6 +100,13 @@ class SettingsActivity : SessionActivity() {
             }
         }
 
+        findViewById<Button>(R.id.aiModelsButton).setOnClickListener {
+            pickModelFromEndpoint(aiUrl.text.toString(), aiKey.text.toString(), aiModel)
+        }
+        findViewById<Button>(R.id.transcribeModelsButton).setOnClickListener {
+            pickModelFromEndpoint(transcribeUrl.text.toString(), transcribeKey.text.toString(), transcribeModel)
+        }
+
         findViewById<Button>(R.id.syncToCloudButton).setOnClickListener {
             requireSession {
                 SyncWorker.runNow(this, SyncWorker.MODE_SYNC)
@@ -147,6 +154,45 @@ class SettingsActivity : SessionActivity() {
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    /**
+     * Fetches `GET {url}/v1/models` (OpenAI format) and lets the user pick one
+     * into [target] — no more typing model names from memory. Reads the URL/key
+     * straight from the (possibly unsaved) fields so it works pre-save.
+     */
+    private fun pickModelFromEndpoint(url: String, apiKey: String, target: EditText) {
+        if (url.isBlank()) {
+            Snackbar.make(findViewById(R.id.settingsRoot), R.string.models_need_url, Snackbar.LENGTH_SHORT).show()
+            return
+        }
+        val bar = Snackbar.make(findViewById(R.id.settingsRoot), R.string.models_fetching, Snackbar.LENGTH_INDEFINITE)
+        bar.show()
+        thread {
+            val result = runCatching { com.discordrive.gallery.api.AiVisionClient.fetchModels(url.trim(), apiKey.trim()) }
+            runOnUiThread {
+                bar.dismiss()
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                result.onSuccess { models ->
+                    if (models.isEmpty()) {
+                        Snackbar.make(findViewById(R.id.settingsRoot), getString(R.string.models_fetch_failed, "pusta lista"), Snackbar.LENGTH_LONG).show()
+                        return@onSuccess
+                    }
+                    val current = models.indexOf(target.text.toString().trim())
+                    MaterialAlertDialogBuilder(this)
+                        .setTitle(R.string.models_picker_title)
+                        .setSingleChoiceItems(models.toTypedArray(), current) { dialog, which ->
+                            target.setText(models[which])
+                            dialog.dismiss()
+                        }
+                        .setNegativeButton(android.R.string.cancel, null)
+                        .show()
+                }.onFailure { e ->
+                    AppLog.w("Settings", "fetch models failed", e)
+                    Snackbar.make(findViewById(R.id.settingsRoot), getString(R.string.models_fetch_failed, e.message ?: "?"), Snackbar.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     // === Appearance ===
@@ -206,8 +252,9 @@ class SettingsActivity : SessionActivity() {
                 // 2) remove now-empty folders
                 for (folder in client.folders(null)) runCatching { client.deleteFolder(folder.id); folders++ }
                     .onFailure { AppLog.w("Settings", "wipe: deleteFolder ${folder.id} failed", it) }
-                // 3) AI enrichments (all)
+                // 3) AI enrichments (all) + the E2EE cloud index
                 runCatching { client.deleteEnrichments(null) }.onFailure { AppLog.w("Settings", "wipe: deleteEnrichments failed", it) }
+                SessionManager.filesKey?.let { EnrichmentIndex.removeAll(client, it) }
                 // 4) reset the stale local sync state + cached previews
                 val db = AppDb(this)
                 db.clearAssetMap(); db.clearCloudItems(); db.clearAllEnrichments()
@@ -266,7 +313,7 @@ class SettingsActivity : SessionActivity() {
                         .getOrDefault(0)
                     val db = AppDb(this)
                     db.clearAllEnrichments()
-                    SessionManager.filesKey?.let { EnrichmentIndex.push(client, it, db) } // reflect clear in cloud index
+                    SessionManager.filesKey?.let { EnrichmentIndex.removeAll(client, it) } // reflect clear in cloud index
                     runOnUiThread {
                         Snackbar.make(findViewById(R.id.settingsRoot), getString(R.string.ai_cleared, deleted), Snackbar.LENGTH_LONG).show()
                     }

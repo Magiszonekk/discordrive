@@ -123,8 +123,14 @@ class SyncRunner(
                             consecutiveNetFails.set(0)
                             return@Callable
                         }
+                        // Stale mapping: keep the AI analysis aside — the bytes don't
+                        // change, so it stays valid for the re-uploaded (or, with
+                        // dedupe, the very same) file. Before this, a delta glitch
+                        // could silently wipe thousands of cached analyses.
+                        var carriedEnrichment: EnrichmentRecord? = null
                         if (mappedFileId != null) {
                             AppLog.w("SyncRunner", "stale mapping: ${asset.displayName} (cloud file $mappedFileId gone) — re-uploading")
+                            carriedEnrichment = db.enrichmentFor(mappedFileId)
                             db.forgetFile(mappedFileId)
                         }
                         val outcome = uploadEngine.uploadStream(
@@ -135,6 +141,9 @@ class SyncRunner(
                             filesKey = filesKey,
                         )
                         db.rememberMapping(asset, outcome.fileId)
+                        if (carriedEnrichment != null && db.enrichmentFor(outcome.fileId) == null) {
+                            db.rememberEnrichment(outcome.fileId, carriedEnrichment)
+                        }
                         if (outcome.deduplicated) {
                             deduplicated.incrementAndGet()
                         } else {

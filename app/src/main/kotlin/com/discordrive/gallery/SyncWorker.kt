@@ -68,7 +68,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
                 }
                 else -> {
                     AppLog.i("SyncWorker", "sync run")
-                    val sync = runner.sync { newSpeedTracker(ctx, ctx.getString(R.string.sync_notif_title), "↑").onProgress(it) }
+                    val tracker = newSpeedTracker(ctx, ctx.getString(R.string.sync_notif_title), "↑")
+                    val sync = runner.sync { tracker.onProgress(it) }
                     AppLog.i("SyncWorker", "sync: +${sync.uploaded} up, ${sync.deduplicated} dedup, ${sync.failed} failed")
                     if (Settings.aiAutoAfterSync(ctx) && Settings.aiConfigured(ctx)) runAi(ctx, runner, null)
                 }
@@ -91,16 +92,20 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         AppLog.i("SyncWorker", "ai: ${r.analyzed} analyzed, ${r.failed} failed")
     }
 
-    /** Tracker showing a rolling transfer speed ([arrow] = ↑ for sync, ↓ for download). */
+    /**
+     * Tracker showing a rolling transfer speed ([arrow] = ↑ for sync, ↓ for download),
+     * averaged over the last ~15 s: bytesDone advances a whole file at a time
+     * (4 parallel uploads), so an instantaneous delta would jump wildly.
+     */
     private fun newSpeedTracker(ctx: Context, label: String, arrow: String): JobProgressTracker {
-        var lastBytes = 0L
-        var lastTimeMs = System.currentTimeMillis()
+        val samples = ArrayDeque<Pair<Long, Long>>() // (timeMs, bytesDone)
         return JobProgressTracker(ctx, label) { p ->
             val now = System.currentTimeMillis()
-            val dtMs = (now - lastTimeMs).coerceAtLeast(1)
-            val speed = ((p.bytesDone - lastBytes) * 1000 / dtMs).coerceAtLeast(0)
-            lastBytes = p.bytesDone
-            lastTimeMs = now
+            samples.addLast(now to p.bytesDone)
+            while (samples.size > 1 && now - samples.first().first > SPEED_WINDOW_MS) samples.removeFirst()
+            val (t0, b0) = samples.first()
+            val dtMs = now - t0
+            val speed = if (dtMs >= 1000) ((p.bytesDone - b0) * 1000 / dtMs).coerceAtLeast(0) else 0L
             if (speed > 0) "$arrow ${android.text.format.Formatter.formatShortFileSize(ctx, speed)}/s" else ""
         }
     }
@@ -120,6 +125,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
         )
 
     companion object {
+        private const val SPEED_WINDOW_MS = 15_000L
         private const val WORK_NAME = "ddv4-bg-sync"
         private const val NOW_WORK_NAME = "ddv4-sync-now"
         const val KEY_MODE = "mode"

@@ -105,6 +105,11 @@
     <string name="settings_ai_url">AI endpoint URL</string>
     <string name="settings_ai_key">Klucz API</string>
     <string name="settings_ai_model">Model</string>
+    <string name="settings_fetch_models">Wybierz model z listy</string>
+    <string name="models_picker_title">Dostępne modele</string>
+    <string name="models_fetching">Pobieranie listy modeli…</string>
+    <string name="models_fetch_failed">Nie udało się pobrać listy: %1$s</string>
+    <string name="models_need_url">Najpierw wpisz adres URL endpointu</string>
     <string name="settings_ai_auto">Analizuj automatycznie po synchronizacji</string>
     <string name="settings_save">Zapisz</string>
     <string name="settings_saved">Zapisano ustawienia</string>

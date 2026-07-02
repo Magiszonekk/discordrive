@@ -162,6 +162,28 @@ class AiVisionClient(
 
     companion object {
         const val FRAMES_PER_REQUEST = 4
+
+        /**
+         * Lists model ids from an OpenAI-compatible `GET {baseUrl}/v1/models`
+         * (settings UI: pick a model instead of typing its full name).
+         * Static because it's called while the user is still editing the
+         * URL/key fields, before any client is configured.
+         */
+        fun fetchModels(baseUrl: String, apiKey: String): List<String> {
+            val http = OkHttpClient.Builder().readTimeout(30, TimeUnit.SECONDS).build()
+            val request = Request.Builder()
+                .url("${baseUrl.trimEnd('/')}/v1/models")
+                .header("Authorization", "Bearer $apiKey")
+                .build()
+            http.newCall(request).execute().use { response ->
+                val text = response.body?.string() ?: throw GraphQLException("Empty /models response")
+                if (!response.isSuccessful) throw GraphQLException("HTTP ${response.code}: ${text.take(200)}")
+                val root = Json { ignoreUnknownKeys = true }.parseToJsonElement(text).jsonObject
+                // standard shape {"data":[{"id":…}]}, tolerate a bare array {"models":…} too
+                val list = root["data"]?.jsonArray ?: root["models"]?.jsonArray ?: throw GraphQLException("No model list in response")
+                return list.mapNotNull { it.jsonObject["id"]?.jsonPrimitive?.content }.sorted()
+            }
+        }
     }
 
     /**

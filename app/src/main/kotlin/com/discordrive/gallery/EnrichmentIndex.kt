@@ -23,10 +23,18 @@ object EnrichmentIndex {
     private val json = Json { ignoreUnknownKeys = true }
     private val serializer = MapSerializer(String.serializer(), EnrichmentRecord.serializer())
 
-    /** Uploads the current local cache as the encrypted index (last-write-wins). */
+    /**
+     * Uploads the local cache MERGED over the cloud index (local wins per file).
+     * The merge is what makes the push additive: a device whose local cache is
+     * incomplete (fresh install, cache partially dropped) must not erase other
+     * files' analyses from the shared index. Entries removed on purpose go
+     * through [remove]/[removeAll], not through push.
+     */
     fun push(client: DiscorDriveClient, filesKey: ByteArray, db: AppDb) {
         runCatching {
-            val plain = json.encodeToString(serializer, db.allEnrichments())
+            val merged = HashMap(fetchCloudIndex(client, filesKey) ?: emptyMap())
+            merged.putAll(db.allEnrichments())
+            val plain = json.encodeToString(serializer, merged)
             if (plain.length > MAX_PLAINTEXT) {
                 AppLog.w("EnrichmentIndex", "index too large (${plain.length} B) — skipping push")
                 return@runCatching
@@ -35,12 +43,33 @@ object EnrichmentIndex {
         }.onFailure { AppLog.w("EnrichmentIndex", "push failed", it) }
     }
 
-    /** Merges the cloud index into the local cache (fills gaps). Returns #added. */
-    fun pull(client: DiscorDriveClient, filesKey: ByteArray, db: AppDb): Int {
+    /** Deletes the given files' entries from the cloud index (after a purge / manual delete). */
+    fun remove(client: DiscorDriveClient, filesKey: ByteArray, fileIds: Collection<String>) {
+        runCatching {
+            val index = fetchCloudIndex(client, filesKey) ?: return
+            val remaining = index.filterKeys { it !in fileIds.toSet() }
+            if (remaining.size == index.size) return
+            client.setGalleryState(STATE_KEY, DdvCrypto.encryptMeta(filesKey, json.encodeToString(serializer, remaining)))
+        }.onFailure { AppLog.w("EnrichmentIndex", "remove failed", it) }
+    }
+
+    /** Empties the cloud index ("wyczyść wszystkie analizy" / wipe cloud). */
+    fun removeAll(client: DiscorDriveClient, filesKey: ByteArray) {
+        runCatching {
+            client.setGalleryState(STATE_KEY, DdvCrypto.encryptMeta(filesKey, json.encodeToString(serializer, emptyMap())))
+        }.onFailure { AppLog.w("EnrichmentIndex", "removeAll failed", it) }
+    }
+
+    private fun fetchCloudIndex(client: DiscorDriveClient, filesKey: ByteArray): Map<String, EnrichmentRecord>? {
         val plain = runCatching {
             client.getGalleryState(STATE_KEY)?.valueB64?.let { DdvCrypto.decryptMeta(filesKey, it) }
-        }.getOrNull() ?: return 0
-        val map = runCatching { json.decodeFromString(serializer, plain) }.getOrNull() ?: return 0
+        }.getOrNull() ?: return null
+        return runCatching { json.decodeFromString(serializer, plain) }.getOrNull()
+    }
+
+    /** Merges the cloud index into the local cache (fills gaps). Returns #added. */
+    fun pull(client: DiscorDriveClient, filesKey: ByteArray, db: AppDb): Int {
+        val map = fetchCloudIndex(client, filesKey) ?: return 0
         var added = 0
         for ((fileId, record) in map) {
             if (db.enrichmentFor(fileId) == null) {

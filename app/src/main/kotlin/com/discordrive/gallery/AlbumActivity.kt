@@ -436,7 +436,7 @@ class AlbumActivity : SessionActivity() {
                         if (fileIds.isNotEmpty()) client.deleteEnrichments(fileIds) else 0
                     }.onFailure { AppLog.w("Album", "clear album AI failed", it) }.getOrDefault(0)
                     fileIds.forEach { db.forgetEnrichment(it) }
-                    SessionManager.filesKey?.let { EnrichmentIndex.push(client, it, db) } // reflect clear in cloud index
+                    SessionManager.filesKey?.let { EnrichmentIndex.remove(client, it, fileIds) } // reflect clear in cloud index
                     setWorking(null)
                     runOnUiThread {
                         Snackbar.make(findViewById(R.id.albumRoot), getString(R.string.ai_cleared, deleted), Snackbar.LENGTH_LONG).show()
