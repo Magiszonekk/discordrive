@@ -33,13 +33,14 @@
         android:importantForAccessibility="no"/>
 
     <ImageView
-        android:id="@+id/cloudBadge"
-        android:layout_width="22dp"
-        android:layout_height="22dp"
+        android:id="@+id/syncDot"
+        android:layout_width="12dp"
+        android:layout_height="12dp"
         android:layout_gravity="bottom|end"
         android:layout_margin="6dp"
-        android:background="@drawable/badge_bg"
-        android:padding="3dp"
-        android:src="@drawable/ic_cloud_pending"
+        android:background="@drawable/sync_dot_ring"
+        android:padding="2dp"
+        android:src="@drawable/sync_dot"
+        android:visibility="gone"
         android:contentDescription="@string/badge_synced_desc"/>
 </FrameLayout>

@@ -105,6 +105,8 @@
     <string name="settings_ai_url">AI endpoint URL</string>
     <string name="settings_ai_key">Klucz API</string>
     <string name="settings_ai_model">Model</string>
+    <string name="date_today">Dzisiaj</string>
+    <string name="date_yesterday">Wczoraj</string>
     <string name="settings_fetch_models">Wybierz model z listy</string>
     <string name="models_picker_title">Dostępne modele</string>
     <string name="models_fetching">Pobieranie listy modeli…</string>

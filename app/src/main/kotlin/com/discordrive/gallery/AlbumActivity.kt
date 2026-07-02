@@ -90,7 +90,12 @@ class AlbumActivity : SessionActivity() {
             },
         )
         findViewById<RecyclerView>(R.id.grid).apply {
-            layoutManager = GridLayoutManager(this@AlbumActivity, GalleryAdapter.SPAN_COUNT)
+            layoutManager = GridLayoutManager(this@AlbumActivity, GalleryAdapter.SPAN_COUNT).also { glm ->
+                glm.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
+                    override fun getSpanSize(position: Int) =
+                        if (this@AlbumActivity.adapter.isHeader(position)) GalleryAdapter.SPAN_COUNT else 1
+                }
+            }
             adapter = this@AlbumActivity.adapter
         }
     }
