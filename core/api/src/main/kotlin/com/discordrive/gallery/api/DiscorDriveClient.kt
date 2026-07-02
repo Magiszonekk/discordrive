@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
@@ -175,6 +176,33 @@ class DiscorDriveClient(
         val state = data["galleryState"]
         if (state == null || state is JsonNull) return null
         return json.decodeFromJsonElement(GalleryStateDto.serializer(), state)
+    }
+
+    /** Keys of stored gallery-state entries matching [prefix] (values not included). */
+    fun galleryStateKeys(prefix: String? = null): List<String> {
+        val data = graphql.execute(
+            """
+            query StateKeys(${'$'}prefix: String) {
+              galleryStates(prefix: ${'$'}prefix) { key }
+            }
+            """.trimIndent(),
+            buildJsonObject { put("prefix", prefix?.let { JsonPrimitive(it) } ?: JsonNull) },
+        )
+        return data.getValue("galleryStates").jsonArray.map {
+            it.jsonObject.getValue("key").jsonPrimitive.content
+        }
+    }
+
+    fun deleteGalleryState(key: String): Boolean {
+        val data = graphql.execute(
+            """
+            mutation DeleteState(${'$'}key: String!) {
+              deleteGalleryState(key: ${'$'}key)
+            }
+            """.trimIndent(),
+            buildJsonObject { put("key", JsonPrimitive(key)) },
+        )
+        return data.getValue("deleteGalleryState").jsonPrimitive.content.toBoolean()
     }
 
     fun setGalleryState(key: String, valueB64: String, expectedVersion: Int? = null): GalleryStateDto {
