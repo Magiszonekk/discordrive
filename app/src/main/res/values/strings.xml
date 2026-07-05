@@ -108,6 +108,9 @@
     <string name="saf_summary">Zdjęcia i wideo · szukaj po tagach AI</string>
     <!-- leading ★ so DocumentsUI's alphabetical sort puts it above the albums -->
     <string name="saf_all_photos">★ Wszystkie zdjęcia i wideo</string>
+    <string name="picker_title">Wybierz z galerii</string>
+    <string name="picker_search_hint">Szukaj: tagi, opis, transkrypt…</string>
+    <string name="picker_empty">Brak pasujących plików</string>
     <string name="logo_brand">DiscorDrive</string>
     <!-- quoted: Android trims a bare leading space in resources -->
     <string name="logo_suffix">" Gallery"</string>

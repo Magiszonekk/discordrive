@@ -29,6 +29,28 @@
             </intent-filter>
         </activity>
 
+        <!-- In-app picker: shows up as an app option when another app asks the
+             system for an image/video (GET_CONTENT / PICK). -->
+        <activity
+            android:name=".PickerActivity"
+            android:exported="true"
+            android:label="@string/picker_title"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.GET_CONTENT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.OPENABLE" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.PICK" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+            </intent-filter>
+        </activity>
+
         <activity android:name=".LoginActivity" android:exported="false" />
         <activity android:name=".AlbumActivity" android:exported="false" />
         <activity android:name=".TrashActivity" android:exported="false" />
