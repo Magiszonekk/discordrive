@@ -48,6 +48,19 @@
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
 
+        <!-- SAF: the gallery as a system file-picker source (Discord attach etc.),
+             with the AI cache answering the picker's search box. -->
+        <provider
+            android:name=".GalleryDocumentsProvider"
+            android:authorities="${applicationId}.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
