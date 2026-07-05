@@ -63,7 +63,7 @@ class GalleryDocumentsProvider : DocumentsProvider() {
             .add(Root.COLUMN_TITLE, context!!.getString(R.string.app_name))
             .add(Root.COLUMN_SUMMARY, context!!.getString(R.string.saf_summary))
             .add(Root.COLUMN_ICON, R.mipmap.ic_launcher)
-            .add(Root.COLUMN_FLAGS, Root.FLAG_SUPPORTS_SEARCH)
+            .add(Root.COLUMN_FLAGS, Root.FLAG_SUPPORTS_SEARCH or Root.FLAG_SUPPORTS_RECENTS)
             .add(Root.COLUMN_MIME_TYPES, "image/*\nvideo/*")
         return cursor
     }
@@ -74,6 +74,7 @@ class GalleryDocumentsProvider : DocumentsProvider() {
         val cursor = MatrixCursor(projection ?: DEFAULT_DOC_PROJECTION)
         when {
             documentId == DOC_ROOT -> cursor.addDirRow(DOC_ROOT, context!!.getString(R.string.app_name))
+            documentId == DOC_ALL -> cursor.addDirRow(DOC_ALL, context!!.getString(R.string.saf_all_photos))
             documentId.startsWith("album:") ->
                 cursor.addDirRow(documentId, Uri.decode(documentId.removePrefix("album:")))
             else -> assetFor(documentId)?.let { cursor.addAssetRow(it) }
@@ -85,9 +86,15 @@ class GalleryDocumentsProvider : DocumentsProvider() {
     override fun queryChildDocuments(parentDocumentId: String, projection: Array<out String>?, sortOrder: String?): Cursor {
         val cursor = MatrixCursor(projection ?: DEFAULT_DOC_PROJECTION)
         if (parentDocumentId == DOC_ROOT) {
+            // one-tap full library first, then the album directories
+            cursor.addDirRow(DOC_ALL, context!!.getString(R.string.saf_all_photos))
             assets().map { it.bucketName }.distinct().sortedBy { it.lowercase() }.forEach { bucket ->
                 cursor.addDirRow("album:${Uri.encode(bucket)}", bucket)
             }
+            return cursor
+        }
+        if (parentDocumentId == DOC_ALL) {
+            assets().sortedByDescending { it.dateAddedSec }.forEach { cursor.addAssetRow(it) }
             return cursor
         }
         if (parentDocumentId.startsWith("album:")) {
@@ -98,6 +105,18 @@ class GalleryDocumentsProvider : DocumentsProvider() {
             return cursor
         }
         throw FileNotFoundException("Not a directory: $parentDocumentId")
+    }
+
+    /**
+     * Newest items for the picker's landing "Recent" grid — photos are
+     * visible with thumbnails before entering any folder.
+     */
+    override fun queryRecentDocuments(rootId: String, projection: Array<out String>?): Cursor {
+        val cursor = MatrixCursor(projection ?: DEFAULT_DOC_PROJECTION)
+        assets().sortedByDescending { it.dateAddedSec }
+            .take(MAX_RECENT_RESULTS)
+            .forEach { cursor.addAssetRow(it) }
+        return cursor
     }
 
     /**
@@ -213,8 +232,10 @@ class GalleryDocumentsProvider : DocumentsProvider() {
     private companion object {
         const val ROOT_ID = "gallery"
         const val DOC_ROOT = "root"
+        const val DOC_ALL = "all"
         const val SNAPSHOT_TTL_MS = 15_000L
         const val MAX_SEARCH_RESULTS = 200
+        const val MAX_RECENT_RESULTS = 64 // DocumentsUI caps recents per root anyway
 
         val DEFAULT_ROOT_PROJECTION = arrayOf(
             Root.COLUMN_ROOT_ID, Root.COLUMN_DOCUMENT_ID, Root.COLUMN_TITLE, Root.COLUMN_SUMMARY,

@@ -106,6 +106,8 @@
     <string name="settings_ai_key">Klucz API</string>
     <string name="settings_ai_model">Model</string>
     <string name="saf_summary">Zdjęcia i wideo · szukaj po tagach AI</string>
+    <!-- leading ★ so DocumentsUI's alphabetical sort puts it above the albums -->
+    <string name="saf_all_photos">★ Wszystkie zdjęcia i wideo</string>
     <string name="logo_brand">DiscorDrive</string>
     <!-- quoted: Android trims a bare leading space in resources -->
     <string name="logo_suffix">" Gallery"</string>
