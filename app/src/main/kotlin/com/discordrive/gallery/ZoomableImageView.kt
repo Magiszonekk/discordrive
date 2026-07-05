@@ -89,10 +89,21 @@ class ZoomableImageView @JvmOverloads constructor(context: Context, attrs: Attri
 
     @Suppress("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // Claim the gesture BEFORE the pager can intercept: a zoomed photo must
+        // pan in every direction, never flip pages (the old code only disallowed
+        // interception inside onScroll — after the pager had already stolen the
+        // horizontal move). A second finger (pinch) also claims the gesture, so
+        // zooming can't be hijacked mid-pinch.
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN ->
+                if (relativeScale() > 1.01f) parent?.requestDisallowInterceptTouchEvent(true)
+            MotionEvent.ACTION_POINTER_DOWN ->
+                parent?.requestDisallowInterceptTouchEvent(true)
+        }
         scaleDetector.onTouchEvent(event)
         gestureDetector.onTouchEvent(event)
         if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-            if (relativeScale() <= 1f) parent?.requestDisallowInterceptTouchEvent(false)
+            if (relativeScale() <= 1.01f) parent?.requestDisallowInterceptTouchEvent(false)
         }
         return true
     }
