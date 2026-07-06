@@ -15,8 +15,10 @@ import kotlinx.serialization.json.Json
  *  - enrichment: decrypted AI tags/descriptions cache for instant search
  *  - cloud_item: cloud-only files downloaded as previews (no local copy), so a
  *    previews-only library is browsable offline; the full file is fetched on tap
+ *  - favorite: gallery items starred by the user, keyed by [MediaAsset.id]
+ *    (positive MediaStore ids and negative synthetic cloud-only ids share one space)
  */
-class AppDb(context: Context) : SQLiteOpenHelper(context, "gallery.db", null, 3) {
+class AppDb(context: Context) : SQLiteOpenHelper(context, "gallery.db", null, 4) {
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -37,6 +39,7 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "gallery.db", null, 3)
             )""",
         )
         createCloudItemTable(db)
+        createFavoriteTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -46,6 +49,18 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "gallery.db", null, 3)
         if (oldVersion < 3) {
             createCloudItemTable(db)
         }
+        if (oldVersion < 4) {
+            createFavoriteTable(db)
+        }
+    }
+
+    private fun createFavoriteTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE favorite (
+                asset_id INTEGER PRIMARY KEY,
+                added_at INTEGER NOT NULL
+            )""",
+        )
     }
 
     private fun createCloudItemTable(db: SQLiteDatabase) {
@@ -168,6 +183,34 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "gallery.db", null, 3)
                         .getOrNull()?.let { put(cursor.getString(0), it) }
                 }
             }
+        }
+
+    // === favorites ===
+
+    fun isFavorite(assetId: Long): Boolean =
+        readableDatabase.rawQuery(
+            "SELECT 1 FROM favorite WHERE asset_id = ?",
+            arrayOf(assetId.toString()),
+        ).use { it.moveToFirst() }
+
+    fun setFavorite(assetId: Long, favorite: Boolean) {
+        if (favorite) {
+            writableDatabase.insertWithOnConflict(
+                "favorite", null,
+                ContentValues().apply {
+                    put("asset_id", assetId)
+                    put("added_at", System.currentTimeMillis())
+                },
+                SQLiteDatabase.CONFLICT_IGNORE,
+            )
+        } else {
+            writableDatabase.delete("favorite", "asset_id = ?", arrayOf(assetId.toString()))
+        }
+    }
+
+    fun favoriteIds(): Set<Long> =
+        readableDatabase.rawQuery("SELECT asset_id FROM favorite", null).use { cursor ->
+            buildSet { while (cursor.moveToNext()) add(cursor.getLong(0)) }
         }
 
     // === cloud-only items (previews-only mode) ===

@@ -45,6 +45,16 @@
                 app:tint="@color/text_dim"
                 android:visibility="gone"
                 android:importantForAccessibility="no"/>
+
+            <ImageView
+                android:id="@+id/albumFavIcon"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_favorite"
+                app:tint="@color/text_dim"
+                android:visibility="gone"
+                android:importantForAccessibility="no"/>
         </FrameLayout>
     </com.google.android.material.card.MaterialCardView>
 

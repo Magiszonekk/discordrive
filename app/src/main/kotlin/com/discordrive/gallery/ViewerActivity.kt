@@ -1,5 +1,6 @@
 package com.discordrive.gallery
 
+import android.app.WallpaperManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -45,6 +46,7 @@ class ViewerActivity : SessionActivity() {
     private var assets: List<MediaAsset> = emptyList()
     private var shownAsset: MediaAsset? = null
     private var bucket: String? = null
+    private var favoritesMode = false
     private lateinit var pager: ViewPager2
     private lateinit var adapter: PageAdapter
 
@@ -84,8 +86,10 @@ class ViewerActivity : SessionActivity() {
         toolbar.inflateMenu(R.menu.menu_viewer)
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
+                R.id.action_viewer_favorite -> toggleFavorite()
                 R.id.action_viewer_sync -> syncCurrent()
                 R.id.action_viewer_info -> showInfoDialog()
+                R.id.action_viewer_wallpaper -> setAsWallpaper()
                 R.id.action_viewer_move -> moveCurrent()
                 R.id.action_viewer_delete_cloud -> confirmDelete(alsoLocal = false)
                 R.id.action_viewer_delete_everywhere -> confirmDelete(alsoLocal = true)
@@ -104,6 +108,7 @@ class ViewerActivity : SessionActivity() {
         analyzeAiButton.setOnClickListener { analyzeCurrent() }
 
         this.bucket = bucket
+        favoritesMode = intent.getBooleanExtra("favorites", false)
         this.pager = pager
         adapter = PageAdapter()
         pager.adapter = adapter
@@ -120,8 +125,14 @@ class ViewerActivity : SessionActivity() {
     private fun loadAssets(focusAssetId: Long, fallbackIndex: Int) {
         thread {
             val all = MediaScanner(this).scanGallery()
-            val scoped = bucket?.let { b -> all.filter { it.bucketName == b } }
-                ?.takeIf { it.isNotEmpty() } ?: all
+            val scoped = when {
+                favoritesMode -> {
+                    val fav = AppDb(this).favoriteIds()
+                    all.filter { it.id in fav }
+                }
+                else -> bucket?.let { b -> all.filter { it.bucketName == b } }
+                    ?.takeIf { it.isNotEmpty() } ?: all
+            }
             runOnUiThread {
                 if (scoped.isEmpty()) { finish(); return@runOnUiThread }
                 assets = scoped
@@ -146,12 +157,15 @@ class ViewerActivity : SessionActivity() {
         clearAiButton.visibility = View.GONE
         editAiButton.visibility = View.GONE
         analyzeAiButton.visibility = View.GONE
+        toolbar.menu.findItem(R.id.action_viewer_wallpaper)?.isVisible = !asset.isVideo
         thread {
             val db = AppDb(this)
+            val favorite = db.isFavorite(asset.id)
             val fileId = db.fileIdForAny(asset)
             val record = fileId?.let { db.enrichmentFor(it) }
             runOnUiThread {
                 if (shownAsset?.id != asset.id) return@runOnUiThread // already swiped on
+                applyFavoriteIcon(favorite)
                 if (record != null) {
                     descriptionView.text = record.description
                     chips.removeAllViews()
@@ -169,6 +183,98 @@ class ViewerActivity : SessionActivity() {
                 }
             }
         }
+    }
+
+    // === Favorites ===
+
+    private fun applyFavoriteIcon(favorite: Boolean) {
+        toolbar.menu.findItem(R.id.action_viewer_favorite)?.apply {
+            setIcon(if (favorite) R.drawable.ic_favorite else R.drawable.ic_favorite_border)
+            setTitle(if (favorite) R.string.viewer_fav_remove else R.string.viewer_fav_add)
+        }
+    }
+
+    private fun toggleFavorite() {
+        val asset = shownAsset ?: return
+        thread {
+            val db = AppDb(this)
+            val nowFavorite = !db.isFavorite(asset.id)
+            db.setFavorite(asset.id, nowFavorite)
+            runOnUiThread {
+                if (shownAsset?.id == asset.id) applyFavoriteIcon(nowFavorite)
+                snack(getString(if (nowFavorite) R.string.fav_added else R.string.fav_removed))
+            }
+        }
+    }
+
+    // === Wallpaper ===
+
+    /** "Set as wallpaper": pick the target screen(s), then apply in the background. */
+    private fun setAsWallpaper() {
+        val asset = shownAsset ?: return
+        if (asset.isVideo) return
+        val options = arrayOf(
+            getString(R.string.wallpaper_home),
+            getString(R.string.wallpaper_lock),
+            getString(R.string.wallpaper_both),
+        )
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.wallpaper_title)
+            .setItems(options) { _, which ->
+                val flags = when (which) {
+                    0 -> WallpaperManager.FLAG_SYSTEM
+                    1 -> WallpaperManager.FLAG_LOCK
+                    else -> WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
+                }
+                // cloud-only photos need a live session to fetch the full file
+                if (asset.cloudFileId != null) {
+                    requireSession { applyWallpaper(asset, flags) }
+                } else {
+                    applyWallpaper(asset, flags)
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun applyWallpaper(asset: MediaAsset, flags: Int) {
+        snack(getString(R.string.wallpaper_working))
+        thread {
+            try {
+                val bitmap = wallpaperBitmap(asset) ?: error("nie udało się zdekodować zdjęcia")
+                WallpaperManager.getInstance(this).setBitmap(bitmap, null, true, flags)
+                runOnUiThread { snack(getString(R.string.wallpaper_done)) }
+            } catch (e: Exception) {
+                AppLog.w("Viewer", "set wallpaper failed for ${asset.displayName}", e)
+                runOnUiThread { snack("Błąd: ${e.message}") }
+            }
+        }
+    }
+
+    /** Full-quality bitmap of the photo (local file or downloaded cloud bytes), size-capped. */
+    private fun wallpaperBitmap(asset: MediaAsset): Bitmap? {
+        val maxDim = (2 * maxOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels))
+            .coerceAtMost(4096)
+        return if (asset.cloudFileId != null) {
+            val client = SessionManager.client ?: error(getString(R.string.viewer_needs_session))
+            val filesKey = SessionManager.filesKey ?: error(getString(R.string.viewer_needs_session))
+            val file = client.file(asset.cloudFileId) ?: error("plik zniknął z chmury")
+            val bytes = UploadEngine(client).downloadFile(file, filesKey)
+            decodeLimited(maxDim) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, it) }
+        } else {
+            decodeLimited(maxDim) { opts ->
+                contentResolver.openInputStream(asset.uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+            }
+        }
+    }
+
+    /** Two-pass decode (bounds, then sampled) keeping the longer edge under [maxDim]. */
+    private fun decodeLimited(maxDim: Int, decode: (BitmapFactory.Options) -> Bitmap?): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        decode(bounds)
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxDim) sample *= 2
+        return decode(BitmapFactory.Options().apply { inSampleSize = sample })
     }
 
     /** Analyzes just this photo with AI on demand and shows the result. */

@@ -26,6 +26,7 @@ import kotlin.concurrent.thread
 class AlbumActivity : SessionActivity() {
 
     private lateinit var bucket: String
+    private var favoritesMode = false
     private lateinit var toolbar: MaterialToolbar
     private lateinit var adapter: GalleryAdapter
     private lateinit var progress: LinearProgressIndicator
@@ -41,7 +42,10 @@ class AlbumActivity : SessionActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        bucket = intent.getStringExtra("bucket") ?: run { finish(); return }
+        favoritesMode = intent.getBooleanExtra("favorites", false)
+        val bucketExtra = intent.getStringExtra("bucket")
+        if (bucketExtra == null && !favoritesMode) { finish(); return }
+        bucket = bucketExtra ?: getString(R.string.favorites_title)
 
         setContentView(R.layout.activity_album)
         Insets.apply(findViewById(R.id.albumRoot), bottom = false)
@@ -50,7 +54,7 @@ class AlbumActivity : SessionActivity() {
         defaultNavIcon = toolbar.navigationIcon
         toolbar.title = bucket
         toolbar.setNavigationOnClickListener { if (selectionMode) exitSelection() else finish() }
-        toolbar.inflateMenu(R.menu.menu_album)
+        inflateAlbumMenu()
         toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 R.id.action_ai_album -> requireSession { runAlbumAi() }
@@ -58,6 +62,8 @@ class AlbumActivity : SessionActivity() {
                 R.id.action_album_clear_ai -> requireSession { confirmClearAlbumAnalyses() }
                 R.id.action_sel_sync -> requireSession { syncSelection() }
                 R.id.action_sel_move -> requireSession { pickMoveTargetForSelection() }
+                R.id.action_sel_fav_add -> setFavoriteSelection(true)
+                R.id.action_sel_fav_remove -> setFavoriteSelection(false)
                 R.id.action_sel_delete_cloud -> requireSession { confirmTrashSelection(alsoLocal = false) }
                 R.id.action_sel_delete_everywhere -> requireSession { confirmTrashSelection(alsoLocal = true) }
                 R.id.action_sel_delete_local -> deleteLocalBatch(selectedAssets())
@@ -78,11 +84,10 @@ class AlbumActivity : SessionActivity() {
                 if (selectionMode) {
                     toggleSelection(asset)
                 } else {
-                    startActivity(
-                        Intent(this, ViewerActivity::class.java)
-                            .putExtra("assetId", asset.id)
-                            .putExtra("bucket", bucket),
-                    )
+                    val viewer = Intent(this, ViewerActivity::class.java).putExtra("assetId", asset.id)
+                    // favorites is a virtual album, not a real bucket — scope the pager by flag
+                    if (favoritesMode) viewer.putExtra("favorites", true) else viewer.putExtra("bucket", bucket)
+                    startActivity(viewer)
                 }
             },
             onLongClick = { asset ->
@@ -106,8 +111,23 @@ class AlbumActivity : SessionActivity() {
         loadAlbumDescription()
     }
 
+    /**
+     * The album menu; in favorites mode the per-bucket actions (AI scan,
+     * description, clear analyses) are hidden — "Ulubione" is a virtual album,
+     * not a real MediaStore bucket.
+     */
+    private fun inflateAlbumMenu() {
+        toolbar.inflateMenu(R.menu.menu_album)
+        if (favoritesMode) {
+            toolbar.menu.findItem(R.id.action_ai_album)?.isVisible = false
+            toolbar.menu.findItem(R.id.action_album_desc)?.isVisible = false
+            toolbar.menu.findItem(R.id.action_album_clear_ai)?.isVisible = false
+        }
+    }
+
     /** Loads the (E2EE) album description into the toolbar subtitle, in the background. */
     private fun loadAlbumDescription() {
+        if (favoritesMode) return
         val client = SessionManager.client ?: return
         val filesKey = SessionManager.filesKey ?: return
         thread {
@@ -158,8 +178,14 @@ class AlbumActivity : SessionActivity() {
 
     private fun refreshGrid() {
         thread {
-            val assets = MediaScanner(this).scanGallery().filter { it.bucketName == bucket }
             val db = AppDb(this)
+            val all = MediaScanner(this).scanGallery()
+            val assets = if (favoritesMode) {
+                val fav = db.favoriteIds()
+                all.filter { it.id in fav }
+            } else {
+                all.filter { it.bucketName == bucket }
+            }
             val synced = assets.filter { db.fileIdForAny(it) != null }.map { it.id }.toSet()
             runOnUiThread {
                 currentAssets = assets
@@ -170,7 +196,8 @@ class AlbumActivity : SessionActivity() {
                 }
                 adapter.submit(assets, synced)
                 adapter.setSelection(selectionMode, selectedIds.toSet())
-                if (assets.isEmpty()) finish()
+                // an emptied favorites album stays open (just an empty grid)
+                if (assets.isEmpty() && !favoritesMode) finish()
             }
         }
     }
@@ -232,7 +259,26 @@ class AlbumActivity : SessionActivity() {
             toolbar.title = bucket
             toolbar.subtitle = albumDescription
             toolbar.navigationIcon = defaultNavIcon
-            toolbar.inflateMenu(R.menu.menu_album)
+            inflateAlbumMenu()
+        }
+    }
+
+    /** Stars/unstars the selected items (local-only state, instant). */
+    private fun setFavoriteSelection(favorite: Boolean) {
+        val assets = selectedAssets()
+        if (assets.isEmpty()) return
+        thread {
+            val db = AppDb(this)
+            assets.forEach { db.setFavorite(it.id, favorite) }
+            runOnUiThread {
+                Snackbar.make(
+                    findViewById(R.id.albumRoot),
+                    getString(if (favorite) R.string.sel_fav_added else R.string.sel_fav_removed, assets.size),
+                    Snackbar.LENGTH_SHORT,
+                ).show()
+                exitSelection()
+                if (favoritesMode) refreshGrid() // unstarred items leave this album immediately
+            }
         }
     }
 

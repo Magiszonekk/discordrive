@@ -14,6 +14,7 @@ data class Album(
     val cover: MediaAsset?,
     val allVideo: Boolean,
     val isTrash: Boolean = false,
+    val isFavorites: Boolean = false,
 )
 
 class AlbumAdapter(
@@ -32,6 +33,7 @@ class AlbumAdapter(
         val cover: ImageView = view.findViewById(R.id.albumCover)
         val videoIcon: ImageView = view.findViewById(R.id.albumVideoIcon)
         val trashIcon: ImageView = view.findViewById(R.id.albumTrashIcon)
+        val favIcon: ImageView = view.findViewById(R.id.albumFavIcon)
         val name: TextView = view.findViewById(R.id.albumName)
         val count: TextView = view.findViewById(R.id.albumCount)
     }
@@ -56,14 +58,19 @@ class AlbumAdapter(
             holder.cover.setImageDrawable(null)
             holder.cover.setBackgroundColor(ctx.getColor(R.color.surface_high))
             holder.trashIcon.visibility = View.VISIBLE
+            holder.favIcon.visibility = View.GONE
             holder.videoIcon.visibility = View.GONE
             holder.name.text = album.name
             holder.count.visibility = View.GONE
         } else {
             holder.trashIcon.visibility = View.GONE
             holder.count.visibility = View.VISIBLE
+            holder.cover.setImageDrawable(null)
             holder.cover.setBackgroundColor(ctx.getColor(R.color.surface_high))
             album.cover?.let { ThumbLoader.load(ctx, it, holder.cover, 512) }
+            // Favorites with no cover yet: plain tile with a centered heart (like trash).
+            holder.favIcon.visibility =
+                if (album.isFavorites && album.cover == null) View.VISIBLE else View.GONE
             holder.videoIcon.visibility = if (album.allVideo) View.VISIBLE else View.GONE
             holder.name.text = album.name
             holder.count.text = ctx.resources.getQuantityString(R.plurals.album_count, album.count, album.count)

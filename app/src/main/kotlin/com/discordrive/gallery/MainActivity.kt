@@ -56,10 +56,11 @@ class MainActivity : SessionActivity() {
         emptyView = findViewById(R.id.emptyView)
 
         adapter = AlbumAdapter { album ->
-            if (album.isTrash) {
-                requireSession { startActivity(Intent(this, TrashActivity::class.java)) }
-            } else {
-                startActivity(Intent(this, AlbumActivity::class.java).putExtra("bucket", album.name))
+            when {
+                album.isTrash -> requireSession { startActivity(Intent(this, TrashActivity::class.java)) }
+                album.isFavorites ->
+                    startActivity(Intent(this, AlbumActivity::class.java).putExtra("favorites", true))
+                else -> startActivity(Intent(this, AlbumActivity::class.java).putExtra("bucket", album.name))
             }
         }
         findViewById<RecyclerView>(R.id.grid).apply {
@@ -116,8 +117,16 @@ class MainActivity : SessionActivity() {
                     allVideo = items.all { it.isVideo },
                 )
             }.sortedByDescending { it.cover?.dateAddedSec ?: 0L }
-            // Trash is a regular tile, always pinned to the very end.
+            // Favorites and Trash are regular tiles, always pinned to the very end.
+            val favIds = AppDb(this).favoriteIds()
+            val favAssets = assets.filter { it.id in favIds } // newest-first, like assets
             val withTrash = albums + Album(
+                name = getString(R.string.favorites_title),
+                count = favAssets.size,
+                cover = favAssets.firstOrNull(),
+                allVideo = false,
+                isFavorites = true,
+            ) + Album(
                 name = getString(R.string.trash_title),
                 count = 0,
                 cover = null,

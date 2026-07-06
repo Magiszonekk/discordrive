@@ -219,6 +219,26 @@
     <string name="sel_moved">Przeniesiono %1$d plików do „%2$s”</string>
     <string name="sel_none_synced">Żaden z zaznaczonych plików nie jest jeszcze zsynchronizowany</string>
 
+    <!-- Favorites -->
+    <string name="favorites_title">Ulubione</string>
+    <string name="viewer_fav_add">Dodaj do ulubionych</string>
+    <string name="viewer_fav_remove">Usuń z ulubionych</string>
+    <string name="fav_added">Dodano do ulubionych</string>
+    <string name="fav_removed">Usunięto z ulubionych</string>
+    <string name="sel_fav_add">Dodaj do ulubionych</string>
+    <string name="sel_fav_remove">Usuń z ulubionych</string>
+    <string name="sel_fav_added">Dodano do ulubionych: %d</string>
+    <string name="sel_fav_removed">Usunięto z ulubionych: %d</string>
+
+    <!-- Wallpaper -->
+    <string name="viewer_set_wallpaper">Ustaw jako tapetę</string>
+    <string name="wallpaper_title">Ustaw tapetę na</string>
+    <string name="wallpaper_home">Ekran główny</string>
+    <string name="wallpaper_lock">Ekran blokady</string>
+    <string name="wallpaper_both">Oba ekrany</string>
+    <string name="wallpaper_working">Ustawianie tapety…</string>
+    <string name="wallpaper_done">Ustawiono tapetę</string>
+
     <!-- Diagnostics -->
     <string name="settings_diag">Diagnostyka</string>
     <string name="settings_diag_hint">Aplikacja zapisuje logi (w tym crashe) do pliku na urządzeniu. Wysyłka na serwer jest szyfrowana end-to-end Twoim kluczem.</string>
