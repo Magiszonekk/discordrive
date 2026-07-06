@@ -49,7 +49,27 @@ class CropOverlayView @JvmOverloads constructor(context: Context, attrs: Attribu
     fun setImageRect(rect: RectF) {
         imageRect.set(rect)
         cropRect.set(rect)
+        updateGestureExclusion()
         invalidate()
+    }
+
+    /**
+     * Keeps the corner handles out of the system back-gesture zones: without
+     * this, grabbing a handle near the screen edge triggers back navigation.
+     * (The system caps exclusions at 200dp total height, so we exclude only
+     * the four handle areas, not whole edges.)
+     */
+    private fun updateGestureExclusion() {
+        val r = touchRadius
+        fun around(x: Float, y: Float) = android.graphics.Rect(
+            (x - r).toInt(), (y - r).toInt(), (x + r).toInt(), (y + r).toInt(),
+        )
+        systemGestureExclusionRects = listOf(
+            around(cropRect.left, cropRect.top),
+            around(cropRect.right, cropRect.top),
+            around(cropRect.left, cropRect.bottom),
+            around(cropRect.right, cropRect.bottom),
+        )
     }
 
     /**
@@ -108,6 +128,7 @@ class CropOverlayView @JvmOverloads constructor(context: Context, attrs: Attribu
                 lastX = event.x
                 lastY = event.y
                 applyDrag(dx, dy)
+                updateGestureExclusion()
                 invalidate()
                 return true
             }

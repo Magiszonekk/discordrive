@@ -16,11 +16,14 @@
         app:navigationIcon="@drawable/ic_close"
         app:title="@string/edit_title"/>
 
+    <!-- generous side margins: crop handles must stay clear of the system
+         back-gesture zones at the screen edges -->
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:layout_margin="12dp">
+        android:layout_marginHorizontal="28dp"
+        android:layout_marginVertical="12dp">
 
         <ImageView
             android:id="@+id/editImage"

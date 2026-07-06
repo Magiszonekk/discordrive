@@ -2,11 +2,11 @@
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item android:id="@+id/action_viewer_favorite" android:title="@string/viewer_fav_add"
         android:icon="@drawable/ic_favorite_border" app:showAsAction="always"/>
+    <item android:id="@+id/action_viewer_edit_photo" android:title="@string/viewer_edit_photo"
+        android:icon="@drawable/ic_edit" app:showAsAction="always"/>
     <item android:id="@+id/action_viewer_sync" android:title="@string/action_sync_this"
         app:showAsAction="never"/>
     <item android:id="@+id/action_viewer_info" android:title="@string/viewer_info_title"
-        app:showAsAction="never"/>
-    <item android:id="@+id/action_viewer_edit_photo" android:title="@string/viewer_edit_photo"
         app:showAsAction="never"/>
     <item android:id="@+id/action_viewer_wallpaper" android:title="@string/viewer_set_wallpaper"
         app:showAsAction="never"/>
