@@ -213,7 +213,8 @@ class GalleryDocumentsProvider : DocumentsProvider() {
             .add(Document.COLUMN_MIME_TYPE, Document.MIME_TYPE_DIR)
             .add(Document.COLUMN_SIZE, null)
             .add(Document.COLUMN_LAST_MODIFIED, null)
-            .add(Document.COLUMN_FLAGS, 0)
+            // photos inside — DocumentsUI should open these as a thumbnail grid
+            .add(Document.COLUMN_FLAGS, Document.FLAG_DIR_PREFERS_GRID)
     }
 
     private fun MatrixCursor.addAssetRow(asset: MediaAsset) {
