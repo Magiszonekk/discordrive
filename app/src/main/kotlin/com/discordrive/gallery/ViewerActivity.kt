@@ -88,6 +88,7 @@ class ViewerActivity : SessionActivity() {
                 R.id.action_viewer_favorite -> toggleFavorite()
                 R.id.action_viewer_sync -> syncCurrent()
                 R.id.action_viewer_info -> showInfoDialog()
+                R.id.action_viewer_edit_photo -> editPhoto()
                 R.id.action_viewer_wallpaper -> setAsWallpaper()
                 R.id.action_viewer_move -> moveCurrent()
                 R.id.action_viewer_delete_cloud -> confirmDelete(alsoLocal = false)
@@ -157,6 +158,7 @@ class ViewerActivity : SessionActivity() {
         editAiButton.visibility = View.GONE
         analyzeAiButton.visibility = View.GONE
         toolbar.menu.findItem(R.id.action_viewer_wallpaper)?.isVisible = !asset.isVideo
+        toolbar.menu.findItem(R.id.action_viewer_edit_photo)?.isVisible = !asset.isVideo
         thread {
             val db = AppDb(this)
             val favorite = db.isFavorite(asset.id)
@@ -206,15 +208,18 @@ class ViewerActivity : SessionActivity() {
         }
     }
 
-    // === Wallpaper ===
+    // === Wallpaper / editor ===
 
     /** Opens the full-screen wallpaper cropper (pan/zoom, target-screen buttons). */
-    private fun setAsWallpaper() {
+    private fun setAsWallpaper() = openPhotoTool(WallpaperActivity::class.java)
+
+    /** Opens the photo editor (crop / rotate / flip, saves a copy). */
+    private fun editPhoto() = openPhotoTool(EditActivity::class.java)
+
+    private fun openPhotoTool(activity: Class<out SessionActivity>) {
         val asset = shownAsset ?: return
         if (asset.isVideo) return
-        val open = {
-            startActivity(Intent(this, WallpaperActivity::class.java).putExtra("assetId", asset.id))
-        }
+        val open = { startActivity(Intent(this, activity).putExtra("assetId", asset.id)) }
         // cloud-only photos need a live session to fetch the full file
         if (asset.cloudFileId != null) requireSession { open() } else open()
     }

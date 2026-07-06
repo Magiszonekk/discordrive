@@ -6,6 +6,8 @@
         app:showAsAction="never"/>
     <item android:id="@+id/action_viewer_info" android:title="@string/viewer_info_title"
         app:showAsAction="never"/>
+    <item android:id="@+id/action_viewer_edit_photo" android:title="@string/viewer_edit_photo"
+        app:showAsAction="never"/>
     <item android:id="@+id/action_viewer_wallpaper" android:title="@string/viewer_set_wallpaper"
         app:showAsAction="never"/>
     <item android:id="@+id/action_viewer_move" android:title="@string/action_move_to_album"

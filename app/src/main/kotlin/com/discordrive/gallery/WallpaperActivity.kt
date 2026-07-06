@@ -1,13 +1,10 @@
 package com.discordrive.gallery
 
 import android.app.WallpaperManager
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.view.View
 import android.widget.ProgressBar
 import android.widget.Toast
-import com.discordrive.gallery.api.UploadEngine
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.snackbar.Snackbar
@@ -65,7 +62,9 @@ class WallpaperActivity : SessionActivity() {
     private fun loadPhoto(assetId: Long) {
         thread {
             val asset = MediaScanner(this).findById(assetId)
-            val bitmap = asset?.let { runCatching { decodeAsset(it) }.getOrNull() }
+            val bitmap = asset?.let {
+                runCatching { PhotoLoader.decodeAsset(this, it, PhotoLoader.screenMaxDim(this)) }.getOrNull()
+            }
             runOnUiThread {
                 loading.visibility = View.GONE
                 if (bitmap == null) {
@@ -78,31 +77,6 @@ class WallpaperActivity : SessionActivity() {
                 setButtonsEnabled(true)
             }
         }
-    }
-
-    private fun decodeAsset(asset: MediaAsset): Bitmap? {
-        val maxDim = (2 * maxOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels))
-            .coerceAtMost(4096)
-        return if (asset.cloudFileId != null) {
-            val client = SessionManager.client ?: error(getString(R.string.viewer_needs_session))
-            val filesKey = SessionManager.filesKey ?: error(getString(R.string.viewer_needs_session))
-            val file = client.file(asset.cloudFileId) ?: error("plik zniknął z chmury")
-            val bytes = UploadEngine(client).downloadFile(file, filesKey)
-            decodeLimited(maxDim) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, it) }
-        } else {
-            decodeLimited(maxDim) { opts ->
-                contentResolver.openInputStream(asset.uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
-            }
-        }
-    }
-
-    /** Two-pass decode (bounds, then sampled) keeping the longer edge under [maxDim]. */
-    private fun decodeLimited(maxDim: Int, decode: (BitmapFactory.Options) -> Bitmap?): Bitmap? {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        decode(bounds)
-        var sample = 1
-        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxDim) sample *= 2
-        return decode(BitmapFactory.Options().apply { inSampleSize = sample })
     }
 
     /** Sets the currently visible crop as the wallpaper for the chosen screen(s). */

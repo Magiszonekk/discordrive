@@ -240,6 +240,15 @@
     <string name="wallpaper_done">Ustawiono tapetę</string>
     <string name="wallpaper_load_failed">Nie udało się wczytać zdjęcia</string>
 
+    <!-- Photo editor -->
+    <string name="viewer_edit_photo">Edytuj zdjęcie</string>
+    <string name="edit_title">Edytuj</string>
+    <string name="edit_rotate">Obróć</string>
+    <string name="edit_flip">Odbij</string>
+    <string name="edit_reset">Reset</string>
+    <string name="edit_save">Zapisz kopię</string>
+    <string name="edit_saved">Zapisano kopię w galerii (album DiscorDrive)</string>
+
     <!-- Diagnostics -->
     <string name="settings_diag">Diagnostyka</string>
     <string name="settings_diag_hint">Aplikacja zapisuje logi (w tym crashe) do pliku na urządzeniu. Wysyłka na serwer jest szyfrowana end-to-end Twoim kluczem.</string>
