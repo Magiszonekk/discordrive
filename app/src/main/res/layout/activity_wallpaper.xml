@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/wallpaperRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black">
+
+    <com.discordrive.gallery.ZoomableImageView
+        android:id="@+id/cropImage"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"/>
+
+    <ProgressBar
+        android:id="@+id/loading"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="center"/>
+
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/wallpaperToolbar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:background="@color/scrim"
+        android:theme="@style/ThemeOverlay.Material3.Dark"
+        app:navigationIcon="@drawable/ic_close"
+        app:title="@string/wallpaper_ui_title"/>
+
+    <LinearLayout
+        android:id="@+id/targetPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:orientation="vertical"
+        android:background="@color/scrim"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="16dp">
+
+        <TextView
+            android:id="@+id/cropHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="@string/wallpaper_hint"
+            android:textColor="@color/text_dim"
+            android:textSize="13sp"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/setHomeButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp"
+                android:paddingHorizontal="4dp"
+                android:textSize="12sp"
+                android:maxLines="2"
+                android:text="@string/wallpaper_home"/>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/setLockButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="8dp"
+                android:paddingHorizontal="4dp"
+                android:textSize="12sp"
+                android:maxLines="2"
+                android:text="@string/wallpaper_lock"/>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/setBothButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:paddingHorizontal="4dp"
+                android:textSize="12sp"
+                android:maxLines="2"
+                android:text="@string/wallpaper_both"/>
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

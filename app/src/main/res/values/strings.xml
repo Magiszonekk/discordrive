@@ -232,12 +232,13 @@
 
     <!-- Wallpaper -->
     <string name="viewer_set_wallpaper">Ustaw jako tapetę</string>
-    <string name="wallpaper_title">Ustaw tapetę na</string>
+    <string name="wallpaper_ui_title">Ustaw tapetę</string>
+    <string name="wallpaper_hint">Przesuń i przybliż zdjęcie, aby wykadrować tapetę</string>
     <string name="wallpaper_home">Ekran główny</string>
     <string name="wallpaper_lock">Ekran blokady</string>
     <string name="wallpaper_both">Oba ekrany</string>
-    <string name="wallpaper_working">Ustawianie tapety…</string>
     <string name="wallpaper_done">Ustawiono tapetę</string>
+    <string name="wallpaper_load_failed">Nie udało się wczytać zdjęcia</string>
 
     <!-- Diagnostics -->
     <string name="settings_diag">Diagnostyka</string>

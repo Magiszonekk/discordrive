@@ -20,6 +20,17 @@ class ZoomableImageView @JvmOverloads constructor(context: Context, attrs: Attri
 
     var onSingleTap: (() -> Unit)? = null
 
+    /**
+     * Wallpaper-cropper mode: the base scale center-CROPS (fills the viewport,
+     * no bars) instead of fit-centering, and panning works already at base
+     * scale — the visible viewport is the crop the user is choosing.
+     */
+    var fillViewport = false
+        set(value) {
+            field = value
+            resetBase()
+        }
+
     private val baseMatrix = Matrix() // fit-center
     private val drawMatrix = Matrix() // base + user zoom/pan
     private val values = FloatArray(9)
@@ -59,7 +70,9 @@ class ZoomableImageView @JvmOverloads constructor(context: Context, attrs: Attri
             }
 
             override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dX: Float, dY: Float): Boolean {
-                if (relativeScale() <= 1.01f) return false // not zoomed → let the pager swipe
+                // not zoomed → let the pager swipe (in fill mode the image sticks
+                // out on one axis even at base scale, so panning is always ours)
+                if (!fillViewport && relativeScale() <= 1.01f) return false
                 drawMatrix.postTranslate(-dX, -dY)
                 applyMatrix()
                 parent?.requestDisallowInterceptTouchEvent(true)
@@ -115,12 +128,26 @@ class ZoomableImageView @JvmOverloads constructor(context: Context, attrs: Attri
         val dw = d.intrinsicWidth.toFloat()
         val dh = d.intrinsicHeight.toFloat()
         if (vw <= 0 || vh <= 0 || dw <= 0 || dh <= 0) return
-        val scale = minOf(vw / dw, vh / dh)
+        val scale = if (fillViewport) maxOf(vw / dw, vh / dh) else minOf(vw / dw, vh / dh)
         baseMatrix.reset()
         baseMatrix.postScale(scale, scale)
         baseMatrix.postTranslate((vw - dw * scale) / 2f, (vh - dh * scale) / 2f)
         drawMatrix.set(baseMatrix)
         imageMatrix = drawMatrix
+    }
+
+    /**
+     * Renders exactly what the viewport shows into a bitmap (the WYSIWYG crop
+     * for "set as wallpaper"). View-sized, so it matches the screen resolution.
+     */
+    fun renderVisible(): android.graphics.Bitmap? {
+        val d = drawable ?: return null
+        if (width <= 0 || height <= 0) return null
+        val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        canvas.concat(drawMatrix)
+        d.draw(canvas)
+        return bitmap
     }
 
     /** Current scale relative to the fit-center base (1f = fully zoomed out). */

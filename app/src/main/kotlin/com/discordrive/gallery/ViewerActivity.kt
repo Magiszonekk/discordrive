@@ -1,6 +1,5 @@
 package com.discordrive.gallery
 
-import android.app.WallpaperManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -209,72 +208,15 @@ class ViewerActivity : SessionActivity() {
 
     // === Wallpaper ===
 
-    /** "Set as wallpaper": pick the target screen(s), then apply in the background. */
+    /** Opens the full-screen wallpaper cropper (pan/zoom, target-screen buttons). */
     private fun setAsWallpaper() {
         val asset = shownAsset ?: return
         if (asset.isVideo) return
-        val options = arrayOf(
-            getString(R.string.wallpaper_home),
-            getString(R.string.wallpaper_lock),
-            getString(R.string.wallpaper_both),
-        )
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.wallpaper_title)
-            .setItems(options) { _, which ->
-                val flags = when (which) {
-                    0 -> WallpaperManager.FLAG_SYSTEM
-                    1 -> WallpaperManager.FLAG_LOCK
-                    else -> WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
-                }
-                // cloud-only photos need a live session to fetch the full file
-                if (asset.cloudFileId != null) {
-                    requireSession { applyWallpaper(asset, flags) }
-                } else {
-                    applyWallpaper(asset, flags)
-                }
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
-    private fun applyWallpaper(asset: MediaAsset, flags: Int) {
-        snack(getString(R.string.wallpaper_working))
-        thread {
-            try {
-                val bitmap = wallpaperBitmap(asset) ?: error("nie udało się zdekodować zdjęcia")
-                WallpaperManager.getInstance(this).setBitmap(bitmap, null, true, flags)
-                runOnUiThread { snack(getString(R.string.wallpaper_done)) }
-            } catch (e: Exception) {
-                AppLog.w("Viewer", "set wallpaper failed for ${asset.displayName}", e)
-                runOnUiThread { snack("Błąd: ${e.message}") }
-            }
+        val open = {
+            startActivity(Intent(this, WallpaperActivity::class.java).putExtra("assetId", asset.id))
         }
-    }
-
-    /** Full-quality bitmap of the photo (local file or downloaded cloud bytes), size-capped. */
-    private fun wallpaperBitmap(asset: MediaAsset): Bitmap? {
-        val maxDim = (2 * maxOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels))
-            .coerceAtMost(4096)
-        return if (asset.cloudFileId != null) {
-            val client = SessionManager.client ?: error(getString(R.string.viewer_needs_session))
-            val filesKey = SessionManager.filesKey ?: error(getString(R.string.viewer_needs_session))
-            val file = client.file(asset.cloudFileId) ?: error("plik zniknął z chmury")
-            val bytes = UploadEngine(client).downloadFile(file, filesKey)
-            decodeLimited(maxDim) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, it) }
-        } else {
-            decodeLimited(maxDim) { opts ->
-                contentResolver.openInputStream(asset.uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
-            }
-        }
-    }
-
-    /** Two-pass decode (bounds, then sampled) keeping the longer edge under [maxDim]. */
-    private fun decodeLimited(maxDim: Int, decode: (BitmapFactory.Options) -> Bitmap?): Bitmap? {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        decode(bounds)
-        var sample = 1
-        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxDim) sample *= 2
-        return decode(BitmapFactory.Options().apply { inSampleSize = sample })
+        // cloud-only photos need a live session to fetch the full file
+        if (asset.cloudFileId != null) requireSession { open() } else open()
     }
 
     /** Analyzes just this photo with AI on demand and shows the result. */
