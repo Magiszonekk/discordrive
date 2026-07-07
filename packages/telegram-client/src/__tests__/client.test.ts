@@ -72,6 +72,29 @@ describe("uploadDocument", () => {
     ).rejects.toThrow(/no file_id/);
   });
 
+  it("retries network-level failures (ECONNRESET), not just timeouts", async () => {
+    const reset = Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } });
+    fetchMock
+      .mockRejectedValueOnce(reset)
+      .mockResolvedValueOnce(
+        tgOk({ message_id: 8, chat: { id: -100999 }, document: { file_id: "FILE_R" } }),
+      );
+
+    const result = await uploadDocument(bot, new Uint8Array([1]).buffer, "r.bin", new TelegramRateLimiter(0));
+
+    expect(result.fileId).toBe("FILE_R");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("includes the network cause in the final error after retries are exhausted", async () => {
+    const reset = Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } });
+    fetchMock.mockRejectedValue(reset);
+
+    await expect(
+      uploadDocument(bot, new Uint8Array([1]).buffer, "r.bin", new TelegramRateLimiter(0)),
+    ).rejects.toThrow(/ECONNRESET/);
+  }, 15_000);
+
   it("surfaces auth errors without retrying", async () => {
     fetchMock.mockResolvedValueOnce(tgError(401, "Unauthorized"));
 

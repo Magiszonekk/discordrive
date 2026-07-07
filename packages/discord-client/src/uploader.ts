@@ -32,6 +32,14 @@ function normalizeRelayBaseUrl(relayBaseUrl?: string): string | null {
   return trimmed.replace(/\/$/, "");
 }
 
+/** undici buries the real cause ("fetch failed" + cause: ECONNREFUSED) — surface it. */
+function describeFetchError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause = (err as { cause?: { message?: string; code?: string } }).cause;
+  const detail = cause?.code ?? cause?.message;
+  return detail ? `${err.message} (${detail})` : err.message;
+}
+
 export async function uploadChunk(
   webhook: WebhookInfo,
   data: ArrayBuffer,
@@ -39,12 +47,14 @@ export async function uploadChunk(
   rateLimiter: WebhookRateLimiter,
   options?: UploadChunkOptions,
 ): Promise<UploadResult> {
-  const relayBaseUrl = normalizeRelayBaseUrl(options?.relayBaseUrl);
+  // Mutable: a network-dead relay degrades to a direct webhook upload — the
+  // relay is an egress optimization, never a functional requirement.
+  let relayBaseUrl = normalizeRelayBaseUrl(options?.relayBaseUrl);
   const webhookApiUrl = getWebhookApiUrl(webhook);
-  const url = relayBaseUrl ? `${relayBaseUrl}/upload` : `${webhookApiUrl}?wait=true`;
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const url = relayBaseUrl ? `${relayBaseUrl}/upload` : `${webhookApiUrl}?wait=true`;
     const attemptStartMs = performance.now();
     rateLimiter.reserve(webhook.id);
     let response: Response;
@@ -82,11 +92,19 @@ export async function uploadChunk(
       }
     } catch (err: unknown) {
       rateLimiter.release(webhook.id);
-      if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
-        if (attempt < MAX_RETRIES) continue;
-        throw new Error(`Upload timed out for ${filename} after ${MAX_RETRIES} retries`);
+      // Relay unreachable (down, refused, DNS) — fall back to uploading
+      // directly to the webhook and keep going.
+      if (relayBaseUrl) {
+        console.warn(`[discord-client] relay unreachable for webhook ${webhook.id} (${describeFetchError(err)}) — falling back to direct upload`);
+        relayBaseUrl = null;
+        continue;
       }
-      throw err;
+      // Direct-path network failures (timeout, ECONNRESET, DNS) are retryable
+      if (attempt < MAX_RETRIES) {
+        await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
+        continue;
+      }
+      throw new Error(`Upload failed for ${filename} after ${MAX_RETRIES} retries: ${describeFetchError(err)}`);
     }
 
     rateLimiter.release(webhook.id);

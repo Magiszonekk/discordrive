@@ -228,6 +228,8 @@ class TelegramReplicaPool implements BlobProviderPool {
     this.bots = serverConfig.replicaTelegramBotConfigs;
   }
 
+  // Reserves the sender at selection (caller releases in finally) so
+  // concurrent replications can't stampede one bot with parallel sends.
   private async selectSender(): Promise<TgBotInfo> {
     if (this.bots.length === 0) {
       throw new Error("Telegram replica pool has no configured senders (REPLICA_TG_BOT_n)");
@@ -238,6 +240,7 @@ class TelegramReplicaPool implements BlobProviderPool {
         const bot = this.bots[idx]!;
         if (this.limiter.canUse(bot.id)) {
           this.roundRobin = (idx + 1) % this.bots.length;
+          this.limiter.reserve(bot.id);
           return bot;
         }
       }
@@ -253,20 +256,24 @@ class TelegramReplicaPool implements BlobProviderPool {
   }
 
   async put(ownerUserId: string, blobId: string, bytes: Uint8Array): Promise<PlacementWriteResult> {
-    const bot = await this.selectSender();
-    const upload = await uploadDocument(
-      bot,
-      bytes.slice().buffer,
-      `${ownerUserId}-${blobId}.bin`,
-      this.limiter,
-    );
-    return {
-      provider: this.kind,
-      storagePath: `${TG_STORAGE_PATH_PREFIX}${upload.fileId}`,
-      messageId: upload.messageId,
-      locationId: upload.chatId,
-      senderId: bot.id,
-    };
+    const bot = await this.selectSender(); // reserved — release in finally
+    try {
+      const upload = await uploadDocument(
+        bot,
+        bytes.slice().buffer,
+        `${ownerUserId}-${blobId}.bin`,
+        this.limiter,
+      );
+      return {
+        provider: this.kind,
+        storagePath: `${TG_STORAGE_PATH_PREFIX}${upload.fileId}`,
+        messageId: upload.messageId,
+        locationId: upload.chatId,
+        senderId: bot.id,
+      };
+    } finally {
+      this.limiter.release(bot.id);
+    }
   }
 
   async get(placement: PlacementRef): Promise<Uint8Array> {

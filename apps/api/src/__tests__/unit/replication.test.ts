@@ -77,6 +77,9 @@ beforeEach(async () => {
   process.env.STORAGE_REPLICA_PROVIDERS = "LOCAL";
   clearReplicaPools();
   await db.blobTransport.deleteMany({ where: { ownerUserId } });
+  // The test DB is shared with other (parallel) test files — drain any queued
+  // placements they left so sweep counts here stay deterministic.
+  await db.blobPlacement.deleteMany({ where: { status: { in: ["PENDING", "MISSING"] } } });
 });
 
 afterEach(async () => {
@@ -99,7 +102,8 @@ describe("replication worker", () => {
 
     const activated = await runReplicationSweep();
 
-    expect(activated).toBe(1);
+    // >=: a parallel test file may enqueue its own rows into the shared DB
+    expect(activated).toBeGreaterThanOrEqual(1);
     const placement = await db.blobPlacement.findFirst({
       where: { blobId: "repl-blob-sweep", poolRole: "REPLICA" },
     });
@@ -169,10 +173,12 @@ describe("replication worker", () => {
 
     await purgeFile(ownerUserId, fileId);
 
-    // Physical replica copy removed, all rows gone, sweep is a no-op
+    // Physical replica copy removed, all rows gone, and a sweep cannot
+    // resurrect the purged blob's placements
     await expect(stat(replicated!.storagePath)).rejects.toThrow();
     expect(await db.blobPlacement.count({ where: { blobId: `${fileId}:chunk:0` } })).toBe(0);
-    expect(await runReplicationSweep()).toBe(0);
+    await runReplicationSweep();
+    expect(await db.blobPlacement.count({ where: { blobId: `${fileId}:chunk:0` } })).toBe(0);
   });
 });
 

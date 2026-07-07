@@ -46,6 +46,10 @@ function fileIdFromStoragePath(storagePath: string): string {
   return storagePath.slice(STORAGE_PATH_PREFIX.length);
 }
 
+// Selection RESERVES the sender before returning (caller releases in finally).
+// Without this, N concurrent uploads all see canUse()==true before any of them
+// reserves, stampede one bot with parallel sends, and Telegram resets the
+// connections. Mirrors discord-blobs' claimSender.
 async function selectSender(bots: TgBotInfo[]): Promise<TgBotInfo> {
   while (true) {
     for (let i = 0; i < bots.length; i++) {
@@ -53,6 +57,7 @@ async function selectSender(bots: TgBotInfo[]): Promise<TgBotInfo> {
       const bot = bots[idx]!;
       if (sharedRateLimiter.canUse(bot.id)) {
         roundRobinIndex = (idx + 1) % bots.length;
+        sharedRateLimiter.reserve(bot.id);
         return bot;
       }
     }
@@ -75,19 +80,23 @@ export async function uploadCiphertextBlobToTelegram(
       ? new Uint8Array(bytes)
       : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const bots = getConfiguredTelegramBots();
-  const bot = await selectSender(bots);
+  const bot = await selectSender(bots); // reserved — release in finally
   const filename = `${ownerUserId}-${blobId}.bin`;
 
-  const upload = await uploadDocument(bot, ciphertext.slice().buffer, filename, sharedRateLimiter);
-  return {
-    storagePath: `${STORAGE_PATH_PREFIX}${upload.fileId}`,
-    messageId: upload.messageId,
-    chatId: upload.chatId,
-    senderId: bot.id,
-    attemptCount: upload.attemptCount,
-    upstreamStatus: upload.upstreamStatus,
-    elapsedMs: upload.elapsedMs,
-  };
+  try {
+    const upload = await uploadDocument(bot, ciphertext.slice().buffer, filename, sharedRateLimiter);
+    return {
+      storagePath: `${STORAGE_PATH_PREFIX}${upload.fileId}`,
+      messageId: upload.messageId,
+      chatId: upload.chatId,
+      senderId: bot.id,
+      attemptCount: upload.attemptCount,
+      upstreamStatus: upload.upstreamStatus,
+      elapsedMs: upload.elapsedMs,
+    };
+  } finally {
+    sharedRateLimiter.release(bot.id);
+  }
 }
 
 export async function fetchCiphertextBlobFromTelegram(

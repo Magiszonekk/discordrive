@@ -72,6 +72,8 @@ async function withTempBlobRoot<T>(fn: (rootDir: string) => Promise<T>): Promise
     }
     delete process.env.BLOB_STORAGE_KIND;
     delete process.env.WEBHOOK_1;
+    delete process.env.STORAGE_PRIMARY_PROVIDERS;
+    delete process.env.STORAGE_REPLICA_PROVIDERS;
     await rm(rootDir, { recursive: true, force: true });
   }
 }
@@ -98,12 +100,17 @@ describe("blob transport handlers", () => {
     clearDiscordBlobStore();
     delete process.env.BLOB_STORAGE_KIND;
     delete process.env.WEBHOOK_1;
+    // Loaded from the developer's real .env — must not leak into these tests
+    delete process.env.STORAGE_PRIMARY_PROVIDERS;
+    delete process.env.STORAGE_REPLICA_PROVIDERS;
   });
 
   afterEach(() => {
     delete process.env.DDV4_BLOB_ROOT_DIR;
     delete process.env.BLOB_STORAGE_KIND;
     delete process.env.WEBHOOK_1;
+    delete process.env.STORAGE_PRIMARY_PROVIDERS;
+    delete process.env.STORAGE_REPLICA_PROVIDERS;
     clearDiscordBlobStore();
   });
 

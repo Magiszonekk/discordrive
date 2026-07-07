@@ -33,6 +33,14 @@ interface TgApiEnvelope<T> {
 
 const MAX_RETRIES = 3;
 
+/** undici buries the real cause ("fetch failed" + cause: ECONNRESET) — surface it. */
+function describeFetchError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause = (err as { cause?: { message?: string; code?: string } }).cause;
+  const detail = cause?.code ?? cause?.message;
+  return detail ? `${err.message} (${detail})` : err.message;
+}
+
 function apiUrl(bot: TgBotInfo, method: string): string {
   return `https://api.telegram.org/bot${bot.token}/${method}`;
 }
@@ -80,11 +88,14 @@ export async function uploadDocument(
       });
     } catch (err) {
       rateLimiter.release(bot.id);
-      if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
-        if (attempt < MAX_RETRIES) continue;
-        throw new Error(`Telegram upload timed out for ${filename}`);
+      // Network-level failures (timeout, ECONNRESET, DNS) are all retryable —
+      // Telegram resets connections under load and undici reports it as a
+      // generic "fetch failed".
+      if (attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+        continue;
       }
-      throw err;
+      throw new Error(`Telegram upload failed for ${filename}: ${describeFetchError(err)}`);
     }
     rateLimiter.release(bot.id);
 
@@ -144,11 +155,11 @@ export async function getFilePath(
         signal: AbortSignal.timeout(30_000),
       });
     } catch (err) {
-      if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
-        if (attempt < MAX_RETRIES) continue;
-        throw new Error(`Telegram getFile timed out for ${fileId}`);
+      if (attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+        continue;
       }
-      throw err;
+      throw new Error(`Telegram getFile failed for ${fileId}: ${describeFetchError(err)}`);
     }
 
     const envelope = await parseEnvelope<{ file_path?: string }>(response);
@@ -185,12 +196,11 @@ export async function downloadDocument(
     try {
       response = await fetch(fileUrl(bot, filePath), { signal: AbortSignal.timeout(60_000) });
     } catch (err) {
-      if (attempt >= MAX_RETRIES) throw err;
-      if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
-        await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
-        continue;
+      if (attempt >= MAX_RETRIES) {
+        throw new Error(`Telegram file download failed: ${describeFetchError(err)}`);
       }
-      throw err;
+      await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
+      continue;
     }
     if (response.ok && response.body) return response.body;
     if ((response.status === 404 || response.status >= 500) && attempt < MAX_RETRIES) {
@@ -219,11 +229,11 @@ export async function deleteMessage(
         signal: AbortSignal.timeout(30_000),
       });
     } catch (err) {
-      if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
-        if (attempt < MAX_RETRIES) continue;
-        throw new Error(`Telegram delete timed out for message ${messageId}`);
+      if (attempt < MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+        continue;
       }
-      throw err;
+      throw new Error(`Telegram delete failed for message ${messageId}: ${describeFetchError(err)}`);
     }
 
     const envelope = await parseEnvelope<boolean>(response);
