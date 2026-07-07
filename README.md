@@ -52,6 +52,75 @@ Download retries: up to 3 attempts (exponential backoff on 5xx / timeout).
 
 ---
 
+## Storage providers, striping & replication
+
+Discord is not the only backend. Blobs are stored through pluggable **providers**
+(`LOCAL` disk, `DISCORD` attachments, `TELEGRAM` documents), and every provider
+sees only ciphertext — switching or adding one never touches the crypto model.
+
+### Data model
+
+Each logical blob (`BlobTransport`) has one or more **placements**
+(`BlobPlacement`) — one row per physical copy at one provider, tagged with a
+role (`PRIMARY` | `REPLICA`) and status (`ACTIVE`, `PENDING`, `MISSING`,
+`MODIFIED`, `DELETING`). This one table expresses every layout:
+
+| Layout | Placements per blob |
+|---|---|
+| Single provider | 1 × PRIMARY |
+| Striping (speed) | 1 × PRIMARY, chunks spread across providers |
+| Mirror (durability) | 1 × PRIMARY + N × REPLICA |
+| More copies | add another REPLICA — no code change |
+
+### Choosing providers (striping)
+
+`STORAGE_PRIMARY_PROVIDERS` (comma list) selects which providers receive new
+uploads. With more than one, each chunk goes to whichever pool has the most
+free rate-limit budget right now, so a saturated or 429-blocked provider sheds
+load to the others and throughput adds up. A single value (or the
+`BLOB_STORAGE_KIND` fallback) is plain single-provider mode.
+
+Telegram note: the vanilla Bot API caps uploads at 50 MB and downloads at
+20 MB, so the standard 10 MiB chunk fits with no client changes. One Telegram
+bot maps to one private channel (like a webhook→channel on Discord); scale
+throughput by adding bots. `file_id` is a stable download handle, so no CDN-URL
+refresh is needed.
+
+### Replication (durability against losing an account)
+
+`STORAGE_REPLICA_PROVIDERS` turns on asynchronous mirroring onto **dedicated
+`REPLICA_*` sender pools** — physically separate webhooks/bots/accounts (e.g. a
+second Discord server) reserved for copies. Because their rate-limit budgets are
+separate, replication runs continuously without competing with primary uploads.
+
+- Uploads never wait on replication. The response returns after the primary
+  write; a durable `PENDING` placement is enqueued and an opportunistic
+  write-through copies the in-memory ciphertext to replicas immediately. If that
+  fails or the process dies, the background worker retries from any surviving
+  copy (with exponential backoff).
+- Reads fail over automatically: a dead PRIMARY copy is served from a REPLICA,
+  the bad copy is parked `MISSING`, and the worker rebuilds it (self-heal).
+- Deletes propagate to every copy — including `PENDING` ones, so a purge can't
+  be resurrected by the replication queue.
+- `replicationStatus` (GraphQL) exposes queue depth, replication lag, and
+  per-pool placement counts for the HealthCheck page.
+
+Losing the primary Discord account then means: point a new instance at the
+`REPLICA_*` pool (as its primary) and every replicated file is still readable.
+
+### Migration
+
+The placement table is added by `prisma db push`; run
+`npx tsx scripts/backfill-blob-placements.ts` once to create a PRIMARY placement
+for every pre-existing blob (idempotent, safe to re-run). Reads fall back to the
+legacy `BlobTransport` columns until the backfill completes, so ordering is not
+critical. **Back up the database before migrating production.**
+
+Telegram transport can be smoke-tested against a real bot with
+`TG_BOT_1=… TG_BOT_1_CHAT=… npx tsx scripts/telegram-smoke.ts`.
+
+---
+
 ## Setup
 
 ### 1. Environment
