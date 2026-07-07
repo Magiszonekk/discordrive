@@ -8,6 +8,8 @@ import {
   type BotInfo,
   uploadChunkBot,
   downloadChunkBot,
+  deleteChunk,
+  deleteChunkBot,
 } from "@ddv4/discord-client";
 import { serverConfig } from "@ddv4/config/server";
 
@@ -377,6 +379,51 @@ export async function fetchCiphertextBlobFromDiscord(
   const webhook = selectWebhookById(webhooks, webhookId);
   const stream = await downloadChunk(webhook, discordMessageId, sharedRateLimiter);
   return streamToUint8Array(stream);
+}
+
+/** Number of configured Discord senders (webhooks + enabled bots). */
+export function discordSenderCount(): number {
+  let count = 0;
+  try {
+    count += getConfiguredWebhooks().length;
+  } catch {
+    // no webhooks configured
+  }
+  count += getConfiguredBots().length;
+  return count;
+}
+
+/** Senders currently usable (not rate-limited, below concurrency cap). */
+export function discordSenderAvailability(): number {
+  let senders: Array<{ id: string }> = [];
+  try {
+    senders = senders.concat(getConfiguredWebhooks());
+  } catch {
+    // no webhooks configured
+  }
+  senders = senders.concat(getConfiguredBots());
+  return senders.filter((s) => sharedRateLimiter.canUse(s.id) && senderHasCapacity(s.id)).length;
+}
+
+export async function deleteCiphertextBlobFromDiscord(
+  discordMessageId: string,
+  webhookId: string,
+  discordChannelId?: string | null,
+): Promise<void> {
+  if (webhookId.startsWith("BOT_")) {
+    // Deletion must work even when bot uploads are disabled (BOT_UPLOADS_ENABLED
+    // gates new uploads only), so look up the bot in raw config.
+    const bot = serverConfig.botConfigs.find((b) => b.id === webhookId);
+    if (!bot) {
+      throw new Error(`Bot sender ${webhookId} is not configured`);
+    }
+    await deleteChunkBot(bot, discordMessageId, discordChannelId ?? bot.channelId, sharedRateLimiter);
+    return;
+  }
+
+  const webhooks = getConfiguredWebhooks();
+  const webhook = selectWebhookById(webhooks, webhookId);
+  await deleteChunk(webhook, discordMessageId, sharedRateLimiter);
 }
 
 export async function statDiscordBlob(storagePath: string): Promise<{ exists: boolean; size: number }> {

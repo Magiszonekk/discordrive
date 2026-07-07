@@ -2,16 +2,18 @@
 
 import { db } from "@ddv4/database";
 import type { BlobTransportMetadataDto } from "@ddv4/types/api";
+import { sha256Ciphertext } from "../storage/local-blobs.js";
 import {
-  ensureBlobRootDir,
-  readCiphertextBlob,
-  sha256Ciphertext,
-  writeCiphertextBlob,
-} from "../storage/local-blobs.js";
-import {
-  fetchCiphertextBlobFromDiscord,
-  uploadCiphertextBlobToDiscord,
-} from "../storage/discord-blobs.js";
+  getPoolFor,
+  getPrimaryPool,
+  orderPlacementsForRead,
+  placementFromBlobRecord,
+  placementFromRow,
+  type PlacementRow,
+  type PoolRole,
+} from "../storage/provider.js";
+import { getConfiguredReplicaKinds } from "../storage/replica-pools.js";
+import { writeThroughReplication } from "../storage/replication-worker.js";
 import { extractToken, verifySessionToken } from "../middleware/auth.js";
 import { constantTimeEqual } from "@ddv4/processing";
 
@@ -28,6 +30,8 @@ type BlobRecord = {
   healthStatus: string | null;
   healthCheckedAt: Date | null;
   createdAt: Date;
+  /** Loaded via include; absent on un-backfilled rows and in legacy callers. */
+  placements?: PlacementRow[];
 };
 
 async function parseAuth(req: Request): Promise<{ userId: string; email: string } | null> {
@@ -44,13 +48,6 @@ async function parseAuth(req: Request): Promise<{ userId: string; email: string 
 function normalizeBlobUploadBody(body: ArrayBuffer | ArrayBufferView): Uint8Array {
   if (body instanceof ArrayBuffer) return new Uint8Array(body);
   return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
-}
-
-function getBlobStorageKind(): "LOCAL" | "DISCORD" {
-  const configured = process.env.BLOB_STORAGE_KIND?.trim().toUpperCase();
-  if (!configured || configured === "LOCAL") return "LOCAL";
-  if (configured === "DISCORD") return "DISCORD";
-  throw new Error(`Unsupported BLOB_STORAGE_KIND: ${configured}`);
 }
 
 function toMetadataDto(blob: BlobRecord): BlobTransportMetadataDto {
@@ -75,15 +72,44 @@ function toMetadataDto(blob: BlobRecord): BlobTransportMetadataDto {
   return base;
 }
 
+function looksLikeMissing(error: unknown): boolean {
+  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return msg.includes("not found") || msg.includes("404") || msg.includes("enoent");
+}
+
 export async function readBlobBytes(blob: BlobRecord): Promise<Uint8Array> {
-  if (blob.storageKind === "DISCORD") {
-    if (!blob.discordMessageId || !blob.webhookId) {
-      throw new Error(`Discord blob ${blob.blobId} is missing transport coordinates`);
+  // Placements are authoritative; legacy BlobTransport columns cover rows
+  // that predate the placement backfill. Candidates are tried in order
+  // (ACTIVE PRIMARY → ACTIVE REPLICA → ...) so a dead copy fails over to the
+  // next one instead of failing the request.
+  const candidates = orderPlacementsForRead(blob.placements ?? []);
+  let lastError: unknown = null;
+
+  for (const placement of candidates) {
+    try {
+      return await getPoolFor(placement.provider, placement.poolRole as PoolRole).get(
+        placementFromRow(blob.blobId, blob.ownerUserId, placement),
+      );
+    } catch (error) {
+      lastError = error;
+      // Self-heal: park definitively-missing copies as MISSING — the
+      // replication worker rebuilds them from a surviving copy. Transient
+      // errors (5xx, timeouts) are not marked; the next candidate just serves.
+      if (placement.id && looksLikeMissing(error)) {
+        void db.blobPlacement
+          .updateMany({
+            where: { id: placement.id, status: { in: ["ACTIVE", "MODIFIED"] } },
+            data: { status: "MISSING", healthCheckedAt: new Date(), attemptCount: 0, nextAttemptAt: null },
+          })
+          .catch(() => {});
+      }
     }
-    return fetchCiphertextBlobFromDiscord(blob.storagePath, blob.discordMessageId, blob.webhookId, blob.discordChannelId);
   }
 
-  return readCiphertextBlob(blob.ownerUserId, blob.blobId);
+  if (candidates.length > 0) {
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+  return getPoolFor(blob.storageKind).get(placementFromBlobRecord(blob));
 }
 
 function asErrorMessage(error: unknown): string {
@@ -136,7 +162,10 @@ export async function handleBlobContent(req: Request, params: { blobId: string }
   const auth = await parseAuth(req);
   if (!auth) return Response.json({ error: "Authentication required" }, { status: 401 });
 
-  const blob = await db.blobTransport.findUnique({ where: { blobId: params.blobId } });
+  const blob = await db.blobTransport.findUnique({
+    where: { blobId: params.blobId },
+    include: { placements: true },
+  });
   if (!blob || blob.ownerUserId !== auth.userId) {
     return Response.json({ error: "Blob not found" }, { status: 404 });
   }
@@ -191,7 +220,10 @@ export async function handleBlobContentForShare(req: Request, params: { blobId: 
     return Response.json({ error: "Invalid capability token" }, { status: 403 });
   }
 
-  const blob = await db.blobTransport.findUnique({ where: { blobId: params.blobId } });
+  const blob = await db.blobTransport.findUnique({
+    where: { blobId: params.blobId },
+    include: { placements: true },
+  });
   if (!blob) {
     return Response.json({ error: "Blob not found" }, { status: 404 });
   }
@@ -255,45 +287,22 @@ export async function handleBlobUpload(req: Request, params: { blobId: string })
     const ciphertextHash = sha256Ciphertext(ciphertext);
     const hashMs = performance.now() - hashStartMs;
 
-    const storageKind = getBlobStorageKind();
-
-    let storagePath: string;
-    let discordMessageId: string | null = null;
-    let discordChannelId: string | null = null;
-    let webhookId: string | null = null;
+    const pool = getPrimaryPool();
+    const storageKind = pool.kind;
 
     const storeStartMs = performance.now();
-    let uploadTransportPath: "direct" | "relay" | "bot" | null = null;
-    let uploadAttemptCount: number | null = null;
-    let uploadUpstreamStatus: number | null = null;
-    let uploadElapsedMs: number | null = null;
-    let relayEgress: string | null = null;
-    let discordUploadLimiterRemaining: number | null = null;
-    let discordUploadLimiterInFlight: number | null = null;
-
-    if (storageKind === "DISCORD") {
-      const discordUpload = await uploadCiphertextBlobToDiscord(auth.userId, params.blobId, ciphertext, {
-        requestId,
-        uploadId: telemetry.uploadId,
-        chunkIndex: telemetry.chunkIndex,
-        chunkCount: telemetry.chunkCount,
-      });
-      storagePath = discordUpload.storagePath;
-      discordMessageId = discordUpload.discordMessageId;
-      discordChannelId = discordUpload.discordChannelId;
-      webhookId = discordUpload.webhookId;
-      uploadTransportPath = discordUpload.transportPath;
-      uploadAttemptCount = discordUpload.attemptCount;
-      uploadUpstreamStatus = discordUpload.upstreamStatus;
-      uploadElapsedMs = discordUpload.elapsedMs;
-      relayEgress = discordUpload.relayEgress;
-      discordUploadLimiterRemaining = discordUpload.limiterRemaining;
-      discordUploadLimiterInFlight = discordUpload.limiterInFlight;
-    } else {
-      await ensureBlobRootDir();
-      storagePath = await writeCiphertextBlob(auth.userId, params.blobId, ciphertext);
-    }
+    const written = await pool.put(auth.userId, params.blobId, ciphertext, {
+      requestId,
+      uploadId: telemetry.uploadId,
+      chunkIndex: telemetry.chunkIndex,
+      chunkCount: telemetry.chunkCount,
+    });
     const storeMs = performance.now() - storeStartMs;
+
+    const storagePath = written.storagePath;
+    const discordMessageId = written.messageId;
+    const discordChannelId = written.locationId;
+    const webhookId = written.senderId;
 
     // Persist transport coordinates immediately so interrupted uploads can be
     // resumed: without this, chunks already stored (e.g. on Discord) would be
@@ -307,11 +316,81 @@ export async function handleBlobUpload(req: Request, params: { blobId: string })
       ciphertextSizeBytes,
       ciphertextHash,
     };
-    await db.blobTransport.upsert({
-      where: { blobId: params.blobId },
-      create: { blobId: params.blobId, ...transportData },
-      update: { ...transportData, healthStatus: null, healthCheckedAt: null },
-    });
+    const placementCoordinates = {
+      status: "ACTIVE" as const,
+      storagePath,
+      messageId: discordMessageId,
+      locationId: discordChannelId,
+      senderId: webhookId,
+      activatedAt: new Date(),
+    };
+    const replicaKinds = getConfiguredReplicaKinds();
+    await db.$transaction([
+      db.blobTransport.upsert({
+        where: { blobId: params.blobId },
+        create: { blobId: params.blobId, ...transportData },
+        update: { ...transportData, healthStatus: null, healthCheckedAt: null },
+      }),
+      // A re-upload may land on a different provider; stale PRIMARY placements
+      // of other providers must not survive it.
+      db.blobPlacement.deleteMany({
+        where: { blobId: params.blobId, poolRole: "PRIMARY", NOT: { provider: storageKind } },
+      }),
+      db.blobPlacement.upsert({
+        where: {
+          blobId_provider_poolRole: {
+            blobId: params.blobId,
+            provider: storageKind,
+            poolRole: "PRIMARY",
+          },
+        },
+        create: {
+          blobId: params.blobId,
+          provider: storageKind,
+          poolRole: "PRIMARY",
+          ...placementCoordinates,
+        },
+        update: { ...placementCoordinates, attemptCount: 0, lastError: null },
+      }),
+      ...(replicaKinds.length > 0
+        ? [
+            // Re-upload changed the bytes — existing replica copies are stale
+            // and must be re-replicated.
+            db.blobPlacement.updateMany({
+              where: {
+                blobId: params.blobId,
+                poolRole: "REPLICA",
+                status: { in: ["ACTIVE", "MISSING", "MODIFIED"] },
+              },
+              data: { status: "PENDING", attemptCount: 0, nextAttemptAt: null },
+            }),
+            db.blobPlacement.createMany({
+              skipDuplicates: true,
+              data: replicaKinds.map((kind) => ({
+                blobId: params.blobId,
+                provider: kind,
+                poolRole: "REPLICA" as const,
+                status: "PENDING" as const,
+                storagePath: "pending://replica",
+              })),
+            }),
+          ]
+        : []),
+    ]);
+
+    if (replicaKinds.length > 0) {
+      // Opportunistic write-through: copy to replica pools now, while the
+      // ciphertext is in memory. Never blocks the response; the durable
+      // PENDING rows are the fallback if this fails or the process dies.
+      void writeThroughReplication(params.blobId, ciphertext).catch((error) => {
+        logBlobUploadEvent({
+          type: "write_through_failed",
+          requestId,
+          blobId: params.blobId,
+          error: asErrorMessage(error),
+        });
+      });
+    }
 
     logBlobUploadEvent({
       type: "blob_upload_completed",
@@ -324,13 +403,13 @@ export async function handleBlobUpload(req: Request, params: { blobId: string })
       userId: auth.userId,
       storageKind,
       webhookId,
-      uploadTransportPath,
-      uploadAttemptCount,
-      uploadUpstreamStatus,
-      uploadElapsedMs,
-      relayEgress,
-      limiterRemaining: storageKind === "DISCORD" ? discordUploadLimiterRemaining : null,
-      limiterInFlight: storageKind === "DISCORD" ? discordUploadLimiterInFlight : null,
+      uploadTransportPath: written.diagnostics?.uploadTransportPath ?? null,
+      uploadAttemptCount: written.diagnostics?.uploadAttemptCount ?? null,
+      uploadUpstreamStatus: written.diagnostics?.uploadUpstreamStatus ?? null,
+      uploadElapsedMs: written.diagnostics?.uploadElapsedMs ?? null,
+      relayEgress: written.diagnostics?.relayEgress ?? null,
+      limiterRemaining: written.diagnostics?.limiterRemaining ?? null,
+      limiterInFlight: written.diagnostics?.limiterInFlight ?? null,
       ciphertextSizeBytes: ciphertext.byteLength,
       readBodyMs: Number(readBodyMs.toFixed(2)),
       hashMs: Number(hashMs.toFixed(2)),

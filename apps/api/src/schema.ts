@@ -218,6 +218,22 @@ export function buildSchema() {
         status: String!
       }
 
+      type ReplicationPlacementGroup {
+        provider: String!
+        poolRole: String!
+        status: String!
+        count: Int!
+      }
+
+      type ReplicationStatus {
+        enabled: Boolean!
+        replicaProviders: [String!]!
+        queueDepth: Int!
+        oldestQueuedAgeSeconds: Int
+        failedPlacements: Int!
+        placements: [ReplicationPlacementGroup!]!
+      }
+
       input Argon2ParamsInput {
         memoryKB: Int!
         iterations: Int!
@@ -240,6 +256,7 @@ export function buildSchema() {
         storageUsage: StorageUsage!
         accessShare(shareId: ID!, capabilityToken: String!): ShareAccess
         filesForHealthCheck(samplePercent: Float, fileId: ID): [HealthCheckFile!]!
+        replicationStatus: ReplicationStatus!
       }
 
       type Mutation {
@@ -404,6 +421,10 @@ export function buildSchema() {
           const auth = requireAuth(ctx);
           return fileResolvers.getFilesForHealthCheckDisplay(auth.userId);
         },
+        replicationStatus: async (_parent: unknown, _args: unknown, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return fileResolvers.getReplicationStatus(auth.userId);
+        },
         accessShare: async (_parent: unknown, args: { shareId: string; capabilityToken: string }, ctx: Context) => {
           enforceRateLimit(ctx.ip, "auth");
           return sharingResolvers.accessShare(args.shareId, args.capabilityToken);
@@ -468,7 +489,7 @@ export function buildSchema() {
           chunkCount: number;
           blobs: Array<{
             blobId: string;
-            storageKind: "LOCAL" | "DISCORD";
+            storageKind: "LOCAL" | "DISCORD" | "TELEGRAM";
             storagePath: string;
             ciphertextSizeBytes: string;
             ciphertextHash?: string;

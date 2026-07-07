@@ -1,9 +1,11 @@
 // DiscorDrive v4 — File resolvers (secure files v2)
 
 import { createHash } from "node:crypto";
-import { readFile, stat, unlink } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { db } from "@ddv4/database";
-import { downloadChunk, getChunkUrl, parseWebhookUrls, WebhookRateLimiter, type WebhookInfo, downloadChunkBot, getChunkUrlBot, type BotInfo, deleteChunk } from "@ddv4/discord-client";
+import { downloadChunk, getChunkUrl, parseWebhookUrls, WebhookRateLimiter, type WebhookInfo, downloadChunkBot, getChunkUrlBot, type BotInfo } from "@ddv4/discord-client";
+import { getPoolFor, placementFromBlobRecord, placementFromRow, type PlacementRow, type PoolRole } from "../storage/provider.js";
+import { getConfiguredReplicaKinds } from "../storage/replica-pools.js";
 import type { InitSecureUploadRequest, UploadedBlobTransportInput } from "@ddv4/types/api";
 import { pluginRegistry } from "../plugin-registry.js";
 
@@ -99,6 +101,39 @@ export async function commitManifest(
       })),
     });
 
+    // Same catch-up for placements (unique on blobId+provider+poolRole).
+    await tx.blobPlacement.createMany({
+      skipDuplicates: true,
+      data: blobs.map((blob) => ({
+        blobId: blob.blobId,
+        provider: blob.storageKind,
+        poolRole: "PRIMARY" as const,
+        status: "ACTIVE" as const,
+        storagePath: blob.storagePath,
+        messageId: blob.discordMessageId ?? null,
+        locationId: blob.discordChannelId ?? null,
+        senderId: blob.webhookId ?? null,
+        activatedAt: new Date(),
+      })),
+    });
+
+    // Queue replica copies for any blob that slipped past the upload handler
+    const replicaKinds = getConfiguredReplicaKinds();
+    if (replicaKinds.length > 0) {
+      await tx.blobPlacement.createMany({
+        skipDuplicates: true,
+        data: blobs.flatMap((blob) =>
+          replicaKinds.map((kind) => ({
+            blobId: blob.blobId,
+            provider: kind,
+            poolRole: "REPLICA" as const,
+            status: "PENDING" as const,
+            storagePath: "pending://replica",
+          })),
+        ),
+      });
+    }
+
     await tx.file.update({
       where: { id: fileId },
       data: {
@@ -189,43 +224,51 @@ export async function moveFile(
 type PurgeableFile = { id: string; ownerUserId: string; previewBlobId: string | null };
 type PurgeableBlob = {
   blobId: string;
+  ownerUserId: string;
   storageKind: string;
   storagePath: string;
   discordMessageId: string | null;
+  discordChannelId: string | null;
   webhookId: string | null;
+  placements?: PlacementRow[];
 };
 
-function buildWebhookMap(): Map<string, WebhookInfo> {
-  const webhookUrls = Object.entries(process.env)
-    .filter(([key]) => /^WEBHOOK_\d+$/.test(key))
-    .map(([, value]) => value as string)
-    .filter(Boolean);
-  return new Map(parseWebhookUrls(webhookUrls).map((w) => [w.id, w]));
-}
-
-// Best-effort physical deletion. Failures are logged, not thrown: a purge must
-// never be blocked by an already-deleted Discord message or missing local file.
-// Bot-uploaded blobs are skipped (deletion is webhook-only); their ciphertext
-// stays orphaned on Discord, which leaks nothing.
+// Best-effort physical deletion of every copy of every blob. Failures are
+// logged, not thrown: a purge must never be blocked by an already-deleted
+// Discord message or missing local file.
 async function deleteBlobsBestEffort(blobs: PurgeableBlob[]): Promise<void> {
-  const webhookMap = buildWebhookMap();
-  const rateLimiter = new WebhookRateLimiter();
+  const warn = (blobId: string, error: unknown) =>
+    console.warn(JSON.stringify({
+      ts: new Date().toISOString(),
+      scope: "trash-purge",
+      type: "blob_delete_failed",
+      blobId,
+      error: error instanceof Error ? error.message : String(error),
+    }));
 
   for (const blob of blobs) {
-    try {
-      if (blob.storageKind === "LOCAL") {
-        await unlink(blob.storagePath);
-      } else if (blob.discordMessageId && blob.webhookId && webhookMap.has(blob.webhookId)) {
-        await deleteChunk(webhookMap.get(blob.webhookId)!, blob.discordMessageId, rateLimiter);
+    const placements = blob.placements ?? [];
+    if (placements.length === 0) {
+      // Row predates the placement backfill — legacy columns are all we have.
+      try {
+        await getPoolFor(blob.storageKind).delete(placementFromBlobRecord(blob));
+      } catch (error) {
+        warn(blob.blobId, error);
       }
-    } catch (error) {
-      console.warn(JSON.stringify({
-        ts: new Date().toISOString(),
-        scope: "trash-purge",
-        type: "blob_delete_failed",
-        blobId: blob.blobId,
-        error: error instanceof Error ? error.message : String(error),
-      }));
+      continue;
+    }
+
+    for (const placement of placements) {
+      // PENDING rows have no physical copy yet; their DB row is removed by the
+      // caller's cascade delete, which also dequeues them from replication.
+      if (placement.status === "PENDING" && !placement.messageId) continue;
+      try {
+        await getPoolFor(placement.provider, placement.poolRole as PoolRole).delete(
+          placementFromRow(blob.blobId, blob.ownerUserId, placement),
+        );
+      } catch (error) {
+        warn(blob.blobId, error);
+      }
     }
   }
 }
@@ -239,6 +282,7 @@ async function purgeFileRecord(file: PurgeableFile): Promise<void> {
         ...(file.previewBlobId ? [{ blobId: file.previewBlobId }] : []),
       ],
     },
+    include: { placements: true },
   });
 
   await deleteBlobsBestEffort(blobs);
@@ -339,7 +383,7 @@ type HealthCheckChunkStatus = "HEALTHY" | "MISSING" | "MODIFIED" | "SKIPPED";
 type HealthCheckChunkInfo = {
   id: string;
   index: number;
-  storageKind: "LOCAL" | "DISCORD";
+  storageKind: "LOCAL" | "DISCORD" | "TELEGRAM";
   storagePath: string;
   messageId: string;
   webhookId: string;
@@ -494,15 +538,69 @@ export async function updateChunkHealthBatch(
   updates: ChunkHealthUpdate[],
 ): Promise<boolean> {
   const checkedAt = new Date();
+  // Placement status mirrors chunk health: a HEALTHY check re-activates,
+  // MISSING/MODIFIED park the placement so reads prefer other copies.
+  const placementStatus = { HEALTHY: "ACTIVE", MISSING: "MISSING", MODIFIED: "MODIFIED" } as const;
   await db.$transaction(
-    updates.map((update) =>
+    updates.flatMap((update) => [
       db.blobTransport.updateMany({
         where: { blobId: update.chunkId, ownerUserId },
         data: { healthStatus: update.status, healthCheckedAt: checkedAt },
       }),
-    ),
+      db.blobPlacement.updateMany({
+        where: {
+          blobId: update.chunkId,
+          poolRole: "PRIMARY",
+          blob: { ownerUserId },
+          // Never resurrect queue states from a health sweep
+          status: { in: ["ACTIVE", "MISSING", "MODIFIED"] },
+        },
+        data: { status: placementStatus[update.status], healthCheckedAt: checkedAt },
+      }),
+    ]),
   );
   return true;
+}
+
+// === Replication status (HealthCheck page metrics) ===
+
+export async function getReplicationStatus(ownerUserId: string) {
+  const [groups, oldestPending, failedPlacements] = await Promise.all([
+    db.blobPlacement.groupBy({
+      by: ["provider", "poolRole", "status"],
+      where: { blob: { ownerUserId } },
+      _count: { _all: true },
+    }),
+    db.blobPlacement.findFirst({
+      where: { blob: { ownerUserId }, status: { in: ["PENDING", "MISSING"] } },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    }),
+    db.blobPlacement.count({
+      where: { blob: { ownerUserId }, status: { in: ["PENDING", "MISSING"] }, attemptCount: { gte: 8 } },
+    }),
+  ]);
+
+  const replicaKinds = getConfiguredReplicaKinds();
+  const queueDepth = groups
+    .filter((g) => g.status === "PENDING" || g.status === "MISSING")
+    .reduce((sum, g) => sum + g._count._all, 0);
+
+  return {
+    enabled: replicaKinds.length > 0,
+    replicaProviders: replicaKinds,
+    queueDepth,
+    oldestQueuedAgeSeconds: oldestPending
+      ? Math.floor((Date.now() - oldestPending.createdAt.getTime()) / 1000)
+      : null,
+    failedPlacements,
+    placements: groups.map((g) => ({
+      provider: g.provider,
+      poolRole: g.poolRole,
+      status: g.status,
+      count: g._count._all,
+    })),
+  };
 }
 
 export async function runHealthCheck(

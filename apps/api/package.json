@@ -18,6 +18,7 @@
     "@ddv4/discord-client": "*",
     "@ddv4/plugin-sdk": "*",
     "@ddv4/processing": "*",
+    "@ddv4/telegram-client": "*",
     "@ddv4/types": "*",
     "argon2": "^0.41.0",
     "graphql": "^16.9.0",

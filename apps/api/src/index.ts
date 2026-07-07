@@ -130,6 +130,14 @@ setInterval(trashSweep, 24 * 60 * 60 * 1000).unref();
 import { createMagiszonekIfNeeded } from "@ddv4/database/seed/magiszonek";
 createMagiszonekIfNeeded().catch(console.error);
 
+// Replication worker: drains PENDING/MISSING placements onto replica pools.
+// No-op unless STORAGE_REPLICA_PROVIDERS names a provider with configured senders.
+import { startReplicationWorker, stopReplicationWorker } from "./storage/replication-worker.js";
+import { getConfiguredReplicaKinds } from "./storage/replica-pools.js";
+if (getConfiguredReplicaKinds().length > 0) {
+  startReplicationWorker();
+}
+
 // Build schema after plugins are loaded so their GraphQL extensions are included
 yoga = createYoga({
   schema: buildSchema(),
@@ -209,6 +217,7 @@ server.listen(port, () => {
 });
 
 process.on("SIGTERM", async () => {
+  stopReplicationWorker();
   await pluginRegistry.unload();
   server.close();
 });

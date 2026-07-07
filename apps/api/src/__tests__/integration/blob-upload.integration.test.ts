@@ -11,9 +11,18 @@ const blobTransport = {
   upsert: vi.fn(),
 };
 
+const blobPlacement = {
+  upsert: vi.fn(),
+  deleteMany: vi.fn(),
+  createMany: vi.fn(),
+};
+
 vi.mock("@ddv4/database", () => ({
   db: {
     blobTransport,
+    blobPlacement,
+    // Array form only — the blob handlers pass a list of already-started ops
+    $transaction: vi.fn(async (ops: Array<Promise<unknown>>) => Promise.all(ops)),
   },
 }));
 
@@ -77,6 +86,9 @@ describe("blob transport handlers", () => {
     const configServer = await import("@ddv4/config/server");
     blobTransport.findUnique.mockReset();
     blobTransport.upsert.mockReset();
+    blobPlacement.upsert.mockReset();
+    blobPlacement.deleteMany.mockReset();
+    blobPlacement.createMany.mockReset();
     vi.mocked(discordClient.uploadChunk).mockReset();
     vi.mocked(discordClient.getChunkUrl).mockReset();
     vi.mocked(discordClient.downloadChunk).mockReset();
@@ -227,7 +239,10 @@ describe("blob transport handlers", () => {
         { blobId: manifestProvidedBlobId },
       );
 
-      expect(blobTransport.findUnique).toHaveBeenCalledWith({ where: { blobId: manifestProvidedBlobId } });
+      expect(blobTransport.findUnique).toHaveBeenCalledWith({
+        where: { blobId: manifestProvidedBlobId },
+        include: { placements: true },
+      });
       expect(response.status).toBe(200);
       const body = new Uint8Array(await response.arrayBuffer());
       expect(Array.from(body)).toEqual(Array.from(ciphertext));
@@ -276,7 +291,10 @@ describe("blob transport handlers", () => {
         { blobId: manifestProvidedBlobId },
       );
 
-      expect(blobTransport.findUnique).toHaveBeenCalledWith({ where: { blobId: manifestProvidedBlobId } });
+      expect(blobTransport.findUnique).toHaveBeenCalledWith({
+        where: { blobId: manifestProvidedBlobId },
+        include: { placements: true },
+      });
       expect(response.status).toBe(200);
       expect(new Uint8Array(await response.arrayBuffer())).toEqual(ciphertext);
     });
@@ -394,6 +412,24 @@ describe("blob transport handlers", () => {
           healthCheckedAt: null,
         },
       });
+      expect(blobPlacement.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            blobId_provider_poolRole: {
+              blobId: "blob-abc",
+              provider: "LOCAL",
+              poolRole: "PRIMARY",
+            },
+          },
+          create: expect.objectContaining({
+            blobId: "blob-abc",
+            provider: "LOCAL",
+            poolRole: "PRIMARY",
+            status: "ACTIVE",
+            storagePath: path.resolve(rootDir, "user-123", "blob-abc.bin"),
+          }),
+        }),
+      );
     });
   });
 
@@ -453,6 +489,76 @@ describe("blob transport handlers", () => {
           healthCheckedAt: null,
         },
       });
+      expect(blobPlacement.deleteMany).toHaveBeenCalledWith({
+        where: { blobId: "blob-discord-upload", poolRole: "PRIMARY", NOT: { provider: "DISCORD" } },
+      });
+      expect(blobPlacement.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            blobId_provider_poolRole: {
+              blobId: "blob-discord-upload",
+              provider: "DISCORD",
+              poolRole: "PRIMARY",
+            },
+          },
+          create: expect.objectContaining({
+            status: "ACTIVE",
+            storagePath: "discord://attachments/blob-discord-upload",
+            messageId: "discord-message-blob-discord-upload",
+            locationId: "discord-channel-user-123",
+            senderId: "wh-1",
+          }),
+        }),
+      );
+    });
+  });
+
+  it("serves reads from an ACTIVE placement instead of legacy columns", async () => {
+    await withTempBlobRoot(async () => {
+      const ciphertext = new Uint8Array([42, 42, 42]);
+      const token = signToken({ userId: "user-123", email: "user@example.com" });
+      const { handleBlobContent } = await import("../../handlers/blob.js");
+      const { writeCiphertextBlob } = await import("../../storage/local-blobs.js");
+      const blobPath = await writeCiphertextBlob("user-123", "blob-placed", ciphertext);
+
+      blobTransport.findUnique.mockResolvedValue({
+        blobId: "blob-placed",
+        ownerUserId: "user-123",
+        // Legacy columns deliberately point at a broken location — the read
+        // must come from the placement row instead.
+        storageKind: "DISCORD",
+        storagePath: "discord://attachments/blob-placed",
+        discordMessageId: null,
+        discordChannelId: null,
+        webhookId: null,
+        ciphertextSizeBytes: BigInt(ciphertext.byteLength),
+        ciphertextHash: sha256Hex(ciphertext),
+        healthStatus: null,
+        healthCheckedAt: null,
+        createdAt: new Date(),
+        placements: [
+          {
+            provider: "LOCAL",
+            poolRole: "PRIMARY",
+            status: "ACTIVE",
+            storagePath: blobPath,
+            messageId: null,
+            locationId: null,
+            senderId: null,
+          },
+        ],
+      });
+
+      const response = await handleBlobContent(
+        new Request("http://localhost/api/blob/blob-placed", {
+          method: "GET",
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        { blobId: "blob-placed" },
+      );
+
+      expect(response.status).toBe(200);
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(ciphertext);
     });
   });
 });
