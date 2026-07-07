@@ -115,8 +115,8 @@ export async function createMagiszonekIfNeeded(): Promise<void> {
       username: "Magiszonek",
       crypto: {
         create: {
-          wrappedARKByPassword: cryptoData.wrappedARKByPassword,
-          wrappedARKByRecovery: cryptoData.wrappedARKByRecovery,
+          wrappedARKByPassword: Buffer.from(cryptoData.wrappedARKByPassword, "base64"),
+          wrappedARKByRecovery: Buffer.from(cryptoData.wrappedARKByRecovery, "base64"),
           argon2MemoryKB: cryptoData.argon2Params.memoryKB,
           argon2Iterations: cryptoData.argon2Params.iterations,
           argon2Parallelism: cryptoData.argon2Params.parallelism,

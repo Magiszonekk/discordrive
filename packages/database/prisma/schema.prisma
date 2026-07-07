@@ -121,8 +121,13 @@ enum FileStatus {
 enum BlobStorageKind {
   LOCAL
   DISCORD
+  TELEGRAM
 }
 
+// Logical blob. Physical copies live in BlobPlacement (one row per copy);
+// the storageKind/storagePath/discord* columns below are a legacy mirror of
+// the PRIMARY placement, kept during the expand/contract migration so old
+// code (and un-backfilled rows) keep working. Placements are authoritative.
 model BlobTransport {
   blobId               String           @id
   ownerUserId          String
@@ -137,9 +142,55 @@ model BlobTransport {
   healthCheckedAt      DateTime?
   createdAt            DateTime         @default(now())
 
-  owner User @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  owner      User            @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  placements BlobPlacement[]
 
   @@index([ownerUserId, createdAt])
+}
+
+// One physical copy of a blob at one provider. PRIMARY placements serve
+// reads; REPLICA placements are asynchronous copies on dedicated sender
+// pools (separate webhooks/bots/accounts). PENDING rows form the
+// replication queue, DELETING rows the deletion queue.
+model BlobPlacement {
+  id              String          @id @default(cuid())
+  blobId          String
+  provider        BlobStorageKind
+  poolRole        PoolRole
+  status          PlacementStatus
+  storagePath     String
+  // discord message id / telegram message_id — needed for provider-side delete
+  messageId       String?
+  // discord channel id / telegram chat_id
+  locationId      String?
+  // webhook numeric id, "BOT_n", "TG_BOT_n", "R_..." — rate-limiter + config key
+  senderId        String?
+  attemptCount    Int             @default(0)
+  lastError       String?
+  // Exponential backoff gate for the replication worker; null = due now
+  nextAttemptAt   DateTime?
+  createdAt       DateTime        @default(now())
+  activatedAt     DateTime?
+  healthCheckedAt DateTime?
+
+  blob BlobTransport @relation(fields: [blobId], references: [blobId], onDelete: Cascade)
+
+  @@unique([blobId, provider, poolRole])
+  @@index([blobId, poolRole, status])
+  @@index([status, createdAt])
+}
+
+enum PoolRole {
+  PRIMARY
+  REPLICA
+}
+
+enum PlacementStatus {
+  PENDING
+  ACTIVE
+  MISSING
+  MODIFIED
+  DELETING
 }
 
 enum BlobHealthStatus {
