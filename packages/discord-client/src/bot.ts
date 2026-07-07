@@ -128,6 +128,54 @@ export async function getChunkUrlBot(
   throw new Error(`Bot getChunkUrl failed after ${MAX_RETRIES} retries`);
 }
 
+export async function deleteChunkBot(
+  bot: BotInfo,
+  messageId: string,
+  channelId: string,
+  rateLimiter: WebhookRateLimiter,
+): Promise<void> {
+  const url = `https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "DELETE",
+        headers: { Authorization: `Bot ${bot.token}` },
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (err) {
+      if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
+        if (attempt < MAX_RETRIES) continue;
+        throw new Error(`Bot delete timed out for message ${messageId}`);
+      }
+      throw err;
+    }
+
+    rateLimiter.recordResponse(bot.id, response.headers);
+
+    if (response.ok || response.status === 204) return;
+
+    if (response.status === 429) {
+      rateLimiter.recordError(429);
+      const retryAfter = response.headers.get("retry-after");
+      await new Promise((r) => setTimeout(r, retryAfter ? parseFloat(retryAfter) * 1000 : 5000));
+      continue;
+    }
+
+    // Already deleted — treat as success
+    if (response.status === 404) return;
+
+    if (response.status >= 500 && attempt < MAX_RETRIES) {
+      await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
+      continue;
+    }
+
+    throw new Error(`Bot delete failed for message ${messageId}: ${response.status}`);
+  }
+  throw new Error(`Bot delete failed after ${MAX_RETRIES} retries`);
+}
+
 export async function downloadChunkBot(
   bot: BotInfo,
   messageId: string,

@@ -18,4 +18,5 @@ export {
   uploadChunkBot,
   getChunkUrlBot,
   downloadChunkBot,
+  deleteChunkBot,
 } from "./bot.js";
