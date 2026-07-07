@@ -55,7 +55,7 @@ export interface InitUploadResponse {
 
 export interface UploadedBlobTransportInput {
   blobId: string;
-  storageKind: "LOCAL" | "DISCORD";
+  storageKind: "LOCAL" | "DISCORD" | "TELEGRAM";
   storagePath: string;
   ciphertextSizeBytes: string;
   ciphertextHash?: string;
@@ -109,7 +109,7 @@ export interface ShareAccessResponse {
   allowPreview: boolean;
 }
 
-export type BlobStorageKindDto = "LOCAL" | "DISCORD";
+export type BlobStorageKindDto = "LOCAL" | "DISCORD" | "TELEGRAM";
 
 export interface BlobTransportMetadataDto {
   blobId: string;

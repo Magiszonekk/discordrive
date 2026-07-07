@@ -13,7 +13,7 @@ export interface BlobUploadResponse {
   blobId: string;
   ciphertextSizeBytes: string;
   ciphertextHash?: string;
-  storageKind: "LOCAL" | "DISCORD";
+  storageKind: "LOCAL" | "DISCORD" | "TELEGRAM";
   storagePath: string;
   discordMessageId?: string;
   discordChannelId?: string;
