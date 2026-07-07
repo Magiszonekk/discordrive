@@ -1,3 +1,5 @@
+package com.discordrive.gallery
+
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**

@@ -63,7 +63,8 @@ class SyncRunner(
      * creation via computeIfAbsent. Pause + unreachable-abort still apply.
      */
     fun syncAssets(assets: List<MediaAsset>, onProgress: (Progress) -> Unit): Progress {
-        AppLog.i("SyncRunner", "sync start: ${assets.size} assets, concurrency=$UPLOAD_CONCURRENCY")
+        // Indeterminate "checking" tick while we classify (total=0 → spinner bar).
+        onProgress(Progress("scan", 0, 0, ""))
 
         // Detect stale local mappings — files the local DB marks as synced but
         // that no longer exist in the cloud (purged / deleted elsewhere). Validate
@@ -82,10 +83,26 @@ class SyncRunner(
                 null
             }
 
-        val total = assets.size
+        // Classify up front so the progress total is the REAL work (new uploads,
+        // stale re-uploads, drift/preview repairs) — not the whole library with
+        // skips counted through ("20 nowych" must show 0/20, not 0/2000).
+        val work = mutableListOf<MediaAsset>()
+        var pureSkips = 0
+        for (asset in assets) {
+            val mappedFileId = db.fileIdFor(asset)
+            val stillInCloud = mappedFileId != null && (remoteFiles == null || mappedFileId in remoteFiles)
+            val needsRepair = stillInCloud && (
+                db.mappedBucketFor(asset) != asset.bucketName || // moved between buckets locally
+                    remoteFiles?.get(mappedFileId)?.previewBlobId == null && remoteFiles != null // missing cloud preview
+                )
+            if (stillInCloud && !needsRepair) pureSkips++ else work.add(asset)
+        }
+        val total = work.size
+        AppLog.i("SyncRunner", "sync start: ${assets.size} assets → $total to process ($pureSkips up-to-date), concurrency=$UPLOAD_CONCURRENCY")
+
         val uploaded = AtomicInteger(0)
         val deduplicated = AtomicInteger(0)
-        val skipped = AtomicInteger(0)
+        val skipped = AtomicInteger(pureSkips)
         val failed = AtomicInteger(0)
         val bytesDone = AtomicLong(0)
         val done = AtomicInteger(0)
@@ -99,9 +116,18 @@ class SyncRunner(
         fun folderFor(bucket: String): String =
             folderIds.computeIfAbsent(bucket) { folderManager.ensureFolder(it, parentFolderId = null, filesKey = filesKey) }
 
+        // Runs before every chunk of an upload: pausing/cancelling takes effect
+        // MID-FILE (a long video used to ignore the buttons until it finished).
+        val chunkCheckpoint = {
+            SyncController.awaitIfPaused()
+            if (SyncController.cancelled) throw java.util.concurrent.CancellationException("sync cancelled")
+        }
+
+        report("") // first real tick: 0 / total
+
         val pool = Executors.newFixedThreadPool(UPLOAD_CONCURRENCY)
         try {
-            val tasks = assets.map { asset ->
+            val tasks = work.map { asset ->
                 Callable {
                     if (aborted.get() || SyncController.cancelled) { done.incrementAndGet(); return@Callable }
                     SyncController.awaitIfPaused() // honour notification Pause/Resume
@@ -110,12 +136,11 @@ class SyncRunner(
                         val mappedFileId = db.fileIdFor(asset)
                         val stillInCloud = mappedFileId != null && (remoteFiles == null || mappedFileId in remoteFiles)
                         if (stillInCloud) {
-                            // drift repair: file moved between buckets locally → mirror in cloud
+                            // repair item: drift (moved between buckets) and/or missing preview
                             if (db.mappedBucketFor(asset) != asset.bucketName) {
                                 client.moveFile(mappedFileId!!, folderFor(asset.bucketName))
                                 db.rememberMapping(asset, mappedFileId)
                             }
-                            // backfill a preview for files uploaded before previews existed
                             if (remoteFiles?.get(mappedFileId)?.previewBlobId == null) {
                                 makeAndUploadPreview(asset, mappedFileId!!)
                             }
@@ -139,6 +164,8 @@ class SyncRunner(
                             mimeType = asset.mimeType,
                             parentFolderId = folderFor(asset.bucketName),
                             filesKey = filesKey,
+                            onBytes = { delta -> bytesDone.addAndGet(delta); report(asset.displayName) },
+                            checkpoint = chunkCheckpoint,
                         )
                         db.rememberMapping(asset, outcome.fileId)
                         if (carriedEnrichment != null && db.enrichmentFor(outcome.fileId) == null) {
@@ -148,12 +175,13 @@ class SyncRunner(
                             deduplicated.incrementAndGet()
                         } else {
                             uploaded.incrementAndGet()
-                            bytesDone.addAndGet(asset.sizeBytes)
                             // attach an E2EE preview so this file can later be browsed
                             // offline in previews-only mode (best-effort)
                             makeAndUploadPreview(asset, outcome.fileId)
                         }
                         consecutiveNetFails.set(0)
+                    } catch (c: java.util.concurrent.CancellationException) {
+                        // user hit Anuluj mid-file — not a failure, just stop
                     } catch (e: Throwable) {
                         // Throwable, not Exception: an OutOfMemoryError on one corrupt/huge
                         // file must not kill the whole pass (the pre-0.5.0 crash loop)

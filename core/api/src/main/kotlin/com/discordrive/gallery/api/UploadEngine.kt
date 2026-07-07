@@ -58,6 +58,9 @@ class UploadEngine(private val client: DiscorDriveClient) {
      * pass 1 hashes for the dedupe token (and measures the real size — the
      * caller's metadata may be stale), pass 2 encrypts and uploads chunks.
      * [open] must return a fresh stream over the same content each call.
+     * [onBytes] reports plaintext bytes as each chunk lands (live speed).
+     * [checkpoint] runs before each chunk upload — it may block (pause) or
+     * throw (cancel), so a long file reacts mid-transfer, not at the end.
      */
     fun uploadStream(
         open: () -> java.io.InputStream,
@@ -65,6 +68,8 @@ class UploadEngine(private val client: DiscorDriveClient) {
         mimeType: String,
         parentFolderId: String?,
         filesKey: ByteArray,
+        onBytes: ((Long) -> Unit)? = null,
+        checkpoint: (() -> Unit)? = null,
     ): UploadOutcome {
         val sha = java.security.MessageDigest.getInstance("SHA-256")
         var totalBytes = 0L
@@ -107,6 +112,7 @@ class UploadEngine(private val client: DiscorDriveClient) {
             val buffer = ByteArray(CHUNK_SIZE_BYTES)
             var streamedBytes = 0L
             for (index in 0 until chunkCount) {
+                checkpoint?.invoke()
                 val plainSize = readFully(input, buffer)
                 streamedBytes += plainSize
                 check(plainSize > 0) { "Source ended early — file changed during upload" }
@@ -123,6 +129,7 @@ class UploadEngine(private val client: DiscorDriveClient) {
                     blobId = blobId,
                     ciphertextSizeBytes = ciphertext.size.toLong(),
                 )
+                onBytes?.invoke(plainSize.toLong())
             }
             check(streamedBytes == totalBytes && input.read() < 0) {
                 "Source size changed during upload ($totalBytes → ≥$streamedBytes bytes)"

@@ -71,7 +71,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : Worker(context, p
                     val tracker = newSpeedTracker(ctx, ctx.getString(R.string.sync_notif_title), "↑")
                     val sync = runner.sync { tracker.onProgress(it) }
                     AppLog.i("SyncWorker", "sync: +${sync.uploaded} up, ${sync.deduplicated} dedup, ${sync.failed} failed")
-                    if (Settings.aiAutoAfterSync(ctx) && Settings.aiConfigured(ctx)) runAi(ctx, runner, null)
+                    // user cancelled the sync → don't chain the auto-AI pass
+                    if (!SyncController.cancelled && Settings.aiAutoAfterSync(ctx) && Settings.aiConfigured(ctx)) runAi(ctx, runner, null)
                 }
             }
             Result.success()
