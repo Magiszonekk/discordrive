@@ -7,6 +7,7 @@
     "plugins/*"
   ],
   "scripts": {
+    "setup": "tsx scripts/setup.ts",
     "dev": "concurrently --kill-others-on-fail \"npm run dev:api\" \"npm run dev:frontend\"",
     "dev:api": "npm run dev --workspace=@ddv4/api",
     "dev:frontend": "npm run dev --workspace=@ddv4/frontend",
