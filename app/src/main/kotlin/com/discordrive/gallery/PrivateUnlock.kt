@@ -89,6 +89,11 @@ object PrivateUnlock {
             input.doOnTextChanged { layout.error = null }
             input.requestFocus()
         }
+        // belt-and-braces vs Google Password Manager: kill the autofill session
+        // on close so no save-password prompt can survive the dialog
+        dialog.setOnDismissListener {
+            activity.getSystemService(android.view.autofill.AutofillManager::class.java)?.cancel()
+        }
         dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
         dialog.show()
     }

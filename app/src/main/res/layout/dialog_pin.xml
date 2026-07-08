@@ -19,7 +19,7 @@
         app:endIconMode="password_toggle"
         android:hint="@string/private_unlock_pin_hint">
 
-        <com.google.android.material.textfield.TextInputEditText
+        <com.discordrive.gallery.PinEditText
             android:id="@+id/pinInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

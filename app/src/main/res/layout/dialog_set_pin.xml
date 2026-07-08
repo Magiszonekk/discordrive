@@ -17,7 +17,7 @@
         app:endIconMode="password_toggle"
         android:hint="@string/private_pin_old">
 
-        <com.google.android.material.textfield.TextInputEditText
+        <com.discordrive.gallery.PinEditText
             android:id="@+id/pinOldInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -35,7 +35,7 @@
         app:endIconMode="password_toggle"
         android:hint="@string/private_pin_new">
 
-        <com.google.android.material.textfield.TextInputEditText
+        <com.discordrive.gallery.PinEditText
             android:id="@+id/pinNewInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -53,7 +53,7 @@
         app:endIconMode="password_toggle"
         android:hint="@string/private_pin_repeat">
 
-        <com.google.android.material.textfield.TextInputEditText
+        <com.discordrive.gallery.PinEditText
             android:id="@+id/pinRepeatInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

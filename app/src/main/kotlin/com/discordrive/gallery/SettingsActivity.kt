@@ -280,6 +280,10 @@ class SettingsActivity : SessionActivity() {
                 }
             }
         }
+        // kill the autofill session on close — see PrivateUnlock.pinDialog
+        dialog.setOnDismissListener {
+            getSystemService(android.view.autofill.AutofillManager::class.java)?.cancel()
+        }
         dialog.show()
     }
 
