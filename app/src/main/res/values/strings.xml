@@ -277,6 +277,7 @@
     <string name="album_private_marked">Folder jest teraz prywatny — znajdziesz go na dole listy</string>
     <string name="album_private_unmarked">Folder nie jest już prywatny</string>
     <string name="private_need_pin_msg">Aby oznaczać foldery jako prywatne, najpierw ustaw kod PIN w ustawieniach.</string>
+    <string name="private_mark_confirm">Ustawić „%s” jako prywatny? Folder zniknie z listy, wyszukiwania i wyboru plików, a każde otwarcie będzie wymagać kodu PIN lub odcisku palca.</string>
 
     <!-- Diagnostics -->
     <string name="settings_diag">Diagnostyka</string>

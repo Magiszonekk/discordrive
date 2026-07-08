@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Autofill excluded on purpose — see dialog_pin.xml. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingHorizontal="24dp"
+    android:paddingTop="12dp"
+    android:importantForAutofill="noExcludeDescendants">
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/pinOldLayout"
+        style="@style/Widget.Gallery.TextInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        app:endIconMode="password_toggle"
+        android:hint="@string/private_pin_old">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/pinOldInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="numberPassword"
+            android:importantForAutofill="no"
+            android:maxLength="12"/>
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/pinNewLayout"
+        style="@style/Widget.Gallery.TextInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        app:endIconMode="password_toggle"
+        android:hint="@string/private_pin_new">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/pinNewInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="numberPassword"
+            android:importantForAutofill="no"
+            android:maxLength="12"/>
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/pinRepeatLayout"
+        style="@style/Widget.Gallery.TextInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        app:endIconMode="password_toggle"
+        android:hint="@string/private_pin_repeat">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/pinRepeatInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="numberPassword"
+            android:importantForAutofill="no"
+            android:maxLength="12"/>
+    </com.google.android.material.textfield.TextInputLayout>
+</LinearLayout>

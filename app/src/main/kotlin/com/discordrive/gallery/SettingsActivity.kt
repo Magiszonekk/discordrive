@@ -237,42 +237,50 @@ class SettingsActivity : SessionActivity() {
         }
     }
 
-    /** Sets or changes the private-folders PIN; changing requires the current code. */
+    /**
+     * Sets or changes the private-folders PIN; changing requires the current
+     * code. Material text fields with inline errors — the dialog stays open
+     * until the input is valid. Autofill is excluded in the layout (the PIN
+     * must not be mixed up with the DiscorDrive login password).
+     */
     private fun changePinDialog(pinButton: Button) {
-        val view = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(48, 16, 48, 0)
-        }
-        fun pinField(hintRes: Int) = EditText(this).apply {
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
-            hint = getString(hintRes)
-            view.addView(this)
-        }
+        val view = layoutInflater.inflate(R.layout.dialog_set_pin, null)
+        val oldLayout = view.findViewById<com.google.android.material.textfield.TextInputLayout>(R.id.pinOldLayout)
+        val oldInput = view.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.pinOldInput)
+        val newLayout = view.findViewById<com.google.android.material.textfield.TextInputLayout>(R.id.pinNewLayout)
+        val newInput = view.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.pinNewInput)
+        val repeatLayout = view.findViewById<com.google.android.material.textfield.TextInputLayout>(R.id.pinRepeatLayout)
+        val repeatInput = view.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.pinRepeatInput)
         val hasPin = PrivateAlbums.hasPin(this)
-        val oldPin = if (hasPin) pinField(R.string.private_pin_old) else null
-        val newPin = pinField(R.string.private_pin_new)
-        val repeatPin = pinField(R.string.private_pin_repeat)
+        oldLayout.visibility = if (hasPin) android.view.View.VISIBLE else android.view.View.GONE
 
-        MaterialAlertDialogBuilder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(if (hasPin) R.string.private_change_pin else R.string.private_set_pin)
+            .setIcon(R.drawable.ic_lock)
             .setView(view)
-            .setPositiveButton(R.string.settings_save) { _, _ ->
-                val error = when {
-                    hasPin && !PrivateAlbums.verifyPin(this, oldPin?.text.toString()) -> R.string.private_pin_wrong
-                    newPin.text.toString().length < 4 -> R.string.private_pin_short
-                    newPin.text.toString() != repeatPin.text.toString() -> R.string.private_pin_mismatch
-                    else -> null
-                }
-                if (error != null) {
-                    Snackbar.make(findViewById(R.id.settingsRoot), error, Snackbar.LENGTH_LONG).show()
-                } else {
-                    PrivateAlbums.setPin(this, newPin.text.toString())
-                    pinButton.setText(R.string.private_change_pin)
-                    Snackbar.make(findViewById(R.id.settingsRoot), R.string.private_pin_saved, Snackbar.LENGTH_SHORT).show()
+            .setPositiveButton(R.string.settings_save, null) // validated below, stays open on error
+            .setNegativeButton(android.R.string.cancel, null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                oldLayout.error = null; newLayout.error = null; repeatLayout.error = null
+                when {
+                    hasPin && !PrivateAlbums.verifyPin(this, oldInput.text?.toString().orEmpty()) ->
+                        oldLayout.error = getString(R.string.private_pin_wrong)
+                    (newInput.text?.length ?: 0) < 4 ->
+                        newLayout.error = getString(R.string.private_pin_short)
+                    newInput.text?.toString() != repeatInput.text?.toString() ->
+                        repeatLayout.error = getString(R.string.private_pin_mismatch)
+                    else -> {
+                        PrivateAlbums.setPin(this, newInput.text.toString())
+                        pinButton.setText(R.string.private_change_pin)
+                        dialog.dismiss()
+                        Snackbar.make(findViewById(R.id.settingsRoot), R.string.private_pin_saved, Snackbar.LENGTH_SHORT).show()
+                    }
                 }
             }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        }
+        dialog.show()
     }
 
     // === Appearance ===

@@ -149,9 +149,10 @@ class AlbumActivity : SessionActivity() {
     }
 
     /**
-     * Marks/unmarks this album as private. Marking requires the gallery PIN to
-     * exist AND to be entered (so a passer-by can't hide albums); unmarking
-     * happens inside an already-unlocked private album, so it's direct.
+     * Marks/unmarks this album as private. Marking asks for a plain
+     * confirmation (the user is already inside the album — a PIN prompt here
+     * felt absurd); unmarking happens inside an already-unlocked private
+     * album, so it's direct too.
      */
     private fun togglePrivate() {
         if (PrivateAlbums.isPrivate(this, bucket)) {
@@ -170,11 +171,17 @@ class AlbumActivity : SessionActivity() {
                     .show()
                 return
             }
-            PrivateUnlock.unlock(this) {
-                PrivateAlbums.setPrivate(this, bucket, true)
-                inflateAlbumMenuRefresh()
-                Snackbar.make(findViewById(R.id.albumRoot), R.string.album_private_marked, Snackbar.LENGTH_LONG).show()
-            }
+            MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.album_make_private)
+                .setIcon(R.drawable.ic_lock)
+                .setMessage(getString(R.string.private_mark_confirm, bucket))
+                .setPositiveButton(R.string.album_make_private) { _, _ ->
+                    PrivateAlbums.setPrivate(this, bucket, true)
+                    inflateAlbumMenuRefresh()
+                    Snackbar.make(findViewById(R.id.albumRoot), R.string.album_private_marked, Snackbar.LENGTH_LONG).show()
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
         }
     }
 
