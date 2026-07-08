@@ -39,6 +39,18 @@ object Settings {
     fun bgWifiOnly(context: Context): Boolean = prefs(context).getBoolean("bgWifiOnly", true)
     fun bgChargingOnly(context: Context): Boolean = prefs(context).getBoolean("bgChargingOnly", false)
 
+    // === Video player ===
+
+    /** Selectable double-tap seek steps for the video player (seconds). */
+    val VIDEO_SEEK_OPTIONS = listOf(3, 5, 10, 15, 30)
+
+    /** Double-tap seek step in seconds (left = back, right = forward). */
+    fun videoSeekSeconds(context: Context): Int = prefs(context).getInt("videoSeekSec", 5)
+
+    fun setVideoSeekSeconds(context: Context, seconds: Int) {
+        prefs(context).edit().putInt("videoSeekSec", seconds.coerceIn(1, 120)).apply()
+    }
+
     // === Accent colour (UI theme) ===
 
     /** A selectable accent. [overlayStyle] is null for the default (blue) theme. */
@@ -114,12 +126,14 @@ object Settings {
         put("bgWifiOnly", bgWifiOnly(context))
         put("bgChargingOnly", bgChargingOnly(context))
         put("accent", accentKey(context))
+        put("videoSeekSec", videoSeekSeconds(context))
     }.toString()
 
     /** Applies settings restored from the E2EE backup; missing fields keep current values. */
     fun applyJson(context: Context, jsonStr: String) {
         val o = JSONObject(jsonStr)
         if (o.has("accent")) setAccent(context, o.optString("accent", accentKey(context)))
+        if (o.has("videoSeekSec")) setVideoSeekSeconds(context, o.optInt("videoSeekSec", videoSeekSeconds(context)))
         save(
             context,
             serverUrl = o.optString("serverUrl", serverUrl(context)),

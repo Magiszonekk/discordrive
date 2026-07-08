@@ -128,7 +128,7 @@ class ViewerActivity : SessionActivity() {
             val scoped = when {
                 favoritesMode -> {
                     val fav = AppDb(this).favoriteIds()
-                    all.filter { it.id in fav }
+                    PrivateAlbums.filterVisible(this, all).filter { it.id in fav }
                 }
                 else -> bucket?.let { b -> all.filter { it.bucketName == b } }
                     ?.takeIf { it.isNotEmpty() } ?: all
@@ -562,13 +562,19 @@ class ViewerActivity : SessionActivity() {
         activePlayerView = playerView
         activeImage = image
         activePlay = play
-        attachVideoZoom(playerView)
+        attachVideoGestures(playerView)
     }
 
-    /** Two-finger pinch zoom for the playing video; single-finger taps still reach the controls. */
+    /**
+     * Video gestures: pinch zoom, single tap toggles the controller, and a
+     * YouTube-style double tap on the left/right edge seeks back/forward by
+     * the configurable step (Settings). Double tap in the middle = play/pause.
+     * Controller buttons are child views, so they consume their own taps first.
+     */
     @Suppress("ClickableViewAccessibility")
-    private fun attachVideoZoom(playerView: PlayerView) {
-        val detector = ScaleGestureDetector(
+    private fun attachVideoGestures(playerView: PlayerView) {
+        val seekMs = Settings.videoSeekSeconds(this) * 1000L
+        val scaleDetector = ScaleGestureDetector(
             this,
             object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
                 override fun onScale(d: ScaleGestureDetector): Boolean {
@@ -580,9 +586,34 @@ class ViewerActivity : SessionActivity() {
                 }
             },
         )
+        val tapDetector = android.view.GestureDetector(
+            this,
+            object : android.view.GestureDetector.SimpleOnGestureListener() {
+                override fun onSingleTapConfirmed(e: android.view.MotionEvent): Boolean {
+                    if (playerView.isControllerFullyVisible) playerView.hideController() else playerView.showController()
+                    return true
+                }
+
+                override fun onDoubleTap(e: android.view.MotionEvent): Boolean {
+                    val p = player ?: return true
+                    val width = playerView.width
+                    when {
+                        e.x < width * 0.4f -> p.seekTo((p.currentPosition - seekMs).coerceAtLeast(0))
+                        e.x > width * 0.6f -> {
+                            val limit = p.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+                            p.seekTo((p.currentPosition + seekMs).coerceAtMost(limit))
+                        }
+                        else -> if (p.isPlaying) p.pause() else p.play()
+                    }
+                    playerView.showController() // position feedback after the jump
+                    return true
+                }
+            },
+        )
         playerView.setOnTouchListener { _, event ->
-            detector.onTouchEvent(event)
-            detector.isInProgress // consume only while pinching; taps fall through to controls
+            scaleDetector.onTouchEvent(event)
+            tapDetector.onTouchEvent(event)
+            true // empty-area taps are ours (controller toggle / double-tap seek)
         }
     }
 

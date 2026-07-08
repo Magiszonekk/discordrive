@@ -60,6 +60,13 @@ class MainActivity : SessionActivity() {
                 album.isTrash -> requireSession { startActivity(Intent(this, TrashActivity::class.java)) }
                 album.isFavorites ->
                     startActivity(Intent(this, AlbumActivity::class.java).putExtra("favorites", true))
+                album.isPrivate -> PrivateUnlock.unlock(this) {
+                    startActivity(
+                        Intent(this, AlbumActivity::class.java)
+                            .putExtra("bucket", album.name)
+                            .putExtra("unlocked", true),
+                    )
+                }
                 else -> startActivity(Intent(this, AlbumActivity::class.java).putExtra("bucket", album.name))
             }
         }
@@ -109,7 +116,9 @@ class MainActivity : SessionActivity() {
     private fun refreshAlbums() {
         thread {
             val assets = MediaScanner(this).scanGallery()
-            val albums = assets.groupBy { it.bucketName }.map { (name, items) ->
+            val hidden = PrivateAlbums.all(this)
+            val visible = if (hidden.isEmpty()) assets else assets.filter { it.bucketName !in hidden }
+            val albums = visible.groupBy { it.bucketName }.map { (name, items) ->
                 Album(
                     name = name,
                     count = items.size,
@@ -117,16 +126,20 @@ class MainActivity : SessionActivity() {
                     allVideo = items.all { it.isVideo },
                 )
             }.sortedByDescending { it.cover?.dateAddedSec ?: 0L }
-            // Favorites and Trash are regular tiles, always pinned to the very end.
+            // Favorites, private (locked, no preview) and Trash pin to the very end.
             val favIds = AppDb(this).favoriteIds()
-            val favAssets = assets.filter { it.id in favIds } // newest-first, like assets
+            val favAssets = visible.filter { it.id in favIds } // newest-first, like assets
+            val privateAlbums = hidden
+                .filter { name -> assets.any { it.bucketName == name } } // skip vanished buckets
+                .sorted()
+                .map { name -> Album(name = name, count = 0, cover = null, allVideo = false, isPrivate = true) }
             val withTrash = albums + Album(
                 name = getString(R.string.favorites_title),
                 count = favAssets.size,
                 cover = favAssets.firstOrNull(),
                 allVideo = false,
                 isFavorites = true,
-            ) + Album(
+            ) + privateAlbums + Album(
                 name = getString(R.string.trash_title),
                 count = 0,
                 cover = null,

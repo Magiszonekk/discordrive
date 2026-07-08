@@ -36,7 +36,8 @@ class GalleryDocumentsProvider : DocumentsProvider() {
         val cached = snapshot
         val now = System.currentTimeMillis()
         if (cached != null && now - cached.atMs < SNAPSHOT_TTL_MS) return cached.assets
-        val fresh = MediaScanner(context!!).scanGallery()
+        // private albums never surface through SAF (no unlock flow out here)
+        val fresh = PrivateAlbums.filterVisible(context!!, MediaScanner(context!!).scanGallery())
         snapshot = Snapshot(fresh, now)
         return fresh
     }

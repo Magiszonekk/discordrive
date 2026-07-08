@@ -6,4 +6,6 @@
         app:showAsAction="never"/>
     <item android:id="@+id/action_album_clear_ai" android:title="@string/album_clear_ai_action"
         app:showAsAction="never"/>
+    <item android:id="@+id/action_album_private" android:title="@string/album_make_private"
+        app:showAsAction="never"/>
 </menu>

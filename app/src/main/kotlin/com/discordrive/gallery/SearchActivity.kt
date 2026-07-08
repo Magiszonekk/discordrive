@@ -76,14 +76,19 @@ class SearchActivity : AppCompatActivity() {
         thread {
             try {
                 val db = AppDb(this)
-                val assetsById = MediaScanner(this).scanAll().associateBy { it.id }
+                // private albums stay out of search results (no PIN → no leaks)
+                val assetsById = PrivateAlbums.filterVisible(this, MediaScanner(this).scanAll()).associateBy { it.id }
+                val privateBuckets = PrivateAlbums.all(this)
                 val results = db.allEnrichments().mapNotNull { (fileId, record) ->
                     val hit = record.description.lowercase().contains(q) ||
                         record.tags.any { it.lowercase().contains(q) } ||
                         record.ocrText?.lowercase()?.contains(q) == true ||
                         record.transcript?.lowercase()?.contains(q) == true // video quotes
                     if (!hit) return@mapNotNull null
-                    val asset = db.assetIdForFile(fileId)?.let { assetsById[it] }
+                    val assetId = db.assetIdForFile(fileId)
+                    val asset = assetId?.let { assetsById[it] }
+                    // a local mapping exists but the asset got filtered out above → private album
+                    if (assetId != null && asset == null && privateBuckets.isNotEmpty()) return@mapNotNull null
                     Result(fileId, asset?.displayName ?: fileId, record, asset)
                 }.sortedBy { it.name }
 

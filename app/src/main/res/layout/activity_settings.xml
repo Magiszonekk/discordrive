@@ -114,6 +114,54 @@
                         android:layout_marginTop="12dp"
                         app:icon="@drawable/ic_palette"
                         android:text="@string/settings_accent"/>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/videoSeekButton"
+                        style="@style/Widget.Gallery.Button.Card"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        app:icon="@drawable/ic_play"
+                        android:text="@string/settings_video_seek"/>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Foldery prywatne -->
+            <com.google.android.material.card.MaterialCardView style="@style/SettingsCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="18dp">
+
+                    <TextView style="@style/SettingsSectionTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/private_title"/>
+
+                    <TextView style="@style/SettingsSectionHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/private_hint"/>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/privatePinButton"
+                        style="@style/Widget.Gallery.Button.Card"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        app:icon="@drawable/ic_lock"
+                        android:text="@string/private_set_pin"/>
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/privateBiometricSwitch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/private_biometric_switch"
+                        android:textColor="@color/text"/>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 

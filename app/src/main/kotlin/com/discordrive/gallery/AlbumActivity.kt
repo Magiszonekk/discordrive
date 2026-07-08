@@ -27,6 +27,7 @@ class AlbumActivity : SessionActivity() {
 
     private lateinit var bucket: String
     private var favoritesMode = false
+    private var awaitingUnlock = false
     private lateinit var toolbar: MaterialToolbar
     private lateinit var adapter: GalleryAdapter
     private lateinit var progress: LinearProgressIndicator
@@ -47,6 +48,14 @@ class AlbumActivity : SessionActivity() {
         if (bucketExtra == null && !favoritesMode) { finish(); return }
         bucket = bucketExtra ?: getString(R.string.favorites_title)
 
+        // Private album reached without going through the locked tile → gate it
+        // here too (safety net: every open of a private album asks for the code).
+        if (!favoritesMode && PrivateAlbums.isPrivate(this, bucket) &&
+            !intent.getBooleanExtra("unlocked", false)
+        ) {
+            awaitingUnlock = true
+        }
+
         setContentView(R.layout.activity_album)
         Insets.apply(findViewById(R.id.albumRoot), bottom = false)
 
@@ -60,6 +69,7 @@ class AlbumActivity : SessionActivity() {
                 R.id.action_ai_album -> requireSession { runAlbumAi() }
                 R.id.action_album_desc -> requireSession { editAlbumDescription() }
                 R.id.action_album_clear_ai -> requireSession { confirmClearAlbumAnalyses() }
+                R.id.action_album_private -> togglePrivate()
                 R.id.action_sel_sync -> requireSession { syncSelection() }
                 R.id.action_sel_move -> requireSession { pickMoveTargetForSelection() }
                 R.id.action_sel_fav_add -> setFavoriteSelection(true)
@@ -107,6 +117,14 @@ class AlbumActivity : SessionActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (awaitingUnlock) {
+            PrivateUnlock.unlock(this) {
+                awaitingUnlock = false
+                refreshGrid()
+                loadAlbumDescription()
+            }
+            return // no content until the code checks out; back/cancel leaves it empty
+        }
         refreshGrid()
         loadAlbumDescription()
     }
@@ -122,7 +140,47 @@ class AlbumActivity : SessionActivity() {
             toolbar.menu.findItem(R.id.action_ai_album)?.isVisible = false
             toolbar.menu.findItem(R.id.action_album_desc)?.isVisible = false
             toolbar.menu.findItem(R.id.action_album_clear_ai)?.isVisible = false
+            toolbar.menu.findItem(R.id.action_album_private)?.isVisible = false
+        } else {
+            toolbar.menu.findItem(R.id.action_album_private)?.setTitle(
+                if (PrivateAlbums.isPrivate(this, bucket)) R.string.album_unmake_private else R.string.album_make_private,
+            )
         }
+    }
+
+    /**
+     * Marks/unmarks this album as private. Marking requires the gallery PIN to
+     * exist AND to be entered (so a passer-by can't hide albums); unmarking
+     * happens inside an already-unlocked private album, so it's direct.
+     */
+    private fun togglePrivate() {
+        if (PrivateAlbums.isPrivate(this, bucket)) {
+            PrivateAlbums.setPrivate(this, bucket, false)
+            inflateAlbumMenuRefresh()
+            Snackbar.make(findViewById(R.id.albumRoot), R.string.album_private_unmarked, Snackbar.LENGTH_LONG).show()
+        } else {
+            if (!PrivateAlbums.hasPin(this)) {
+                MaterialAlertDialogBuilder(this)
+                    .setTitle(R.string.album_make_private)
+                    .setMessage(R.string.private_need_pin_msg)
+                    .setPositiveButton(R.string.action_settings) { _, _ ->
+                        startActivity(Intent(this, SettingsActivity::class.java))
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+                return
+            }
+            PrivateUnlock.unlock(this) {
+                PrivateAlbums.setPrivate(this, bucket, true)
+                inflateAlbumMenuRefresh()
+                Snackbar.make(findViewById(R.id.albumRoot), R.string.album_private_marked, Snackbar.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun inflateAlbumMenuRefresh() {
+        toolbar.menu.clear()
+        inflateAlbumMenu()
     }
 
     /** Loads the (E2EE) album description into the toolbar subtitle, in the background. */
@@ -182,7 +240,7 @@ class AlbumActivity : SessionActivity() {
             val all = MediaScanner(this).scanGallery()
             val assets = if (favoritesMode) {
                 val fav = db.favoriteIds()
-                all.filter { it.id in fav }
+                PrivateAlbums.filterVisible(this, all).filter { it.id in fav }
             } else {
                 all.filter { it.bucketName == bucket }
             }

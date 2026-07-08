@@ -249,6 +249,35 @@
     <string name="edit_save">Zapisz kopię</string>
     <string name="edit_saved">Zapisano kopię w galerii (album DiscorDrive)</string>
 
+    <!-- Video player -->
+    <string name="settings_video_seek">Skok podwójnego dotknięcia w wideo</string>
+    <string name="video_seek_picker_title">Skok przewijania (podwójne dotknięcie)</string>
+    <string name="video_seek_option">%d sekund</string>
+
+    <!-- Private folders -->
+    <string name="private_title">Foldery prywatne</string>
+    <string name="private_hint">Folder oznaczysz jako prywatny w jego menu (⋮). Prywatne foldery nie mają podglądu, są ukryte z wyszukiwania i wyboru plików, a każde otwarcie wymaga kodu PIN lub odcisku palca.</string>
+    <string name="private_set_pin">Ustaw kod PIN</string>
+    <string name="private_change_pin">Zmień kod PIN</string>
+    <string name="private_pin_old">Obecny kod</string>
+    <string name="private_pin_new">Nowy kod (min. 4 cyfry)</string>
+    <string name="private_pin_repeat">Powtórz nowy kod</string>
+    <string name="private_pin_saved">Zapisano kod PIN</string>
+    <string name="private_pin_mismatch">Kody się różnią</string>
+    <string name="private_pin_short">Kod musi mieć co najmniej 4 cyfry</string>
+    <string name="private_pin_wrong">Błędny kod</string>
+    <string name="private_biometric_switch">Odblokowanie odciskiem palca</string>
+    <string name="private_biometric_unavailable">Brak skonfigurowanej biometrii na urządzeniu</string>
+    <string name="private_need_pin_first">Najpierw ustaw kod PIN</string>
+    <string name="private_unlock_title">Odblokuj folder prywatny</string>
+    <string name="private_unlock_pin_hint">Kod PIN</string>
+    <string name="private_use_pin">Użyj kodu PIN</string>
+    <string name="album_make_private">Ustaw jako prywatny</string>
+    <string name="album_unmake_private">Wyłącz prywatność</string>
+    <string name="album_private_marked">Folder jest teraz prywatny — znajdziesz go na dole listy</string>
+    <string name="album_private_unmarked">Folder nie jest już prywatny</string>
+    <string name="private_need_pin_msg">Aby oznaczać foldery jako prywatne, najpierw ustaw kod PIN w ustawieniach.</string>
+
     <!-- Diagnostics -->
     <string name="settings_diag">Diagnostyka</string>
     <string name="settings_diag_hint">Aplikacja zapisuje logi (w tym crashe) do pliku na urządzeniu. Wysyłka na serwer jest szyfrowana end-to-end Twoim kluczem.</string>

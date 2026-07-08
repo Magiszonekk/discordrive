@@ -118,6 +118,8 @@ class SettingsActivity : SessionActivity() {
         }
 
         findViewById<Button>(R.id.accentButton).setOnClickListener { pickAccent() }
+        findViewById<Button>(R.id.videoSeekButton).setOnClickListener { pickVideoSeek() }
+        setupPrivateSection()
         findViewById<Button>(R.id.wipeCloudButton).setOnClickListener { confirmWipeCloud() }
         findViewById<Button>(R.id.wipeLocalButton).setOnClickListener { confirmWipeLocal() }
 
@@ -193,6 +195,84 @@ class SettingsActivity : SessionActivity() {
                 }
             }
         }
+    }
+
+    /** Single-choice picker for the video double-tap seek step. */
+    private fun pickVideoSeek() {
+        val labels = Settings.VIDEO_SEEK_OPTIONS.map { getString(R.string.video_seek_option, it) }.toTypedArray()
+        val current = Settings.VIDEO_SEEK_OPTIONS.indexOf(Settings.videoSeekSeconds(this)).coerceAtLeast(0)
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.video_seek_picker_title)
+            .setSingleChoiceItems(labels, current) { dialog, which ->
+                Settings.setVideoSeekSeconds(this, Settings.VIDEO_SEEK_OPTIONS[which])
+                dialog.dismiss()
+                backupSettings()
+                Snackbar.make(findViewById(R.id.settingsRoot), R.string.settings_saved, Snackbar.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    // === Private folders ===
+
+    private fun setupPrivateSection() {
+        val pinButton = findViewById<Button>(R.id.privatePinButton)
+        val biometric = findViewById<MaterialSwitch>(R.id.privateBiometricSwitch)
+        pinButton.setText(if (PrivateAlbums.hasPin(this)) R.string.private_change_pin else R.string.private_set_pin)
+        pinButton.setOnClickListener { changePinDialog(pinButton) }
+        biometric.isChecked = PrivateAlbums.biometricsEnabled(this)
+        biometric.setOnCheckedChangeListener { _, checked ->
+            when {
+                !checked -> PrivateAlbums.setBiometricsEnabled(this, false)
+                !PrivateAlbums.hasPin(this) -> {
+                    biometric.isChecked = false
+                    Snackbar.make(findViewById(R.id.settingsRoot), R.string.private_need_pin_first, Snackbar.LENGTH_SHORT).show()
+                }
+                !PrivateUnlock.biometricsAvailable(this) -> {
+                    biometric.isChecked = false
+                    Snackbar.make(findViewById(R.id.settingsRoot), R.string.private_biometric_unavailable, Snackbar.LENGTH_LONG).show()
+                }
+                else -> PrivateAlbums.setBiometricsEnabled(this, true)
+            }
+        }
+    }
+
+    /** Sets or changes the private-folders PIN; changing requires the current code. */
+    private fun changePinDialog(pinButton: Button) {
+        val view = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(48, 16, 48, 0)
+        }
+        fun pinField(hintRes: Int) = EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            hint = getString(hintRes)
+            view.addView(this)
+        }
+        val hasPin = PrivateAlbums.hasPin(this)
+        val oldPin = if (hasPin) pinField(R.string.private_pin_old) else null
+        val newPin = pinField(R.string.private_pin_new)
+        val repeatPin = pinField(R.string.private_pin_repeat)
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(if (hasPin) R.string.private_change_pin else R.string.private_set_pin)
+            .setView(view)
+            .setPositiveButton(R.string.settings_save) { _, _ ->
+                val error = when {
+                    hasPin && !PrivateAlbums.verifyPin(this, oldPin?.text.toString()) -> R.string.private_pin_wrong
+                    newPin.text.toString().length < 4 -> R.string.private_pin_short
+                    newPin.text.toString() != repeatPin.text.toString() -> R.string.private_pin_mismatch
+                    else -> null
+                }
+                if (error != null) {
+                    Snackbar.make(findViewById(R.id.settingsRoot), error, Snackbar.LENGTH_LONG).show()
+                } else {
+                    PrivateAlbums.setPin(this, newPin.text.toString())
+                    pinButton.setText(R.string.private_change_pin)
+                    Snackbar.make(findViewById(R.id.settingsRoot), R.string.private_pin_saved, Snackbar.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     // === Appearance ===

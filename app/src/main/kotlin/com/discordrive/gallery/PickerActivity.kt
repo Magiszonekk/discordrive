@@ -58,7 +58,7 @@ class PickerActivity : AppCompatActivity() {
         thread {
             val db = AppDb(this)
             val wanted = wantedMimes()
-            val assets = MediaScanner(this).scanGallery()
+            val assets = PrivateAlbums.filterVisible(this, MediaScanner(this).scanGallery())
                 .filter { asset -> wanted.isEmpty() || wanted.any { asset.mimeType.startsWith(it) } }
             val synced = assets.filter { db.fileIdForAny(it) != null }.map { it.id }.toSet()
             // enrichments keyed by the on-screen asset id, for the search filter

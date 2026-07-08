@@ -12,8 +12,8 @@ android {
         // 29+: MediaStore loadThumbnail + clean scoped storage
         minSdk = 29
         targetSdk = 35
-        versionCode = 54
-        versionName = "0.28.0"
+        versionCode = 55
+        versionName = "0.29.0"
     }
 
     compileOptions {
@@ -33,6 +33,7 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
+    implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.viewpager2:viewpager2:1.1.0")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation(libs.media3.exoplayer)

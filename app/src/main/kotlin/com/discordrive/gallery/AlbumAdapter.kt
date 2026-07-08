@@ -15,6 +15,7 @@ data class Album(
     val allVideo: Boolean,
     val isTrash: Boolean = false,
     val isFavorites: Boolean = false,
+    val isPrivate: Boolean = false,
 )
 
 class AlbumAdapter(
@@ -34,6 +35,7 @@ class AlbumAdapter(
         val videoIcon: ImageView = view.findViewById(R.id.albumVideoIcon)
         val trashIcon: ImageView = view.findViewById(R.id.albumTrashIcon)
         val favIcon: ImageView = view.findViewById(R.id.albumFavIcon)
+        val lockIcon: ImageView = view.findViewById(R.id.albumLockIcon)
         val name: TextView = view.findViewById(R.id.albumName)
         val count: TextView = view.findViewById(R.id.albumCount)
     }
@@ -53,17 +55,20 @@ class AlbumAdapter(
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val album = albums[position]
         val ctx = holder.itemView.context
-        if (album.isTrash) {
-            // plain themed tile with a centered trash icon (no photo preview)
+        if (album.isTrash || album.isPrivate) {
+            // plain themed tile with a centered icon — private albums get NO
+            // preview and NO count on purpose (nothing to shoulder-surf)
             holder.cover.setImageDrawable(null)
             holder.cover.setBackgroundColor(ctx.getColor(R.color.surface_high))
-            holder.trashIcon.visibility = View.VISIBLE
+            holder.trashIcon.visibility = if (album.isTrash) View.VISIBLE else View.GONE
+            holder.lockIcon.visibility = if (album.isPrivate) View.VISIBLE else View.GONE
             holder.favIcon.visibility = View.GONE
             holder.videoIcon.visibility = View.GONE
             holder.name.text = album.name
             holder.count.visibility = View.GONE
         } else {
             holder.trashIcon.visibility = View.GONE
+            holder.lockIcon.visibility = View.GONE
             holder.count.visibility = View.VISIBLE
             holder.cover.setImageDrawable(null)
             holder.cover.setBackgroundColor(ctx.getColor(R.color.surface_high))
