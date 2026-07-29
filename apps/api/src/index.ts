@@ -126,6 +126,17 @@ const trashSweep = () =>
 trashSweep();
 setInterval(trashSweep, 24 * 60 * 60 * 1000).unref();
 
+// Hourly sweep: reclaim uploads abandoned mid-flight, measured from the last
+// chunk that arrived so in-progress transfers are never touched.
+import { purgeStaleUploads } from "./resolvers/files.js";
+const STALE_UPLOAD_MINUTES = 60;
+const staleUploadSweep = () =>
+  purgeStaleUploads(STALE_UPLOAD_MINUTES)
+    .then((purged) => { if (purged > 0) console.log(`Stale upload sweep: purged ${purged} abandoned upload(s)`); })
+    .catch((error) => console.error("Stale upload sweep failed:", error));
+staleUploadSweep();
+setInterval(staleUploadSweep, 60 * 60 * 1000).unref();
+
 // Create Magiszonek user if needed (fire-and-forget)
 import { createMagiszonekIfNeeded } from "@ddv4/database/seed/magiszonek";
 createMagiszonekIfNeeded().catch(console.error);

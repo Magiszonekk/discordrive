@@ -353,6 +353,66 @@ export async function purgeExpiredTrash(retentionDays = 30): Promise<number> {
   return purged;
 }
 
+// === Abandoned uploads ===
+
+/**
+ * Uploads that died mid-flight — the tab crashed, the network dropped, the
+ * client never reached commitManifest. Their File row stays UPLOADING forever:
+ * invisible to getFiles and to the storage-usage total, while the chunks that
+ * did land keep occupying provider storage with nothing left to reference them.
+ *
+ * Staleness is measured from the last chunk that actually arrived, never from
+ * creation — a slow multi-hour upload is still making progress and must not be
+ * swept out from under itself.
+ */
+export async function findStaleUploads(
+  staleAfterMinutes = 60,
+): Promise<Array<{ id: string; lastActivityAt: Date; blobCount: number }>> {
+  const cutoff = new Date(Date.now() - staleAfterMinutes * 60_000);
+
+  // A file created after the cutoff cannot be stale (last activity >= creation),
+  // so the CTE prefilter is safe and keeps the unindexable LIKE join small.
+  return db.$queryRaw<Array<{ id: string; lastActivityAt: Date; blobCount: number }>>`
+    WITH candidates AS (
+      SELECT id, "createdAt" FROM "File"
+      WHERE status = 'UPLOADING' AND "deletedAt" IS NULL AND "createdAt" < ${cutoff}
+    )
+    SELECT c.id,
+           COALESCE(MAX(bt."createdAt"), c."createdAt") AS "lastActivityAt",
+           COUNT(bt."blobId")::int                      AS "blobCount"
+    FROM candidates c
+    LEFT JOIN "BlobTransport" bt ON bt."blobId" LIKE c.id || ':%'
+    GROUP BY c.id, c."createdAt"
+    HAVING COALESCE(MAX(bt."createdAt"), c."createdAt") < ${cutoff}
+  `;
+}
+
+export async function purgeStaleUploads(staleAfterMinutes = 60): Promise<number> {
+  const stale = await findStaleUploads(staleAfterMinutes);
+
+  let purged = 0;
+  for (const { id } of stale) {
+    // Re-read under the current state: an upload can commit between the scan
+    // and the purge, and a committed file must never be swept.
+    const file = await db.file.findUnique({ where: { id } });
+    if (!file || file.status !== "UPLOADING" || file.deletedAt) continue;
+
+    try {
+      await purgeFileRecord(file);
+      purged++;
+    } catch (error) {
+      console.warn(JSON.stringify({
+        ts: new Date().toISOString(),
+        scope: "stale-upload-sweep",
+        type: "file_purge_failed",
+        fileId: id,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+  return purged;
+}
+
 export async function getFiles(ownerUserId: string, parentFolderId: string | null) {
   return db.file.findMany({
     where: { ownerUserId, parentFolderId, deletedAt: null, status: "READY" },
