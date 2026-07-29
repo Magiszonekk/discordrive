@@ -29,7 +29,9 @@ export const useUploadStore = create<UploadState>((set, get) => ({
 
   addUpload: (fileId, totalBlobs, bytesTotal, fileName) => {
     speedWindows.set(fileId, []);
-    smoothedSpeeds.set(fileId, 0);
+    // Cleared, not zeroed: a stored 0 would seed the EMA below and make the
+    // speed ramp up from nothing, inflating every ETA derived early on.
+    smoothedSpeeds.delete(fileId);
     set((state) => {
       const uploads = new Map(state.uploads);
       uploads.set(fileId, {
@@ -66,8 +68,8 @@ export const useUploadStore = create<UploadState>((set, get) => ({
           const dt = (newest.time - oldest.time) / 1000;
           if (dt > 0) {
             const raw = (newest.bytes - oldest.bytes) / dt;
-            const prev = smoothedSpeeds.get(fileId) ?? raw;
-            const smoothed = prev * (1 - EMA_ALPHA) + raw * EMA_ALPHA;
+            const prev = smoothedSpeeds.get(fileId);
+            const smoothed = prev ? prev * (1 - EMA_ALPHA) + raw * EMA_ALPHA : raw;
             smoothedSpeeds.set(fileId, smoothed);
             speedBps = smoothed;
           }

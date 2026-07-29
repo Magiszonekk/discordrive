@@ -3,20 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { useDownloadStore } from "../../stores/download.js";
-import { useThemeStore } from "../../stores/theme.js";
 
-const WINDOW_MS = 5000;
+const WINDOW_MS = 8000;
 const TICK_MS   = 300;
 const EMA_ALPHA = 0.10;
 const MIN_WINDOW_FOR_DISPLAY_MS = 2000;
-
-function etaAlpha(prevEtaS: number): number {
-  const MIN = 0.04, MAX = 0.30, LO = 5, HI = 300;
-  if (prevEtaS <= LO) return MAX;
-  if (prevEtaS >= HI) return MIN;
-  const t = Math.log(prevEtaS / LO) / Math.log(HI / LO);
-  return MAX + (MIN - MAX) * t;
-}
 
 function formatSpeed(bytesPerSecond: number): string {
   if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return "";
@@ -43,12 +34,10 @@ export function DownloadProgress() {
   const downloads = useDownloadStore((s) => s.downloads);
   const removeDownload = useDownloadStore((s) => s.removeDownload);
   const cancelDownload = useDownloadStore((s) => s.cancelDownload);
-  const accentColor = useThemeStore((s) => s.accentColor);
 
   const scheduledRef  = useRef(new Set<string>());
   const historyRef    = useRef(new Map<string, Sample[]>());
   const smoothRef     = useRef(new Map<string, number>());
-  const smoothEtaRef  = useRef(new Map<string, number>());
   const [speeds, setSpeeds] = useState<Record<string, number>>({});
   const [etas, setEtas] = useState<Record<string, number>>({});
 
@@ -93,28 +82,28 @@ export function DownloadProgress() {
           }
         }
 
-        const prev = smoothRef.current.get(fid) ?? instant;
+        // Seed the EMA from the first real measurement. Blending it against the
+        // zero of the warm-up window instead ramps the speed up from 0 over
+        // several seconds, and every ETA derived during that ramp is inflated.
+        const prev = smoothRef.current.get(fid);
         const smoothed = instant > 0
-          ? prev * (1 - EMA_ALPHA) + instant * EMA_ALPHA
-          : prev * 0.85;
+          ? (prev ? prev * (1 - EMA_ALPHA) + instant * EMA_ALPHA : instant)
+          : (prev ?? 0) * 0.85;
         smoothRef.current.set(fid, smoothed);
         next[fid] = smoothed;
       }
 
       setSpeeds(next);
+      // Derived fresh from the windowed speed, never smoothed on its own: ETA is
+      // a reciprocal of what we measure, so averaging it lets a stale slow-start
+      // estimate outlive the slow start — that is what left a stuck "1.5 h"
+      // ticking down by minutes per second once the transfer reached full speed.
       const etaMap: Record<string, number> = {};
       for (const dl of downloads.values()) {
         const spd = next[dl.fileId] ?? 0;
         const remaining = dl.bytesTotal - dl.bytesDownloaded;
         if (spd > 0 && remaining > 0 && dl.status !== "DONE" && dl.status !== "FAILED") {
-          const raw = remaining / spd;
-          const prev = smoothEtaRef.current.get(dl.fileId) ?? raw;
-          const alpha = etaAlpha(prev);
-          const smoothed = prev * (1 - alpha) + raw * alpha;
-          smoothEtaRef.current.set(dl.fileId, smoothed);
-          etaMap[dl.fileId] = smoothed;
-        } else {
-          smoothEtaRef.current.delete(dl.fileId);
+          etaMap[dl.fileId] = remaining / spd;
         }
       }
       setEtas(etaMap);
@@ -126,15 +115,15 @@ export function DownloadProgress() {
   if (downloads.size === 0) return null;
 
   return (
-    <div className="mb-6 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900">
+    <div className="mb-6 overflow-hidden rounded-card border border-rule bg-paper">
       <div className="flex items-center justify-between px-4 py-3">
         <div>
-          <p className="text-sm font-medium text-white">Downloads</p>
-          <p className="text-xs text-zinc-500">{downloads.size} active or recent</p>
+          <p className="text-sm font-medium text-ink">Downloads</p>
+          <p className="text-xs text-muted">{downloads.size} active or recent</p>
         </div>
       </div>
 
-      <div className="space-y-2 border-t border-zinc-800 px-3 py-3">
+      <div className="space-y-2 border-t border-rule px-3 py-3">
         {Array.from(downloads.values()).map((download) => {
           const percent = download.bytesTotal > 0
             ? Math.round((download.bytesDownloaded / download.bytesTotal) * 100)
@@ -145,47 +134,55 @@ export function DownloadProgress() {
           const speedStr = isActive ? formatSpeed(speeds[download.fileId] ?? 0) : "";
 
           return (
-            <div key={download.fileId} className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+            <div key={download.fileId} className="rounded-md bg-paper-2 p-3">
               {/* Row 1: filename + cancel + percent */}
               <div className="mb-2 flex justify-between gap-3 text-sm">
-                <span className="truncate text-white">{download.fileName}</span>
-                <span className="flex shrink-0 items-center gap-1 text-zinc-400">
+                <span className="truncate text-ink">{download.fileName}</span>
+                <span className="flex shrink-0 items-center gap-1 text-muted">
                   {isActive && (
                     <button
                       onClick={() => cancelDownload(download.fileId)}
                       title="Cancel"
-                      className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400"
+                      className="rounded-md p-1.5 text-muted transition-colors duration-micro ease-out hover:bg-paper-3 hover:text-error"
                     >
                       <X size={13} />
                     </button>
                   )}
-                  {download.status === "DONE" ? "Complete" : download.status === "FAILED" ? "Failed" : `${percent}%`}
+                  {download.status === "DONE" ? (
+                    "Complete"
+                  ) : download.status === "FAILED" ? (
+                    "Failed"
+                  ) : (
+                    <span className="font-mono tabular-nums">{percent}%</span>
+                  )}
                 </span>
               </div>
               {/* Progress bar */}
-              <div className="h-1.5 w-full rounded-full bg-zinc-800">
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-paper-3">
                 <div
-                  className="h-1.5 rounded-full transition-all"
-                  style={{
-                    width: `${percent}%`,
-                    backgroundColor: download.status === "FAILED" ? "#ef4444" : download.status === "DONE" ? "#22c55e" : accentColor,
-                  }}
+                  className={`h-1.5 w-full origin-left rounded-full transition-transform duration-short ease-out ${
+                    download.status === "FAILED" ? "bg-error" : download.status === "DONE" ? "bg-success" : "bg-accent"
+                  }`}
+                  style={{ transform: `scaleX(${percent / 100})` }}
                 />
               </div>
               {/* Row 3: chunks counter + speed + ETA */}
-              <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+              <div className="mt-2 flex items-center justify-between text-xs text-muted">
                 <span>
-                  {download.downloadedChunks}/{download.totalChunks} chunks
-                  {download.status === "DONE" && <span className="ml-2 text-green-500">✓</span>}
+                  <span className="font-mono tabular-nums">
+                    {download.downloadedChunks}/{download.totalChunks}
+                  </span>{" "}
+                  chunks
+                  {download.status === "DONE" && <span className="ml-2 text-success">✓</span>}
                 </span>
                 <span className="flex items-center gap-1.5">
                   {speedStr && isActive ? (
                     <>
-                      <span className="font-medium" style={{ color: accentColor }}>{speedStr}</span>
+                      <span className="font-mono font-medium tabular-nums text-accent">{speedStr}</span>
                       {formatEta(etas[download.fileId] ?? 0) && (
                         <>
-                          <span className="text-zinc-700">·</span>
-                          <span>{formatEta(etas[download.fileId] ?? 0)}</span>
+                          <span className="text-muted">·</span>
+                          <span className="font-mono tabular-nums">{formatEta(etas[download.fileId] ?? 0)}</span>
                         </>
                       )}
                     </>

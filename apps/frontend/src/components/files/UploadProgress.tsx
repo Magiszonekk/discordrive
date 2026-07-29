@@ -1,17 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { useUploadStore } from "../../stores/upload.js";
-import { useThemeStore } from "../../stores/theme.js";
 
 const ETA_TICK_MS = 300;
-
-function etaAlpha(prevEtaS: number): number {
-  const MIN = 0.04, MAX = 0.30, LO = 5, HI = 300;
-  if (prevEtaS <= LO) return MAX;
-  if (prevEtaS >= HI) return MIN;
-  const t = Math.log(prevEtaS / LO) / Math.log(HI / LO);
-  return MAX + (MIN - MAX) * t;
-}
 
 function formatSpeed(bps: number): string {
   if (!Number.isFinite(bps) || bps <= 0) return "";
@@ -38,8 +29,6 @@ export function UploadProgress() {
   const removeUpload = useUploadStore((s) => s.removeUpload);
   const [collapsed, setCollapsed] = useState(true);
   const [etas, setEtas] = useState<Record<string, number>>({});
-  const smoothEtaRef = useRef(new Map<string, number>());
-  const accentColor = useThemeStore((s) => s.accentColor);
   const scheduledRef = useRef(new Set<string>());
 
   useEffect(() => {
@@ -48,20 +37,17 @@ export function UploadProgress() {
 
   useEffect(() => {
     const id = setInterval(() => {
+      // Derived fresh from the store's windowed speed, never smoothed on its own:
+      // ETA is a reciprocal of what we measure, so averaging it lets a stale
+      // slow-start estimate outlive the slow start and tick down by minutes per
+      // second once the transfer reaches full speed.
       const next: Record<string, number> = {};
       for (const upload of uploads.values()) {
         const spd = upload.speedBps ?? 0;
         const remaining = upload.bytesTotal - upload.bytesUploaded;
         const isActive = upload.status !== "DONE" && upload.status !== "FAILED";
         if (isActive && spd > 0 && remaining > 0) {
-          const raw = remaining / spd;
-          const prev = smoothEtaRef.current.get(upload.fileId) ?? raw;
-          const alpha = etaAlpha(prev);
-          const smoothed = prev * (1 - alpha) + raw * alpha;
-          smoothEtaRef.current.set(upload.fileId, smoothed);
-          next[upload.fileId] = smoothed;
-        } else {
-          smoothEtaRef.current.delete(upload.fileId);
+          next[upload.fileId] = remaining / spd;
         }
       }
       setEtas(next);
@@ -84,17 +70,20 @@ export function UploadProgress() {
   if (uploads.size === 0) return null;
 
   return (
-    <div className="mb-6 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900">
-      <button onClick={() => setCollapsed(!collapsed)} className="flex w-full items-center justify-between px-4 py-3 text-left">
+    <div className="mb-6 overflow-hidden rounded-card border border-rule bg-paper">
+      <button
+        onClick={() => setCollapsed(!collapsed)}
+        className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors duration-micro ease-out hover:bg-paper-2"
+      >
         <div>
-          <p className="text-sm font-medium text-white">Uploads</p>
-          <p className="text-xs text-zinc-500">{uploads.size} active or recent</p>
+          <p className="text-sm font-medium text-ink">Uploads</p>
+          <p className="text-xs text-muted">{uploads.size} active or recent</p>
         </div>
-        <span className="text-zinc-400">{collapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}</span>
+        <span className="text-muted">{collapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}</span>
       </button>
 
       {!collapsed && (
-        <div className="space-y-2 border-t border-zinc-800 px-3 py-3">
+        <div className="space-y-2 border-t border-rule px-3 py-3">
           {Array.from(uploads.values()).map((upload) => {
             const percent = upload.bytesTotal > 0 ? Math.round((upload.bytesUploaded / upload.bytesTotal) * 100) : 0;
             const isActive = upload.status !== "DONE" && upload.status !== "FAILED";
@@ -103,47 +92,55 @@ export function UploadProgress() {
             const etaStr = isActive ? formatEta(etas[upload.fileId] ?? 0) : "";
 
             return (
-              <div key={upload.fileId} className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+              <div key={upload.fileId} className="rounded-md bg-paper-2 p-3">
                 {/* Row 1: filename + cancel + percent */}
                 <div className="mb-2 flex justify-between gap-3 text-sm">
-                  <span className="truncate text-white">{upload.fileName ?? upload.fileId}</span>
-                  <span className="flex shrink-0 items-center gap-1 text-zinc-400">
+                  <span className="truncate text-ink">{upload.fileName ?? upload.fileId}</span>
+                  <span className="flex shrink-0 items-center gap-1 text-muted">
                     {isActive && (
                       <button
                         onClick={() => cancelUpload(upload.fileId)}
                         title="Cancel"
-                        className="rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-red-400"
+                        className="rounded-md p-1.5 text-muted transition-colors duration-micro ease-out hover:bg-paper-3 hover:text-error"
                       >
                         <X size={13} />
                       </button>
                     )}
-                    {upload.status === "DONE" ? "Complete" : upload.status === "FAILED" ? "Failed" : `${percent}%`}
+                    {upload.status === "DONE" ? (
+                      "Complete"
+                    ) : upload.status === "FAILED" ? (
+                      "Failed"
+                    ) : (
+                      <span className="font-mono tabular-nums">{percent}%</span>
+                    )}
                   </span>
                 </div>
                 {/* Progress bar */}
-                <div className="h-1.5 w-full rounded-full bg-zinc-800">
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-paper-3">
                   <div
-                    className="h-1.5 rounded-full transition-all"
-                    style={{
-                      width: `${percent}%`,
-                      backgroundColor: upload.status === "FAILED" ? "#ef4444" : upload.status === "DONE" ? "#22c55e" : accentColor,
-                    }}
+                    className={`h-1.5 w-full origin-left rounded-full transition-transform duration-short ease-out ${
+                      upload.status === "FAILED" ? "bg-error" : upload.status === "DONE" ? "bg-success" : "bg-accent"
+                    }`}
+                    style={{ transform: `scaleX(${percent / 100})` }}
                   />
                 </div>
                 {/* Row 3: blobs counter + speed + ETA */}
-                <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                <div className="mt-2 flex items-center justify-between text-xs text-muted">
                   <span>
-                    {upload.uploadedBlobs}/{upload.totalBlobs} blobs
-                    {upload.status === "DONE" && <span className="ml-2 text-green-500">✓</span>}
+                    <span className="font-mono tabular-nums">
+                      {upload.uploadedBlobs}/{upload.totalBlobs}
+                    </span>{" "}
+                    blobs
+                    {upload.status === "DONE" && <span className="ml-2 text-success">✓</span>}
                   </span>
                   <span className="flex items-center gap-1.5">
                     {speedStr && isActive ? (
                       <>
-                        <span className="font-medium" style={{ color: accentColor }}>{speedStr}</span>
+                        <span className="font-mono font-medium tabular-nums text-accent">{speedStr}</span>
                         {etaStr && (
                           <>
-                            <span className="text-zinc-700">·</span>
-                            <span>{etaStr}</span>
+                            <span className="text-muted">·</span>
+                            <span className="font-mono tabular-nums">{etaStr}</span>
                           </>
                         )}
                       </>
