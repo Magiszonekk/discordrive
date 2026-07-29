@@ -36,6 +36,28 @@ function logUploadEvent(event: UploadTelemetryEvent): void {
 const CHUNK_MAX_ATTEMPTS = 4; // 1 initial + 3 retries
 const CHUNK_RETRY_BASE_MS = 800;
 
+// Whole-pipeline restarts, on top of the per-chunk retries above. These cover
+// failures the per-chunk budget cannot absorb — a network switch (wifi → LTE)
+// or an API restart mid-transfer — by re-running the chunk phase against the
+// chunks the server confirms it is still missing.
+const RESUME_MAX_ATTEMPTS = 3;
+const RESUME_BASE_DELAY_MS = 2000;
+
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("Upload aborted", "AbortError"));
+    }, { once: true });
+  });
+}
+
+/** Definitive failures — retrying cannot help (bad request, expired session). */
+function isDefinitiveFailure(err: unknown): boolean {
+  return err instanceof BlobUploadError && err.status >= 400 && err.status < 500;
+}
+
 async function withChunkRetry<T>(fn: () => Promise<T>, signal: AbortSignal): Promise<T> {
   for (let attempt = 0; attempt < CHUNK_MAX_ATTEMPTS; attempt++) {
     if (signal.aborted) throw new DOMException("Upload aborted", "AbortError");
@@ -43,14 +65,10 @@ async function withChunkRetry<T>(fn: () => Promise<T>, signal: AbortSignal): Pro
       return await fn();
     } catch (err) {
       if (signal.aborted) throw new DOMException("Upload aborted", "AbortError");
-      // 4xx errors are definitive (bad request, unauthorized) — don't retry
-      if (err instanceof BlobUploadError && err.status >= 400 && err.status < 500) throw err;
+      if (isDefinitiveFailure(err)) throw err;
       if (attempt === CHUNK_MAX_ATTEMPTS - 1) throw err;
       const delay = CHUNK_RETRY_BASE_MS * Math.pow(2, attempt); // 800ms, 1.6s, 3.2s
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, delay);
-        signal.addEventListener("abort", () => { clearTimeout(timer); reject(new DOMException("Upload aborted", "AbortError")); }, { once: true });
-      });
+      await abortableDelay(delay, signal);
     }
   }
   throw new Error("Unreachable");
@@ -94,6 +112,25 @@ const COMMIT_MANIFEST = `
     ) { success }
   }
 `;
+
+// Which chunks of an in-flight upload the server already holds. Authoritative
+// where the client is not: a chunk whose response was lost in transit is on
+// storage even though this client never saw the ack.
+const UPLOAD_STATUS = `
+  query UploadStatus($fileId: ID!) {
+    uploadStatus(fileId: $fileId) {
+      status
+      uploadedChunkIndices
+      hasManifest
+    }
+  }
+`;
+
+interface UploadStatusResult {
+  status: string;
+  uploadedChunkIndices: number[];
+  hasManifest: boolean;
+}
 
 export async function uploadFile(file: File, folderId: string | null): Promise<string> {
   const authState = useAuthStore.getState();
@@ -182,33 +219,25 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
       chunks: [],
     };
 
-    const uploadedBlobRecords: UploadedBlobTransportInput[] = [];
+    // Chunks safely on storage, keyed by index and carried across resume
+    // attempts so a restart re-sends only what is genuinely missing.
+    interface DoneChunk {
+      manifestEntry: FileChunkManifestPlaintext["chunks"][number];
+      /** null once the server already held the chunk — its own row is authoritative. */
+      blobRecord: UploadedBlobTransportInput | null;
+    }
+    const doneChunks = new Map<number, DoneChunk>();
+    let serverHasChunks = new Set<number>();
+
     let uploadedBytes = 0;
     let uploadedBlobs = 0;
 
     const CONCURRENCY = config.defaultUploadConcurrency;
     uploadStartMs = performance.now();
 
-    // Streaming chunk iterator with mutex — safe to share across concurrent workers.
-    const chunkIter = chunkFileStream(file, LEGACY_UPLOAD_CHUNK_SIZE_BYTES)[Symbol.asyncIterator]();
-    let iterLocked = false;
-    const iterWaiters: Array<() => void> = [];
-    async function nextChunk(): Promise<{ index: number; data: Uint8Array } | null> {
-      while (iterLocked) {
-        await new Promise<void>(resolve => iterWaiters.push(resolve));
-      }
-      iterLocked = true;
-      try {
-        const result = await chunkIter.next();
-        return result.done ? null : result.value;
-      } finally {
-        iterLocked = false;
-        iterWaiters.shift()?.();
-      }
-    }
-
     const uploadChunk = async (chunk: { index: number; data: Uint8Array }) => {
       if (controller.signal.aborted) throw new DOMException("Upload aborted", "AbortError");
+      if (doneChunks.has(chunk.index)) return;
 
       const chunkStartMs = performance.now();
       const chunkBuffer = chunk.data.buffer.slice(chunk.data.byteOffset, chunk.data.byteOffset + chunk.data.byteLength) as ArrayBuffer;
@@ -216,37 +245,46 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
       const ciphertext = await encryptFileContentChunk(prepared.rootFek, chunkBuffer);
       const encryptMs = performance.now() - encryptStartMs;
       const blobId = `${realFileId}:chunk:${chunk.index}`;
-      const ciphertextBuffer = ciphertext.buffer.slice(ciphertext.byteOffset, ciphertext.byteOffset + ciphertext.byteLength) as ArrayBuffer;
-      const requestStartMs = performance.now();
-      const uploadResult = await withChunkRetry(
-        () => uploadBlobToApi(blobId, ciphertextBuffer, {
-          authToken,
-          extraHeaders: {
-            "X-Upload-Id": uploadId,
-            "X-Chunk-Index": String(chunk.index),
-            "X-Chunk-Count": String(chunkCount),
-            "X-Client-Timestamp": new Date().toISOString(),
-          },
-        }),
-        controller.signal,
-      );
-      const requestMs = performance.now() - requestStartMs;
 
-      manifest.chunks.push({
-        index: chunk.index,
-        blobId,
-        ciphertextSizeBytes: ciphertext.byteLength,
-      });
+      // Already on storage from an earlier attempt: the ciphertext is still
+      // needed to size its manifest entry, but re-sending the bytes is not.
+      // commitManifest needs no record from us either — the row the upload
+      // handler wrote stays authoritative under its skipDuplicates insert.
+      const alreadyStored = serverHasChunks.has(chunk.index);
+      let requestMs = 0;
+      let blobRecord: UploadedBlobTransportInput | null = null;
 
-      uploadedBlobRecords.push({
-        blobId: uploadResult.blobId,
-        ciphertextSizeBytes: uploadResult.ciphertextSizeBytes,
-        ciphertextHash: uploadResult.ciphertextHash,
-        storageKind: uploadResult.storageKind,
-        storagePath: uploadResult.storagePath,
-        discordMessageId: uploadResult.discordMessageId,
-        discordChannelId: uploadResult.discordChannelId,
-        webhookId: uploadResult.webhookId,
+      if (!alreadyStored) {
+        const ciphertextBuffer = ciphertext.buffer.slice(ciphertext.byteOffset, ciphertext.byteOffset + ciphertext.byteLength) as ArrayBuffer;
+        const requestStartMs = performance.now();
+        const uploadResult = await withChunkRetry(
+          () => uploadBlobToApi(blobId, ciphertextBuffer, {
+            authToken,
+            extraHeaders: {
+              "X-Upload-Id": uploadId,
+              "X-Chunk-Index": String(chunk.index),
+              "X-Chunk-Count": String(chunkCount),
+              "X-Client-Timestamp": new Date().toISOString(),
+            },
+          }),
+          controller.signal,
+        );
+        requestMs = performance.now() - requestStartMs;
+        blobRecord = {
+          blobId: uploadResult.blobId,
+          ciphertextSizeBytes: uploadResult.ciphertextSizeBytes,
+          ciphertextHash: uploadResult.ciphertextHash,
+          storageKind: uploadResult.storageKind,
+          storagePath: uploadResult.storagePath,
+          discordMessageId: uploadResult.discordMessageId,
+          discordChannelId: uploadResult.discordChannelId,
+          webhookId: uploadResult.webhookId,
+        };
+      }
+
+      doneChunks.set(chunk.index, {
+        manifestEntry: { index: chunk.index, blobId, ciphertextSizeBytes: ciphertext.byteLength },
+        blobRecord,
       });
 
       uploadedBytes += chunk.data.byteLength;
@@ -263,24 +301,94 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
         ciphertextBytes: ciphertext.byteLength,
         encryptMs: Number(encryptMs.toFixed(2)),
         requestMs: Number(requestMs.toFixed(2)),
+        skippedAlreadyStored: alreadyStored,
         totalChunkMs: Number((performance.now() - chunkStartMs).toFixed(2)),
       });
     };
 
-    const worker = async () => {
-      while (true) {
-        if (controller.signal.aborted) throw new DOMException("Upload aborted", "AbortError");
-        const chunk = await nextChunk();
-        if (!chunk) break;
-        await uploadChunk(chunk);
-      }
+    // One pass over the file. Workers share the streaming iterator through a
+    // mutex; a resume starts a fresh pass, and chunks already in doneChunks
+    // fall straight through.
+    const runChunkPass = async () => {
+      const chunkIter = chunkFileStream(file, LEGACY_UPLOAD_CHUNK_SIZE_BYTES)[Symbol.asyncIterator]();
+      let iterLocked = false;
+      const iterWaiters: Array<() => void> = [];
+      const nextChunk = async (): Promise<{ index: number; data: Uint8Array } | null> => {
+        while (iterLocked) {
+          await new Promise<void>(resolve => iterWaiters.push(resolve));
+        }
+        iterLocked = true;
+        try {
+          const result = await chunkIter.next();
+          return result.done ? null : result.value;
+        } finally {
+          iterLocked = false;
+          iterWaiters.shift()?.();
+        }
+      };
+
+      const worker = async () => {
+        while (true) {
+          if (controller.signal.aborted) throw new DOMException("Upload aborted", "AbortError");
+          const chunk = await nextChunk();
+          if (!chunk) break;
+          await uploadChunk(chunk);
+        }
+      };
+
+      // allSettled, not all: a rejection from one worker leaves the others
+      // running, and a resume must not start a second pass over the same file
+      // while stragglers from the failed one are still uploading. Waiting for
+      // every worker to settle also lets the survivors land more chunks first.
+      const results = await Promise.allSettled(
+        Array.from({ length: Math.min(CONCURRENCY, chunkCount) }, () => worker()),
+      );
+      const failure = results.find((r) => r.status === "rejected");
+      if (failure) throw (failure as PromiseRejectedResult).reason;
     };
 
-    await Promise.all(
-      Array.from({ length: Math.min(CONCURRENCY, chunkCount) }, () => worker()),
-    );
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await runChunkPass();
+        break;
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        if (isDefinitiveFailure(error)) throw error;
+        if (attempt >= RESUME_MAX_ATTEMPTS) throw error;
 
-    manifest.chunks.sort((a, b) => a.index - b.index);
+        // Reconcile with the server before retrying: chunks whose ack was lost
+        // in transit are on storage already and must not be sent twice.
+        try {
+          const { uploadStatus } = await gqlRequest<{ uploadStatus: UploadStatusResult }>(
+            UPLOAD_STATUS, { fileId: realFileId }, authToken,
+          );
+          serverHasChunks = new Set(uploadStatus.uploadedChunkIndices);
+        } catch {
+          // Best effort — without it we simply resume from local state.
+        }
+
+        logUploadEvent({
+          type: "upload_resume_attempt",
+          uploadId,
+          fileId: realFileId,
+          attempt,
+          chunksConfirmedLocally: doneChunks.size,
+          chunksOnServer: serverHasChunks.size,
+          error: error instanceof Error ? error.message : String(error),
+        });
+
+        await abortableDelay(RESUME_BASE_DELAY_MS * Math.pow(2, attempt - 1), controller.signal);
+      }
+    }
+
+    const doneInOrder = Array.from(doneChunks.values()).sort(
+      (a, b) => a.manifestEntry.index - b.manifestEntry.index,
+    );
+    manifest.chunks = doneInOrder.map((c) => c.manifestEntry);
+    const uploadedBlobRecords: UploadedBlobTransportInput[] = doneInOrder
+      .map((c) => c.blobRecord)
+      .filter((record): record is UploadedBlobTransportInput => record !== null);
+
     store.updateUpload(realFileId, { status: UploadStatus.COMMITTING_MANIFEST });
 
     const manifestEncryptStartMs = performance.now();
@@ -289,15 +397,20 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
     const manifestBlobId = `${realFileId}:manifest`;
     const manifestBuffer = encryptedManifest.buffer.slice(encryptedManifest.byteOffset, encryptedManifest.byteOffset + encryptedManifest.byteLength) as ArrayBuffer;
     const manifestRequestStartMs = performance.now();
-    const manifestUploadResult = await uploadBlobToApi(manifestBlobId, manifestBuffer, {
-      authToken,
-      extraHeaders: {
-        "X-Upload-Id": uploadId,
-        "X-Chunk-Index": "manifest",
-        "X-Chunk-Count": String(chunkCount),
-        "X-Client-Timestamp": new Date().toISOString(),
-      },
-    });
+    // Retried like any chunk: every byte is already up by this point, so losing
+    // the manifest to a transient blip would waste the whole transfer.
+    const manifestUploadResult = await withChunkRetry(
+      () => uploadBlobToApi(manifestBlobId, manifestBuffer, {
+        authToken,
+        extraHeaders: {
+          "X-Upload-Id": uploadId,
+          "X-Chunk-Index": "manifest",
+          "X-Chunk-Count": String(chunkCount),
+          "X-Client-Timestamp": new Date().toISOString(),
+        },
+      }),
+      controller.signal,
+    );
     const manifestRequestMs = performance.now() - manifestRequestStartMs;
 
     uploadedBlobRecords.push({
@@ -325,13 +438,37 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
     store.updateUpload(realFileId, { uploadedBlobs: uploadedBlobs + 1, bytesUploaded: file.size });
 
     const commitManifestStartMs = performance.now();
-    const { commitManifest } = await gqlRequest<{ commitManifest: { success: boolean } }>(COMMIT_MANIFEST, {
-      fileId: realFileId,
-      manifestBlobId,
-      totalCiphertextBytes: String(file.size),
-      chunkCount: chunkCount,
-      blobs: uploadedBlobRecords,
-    }, authToken);
+    // The one call that turns an UPLOADING row into a READY file, so a blip here
+    // would waste the whole transfer. Retried — and if the retries still fail the
+    // server is asked directly, because a commit whose response was lost in
+    // transit did land: the file is READY even though this client saw an error.
+    let commitSucceeded: boolean;
+    try {
+      const { commitManifest } = await withChunkRetry(
+        () => gqlRequest<{ commitManifest: { success: boolean } }>(COMMIT_MANIFEST, {
+          fileId: realFileId,
+          manifestBlobId,
+          totalCiphertextBytes: String(file.size),
+          chunkCount: chunkCount,
+          blobs: uploadedBlobRecords,
+        }, authToken),
+        controller.signal,
+      );
+      commitSucceeded = commitManifest.success;
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+      const { uploadStatus } = await gqlRequest<{ uploadStatus: UploadStatusResult }>(
+        UPLOAD_STATUS, { fileId: realFileId }, authToken,
+      );
+      if (uploadStatus.status !== "READY") throw error;
+      commitSucceeded = true;
+      logUploadEvent({
+        type: "upload_commit_recovered",
+        uploadId,
+        fileId: realFileId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     const commitManifestMs = performance.now() - commitManifestStartMs;
 
     logUploadEvent({
@@ -345,7 +482,7 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
       elapsedUploadWallMs: Number((performance.now() - uploadStartMs).toFixed(2)),
     });
 
-    if (!commitManifest.success) {
+    if (!commitSucceeded) {
       store.updateUpload(realFileId, { status: UploadStatus.FAILED });
       logUploadEvent({
         type: "upload_session_failed",
