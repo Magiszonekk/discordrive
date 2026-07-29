@@ -1,7 +1,12 @@
-import { useState } from "react";
+/* Hallmark · genre: modern-minimal · macrostructure: App-shell (custom) · theme: Cobalt
+ * design-system: design.md · designed-as-app · nav: sidebar (restyled) + ⌘K palette
+ */
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
-import { Files, Menu, Settings, ShieldCheck, X } from "lucide-react";
+import { Command, Files, Menu, Settings, ShieldCheck, X } from "lucide-react";
 import { useAuthStore } from "../../stores/auth.js";
+import { CommandPalette } from "./CommandPalette.js";
+import { ColorModeToggle } from "./ColorModeToggle.js";
 
 function SidebarNavigation({
   pathname,
@@ -32,7 +37,7 @@ function SidebarNavigation({
   ];
 
   return (
-    <nav className="flex-1 p-3 space-y-1">
+    <nav className="flex-1 space-y-0.5 p-3">
       {links.map((link) => {
         const Icon = link.icon;
         return (
@@ -40,13 +45,13 @@ function SidebarNavigation({
             key={link.to}
             to={link.to}
             onClick={onNavigate}
-            className={`flex items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors ${
+            className={`flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors duration-short ease-out ${
               link.active
-                ? "bg-zinc-800 text-white"
-                : "text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                ? "bg-paper-2 text-ink"
+                : "text-ink-2 hover:bg-paper-2 hover:text-ink"
             }`}
           >
-            <Icon size={18} />
+            <Icon size={17} strokeWidth={1.75} className={link.active ? "text-accent" : "text-muted"} />
             {link.label}
           </Link>
         );
@@ -60,11 +65,14 @@ function SidebarFooter() {
   const logout = useAuthStore((s) => s.logout);
 
   return (
-    <div className="border-t border-zinc-800 p-4">
-      <p className="mb-3 truncate text-xs text-zinc-500">{user?.email}</p>
+    <div className="border-t border-rule p-4">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <p className="min-w-0 truncate font-mono text-xs text-muted">{user?.email}</p>
+        <ColorModeToggle />
+      </div>
       <button
         onClick={logout}
-        className="w-full rounded-lg px-3 py-3 text-left text-sm text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
+        className="w-full rounded-md border border-rule-2 px-3 py-2.5 text-left text-sm text-ink-2 transition-colors duration-short ease-out hover:border-rule-2 hover:bg-paper-2 hover:text-ink"
       >
         Log out
       </button>
@@ -72,18 +80,38 @@ function SidebarFooter() {
   );
 }
 
-function MobileTopbar({ onMenuOpen }: { onMenuOpen: () => void }) {
+function PaletteTrigger({ onOpen }: { onOpen: () => void }) {
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-zinc-800 bg-zinc-900 px-4 md:hidden">
+    <button
+      type="button"
+      onClick={onOpen}
+      className="mx-3 mt-3 flex items-center gap-2 rounded-md border border-rule-2 px-3 py-2 text-left text-sm text-muted transition-colors duration-short ease-out hover:border-accent hover:text-ink-2"
+    >
+      <Command size={14} strokeWidth={1.75} />
+      <span className="flex-1 truncate">Jump to…</span>
+      <kbd className="rounded-chip border border-rule-2 px-1.5 py-0.5 font-mono text-[0.6875rem] text-muted">⌘K</kbd>
+    </button>
+  );
+}
+
+function MobileTopbar({ onMenuOpen, onPaletteOpen }: { onMenuOpen: () => void; onPaletteOpen: () => void }) {
+  return (
+    <header className="sticky top-0 z-sticky flex h-14 items-center justify-between border-b border-rule bg-paper px-4 md:hidden">
       <button
         onClick={onMenuOpen}
-        className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
+        className="inline-flex h-10 w-10 items-center justify-center rounded-md text-ink-2 transition-colors duration-short ease-out hover:bg-paper-2 hover:text-ink"
         aria-label="Open navigation menu"
       >
-        <Menu size={20} />
+        <Menu size={20} strokeWidth={1.75} />
       </button>
-      <h1 className="text-base font-semibold text-white">DiscorDrive</h1>
-      <div className="h-10 w-10" aria-hidden="true" />
+      <h1 className="font-display text-base font-semibold text-ink">DiscorDrive</h1>
+      <button
+        onClick={onPaletteOpen}
+        className="inline-flex h-10 w-10 items-center justify-center rounded-md text-ink-2 transition-colors duration-short ease-out hover:bg-paper-2 hover:text-ink"
+        aria-label="Open command palette"
+      >
+        <Command size={18} strokeWidth={1.75} />
+      </button>
     </header>
   );
 }
@@ -99,28 +127,28 @@ function MobileDrawer({
 }) {
   return (
     <div
-      className={`fixed inset-0 z-40 md:hidden ${open ? "pointer-events-auto" : "pointer-events-none"}`}
+      className={`fixed inset-0 z-modal md:hidden ${open ? "pointer-events-auto" : "pointer-events-none"}`}
       aria-hidden={!open}
     >
       <div
-        className={`absolute inset-0 bg-black/60 transition-opacity ${
+        className={`absolute inset-0 bg-ink/40 transition-opacity duration-short ease-out ${
           open ? "opacity-100" : "opacity-0"
         }`}
         onClick={onClose}
       />
       <aside
-        className={`absolute left-0 top-0 flex h-full w-72 max-w-[85vw] flex-col border-r border-zinc-800 bg-zinc-900 shadow-xl transition-transform ${
+        className={`absolute left-0 top-0 flex h-full w-72 max-w-[85vw] flex-col border-r border-rule bg-paper shadow-[0_1px_2px_oklch(24%_0.02_258/0.08)] transition-transform duration-short ease-out ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div className="flex items-center justify-between border-b border-zinc-800 p-4">
-          <h2 className="text-lg font-semibold text-white">DiscorDrive</h2>
+        <div className="flex items-center justify-between border-b border-rule p-4">
+          <h2 className="font-display text-lg font-semibold text-ink">DiscorDrive</h2>
           <button
             onClick={onClose}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted transition-colors duration-short ease-out hover:bg-paper-2 hover:text-ink"
             aria-label="Close navigation menu"
           >
-            <X size={20} />
+            <X size={20} strokeWidth={1.75} />
           </button>
         </div>
         <SidebarNavigation pathname={pathname} onNavigate={onClose} />
@@ -133,25 +161,36 @@ function MobileDrawer({
 export function MainLayout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white md:flex">
-      <MobileTopbar onMenuOpen={() => setDrawerOpen(true)} />
-      <MobileDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        pathname={location.pathname}
-      />
+    <div className="min-h-screen bg-paper text-ink-2 md:flex">
+      <MobileTopbar onMenuOpen={() => setDrawerOpen(true)} onPaletteOpen={() => setPaletteOpen(true)} />
+      <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} pathname={location.pathname} />
 
-      <aside className="hidden w-64 flex-col border-r border-zinc-800 bg-zinc-900 md:flex md:min-h-screen">
-        <div className="border-b border-zinc-800 p-4">
-          <h1 className="text-lg font-bold text-white">DiscorDrive</h1>
+      <aside className="hidden w-64 flex-col border-r border-rule bg-paper md:flex md:min-h-screen">
+        <div className="border-b border-rule p-4">
+          <h1 className="font-display text-lg font-semibold text-ink">DiscorDrive</h1>
         </div>
+        <PaletteTrigger onOpen={() => setPaletteOpen(true)} />
         <SidebarNavigation pathname={location.pathname} />
         <SidebarFooter />
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col">{children}</main>
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 }

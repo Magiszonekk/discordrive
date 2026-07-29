@@ -88,22 +88,22 @@ export function VideoPlayer({ file, onClose }: VideoPlayerProps) {
     <div
       ref={backdropRef}
       onClick={handleBackdropClick}
-      className="fixed inset-0 z-50 flex items-end bg-black/80 backdrop-blur-sm md:items-center md:justify-center"
+      className="fixed inset-0 z-modal flex items-end bg-graphite/80 backdrop-blur-sm md:items-center md:justify-center"
     >
-      <div className="relative flex h-screen w-full flex-col bg-black md:h-auto md:max-w-5xl md:rounded-xl md:bg-transparent md:px-4">
+      <div className="relative flex h-screen w-full flex-col bg-graphite md:h-auto md:max-w-5xl md:rounded-card md:bg-transparent md:px-4">
         <div className="flex items-center justify-between px-4 py-3 md:mb-3 md:px-0">
-          <h2 className="max-w-[80%] truncate text-sm font-medium text-white">
+          <h2 className="max-w-[80%] truncate text-sm font-medium text-graphite-ink">
             {file.fileName}
           </h2>
           <button
             onClick={onClose}
-            className="inline-flex h-11 w-11 items-center justify-center rounded-lg text-zinc-300 transition-colors hover:bg-white/10 hover:text-white"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-md text-graphite-ink/70 transition-colors duration-micro ease-out hover:bg-white/10 hover:text-graphite-ink"
           >
             &times;
           </button>
         </div>
 
-        <div className="relative flex-1 bg-black md:flex-none md:overflow-hidden md:rounded-lg md:aspect-video">
+        <div className="relative flex-1 bg-graphite md:flex-none md:overflow-hidden md:rounded-card md:aspect-video">
           <video
             ref={videoRef}
             controls
@@ -114,21 +114,21 @@ export function VideoPlayer({ file, onClose }: VideoPlayerProps) {
           />
 
           {state === "loading" && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+            <div className="absolute inset-0 flex items-center justify-center bg-graphite/60">
               <div className="flex flex-col items-center gap-3">
-                <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                <span className="text-sm text-zinc-400">Buffering...</span>
+                <div className="h-8 w-8 animate-spin rounded-full border-2 border-graphite-ink/30 border-t-graphite-ink" />
+                <span className="text-sm text-graphite-ink/70">Buffering…</span>
               </div>
             </div>
           )}
 
           {state === "error" && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+            <div className="absolute inset-0 flex items-center justify-center bg-graphite/60">
               <div className="flex flex-col items-center gap-3 px-4 text-center">
-                <span className="text-sm text-red-400">{errorMsg}</span>
+                <span className="text-sm text-error">{errorMsg}</span>
                 <button
                   onClick={handleDownloadFallback}
-                  className="rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium text-white hover:bg-blue-700"
+                  className="rounded-md bg-accent px-4 py-3 text-sm font-medium text-accent-ink transition-colors duration-micro ease-out hover:bg-accent-hover"
                 >
                   Download instead
                 </button>

@@ -17,7 +17,7 @@ export function ImagePreview({ preview, className }: ImagePreviewProps) {
     <img
       src={preview.objectUrl}
       alt={preview.fileName}
-      className={className ?? "max-h-[70vh] w-full rounded-lg object-contain bg-black/30"}
+      className={className ?? "max-h-[70vh] w-full rounded-card border border-rule bg-paper-2 object-contain"}
     />
   );
 }

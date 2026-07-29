@@ -85,16 +85,45 @@ function aggregateChunks(files: FileHealthInfo[]) {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function StatBar({ label, value, total, color }: { label: string; value: number; total: number; color: string }) {
+type HealthVariant = "success" | "error" | "warning" | "neutral";
+
+const CHIP_CLASS: Record<HealthVariant, string> = {
+  success: "chip chip--success",
+  error: "chip chip--error",
+  warning: "chip chip--warning",
+  neutral: "chip",
+};
+
+const BAR_CLASS: Record<HealthVariant, string> = {
+  success: "bg-success",
+  error: "bg-error",
+  warning: "bg-warning",
+  neutral: "bg-muted",
+};
+
+function StatBar({
+  label,
+  value,
+  total,
+  variant,
+}: {
+  label: string;
+  value: number;
+  total: number;
+  variant: HealthVariant;
+}) {
   const pct = total > 0 ? (value / total) * 100 : 0;
   return (
     <div className="flex items-center gap-3">
-      <span className="w-24 text-xs text-zinc-400 shrink-0">{label}</span>
-      <div className="flex-1 bg-zinc-800 rounded-full h-2">
-        <div className={`h-2 rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
+      <span className={`${CHIP_CLASS[variant]} w-24 shrink-0`}>{label}</span>
+      <div className="h-2 flex-1 overflow-hidden rounded-full bg-paper-3">
+        <div
+          className={`h-2 w-full origin-left rounded-full transition-transform duration-short ease-out ${BAR_CLASS[variant]}`}
+          style={{ transform: `scaleX(${pct / 100})` }}
+        />
       </div>
-      <span className="w-28 text-xs text-zinc-400 text-right shrink-0">
-        {value.toLocaleString()} <span className="text-zinc-600">({pct.toFixed(1)}%)</span>
+      <span className="w-28 shrink-0 text-right font-mono text-xs tabular-nums text-ink-2">
+        {value.toLocaleString()} <span className="text-muted">({pct.toFixed(1)}%)</span>
       </span>
     </div>
   );
@@ -178,65 +207,68 @@ export function HealthCheck() {
     .filter((f) => f.missingCount > 0 || f.modifiedCount > 0)
     .sort((a, b) => (b.missingCount + b.modifiedCount) - (a.missingCount + a.modifiedCount));
 
+  const hasMissingIssues = filesWithIssues.some((f) => f.missingCount > 0);
+
   return (
-    <div className="flex-1 p-6 space-y-6">
+    <div className="flex-1 space-y-8 p-6">
       <div className="flex items-center gap-2">
-        <ShieldCheck size={20} className="text-zinc-400" />
-        <h1 className="text-xl font-semibold text-white">Health Check</h1>
+        <ShieldCheck size={20} className="text-accent" />
+        <h1 className="font-display text-xl font-semibold text-ink">Health Check</h1>
       </div>
 
       {/* ── DB state panel ── */}
-      <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-medium text-white">Stan bazy danych</h2>
+      <section>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-sm font-medium text-ink">Stan bazy danych</h2>
           {stats.latestChecked && (
-            <span className="text-xs text-zinc-500">
+            <span className="font-mono text-xs tabular-nums text-muted">
               Ostatnio sprawdzone: {stats.latestChecked.toLocaleString()}
             </span>
           )}
         </div>
 
         {healthLoading ? (
-          <p className="text-sm text-zinc-500">Ładowanie...</p>
+          <p className="text-sm text-muted">Ładowanie…</p>
         ) : stats.total === 0 ? (
-          <p className="text-sm text-zinc-500">Brak plików.</p>
+          <p className="text-sm text-muted">Brak plików.</p>
         ) : (
           <div className="space-y-3">
-            <p className="text-xs text-zinc-500 mb-3">
+            <p className="mb-3 font-mono text-xs tabular-nums text-muted">
               {stats.total.toLocaleString()} chunków total &middot; {files.length} plików
             </p>
-            <StatBar label="Healthy" value={stats.healthy} total={stats.total} color="bg-green-500" />
-            <StatBar label="Missing" value={stats.missing} total={stats.total} color="bg-red-500" />
-            <StatBar label="Modified" value={stats.modified} total={stats.total} color="bg-yellow-500" />
-            <StatBar label="Unchecked" value={stats.unchecked} total={stats.total} color="bg-zinc-600" />
+            <StatBar label="Healthy" value={stats.healthy} total={stats.total} variant="success" />
+            <StatBar label="Missing" value={stats.missing} total={stats.total} variant="error" />
+            <StatBar label="Modified" value={stats.modified} total={stats.total} variant="warning" />
+            <StatBar label="Unchecked" value={stats.unchecked} total={stats.total} variant="neutral" />
           </div>
         )}
       </section>
 
       {/* ── Run panel ── */}
-      <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-        <h2 className="text-sm font-medium text-white mb-4">Uruchom health check</h2>
+      <section className="border-t border-rule pt-8">
+        <h2 className="mb-4 text-sm font-medium text-ink">Uruchom health check</h2>
 
         <div className="space-y-4">
           {/* Mode toggle */}
           <div className="flex items-center gap-3">
-            <span className="text-xs text-zinc-400 w-16 shrink-0">Tryb</span>
-            <div className="flex rounded-lg overflow-hidden border border-zinc-700">
+            <span className="w-16 shrink-0 text-xs text-muted">Tryb</span>
+            <div className="flex overflow-hidden rounded-md border border-rule-2">
               {(["exists", "integrity"] as const).map((m) => (
                 <button
                   key={m}
+                  type="button"
                   onClick={() => setMode(m)}
-                  className={`px-4 py-1.5 text-sm transition-colors ${
+                  className={`px-4 py-1.5 text-sm transition-colors duration-short ease-out ${
                     mode === m
-                      ? "bg-zinc-700 text-white"
-                      : "text-zinc-400 hover:text-white"
+                      ? "bg-accent text-accent-ink"
+                      : "text-ink-2 hover:bg-paper-2"
                   }`}
                 >
                   {m}
                 </button>
               ))}
             </div>
-            <span className="text-xs text-zinc-500">
+            <span className="text-xs text-muted">
               {mode === "exists"
                 ? "Sprawdza czy chunki istnieją na Discordzie (szybkie)"
                 : "Pobiera i weryfikuje SHA-256 każdego chunka (wolne, dokładne)"}
@@ -245,14 +277,14 @@ export function HealthCheck() {
 
           {/* Sample % */}
           <div className="flex items-center gap-3">
-            <span className="text-xs text-zinc-400 w-16 shrink-0">Sample</span>
+            <span className="w-16 shrink-0 text-xs text-muted">Sample</span>
             <input
               type="range"
               min={1}
               max={100}
               value={samplePercent}
               onChange={(e) => setSamplePercent(Number(e.target.value))}
-              className="flex-1 accent-blue-500"
+              className="flex-1 accent-accent"
             />
             <input
               type="number"
@@ -260,18 +292,18 @@ export function HealthCheck() {
               max={100}
               value={samplePercent}
               onChange={(e) => setSamplePercent(Math.min(100, Math.max(1, Number(e.target.value))))}
-              className="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-white text-center focus:outline-none focus:border-zinc-500"
+              className="w-16 rounded-md border border-rule-2 bg-paper px-2 py-1 text-center text-sm text-ink outline-2 outline-offset-1 outline-transparent transition-colors duration-short ease-out hover:bg-paper-2 focus:bg-paper focus:outline-focus"
             />
-            <span className="text-xs text-zinc-500">%</span>
+            <span className="text-xs text-muted">%</span>
           </div>
 
           {/* File selector */}
           <div className="flex items-center gap-3">
-            <span className="text-xs text-zinc-400 w-16 shrink-0">Plik</span>
+            <span className="w-16 shrink-0 text-xs text-muted">Plik</span>
             <select
               value={fileId ?? ""}
               onChange={(e) => setFileId(e.target.value || null)}
-              className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-zinc-500"
+              className="rounded-md border border-rule-2 bg-paper px-3 py-1.5 text-sm text-ink outline-2 outline-offset-1 outline-transparent transition-colors duration-short ease-out hover:bg-paper-2 focus:bg-paper focus:outline-focus"
             >
               <option value="">Wszystkie pliki</option>
               {allFiles.map((f) => (
@@ -284,10 +316,10 @@ export function HealthCheck() {
             <button
               onClick={handleRun}
               disabled={isRunning}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-zinc-700 disabled:text-zinc-500 text-white rounded-lg text-sm font-medium transition-colors"
+              className="flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-ink transition-colors duration-short ease-out hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-paper-3 disabled:text-muted"
             >
               <Play size={14} />
-              {isRunning ? "Trwa sprawdzanie..." : "Uruchom"}
+              {isRunning ? "Trwa sprawdzanie…" : "Uruchom"}
             </button>
           </div>
         </div>
@@ -295,23 +327,25 @@ export function HealthCheck() {
 
       {/* ── Results / progress panel ── */}
       {(isRunning || lastResult) && (
-        <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-          <h2 className="text-sm font-medium text-white mb-4">
-            {isRunning ? "Sprawdzanie w toku..." : "Wyniki ostatniego przebiegu"}
+        <section className="border-t border-rule pt-8">
+          <h2 className="mb-4 text-sm font-medium text-ink">
+            {isRunning ? "Sprawdzanie w toku…" : "Wyniki ostatniego przebiegu"}
           </h2>
 
           {isRunning && (
             <div className="mb-4">
-              <div className="flex justify-between text-xs text-zinc-400 mb-1">
+              <div className="mb-1 flex justify-between font-mono text-xs tabular-nums text-muted">
                 <span>
                   Sprawdzono: ~{checkedDuringRun.toLocaleString()} / {stats.total.toLocaleString()} chunków
                 </span>
                 <span>{formatDuration(elapsed)}</span>
               </div>
-              <div className="w-full bg-zinc-800 rounded-full h-2">
+              <div className="h-2 w-full overflow-hidden rounded-full bg-paper-3">
                 <div
-                  className="h-2 rounded-full bg-blue-500 transition-all"
-                  style={{ width: stats.total > 0 ? `${Math.min(100, (checkedDuringRun / stats.total) * 100)}%` : "0%" }}
+                  className="h-2 w-full origin-left rounded-full bg-accent transition-transform duration-short ease-out"
+                  style={{
+                    transform: `scaleX(${stats.total > 0 ? Math.min(1, checkedDuringRun / stats.total) : 0})`,
+                  }}
                 />
               </div>
               {(() => {
@@ -320,11 +354,11 @@ export function HealthCheck() {
                 const remaining = stats.total - checkedDuringRun;
                 const etaMs = chunksPerSec > 0 ? (remaining / chunksPerSec) * 1000 : null;
                 return elapsedSec > 2 && chunksPerSec > 0 ? (
-                  <div className="flex items-center gap-3 mt-2 text-xs text-zinc-500">
+                  <div className="mt-2 flex items-center gap-3 font-mono text-xs tabular-nums text-muted">
                     <span>{chunksPerSec.toFixed(1)} chunks/s</span>
                     {etaMs !== null && (
                       <>
-                        <span className="text-zinc-700">·</span>
+                        <span className="text-muted">&middot;</span>
                         <span>ETA: ~{formatDuration(etaMs)}</span>
                       </>
                     )}
@@ -335,18 +369,20 @@ export function HealthCheck() {
           )}
 
           {lastResult && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
+            <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
               {[
-                { label: "Checked", value: lastResult.checked, color: "text-white" },
-                { label: "Healthy", value: lastResult.healthy, color: "text-green-400" },
-                { label: "Missing", value: lastResult.missing, color: "text-red-400" },
-                { label: "Modified", value: lastResult.modified, color: "text-yellow-400" },
-                { label: "Skipped", value: lastResult.skipped, color: "text-zinc-400" },
-                { label: "Duration", value: formatDuration(lastResult.durationMs), color: "text-zinc-300" },
-              ].map(({ label, value, color }) => (
-                <div key={label} className="bg-zinc-800 rounded-lg px-4 py-3">
-                  <p className="text-xs text-zinc-500 mb-1">{label}</p>
-                  <p className={`text-lg font-semibold ${color}`}>{typeof value === "number" ? value.toLocaleString() : value}</p>
+                { label: "Checked", value: lastResult.checked, className: "text-ink" },
+                { label: "Healthy", value: lastResult.healthy, className: "text-success" },
+                { label: "Missing", value: lastResult.missing, className: "text-error" },
+                { label: "Modified", value: lastResult.modified, className: "text-warning" },
+                { label: "Skipped", value: lastResult.skipped, className: "text-muted" },
+                { label: "Duration", value: formatDuration(lastResult.durationMs), className: "text-ink-2" },
+              ].map(({ label, value, className }) => (
+                <div key={label} className="rounded-md bg-paper-2 px-4 py-3">
+                  <p className="mb-1 font-mono text-[11px] uppercase tracking-wide text-muted">{label}</p>
+                  <p className={`font-mono text-lg font-semibold tabular-nums ${className}`}>
+                    {typeof value === "number" ? value.toLocaleString() : value}
+                  </p>
                 </div>
               ))}
             </div>
@@ -355,29 +391,29 @@ export function HealthCheck() {
           {/* Files with issues */}
           {!isRunning && filesWithIssues.length > 0 && (
             <div>
-              <div className="flex items-center gap-2 mb-3">
-                <AlertTriangle size={14} className="text-yellow-400" />
-                <p className="text-xs font-medium text-zinc-300">
+              <div className="mb-3 flex items-center gap-2">
+                <AlertTriangle size={14} className={hasMissingIssues ? "text-error" : "text-warning"} />
+                <p className="text-xs font-medium text-ink-2">
                   Pliki z problemami ({filesWithIssues.length})
                 </p>
               </div>
-              <div className="bg-zinc-950 rounded-lg border border-zinc-800 overflow-hidden">
+              <div className="overflow-hidden rounded-card border border-rule bg-paper">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-zinc-800">
-                      <th className="text-left px-4 py-2 text-xs text-zinc-500 font-medium">Plik</th>
-                      <th className="text-right px-4 py-2 text-xs text-green-500 font-medium">Healthy</th>
-                      <th className="text-right px-4 py-2 text-xs text-red-500 font-medium">Missing</th>
-                      <th className="text-right px-4 py-2 text-xs text-yellow-500 font-medium">Modified</th>
+                    <tr className="border-b border-rule">
+                      <th className="px-4 py-2 text-left font-mono text-xs uppercase tracking-wide text-muted">Plik</th>
+                      <th className="px-4 py-2 text-right font-mono text-xs uppercase tracking-wide text-success">Healthy</th>
+                      <th className="px-4 py-2 text-right font-mono text-xs uppercase tracking-wide text-error">Missing</th>
+                      <th className="px-4 py-2 text-right font-mono text-xs uppercase tracking-wide text-warning">Modified</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filesWithIssues.map((f) => (
-                      <tr key={f.fileId} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
-                        <td className="px-4 py-2 text-white truncate max-w-xs">{f.fileName}</td>
-                        <td className="px-4 py-2 text-right text-green-400">{f.healthyCount.toLocaleString()}</td>
-                        <td className="px-4 py-2 text-right text-red-400">{f.missingCount.toLocaleString()}</td>
-                        <td className="px-4 py-2 text-right text-yellow-400">{f.modifiedCount.toLocaleString()}</td>
+                      <tr key={f.fileId} className="border-b border-rule last:border-0 hover:bg-paper-2">
+                        <td className="max-w-xs truncate px-4 py-2 text-ink-2">{f.fileName}</td>
+                        <td className="px-4 py-2 text-right font-mono tabular-nums text-success">{f.healthyCount.toLocaleString()}</td>
+                        <td className="px-4 py-2 text-right font-mono tabular-nums text-error">{f.missingCount.toLocaleString()}</td>
+                        <td className="px-4 py-2 text-right font-mono tabular-nums text-warning">{f.modifiedCount.toLocaleString()}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -387,7 +423,7 @@ export function HealthCheck() {
           )}
 
           {!isRunning && filesWithIssues.length === 0 && lastResult && (
-            <p className="text-sm text-green-400 flex items-center gap-2">
+            <p className="flex items-center gap-2 text-sm text-success">
               <ShieldCheck size={16} />
               Wszystkie sprawdzone chunki są w porządku.
             </p>

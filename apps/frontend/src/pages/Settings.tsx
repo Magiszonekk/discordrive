@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { gqlRequest } from "../lib/graphql.js";
 import { useAuthStore } from "../stores/auth.js";
 import { useThemeStore, THEME_PRESETS } from "../stores/theme.js";
+import { useColorModeStore, type ColorMode } from "../stores/colorMode.js";
+import { authInputClass, authLabelClass } from "../components/layout/AuthCard.js";
 import {
   deriveLoginMaterial,
   generateSalt,
@@ -27,15 +29,32 @@ export function Settings() {
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const setUser = useAuthStore((s) => s.setUser);
-  const accentColor = useThemeStore((s) => s.accentColor);
-  const setAccentColor = useThemeStore((s) => s.setAccentColor);
+  const accentName = useThemeStore((s) => s.accentName);
+  const setAccentPreset = useThemeStore((s) => s.setAccentPreset);
+  const colorMode = useColorModeStore((s) => s.mode);
+  const setColorMode = useColorModeStore((s) => s.setMode);
 
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [pwError, setPwError] = useState("");
   const [pwSuccess, setPwSuccess] = useState(false);
   const [pwLoading, setPwLoading] = useState(false);
+  const currentPasswordRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (showPasswordForm) currentPasswordRef.current?.focus();
+  }, [showPasswordForm]);
+
+  function closePasswordForm() {
+    setShowPasswordForm(false);
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+    setPwError("");
+    setPwSuccess(false);
+  }
 
   const { data } = useQuery({
     queryKey: ["storageUsage"],
@@ -118,139 +137,212 @@ export function Settings() {
 
   return (
     <div className="flex-1 max-w-2xl p-4 md:p-6">
-      <h1 className="mb-6 text-2xl font-bold text-white">Settings</h1>
+      <h1 className="mb-8 font-display text-2xl font-semibold text-ink">Settings</h1>
 
-      <div className="space-y-6">
+      <div className="space-y-8">
         {/* Account */}
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 md:p-6">
-          <h2 className="mb-4 text-lg font-semibold text-white">Account</h2>
-          <p className="text-zinc-400">{user?.email}</p>
-        </div>
+        <section>
+          <h2 className="mb-3 text-lg font-semibold text-ink">Account</h2>
+          <p className="mb-1 font-mono text-xs uppercase tracking-wide text-muted">Email</p>
+          <p className="text-ink-2">{user?.email}</p>
+        </section>
 
         {/* Change Password */}
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 md:p-6">
-          <h2 className="mb-1 text-lg font-semibold text-white">Change Password</h2>
-          <p className="mb-4 text-sm text-zinc-500">
-            Sets a new password and re-encrypts your master key. You will need this password to unlock future sessions.
-          </p>
-          <form onSubmit={handleChangePassword} className="space-y-3">
+        <section className="border-t border-rule pt-8">
+          <div className="flex items-center justify-between gap-4">
             <div>
-              <label className="mb-1 block text-sm text-zinc-400">Current password</label>
-              <input
-                type="password"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                required
-                autoComplete="current-password"
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
-              />
+              <h2 className="mb-1 text-lg font-semibold text-ink">Change Password</h2>
+              <p className="text-sm text-muted">
+                Sets a new password and re-encrypts your master key. You will need this password to unlock future
+                sessions.
+              </p>
             </div>
-            <div>
-              <label className="mb-1 block text-sm text-zinc-400">New password</label>
-              <input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                required
-                autoComplete="new-password"
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
-              />
+            {!showPasswordForm && (
+              <button
+                type="button"
+                onClick={() => setShowPasswordForm(true)}
+                className="h-11 shrink-0 rounded-md border border-rule-2 px-4 text-sm font-medium text-ink-2 transition-colors duration-short ease-out hover:bg-paper-2 hover:text-ink"
+              >
+                Change password
+              </button>
+            )}
+          </div>
+
+          <div
+            className="grid transition-[grid-template-rows] duration-long ease-in-out"
+            style={{ gridTemplateRows: showPasswordForm ? "1fr" : "0fr" }}
+          >
+            <div className="overflow-hidden" inert={!showPasswordForm}>
+              <form onSubmit={handleChangePassword} className="mt-4 space-y-4">
+                <div>
+                  <label className={authLabelClass}>Current password</label>
+                  <input
+                    ref={currentPasswordRef}
+                    type="password"
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                    required={showPasswordForm}
+                    autoComplete="current-password"
+                    className={authInputClass}
+                  />
+                </div>
+                <div>
+                  <label className={authLabelClass}>New password</label>
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    required={showPasswordForm}
+                    autoComplete="new-password"
+                    className={authInputClass}
+                  />
+                </div>
+                <div>
+                  <label className={authLabelClass}>Confirm new password</label>
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required={showPasswordForm}
+                    autoComplete="new-password"
+                    className={authInputClass}
+                  />
+                </div>
+                {pwError && <p className="text-sm text-error">{pwError}</p>}
+                {pwSuccess && <p className="text-sm text-success">Password changed successfully.</p>}
+                <div className="flex gap-3">
+                  <button
+                    type="submit"
+                    disabled={pwLoading}
+                    className="flex h-11 flex-1 items-center justify-center rounded-md bg-accent px-4 text-sm font-medium text-accent-ink transition-colors duration-short ease-out hover:bg-accent-hover active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {pwLoading ? "Changing…" : "Change password"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={closePasswordForm}
+                    className="h-11 shrink-0 rounded-md border border-rule-2 px-4 text-sm font-medium text-ink-2 transition-colors duration-short ease-out hover:bg-paper-2 hover:text-ink"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
             </div>
-            <div>
-              <label className="mb-1 block text-sm text-zinc-400">Confirm new password</label>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                autoComplete="new-password"
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-white focus:border-blue-500 focus:outline-none"
-              />
-            </div>
-            {pwError && <p className="text-sm text-red-400">{pwError}</p>}
-            {pwSuccess && <p className="text-sm text-green-400">Password changed successfully.</p>}
-            <button
-              type="submit"
-              disabled={pwLoading}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-            >
-              {pwLoading ? "Changing…" : "Change password"}
-            </button>
-          </form>
-        </div>
+          </div>
+        </section>
 
         {/* Storage */}
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 md:p-6">
-          <h2 className="mb-4 text-lg font-semibold text-white">Storage Usage</h2>
+        <section className="border-t border-rule pt-8">
+          <h2 className="mb-4 text-lg font-semibold text-ink">Storage Usage</h2>
           {data ? (
-            <div className="text-zinc-400">
-              <p>{formatSize(data.storageUsage.totalBytes)} used</p>
-              <p>{data.storageUsage.fileCount} files</p>
+            <div className="space-y-1">
+              <div className="flex items-baseline gap-2">
+                <span className="font-mono text-2xl font-semibold tabular-nums text-ink">
+                  {formatSize(data.storageUsage.totalBytes)}
+                </span>
+                <span className="text-sm text-muted">used</span>
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className="font-mono text-sm tabular-nums text-ink-2">
+                  {data.storageUsage.fileCount.toLocaleString()}
+                </span>
+                <span className="text-sm text-muted">files</span>
+              </div>
             </div>
           ) : (
-            <p className="text-zinc-500">Loading...</p>
+            <p className="text-sm text-muted">Loading…</p>
           )}
-        </div>
+        </section>
 
-        {/* Theme */}
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4 md:p-6">
-          <h2 className="mb-1 text-lg font-semibold text-white">Accent Colour</h2>
-          <p className="mb-4 text-sm text-zinc-500">Applied to progress bars, speed indicators and primary buttons.</p>
-
-          {/* Presets */}
-          <div className="mb-4 flex flex-wrap gap-2">
-            {THEME_PRESETS.map((preset) => {
-              const isSelected = accentColor.toLowerCase() === preset.color.toLowerCase();
+        {/* Colour mode */}
+        <section className="border-t border-rule pt-8">
+          <h2 className="mb-1 text-lg font-semibold text-ink">Appearance</h2>
+          <p className="mb-4 text-sm text-muted">Light, dark, or match your system.</p>
+          <div className="flex gap-2">
+            {(
+              [
+                { mode: "light" as ColorMode, label: "Light" },
+                { mode: "dark" as ColorMode, label: "Dark" },
+                { mode: "system" as ColorMode, label: "System" },
+              ]
+            ).map(({ mode, label }) => {
+              const active = colorMode === mode;
               return (
                 <button
-                  key={preset.color}
-                  onClick={() => setAccentColor(preset.color)}
+                  key={mode}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setColorMode(mode)}
+                  className={`rounded-md border px-4 py-2 text-sm font-medium transition-colors duration-short ease-out ${
+                    active
+                      ? "border-accent bg-paper-2 text-ink"
+                      : "border-rule-2 text-ink-2 hover:bg-paper-2 hover:text-ink"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Theme */}
+        <section className="border-t border-rule pt-8">
+          <h2 className="mb-1 text-lg font-semibold text-ink">Accent Colour</h2>
+          <p className="mb-4 text-sm text-muted">
+            Applied to progress bars, speed indicators and primary buttons.
+          </p>
+
+          {/* Presets */}
+          <div className="flex flex-wrap gap-4">
+            {THEME_PRESETS.map((preset) => {
+              const isSelected = accentName === preset.name;
+              return (
+                <button
+                  key={preset.name}
+                  type="button"
+                  onClick={() => setAccentPreset(preset.name)}
+                  aria-pressed={isSelected}
+                  aria-label={preset.name}
                   title={preset.name}
-                  className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors"
-                  style={{
-                    borderColor: isSelected ? preset.color : "transparent",
-                    backgroundColor: isSelected ? `${preset.color}1a` : "#18181b",
-                    color: isSelected ? preset.color : "#a1a1aa",
-                  }}
+                  className="flex flex-col items-center gap-1.5"
                 >
                   <span
-                    className="inline-block h-3 w-3 rounded-full"
-                    style={{ backgroundColor: preset.color }}
+                    className={`block h-9 w-9 rounded-full ring-offset-2 ring-offset-paper transition-shadow duration-short ease-out ${
+                      isSelected ? "ring-2 ring-ink" : "ring-1 ring-rule-2 hover:ring-ink"
+                    }`}
+                    style={{ backgroundColor: preset.accent }}
                   />
-                  {preset.name}
+                  <span
+                    className={`font-mono text-[10px] uppercase tracking-wide ${
+                      isSelected ? "text-ink" : "text-muted"
+                    }`}
+                  >
+                    {preset.name}
+                  </span>
                 </button>
               );
             })}
           </div>
 
-          {/* Custom colour picker */}
-          <div className="flex items-center gap-3">
-            <label className="text-sm text-zinc-400">Custom</label>
-            <div className="relative flex items-center gap-2">
-              <input
-                type="color"
-                value={accentColor}
-                onChange={(e) => setAccentColor(e.target.value)}
-                className="h-8 w-14 cursor-pointer rounded-md border border-zinc-700 bg-zinc-800 p-0.5"
-              />
-              <span className="font-mono text-sm text-zinc-400">{accentColor.toUpperCase()}</span>
+          {/* Preview — a static swatch, not a live reading */}
+          <div className="mt-5 flex items-center gap-3 border-t border-rule pt-5">
+            <div className="h-1.5 w-24 overflow-hidden rounded-full bg-paper-3">
+              <div className="h-full w-2/3 rounded-full bg-accent" />
             </div>
-            {/* Preview */}
-            <div className="ml-auto flex items-center gap-3">
-              <div className="h-1.5 w-24 rounded-full bg-zinc-800 overflow-hidden">
-                <div className="h-full w-2/3 rounded-full transition-all" style={{ backgroundColor: accentColor }} />
-              </div>
-              <span className="text-xs font-medium" style={{ color: accentColor }}>32.4 MB/s</span>
-            </div>
+            <span className="font-mono text-xs font-medium uppercase tracking-wide text-muted">Preview</span>
           </div>
-        </div>
+        </section>
 
-        <button
-          onClick={logout}
-          className="w-full rounded-lg bg-red-600 px-4 py-3 text-sm font-medium text-white hover:bg-red-700 md:w-auto md:py-2"
-        >
-          Log out
-        </button>
+        <div className="border-t border-rule pt-8">
+          <button
+            type="button"
+            onClick={logout}
+            className="h-11 w-full rounded-md border border-error px-4 text-sm font-medium text-error transition-colors duration-short ease-out hover:bg-error hover:text-error-ink md:w-auto"
+          >
+            Log out
+          </button>
+        </div>
       </div>
     </div>
   );

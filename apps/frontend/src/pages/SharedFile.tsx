@@ -6,6 +6,7 @@ import { unwrapKeyPacked, toBase64, fromBase64, decryptMeta } from "../lib/crypt
 import { deriveShareWrapKey, deriveShareAuthKey, deriveShareCapabilityToken } from "@ddv4/processing";
 import type { ShareAccessResponse } from "@ddv4/types/api";
 import { useNotificationStore } from "../stores/notifications.js";
+import { AuthCard, authPrimaryButtonClass } from "../components/layout/AuthCard.js";
 
 const ACCESS_SHARE = `
   query AccessShare($shareId: ID!, $capabilityToken: String!) {
@@ -125,37 +126,34 @@ export function SharedFile() {
 
   if (error && !info) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-950">
-        <div className="text-red-400">{error}</div>
+      <div className="flex min-h-screen items-center justify-center bg-paper px-4">
+        <p className="text-sm text-error">{error}</p>
       </div>
     );
   }
 
   if (!info) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-950">
-        <div className="text-zinc-500">Loading...</div>
+      <div className="flex min-h-screen items-center justify-center bg-paper px-4">
+        <p className="text-sm text-muted">Loading…</p>
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-950">
-      <div className="w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-900 p-8">
-        <h1 className="mb-2 text-xl font-bold text-white">Shared file</h1>
-        <div className="mb-6 space-y-1 text-sm text-zinc-400">
-          <p className="truncate font-medium text-white">{info.fileName}</p>
-          <p>{info.mimeType}</p>
-        </div>
-        <button
-          onClick={handleDownload}
-          disabled={downloading || !info.allowContent}
-          className="w-full rounded-lg bg-blue-600 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-        >
-          {downloading ? "Downloading..." : "Download"}
-        </button>
-        {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
+    <AuthCard title="Shared file">
+      <div className="mb-6 space-y-1 text-sm text-ink-2">
+        <p className="truncate font-medium text-ink">{info.fileName}</p>
+        <p className="font-mono text-xs text-muted">{info.mimeType}</p>
       </div>
-    </div>
+      <button
+        onClick={handleDownload}
+        disabled={downloading || !info.allowContent}
+        className={authPrimaryButtonClass}
+      >
+        {downloading ? "Downloading…" : "Download"}
+      </button>
+      {error && <p className="mt-3 text-sm text-error">{error}</p>}
+    </AuthCard>
   );
 }

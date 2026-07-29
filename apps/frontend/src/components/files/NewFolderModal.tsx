@@ -3,6 +3,7 @@ import { FolderPlus, X } from "lucide-react";
 import { gqlRequest } from "../../lib/graphql.js";
 import { useAuthStore } from "../../stores/auth.js";
 import { generateFolderKey, encryptFolderBody, wrapKey, toBase64, packWrappedKey } from "../../lib/crypto.js";
+import { authInputClass } from "../layout/AuthCard.js";
 
 const CREATE_FOLDER = `
   mutation CreateFolder($encryptedBodyB64: String!, $wrappedFolderKeyB64: String!, $parentFolderId: ID) {
@@ -47,14 +48,20 @@ export function NewFolderModal({ parentFolderId, onCreated, onClose }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="w-full max-w-sm rounded-xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
+    <div
+      className="fixed inset-0 z-modal flex items-center justify-center bg-ink/40 p-4"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div className="w-full max-w-sm rounded-card border border-rule bg-paper p-6 shadow-[0_1px_2px_oklch(24%_0.02_258/0.08)]">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="flex items-center gap-2 font-semibold text-white">
-            <FolderPlus size={18} className="text-zinc-400" />
+          <h2 className="flex items-center gap-2 font-display text-base font-semibold text-ink">
+            <FolderPlus size={18} className="text-muted" />
             New folder
           </h2>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white">
+          <button
+            onClick={onClose}
+            className="rounded-md p-1.5 text-muted transition-colors duration-micro ease-out hover:bg-paper-2 hover:text-ink"
+          >
             <X size={16} />
           </button>
         </div>
@@ -66,14 +73,22 @@ export function NewFolderModal({ parentFolderId, onCreated, onClose }: Props) {
             value={name}
             onChange={(e) => setName(e.target.value)}
             maxLength={200}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:border-blue-500 focus:outline-none"
+            className={authInputClass}
           />
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p className="text-xs text-error">{error}</p>}
           <div className="flex gap-2">
-            <button type="button" onClick={onClose} className="flex-1 rounded-lg border border-zinc-700 py-2 text-sm text-zinc-300 hover:bg-zinc-800">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 rounded-md border border-rule-2 py-2 text-sm text-ink-2 transition-colors duration-micro ease-out hover:bg-paper-2"
+            >
               Cancel
             </button>
-            <button type="submit" disabled={loading || !name.trim()} className="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+            <button
+              type="submit"
+              disabled={loading || !name.trim()}
+              className="flex-1 rounded-md bg-accent py-2 text-sm font-medium text-accent-ink transition-colors duration-short ease-out hover:bg-accent-hover active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50"
+            >
               {loading ? "Creating…" : "Create"}
             </button>
           </div>

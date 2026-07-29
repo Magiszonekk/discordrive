@@ -1,0 +1,125 @@
+/* Hallmark · genre: modern-minimal · macrostructure: App-shell + Auth-card (custom, non-marketing)
+ * theme: Cobalt · enrichment: none (typography only) · nav: sidebar (restyled) + ⌘K palette · footer: none (app pages) / Ft2-minimal (auth)
+ * design-system: design.md · designed-as-app
+ */
+
+@theme {
+  /* Colour — Cobalt, cool engineered near-white */
+  --color-paper: oklch(98.5% 0.004 250);
+  --color-paper-2: oklch(96% 0.006 250);
+  --color-paper-3: oklch(93% 0.008 250);
+  --color-ink: oklch(24% 0.02 258);
+  --color-ink-2: oklch(34% 0.018 257);
+  --color-rule: oklch(90% 0.006 250);
+  --color-rule-2: oklch(84% 0.008 250);
+  --color-muted: oklch(56% 0.014 255);
+  --color-accent: oklch(58% 0.2 256);
+  --color-accent-hover: oklch(52% 0.2 256);
+  --color-accent-ink: oklch(99% 0.004 250);
+  --color-focus: oklch(58% 0.2 256);
+  --color-graphite: oklch(22% 0.016 260);
+  --color-graphite-ink: oklch(96% 0.006 250);
+  --color-error: oklch(58% 0.2 25);
+  --color-error-ink: oklch(99% 0.004 250);
+  --color-success: oklch(60% 0.15 150);
+  --color-success-ink: oklch(99% 0.004 250);
+  --color-warning: oklch(70% 0.15 80);
+  --color-warning-ink: oklch(24% 0.02 258);
+
+  /* Type */
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  --text-display: clamp(1.75rem, 2vw + 1.25rem, 2.5rem);
+
+  /* Radii — tight, ruler-drawn */
+  --radius-card: 0.625rem; /* 10px */
+  --radius-chip: 0.25rem; /* 4px */
+
+  /* Motion — overrides Tailwind's default eases with Cobalt's cubic-beziers */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --duration-micro: 120ms;
+  --duration-short: 220ms;
+  --duration-long: 420ms;
+
+}
+
+/* Dark mode — same hue anchors as the light Cobalt palette, lightness/chroma
+ * re-tuned per color.md's dark-mode recipe (paper 12-18%, ink 92-96%,
+ * elevation = lighter not darker, accent chroma -0.02..-0.04 / lightness +5-10%).
+ * Applies when the OS prefers dark AND the user hasn't explicitly chosen
+ * light, OR when the user explicitly chose dark via data-theme. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-paper: oklch(15% 0.012 258);
+    --color-paper-2: oklch(19% 0.014 258);
+    --color-paper-3: oklch(24% 0.016 258);
+    --color-ink: oklch(94% 0.006 250);
+    --color-ink-2: oklch(84% 0.008 252);
+    --color-rule: oklch(28% 0.014 258);
+    --color-rule-2: oklch(35% 0.016 258);
+    --color-muted: oklch(60% 0.014 253);
+    --color-accent: oklch(68% 0.17 256);
+    --color-accent-hover: oklch(74% 0.17 256);
+    --color-accent-ink: oklch(15% 0.012 258);
+    --color-focus: oklch(68% 0.17 256);
+    --color-graphite: oklch(9% 0.014 262);
+    --color-graphite-ink: oklch(94% 0.006 250);
+    --color-error: oklch(68% 0.18 25);
+    --color-error-ink: oklch(15% 0.012 258);
+    --color-success: oklch(70% 0.14 150);
+    --color-success-ink: oklch(15% 0.012 258);
+    --color-warning: oklch(76% 0.13 80);
+    --color-warning-ink: oklch(15% 0.012 258);
+  }
+}
+[data-theme="dark"] {
+  --color-paper: oklch(15% 0.012 258);
+  --color-paper-2: oklch(19% 0.014 258);
+  --color-paper-3: oklch(24% 0.016 258);
+  --color-ink: oklch(94% 0.006 250);
+  --color-ink-2: oklch(84% 0.008 252);
+  --color-rule: oklch(28% 0.014 258);
+  --color-rule-2: oklch(35% 0.016 258);
+  --color-muted: oklch(60% 0.014 253);
+  --color-accent: oklch(68% 0.17 256);
+  --color-accent-hover: oklch(74% 0.17 256);
+  --color-accent-ink: oklch(15% 0.012 258);
+  --color-focus: oklch(68% 0.17 256);
+  --color-graphite: oklch(9% 0.014 262);
+  --color-graphite-ink: oklch(94% 0.006 250);
+  --color-error: oklch(68% 0.18 25);
+  --color-error-ink: oklch(15% 0.012 258);
+  --color-success: oklch(70% 0.14 150);
+  --color-success-ink: oklch(15% 0.012 258);
+  --color-warning: oklch(76% 0.13 80);
+  --color-warning-ink: oklch(15% 0.012 258);
+}
+
+/* Z-index — six named levels, never freestyle numbers.
+ * Tailwind v4 has no themeable namespace for named z-index utilities, so
+ * these are plain classes (same pattern as .chip / .reveal below). */
+.z-base {
+  z-index: 1;
+}
+.z-raised {
+  z-index: 10;
+}
+.z-dropdown {
+  z-index: 100;
+}
+.z-sticky {
+  z-index: 200;
+}
+.z-modal {
+  z-index: 400;
+}
+.z-toast {
+  z-index: 500;
+}
+.z-tooltip {
+  z-index: 600;
+}

@@ -78,8 +78,8 @@ export function FolderBreadcrumb({ folderId, onMoveFile, onMoveFolder }: Props) 
 
   const crumbStyle = (id: string | "root") =>
     dragOverId === id
-      ? "rounded px-1.5 py-0.5 bg-blue-500/20 text-blue-300 ring-1 ring-blue-500/60"
-      : "rounded px-1.5 py-0.5 transition-colors";
+      ? "rounded px-1.5 py-0.5 bg-accent/10 text-accent ring-1 ring-accent/50"
+      : "rounded px-1.5 py-0.5 transition-colors duration-short ease-out";
 
   const parentId = crumbs.length >= 2 ? crumbs[crumbs.length - 2]!.id : null;
   const currentName = crumbs[crumbs.length - 1]?.name ?? "…";
@@ -91,13 +91,13 @@ export function FolderBreadcrumb({ folderId, onMoveFile, onMoveFolder }: Props) 
         {folderId ? (
           <Link
             to={parentId ? `/folder/${parentId}` : "/"}
-            className="inline-flex items-center gap-1 text-zinc-400 transition-colors hover:text-white"
+            className="inline-flex items-center gap-1 text-muted transition-colors duration-short ease-out hover:text-ink"
           >
             <ChevronLeft size={16} />
             <span>{crumbs.length >= 2 ? (crumbs[crumbs.length - 2]?.name ?? "Files") : "Files"}</span>
           </Link>
         ) : (
-          <span className="text-sm text-white">Files</span>
+          <span className="text-sm text-ink">Files</span>
         )}
       </div>
 
@@ -106,7 +106,7 @@ export function FolderBreadcrumb({ folderId, onMoveFile, onMoveFolder }: Props) 
         <span {...dropProps("root")} className={crumbStyle("root")}>
           <Link
             to="/"
-            className={folderId ? "text-zinc-400 hover:text-white" : "font-medium text-white"}
+            className={folderId ? "text-muted hover:text-ink" : "font-medium text-ink"}
             // prevent link navigation when dragging
             onClick={(e) => dragOverId === "root" && e.preventDefault()}
           >
@@ -118,14 +118,14 @@ export function FolderBreadcrumb({ folderId, onMoveFile, onMoveFolder }: Props) 
           const isLast = i === crumbs.length - 1;
           return (
             <span key={crumb.id} className="inline-flex items-center gap-1">
-              <ChevronRight size={14} className="text-zinc-600" />
+              <ChevronRight size={14} className="text-muted" />
               <span {...dropProps(crumb.id)} className={crumbStyle(crumb.id)}>
                 {isLast ? (
-                  <span className="max-w-[20ch] truncate font-medium text-white">{currentName}</span>
+                  <span className="max-w-[20ch] truncate font-medium text-ink">{currentName}</span>
                 ) : (
                   <Link
                     to={`/folder/${crumb.id}`}
-                    className="max-w-[16ch] truncate text-zinc-400 hover:text-white"
+                    className="max-w-[16ch] truncate text-muted hover:text-ink"
                     onClick={(e) => dragOverId === crumb.id && e.preventDefault()}
                   >
                     {crumb.name}

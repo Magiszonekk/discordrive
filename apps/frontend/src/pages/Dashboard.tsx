@@ -10,7 +10,6 @@ import { downloadFile, downloadFolderAsZip, DOWNLOAD_SUCCESS_EVENT } from "../li
 import { createOwnerPreview, revokePreview, type PreviewResult } from "../lib/preview.js";
 import { useUploadStore } from "../stores/upload.js";
 import { useDownloadStore } from "../stores/download.js";
-import { useThemeStore } from "../stores/theme.js";
 import { FileTable, type FolderItem } from "../components/files/FileTable.js";
 import { UploadProgress } from "../components/files/UploadProgress.js";
 import { DownloadProgress } from "../components/files/DownloadProgress.js";
@@ -79,7 +78,6 @@ export function Dashboard() {
   const filesKey = useAuthStore((s) => s.filesKey);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploads = useUploadStore((s) => s.uploads);
-  const accentColor = useThemeStore((s) => s.accentColor);
   const addDownload = useDownloadStore((s) => s.addDownload);
   const updateDownload = useDownloadStore((s) => s.updateDownload);
   const pushNotification = useNotificationStore((s) => s.push);
@@ -405,15 +403,14 @@ export function Dashboard() {
           />
           <button
             onClick={() => setShowNewFolder(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-3 text-sm font-medium text-zinc-200 transition-colors hover:bg-zinc-700 md:py-2"
+            className="inline-flex items-center gap-1.5 rounded-md border border-rule-2 bg-paper px-3 py-3 text-sm font-medium text-ink-2 transition-colors duration-short ease-out hover:bg-paper-2 hover:text-ink md:py-2"
           >
             <FolderPlus size={16} />
             <span className="hidden md:inline">New Folder</span>
           </button>
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="w-full rounded-lg px-4 py-3 text-sm font-medium text-white md:w-auto md:py-2 transition-opacity hover:opacity-90"
-            style={{ backgroundColor: accentColor }}
+            className="w-full rounded-md bg-accent px-4 py-3 text-sm font-medium text-accent-ink transition-colors duration-short ease-out hover:bg-accent-hover md:w-auto md:py-2"
           >
             Upload Files
           </button>
@@ -421,8 +418,17 @@ export function Dashboard() {
       </div>
 
       <div
-        className={`mb-4 hidden rounded-xl border-2 border-dashed p-5 text-center text-sm transition-colors md:block ${
-          isDragging ? "border-blue-500 bg-blue-500/10 text-blue-400" : "border-zinc-700 text-zinc-500 hover:border-zinc-600"
+        role="button"
+        tabIndex={0}
+        onClick={() => fileInputRef.current?.click()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            fileInputRef.current?.click();
+          }
+        }}
+        className={`mb-4 hidden cursor-pointer rounded-card border-2 border-dashed p-5 text-center text-sm transition-colors duration-short ease-out md:block ${
+          isDragging ? "border-accent bg-accent/10 text-accent" : "border-rule text-muted hover:border-rule-2"
         }`}
       >
         <UploadCloud size={18} className="mx-auto mb-1.5 opacity-60" />
@@ -433,18 +439,20 @@ export function Dashboard() {
       <DownloadProgress />
 
       {imagePreview && (
-        <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+        <div className="mb-6 rounded-card border border-rule bg-paper p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
-              <p className="text-sm font-medium text-white">Image preview</p>
-              <p className="text-xs text-zinc-500">{imagePreview.fileName} · {imagePreview.bytes} B</p>
+              <p className="text-sm font-medium text-ink">Image preview</p>
+              <p className="text-xs text-muted">
+                {imagePreview.fileName} · <span className="font-mono tabular-nums">{imagePreview.bytes} B</span>
+              </p>
             </div>
             <button
               onClick={() => setImagePreview((current) => {
                 revokePreview(current);
                 return null;
               })}
-              className="rounded-lg bg-zinc-800 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-700"
+              className="rounded-md border border-rule-2 bg-paper px-3 py-2 text-xs text-ink-2 transition-colors duration-short ease-out hover:bg-paper-2 hover:text-ink"
             >
               Close preview
             </button>
@@ -454,7 +462,7 @@ export function Dashboard() {
       )}
 
       {isLoading ? (
-        <div className="text-zinc-500">Loading...</div>
+        <div className="text-muted">Loading…</div>
       ) : (
         <FileTable
           files={uiFiles}
@@ -473,7 +481,7 @@ export function Dashboard() {
       )}
 
       {zipProgress && (
-        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-zinc-700 bg-zinc-900 px-5 py-3 text-sm text-zinc-200 shadow-2xl">
+        <div className="fixed bottom-6 left-1/2 z-toast -translate-x-1/2 rounded-card border border-rule bg-paper px-5 py-3 text-sm text-ink-2 shadow-[0_1px_2px_oklch(24%_0.02_258/0.08)]">
           {zipProgress}
         </div>
       )}

@@ -1,8 +1,20 @@
 @import "tailwindcss";
+@import "./tokens.css";
+
+html,
+body {
+  overflow-x: clip;
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink-2);
+  font-family: var(--font-body);
+}
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #3f3f46 transparent;
+  scrollbar-color: var(--color-rule-2) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -15,10 +27,76 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background-color: #3f3f46;
+  background-color: var(--color-rule-2);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #52525b;
+  background-color: var(--color-muted);
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+/* Mono uppercase status chip — file health, storage provider, upload state */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: var(--radius-chip);
+  padding: 0.125rem 0.375rem;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid var(--color-rule-2);
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+.chip--accent {
+  border-color: color-mix(in oklch, var(--color-accent) 40%, transparent);
+  color: var(--color-accent);
+}
+.chip--success {
+  border-color: color-mix(in oklch, var(--color-success) 40%, transparent);
+  color: var(--color-success);
+}
+.chip--warning {
+  border-color: color-mix(in oklch, var(--color-warning) 50%, transparent);
+  color: color-mix(in oklch, var(--color-warning) 70%, var(--color-ink));
+}
+.chip--error {
+  border-color: color-mix(in oklch, var(--color-error) 40%, transparent);
+  color: var(--color-error);
+}
+
+/* One-shot load stagger — file table rows only, never a scroll reveal */
+.reveal {
+  opacity: 0;
+  transform: translateY(6px);
+  animation: reveal var(--duration-long) var(--ease-out) forwards;
+  animation-delay: calc(var(--i, 0) * 35ms);
+}
+@keyframes reveal {
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    animation-duration: 1ms;
+    animation-delay: 0ms;
+    opacity: 1;
+    transform: none;
+  }
 }
