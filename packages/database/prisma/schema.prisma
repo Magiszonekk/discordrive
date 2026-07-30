@@ -19,6 +19,7 @@ model User {
   blobs       BlobTransport[]
   shares      Share[]
   sessions    DeviceSession[]
+  apiKeys     ApiKey[]
   encryptedStates EncryptedState[]
 }
 
@@ -50,6 +51,36 @@ model DeviceSession {
   lastUsedAt       DateTime  @default(now())
   expiresAt        DateTime
   revokedAt        DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+}
+
+// Long-lived credential for scripts and integrations, scoped to one user.
+//
+// The secret shown to the operator is `ddv4_<authPart>_<cryptoPart>`, and the
+// two halves never meet on the server:
+//   authPart   — presented as X-API-Key; only its SHA-256 is stored here.
+//   cryptoPart — never transmitted. The browser wraps the account's ARK under a
+//                key derived from it, and only the wrapped result lands in
+//                wrappedARKByKey. Without cryptoPart that ciphertext is inert,
+//                so the server still cannot read the user's files.
+//
+// Revoking the row destroys the only copy of the wrapped ARK, which takes the
+// key's decryption ability with it — not just its ability to authenticate.
+model ApiKey {
+  id              String    @id @default(cuid())
+  userId          String
+  name            String
+  keyHash         String    @unique
+  prefix          String
+  wrappedARKByKey Bytes
+  wrappedARKIv    Bytes
+  createdAt       DateTime  @default(now())
+  lastUsedAt      DateTime?
+  expiresAt       DateTime?
+  revokedAt       DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

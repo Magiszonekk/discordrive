@@ -20,6 +20,7 @@ export {
   generateRootFEK,
   deriveFileContentKey,
   deriveFileMetadataKey,
+  deriveApiKeyWrapKey,
   deriveShareWrapKey,
   deriveShareAuthKey,
   deriveShareCapabilityToken,

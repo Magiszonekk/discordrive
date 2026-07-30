@@ -5,6 +5,7 @@ import { useAuthStore } from "../stores/auth.js";
 import { useThemeStore, THEME_PRESETS } from "../stores/theme.js";
 import { useColorModeStore, type ColorMode } from "../stores/colorMode.js";
 import { authInputClass, authLabelClass } from "../components/layout/AuthCard.js";
+import { ApiKeysSection } from "../components/settings/ApiKeysSection.js";
 import {
   deriveLoginMaterial,
   generateSalt,
@@ -230,6 +231,8 @@ export function Settings() {
             </div>
           </div>
         </section>
+
+        <ApiKeysSection />
 
         {/* Storage */}
         <section className="border-t border-rule pt-8">

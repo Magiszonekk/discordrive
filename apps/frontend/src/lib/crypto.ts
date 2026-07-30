@@ -14,6 +14,7 @@ import {
   wrapKey,
   unwrapKey,
   deriveLoginMaterial,
+  deriveApiKeyWrapKey,
   deriveShareWrapKey,
   deriveShareAuthKey,
   deriveShareCapabilityToken,
@@ -194,6 +195,38 @@ export async function encryptFolderBody(body: { name: string }, key: CryptoKey):
 export async function decryptFolderBody(encryptedB64: string, key: CryptoKey): Promise<{ name: string }> {
   const json = await decryptMeta(key, encryptedB64);
   return JSON.parse(json) as { name: string };
+}
+
+// === API keys ===
+
+function toBase64Url(bytes: Uint8Array): string {
+  return toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * Mints an API key entirely in the browser.
+ *
+ * Both halves are generated here and only `authPart` plus the wrapped ARK are
+ * sent to the server — `cryptoPart` exists solely inside the returned secret.
+ * Losing that secret means the key can never decrypt again, which is the point:
+ * the server is not able to reconstruct it on the operator's behalf.
+ */
+export async function prepareApiKey(ark: CryptoKey): Promise<{
+  secret: string;
+  authPart: string;
+  wrappedARKByKey: string;
+  wrappedARKIv: string;
+}> {
+  const authPart = toBase64Url(generateSalt(32));
+  const cryptoPartBytes = generateSalt(32);
+  const wrapped = await wrapKey(ark, await deriveApiKeyWrapKey(cryptoPartBytes));
+
+  return {
+    secret: `ddv4_${authPart}.${toBase64Url(cryptoPartBytes)}`,
+    authPart,
+    wrappedARKByKey: toBase64(new Uint8Array(wrapped.data)),
+    wrappedARKIv: toBase64(wrapped.iv),
+  };
 }
 
 export function packWrappedKey(data: ArrayBuffer, iv: Uint8Array): Uint8Array {

@@ -1,9 +1,8 @@
 // DiscorDrive v4 — GraphQL Schema (secure files v2)
 
 import { createSchema } from "graphql-yoga";
-import { verifySessionToken, isBackendOnly, getSystemUserId, type AuthPayload } from "./middleware/auth.js";
+import { resolveRequestAuth, isBackendOnly, type ResolvedAuth } from "./middleware/auth.js";
 import { enforceRateLimit } from "./middleware/rate-limit.js";
-import { serverConfig } from "@ddv4/config/server";
 import * as authResolvers from "./resolvers/auth.js";
 import * as fileResolvers from "./resolvers/files.js";
 import * as folderResolvers from "./resolvers/folders.js";
@@ -11,17 +10,32 @@ import * as sharingResolvers from "./resolvers/sharing.js";
 import { pluginRegistry } from "./plugin-registry.js";
 
 export interface Context {
-  auth: AuthPayload | null;
+  auth: ResolvedAuth | null;
   ip: string;
 }
 
-function requireAuth(ctx: Context): AuthPayload {
+function requireAuth(ctx: Context): ResolvedAuth {
   if (!ctx.auth) throw new Error("Authentication required");
   return ctx.auth;
 }
 
 function requireFullMode(): void {
   if (isBackendOnly()) throw new Error("Not available in backend-only mode");
+}
+
+/**
+ * Restricts an operation to an interactive browser session.
+ *
+ * Account-management operations stay off-limits to API keys: a key that could
+ * change the password or read wrappedARKByPassword would turn a leaked script
+ * credential into full account takeover. Keys get files and folders, nothing more.
+ */
+function requireInteractive(ctx: Context): ResolvedAuth {
+  const auth = requireAuth(ctx);
+  if (auth.via !== "jwt") {
+    throw new Error("Not available to API keys — sign in from the web app for this operation");
+  }
+  return auth;
 }
 
 function mergeResolvers(
@@ -86,6 +100,21 @@ export function buildSchema() {
 
       type RefreshSessionResult {
         token: String!
+      }
+
+      type ApiKey {
+        id: ID!
+        name: String!
+        prefix: String!
+        createdAt: DateTime!
+        lastUsedAt: DateTime
+        expiresAt: DateTime
+      }
+
+      "The calling key's own ARK, wrapped under a key only the caller can derive."
+      type ApiKeyMaterial {
+        wrappedARKByKey: String!
+        wrappedARKIv: String!
       }
 
       type LoginChallenge {
@@ -251,6 +280,8 @@ export function buildSchema() {
         fileByDedupeToken(dedupeTokenB64: String!): File
         trashedFiles: [File!]!
         sessions: [DeviceSession!]!
+        apiKeys: [ApiKey!]!
+        apiKeyMaterial: ApiKeyMaterial!
         uploadStatus(fileId: ID!): UploadStatus!
         shares(fileId: ID!): [SecureShare!]!
         storageUsage: StorageUsage!
@@ -273,6 +304,15 @@ export function buildSchema() {
 
         refreshSession(refreshToken: String!): RefreshSessionResult!
         revokeSession(sessionId: ID!): Boolean!
+
+        createApiKey(
+          name: String!
+          authPart: String!
+          wrappedARKByKey: String!
+          wrappedARKIv: String!
+          expiresAt: String
+        ): ApiKey!
+        revokeApiKey(apiKeyId: ID!): Boolean!
 
         changePassword(
           currentServerAuthProof: String!
@@ -355,7 +395,8 @@ export function buildSchema() {
         },
         me: async (_parent: unknown, _args: unknown, ctx: Context) => {
           requireFullMode();
-          const auth = requireAuth(ctx);
+          // Returns wrappedARKByPassword — an offline brute-force target. JWT only.
+          const auth = requireInteractive(ctx);
           const { db } = await import("@ddv4/database");
           const user = await db.user.findUnique({ where: { id: auth.userId }, include: { crypto: true } });
           if (!user || !user.crypto) return null;
@@ -406,8 +447,22 @@ export function buildSchema() {
         },
         sessions: async (_parent: unknown, _args: unknown, ctx: Context) => {
           requireFullMode();
-          const auth = requireAuth(ctx);
+          const auth = requireInteractive(ctx);
           return authResolvers.listSessions(auth.userId);
+        },
+        apiKeys: async (_parent: unknown, _args: unknown, ctx: Context) => {
+          requireFullMode();
+          const auth = requireInteractive(ctx);
+          return authResolvers.listApiKeys(auth.userId);
+        },
+        apiKeyMaterial: async (_parent: unknown, _args: unknown, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          // Only a key can ask for its own material, and it identifies itself by
+          // the header it already presented rather than by any argument.
+          if (auth.via !== "apikey" || !auth.apiKeyAuthPart) {
+            throw new Error("Only available when authenticating with an API key");
+          }
+          return authResolvers.getApiKeyMaterial(auth.userId, auth.apiKeyAuthPart);
         },
         shares: async (_parent: unknown, args: { fileId: string }, ctx: Context) => {
           const auth = requireAuth(ctx);
@@ -455,8 +510,26 @@ export function buildSchema() {
         },
         revokeSession: async (_parent: unknown, args: { sessionId: string }, ctx: Context) => {
           requireFullMode();
-          const auth = requireAuth(ctx);
+          const auth = requireInteractive(ctx);
           return authResolvers.revokeSession(auth.userId, args.sessionId);
+        },
+        createApiKey: async (_parent: unknown, args: {
+          name: string;
+          authPart: string;
+          wrappedARKByKey: string;
+          wrappedARKIv: string;
+          expiresAt?: string;
+        }, ctx: Context) => {
+          requireFullMode();
+          // Minting a credential requires a browser session — an API key must not
+          // be able to mint successors and outlive its own revocation.
+          const auth = requireInteractive(ctx);
+          return authResolvers.createApiKey(auth.userId, args);
+        },
+        revokeApiKey: async (_parent: unknown, args: { apiKeyId: string }, ctx: Context) => {
+          requireFullMode();
+          const auth = requireInteractive(ctx);
+          return authResolvers.revokeApiKey(auth.userId, args.apiKeyId);
         },
         changePassword: async (_parent: unknown, args: {
           currentServerAuthProof: string;
@@ -466,7 +539,7 @@ export function buildSchema() {
         }, ctx: Context) => {
           requireFullMode();
           enforceRateLimit(ctx.ip, "auth");
-          const auth = requireAuth(ctx);
+          const auth = requireInteractive(ctx);
           return authResolvers.changePassword(auth.userId, args.currentServerAuthProof, args.wrappedARKByPassword, args.argon2Params, args.serverAuthProof);
         },
         initUpload: async (_parent: unknown, args: {
@@ -580,36 +653,9 @@ export function buildSchema() {
 }
 
 export async function createContext(request: Request): Promise<Context> {
-  let auth: AuthPayload | null = null;
   const ip =
     request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
     request.headers.get("x-real-ip") ?? "unknown";
 
-  if (isBackendOnly()) {
-    const apiKey = request.headers.get("x-api-key");
-    if (!serverConfig.apiKey || apiKey === serverConfig.apiKey) {
-      const userId = await getSystemUserId();
-      auth = { userId, email: "system@ddv4.local" };
-    }
-  } else {
-    const authHeader = request.headers.get("authorization");
-    if (authHeader?.startsWith("Bearer ")) {
-      try {
-        auth = await verifySessionToken(authHeader.slice(7));
-      } catch (error) {
-        console.warn(JSON.stringify({
-          ts: new Date().toISOString(),
-          scope: "graphql-auth-debug",
-          type: "jwt_verify_failed",
-          hasAuthorizationHeader: Boolean(authHeader),
-          bearerPrefixPresent: authHeader.startsWith("Bearer "),
-          tokenLength: authHeader.length - 7,
-          error: error instanceof Error ? error.message : String(error),
-        }));
-        auth = null;
-      }
-    }
-  }
-
-  return { auth, ip };
+  return { auth: await resolveRequestAuth(request), ip };
 }

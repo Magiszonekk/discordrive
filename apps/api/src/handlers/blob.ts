@@ -14,7 +14,7 @@ import {
 } from "../storage/provider.js";
 import { getConfiguredReplicaKinds } from "../storage/replica-pools.js";
 import { writeThroughReplication } from "../storage/replication-worker.js";
-import { extractToken, verifySessionToken } from "../middleware/auth.js";
+import { resolveRequestAuth, LeakedApiKeyError } from "../middleware/auth.js";
 import { constantTimeEqual } from "@ddv4/processing";
 
 type BlobRecord = {
@@ -34,14 +34,28 @@ type BlobRecord = {
   placements?: PlacementRow[];
 };
 
-async function parseAuth(req: Request): Promise<{ userId: string; email: string } | null> {
-  const token = extractToken(req);
-  if (!token) return null;
-
+// Shares the one auth resolver with GraphQL, so a credential that can create a
+// file row can also move its bytes. Previously this accepted Bearer tokens only,
+// which left API-key callers able to call initUpload but not upload a single chunk.
+/**
+ * Resolves the caller, or the Response to return instead.
+ *
+ * A leaked-key mistake gets its own 400 rather than a blanket 401: the operator
+ * has just put the decrypting half of their secret into request logs, and a bare
+ * "Authentication required" would send them hunting for the wrong problem.
+ */
+async function authOrResponse(
+  req: Request,
+): Promise<{ auth: { userId: string; email: string }; response?: never } | { auth?: never; response: Response }> {
   try {
-    return await verifySessionToken(token);
-  } catch {
-    return null;
+    const auth = await resolveRequestAuth(req);
+    if (!auth) return { response: Response.json({ error: "Authentication required" }, { status: 401 }) };
+    return { auth };
+  } catch (error) {
+    if (error instanceof LeakedApiKeyError) {
+      return { response: Response.json({ error: error.message }, { status: 400 }) };
+    }
+    return { response: Response.json({ error: "Authentication required" }, { status: 401 }) };
   }
 }
 
@@ -147,8 +161,8 @@ function makeUploadRequestId(blobId: string, telemetry: ReturnType<typeof parseU
 }
 
 export async function handleBlobMetadata(req: Request, params: { blobId: string }): Promise<Response> {
-  const auth = await parseAuth(req);
-  if (!auth) return Response.json({ error: "Authentication required" }, { status: 401 });
+  const { auth, response } = await authOrResponse(req);
+  if (!auth) return response;
 
   const blob = await db.blobTransport.findUnique({ where: { blobId: params.blobId } });
   if (!blob || blob.ownerUserId !== auth.userId) {
@@ -159,8 +173,8 @@ export async function handleBlobMetadata(req: Request, params: { blobId: string 
 }
 
 export async function handleBlobContent(req: Request, params: { blobId: string }): Promise<Response> {
-  const auth = await parseAuth(req);
-  if (!auth) return Response.json({ error: "Authentication required" }, { status: 401 });
+  const { auth, response } = await authOrResponse(req);
+  if (!auth) return response;
 
   const blob = await db.blobTransport.findUnique({
     where: { blobId: params.blobId },
@@ -252,8 +266,8 @@ export async function handleBlobContentForShare(req: Request, params: { blobId: 
 }
 
 export async function handleBlobUpload(req: Request, params: { blobId: string }): Promise<Response> {
-  const auth = await parseAuth(req);
-  if (!auth) return Response.json({ error: "Authentication required" }, { status: 401 });
+  const { auth, response } = await authOrResponse(req);
+  if (!auth) return response;
 
   const telemetry = parseUploadTelemetryHeaders(req);
   const requestId = makeUploadRequestId(params.blobId, telemetry);

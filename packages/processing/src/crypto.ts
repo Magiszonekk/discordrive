@@ -276,6 +276,13 @@ export async function deriveShareAuthKey(linkSecret: Uint8Array): Promise<Crypto
   return deriveAesKeyFromHkdf(await importHkdfKey(await bufferFromBytes(linkSecret)), "ddv4-files-share-auth-v1", ["encrypt", "decrypt"]);
 }
 
+// Derives the key that wraps an account's ARK for one API key. The input is the
+// cryptoPart half of the API secret, which the client never transmits — so the
+// server holds the wrapped ARK but never the means to open it.
+export async function deriveApiKeyWrapKey(cryptoPart: Uint8Array): Promise<CryptoKey> {
+  return deriveAesKeyFromHkdf(await importHkdfKey(await bufferFromBytes(cryptoPart)), "ddv4-api-key-wrap-v1", ["wrapKey", "unwrapKey"]);
+}
+
 export async function deriveShareCapabilityToken(authKey: CryptoKey): Promise<Uint8Array> {
   const raw = await exportKey(authKey);
   const hmacKey = await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);

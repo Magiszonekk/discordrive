@@ -2,7 +2,12 @@
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { db } from "@ddv4/database";
-import { signToken, invalidateSessionCache } from "../middleware/auth.js";
+import {
+  signToken,
+  invalidateSessionCache,
+  invalidateApiKeyCache,
+  hashApiKeyAuthPart,
+} from "../middleware/auth.js";
 import type { RegisterRequest, LoginResponse } from "@ddv4/types/api";
 import { pluginRegistry } from "../plugin-registry.js";
 
@@ -78,6 +83,90 @@ export async function revokeSession(userId: string, sessionId: string): Promise<
   });
   invalidateSessionCache(sessionId);
   return true;
+}
+
+// === API keys ===
+// The client generates both halves of the secret and keeps cryptoPart to itself;
+// we only ever receive the authPart's hash and an ARK already wrapped under a key
+// we cannot derive. See the ApiKey model and middleware/auth.ts.
+
+export async function listApiKeys(userId: string) {
+  return db.apiKey.findMany({
+    where: { userId, revokedAt: null },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      name: true,
+      prefix: true,
+      createdAt: true,
+      lastUsedAt: true,
+      expiresAt: true,
+    },
+  });
+}
+
+export async function createApiKey(
+  userId: string,
+  input: {
+    name: string;
+    authPart: string;
+    wrappedARKByKey: string;
+    wrappedARKIv: string;
+    expiresAt?: string | null;
+  },
+) {
+  const name = input.name.trim();
+  if (!name) throw new Error("API key name is required");
+
+  // Rejects a client that generated a weak authPart; 32 raw bytes is 43 base64url chars.
+  if (input.authPart.length < 43) throw new Error("API key secret is too short");
+
+  const expiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
+  if (expiresAt && Number.isNaN(expiresAt.getTime())) throw new Error("Invalid expiresAt");
+  if (expiresAt && expiresAt <= new Date()) throw new Error("expiresAt must be in the future");
+
+  const created = await db.apiKey.create({
+    data: {
+      userId,
+      name,
+      keyHash: hashApiKeyAuthPart(input.authPart),
+      prefix: input.authPart.slice(0, 8),
+      wrappedARKByKey: Buffer.from(input.wrappedARKByKey, "base64"),
+      wrappedARKIv: Buffer.from(input.wrappedARKIv, "base64"),
+      expiresAt,
+    },
+    select: { id: true, name: true, prefix: true, createdAt: true, lastUsedAt: true, expiresAt: true },
+  });
+
+  return created;
+}
+
+export async function revokeApiKey(userId: string, apiKeyId: string): Promise<boolean> {
+  const key = await db.apiKey.findFirst({ where: { id: apiKeyId, userId } });
+  if (!key) throw new Error("API key not found");
+
+  // Clearing the wrapped ARK is the point: revocation must remove the key's
+  // ability to decrypt, not merely its ability to authenticate.
+  await db.apiKey.update({
+    where: { id: apiKeyId },
+    data: { revokedAt: new Date(), wrappedARKByKey: Buffer.alloc(0), wrappedARKIv: Buffer.alloc(0) },
+  });
+  invalidateApiKeyCache(key.keyHash);
+  return true;
+}
+
+/**
+ * Hands the calling API key its own wrapped ARK. Useless to anyone who cannot
+ * derive the unwrap key from cryptoPart, which never reaches us.
+ */
+export async function getApiKeyMaterial(userId: string, authPart: string) {
+  const key = await db.apiKey.findUnique({ where: { keyHash: hashApiKeyAuthPart(authPart) } });
+  if (!key || key.userId !== userId || key.revokedAt) throw new Error("API key not found");
+
+  return {
+    wrappedARKByKey: Buffer.from(key.wrappedARKByKey).toString("base64"),
+    wrappedARKIv: Buffer.from(key.wrappedARKIv).toString("base64"),
+  };
 }
 
 export async function getLoginChallenge(emailOrUsername: string) {
