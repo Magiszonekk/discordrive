@@ -1,5 +1,15 @@
 # DiscorDrive v4 — How to Use
 
+> **Outdated — do not use. See [`examples/api-client/`](../examples/api-client/) instead.**
+>
+> These scripts target an API that no longer exists. `POST /api/upload/:fileId/chunk/:n`,
+> `GET /api/download/:fileId/chunk/:n` and the `finalizeUpload` mutation were all
+> replaced by `PUT/GET /api/blob/:blobId` plus `initUpload` → `commitManifest`.
+> The single-`MASTER_KEY` model described below is gone too: keys now hang off a
+> per-account ARK, and scripts authenticate with a per-user API key.
+>
+> Kept only as a record of the old shape.
+
 Runnable examples showing DiscorDrive used as a pure encrypted storage backend.
 No frontend, no user accounts — just `API_KEY` and `MASTER_KEY`.
 
