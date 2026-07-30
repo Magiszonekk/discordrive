@@ -114,6 +114,14 @@ function addCorsHeaders(response: Response): Response {
 
 const port = serverConfig.apiPort;
 
+// backend-only used to authenticate every request when API_KEY was blank, and
+// .env.example ships that key empty — so merely flipping APP_MODE opened the
+// instance to anyone who could reach the port. Refuse to start instead.
+if (serverConfig.appMode === "backend-only" && !serverConfig.apiKey) {
+  console.error("APP_MODE=backend-only requires API_KEY to be set. Refusing to start.");
+  process.exit(1);
+}
+
 await pluginRegistry.load();
 
 // Daily sweep: permanently remove files that sat in trash longer than 30 days.
