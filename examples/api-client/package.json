@@ -1,0 +1,7 @@
+{
+  "name": "@ddv4/example-api-client",
+  "private": true,
+  "version": "0.0.0",
+  "//": "Not a workspace member (workspaces are apps/*, packages/*, plugins/*). This file exists so tsx treats these scripts as ESM — the repo root has no \"type\" field, so without it top-level await fails to compile.",
+  "type": "module"
+}
