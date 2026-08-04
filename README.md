@@ -1,54 +1,89 @@
 # DiscorDrive v4
 
-Use Discord webhooks as unlimited cloud storage. Files are split into chunks, encrypted with AES-GCM, and uploaded as Discord message attachments. Downloads are streamed back through the API (or directly in the browser via Service Worker).
+Use Discord **or Telegram** as (almost) unlimited cloud storage. Files are split into chunks, encrypted with AES-GCM, and uploaded as message attachments through pluggable storage providers (`DISCORD`, `TELEGRAM`, `LOCAL`). Downloads are streamed back through the API (or directly in the browser via a Service Worker).
 
 ## Architecture
 
 ```
-┌─────────────┐    GraphQL     ┌─────────────┐    REST/binary   ┌──────────────┐
-│   Frontend  │ ◄────────────► │   API (Hono)│ ◄──────────────► │   PostgreSQL │
-│  (React/SW) │                │   :3000     │                   └──────────────┘
-└─────────────┘                └──────┬──────┘
-       │                              │  Discord Webhook API
-       │  /sw-stream/:fileId          │  ┌─────────────────────────────────────┐
-       │  (Service Worker intercept)  └──► WEBHOOK_1 (channel A) — rate bucket │
-       │                                 │ WEBHOOK_2 (channel B) — rate bucket │
-       └─────────────────────────────────► WEBHOOK_N (channel N) — rate bucket │
-                                          └─────────────────────────────────────┘
+┌─────────────┐    GraphQL      ┌──────────────────────┐    Prisma     ┌──────────────┐
+│   Frontend  │ ◄─────────────► │  API (Node.js http + │ ◄────────────► │  PostgreSQL  │
+│  (React/SW) │                 │     GraphQL Yoga)    │                └──────────────┘
+└─────────────┘                 │  :3000               │    cache       ┌──────────────┐
+       │                        └──────┬───────────────┘ ◄────────────► │    Redis     │
+       │  /sw-stream/:fileId           │                               └──────────────┘
+       │  (Service Worker intercept)   │  provider pools (rate-budgeted)
+       │                               ├──► WEBHOOK_1..N / BOT_1..N   (Discord channels)
+       │                               ├──► TG_BOT_1..N               (Telegram chats)
+       │                               └──► REPLICA_* pools           (async replication)
+       └──────────────────────────────────► /api/blob/:blobId (REST binary transport)
 ```
+
+The API is a plain `node:http` server (`apps/api/src/index.ts`) with a tiny custom
+router (`matchRoute`) plus **GraphQL Yoga** at `/graphql`. Storage is behind a
+pluggable provider layer — every provider sees only ciphertext, so adding or
+switching providers never touches the crypto model.
+
+### HTTP endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/graphql` | All metadata/auth operations (GraphQL) |
+| PUT | `/api/blob/:blobId` | Upload one encrypted blob (ciphertext body) |
+| GET | `/api/blob/:blobId` | Download one encrypted blob |
+| GET | `/api/blob/:blobId/meta` | Blob descriptor (storageKind, Discord/Telegram handle, hash) |
+| GET | `/api/share/blob/:blobId` | Download a shared blob (share capability token, no auth) |
+| GET | `/api/plugin/:pluginName/...` | Plugin-provided routes |
 
 ### Upload pipeline
 
 ```
 File (browser)
   │
-  ├─ [SW] chunkFileStream()              — reads File object in 10 MiB slices, no full copy
-  ├─ [SW] encryptChunk(AES-GCM)          — 12B IV + ciphertext + 16B auth tag per chunk
-  ├─ [SW] POST /api/upload/:id/chunk/:n  — concurrent (default: 10)
-  └─ [API] PUT to Discord webhook        — rotates across N webhooks, respects rate limits
+  ├─ [client] initUpload GraphQL       — creates file record (encrypted name/mime, wrapped FEK)
+  ├─ [client] deriveFileContentKey(rootFEK) → AES-GCM encrypt each 10 MiB chunk
+  ├─ [client] PUT /api/blob/:blobId    — concurrent (default: 20)
+  ├─ [API]    write to provider pool    — rotates across configured providers, respects rate limits
+  ├─ [client] encrypt file manifest     — list of chunk → blobId, encrypted with root FEK
+  └─ [client] commitManifest GraphQL    — manifest blob + per-chunk blobs; marks file READY
 ```
+
+Uploads are resumable: `uploadStatus` returns the authoritative set of
+uploaded chunk indices, and a 60-minute sweep purges uploads abandoned mid-flight.
 
 ### Download pipeline
 
 ```
-GET /sw-stream/:fileId  (browser hits SW fetch intercept)
+GET /sw-stream/:fileId   (browser hits SW fetch intercept)
   │
-  ├─ [SW] GET /api/download/:id/chunk/:n  — concurrent prefetch (chunksAhead=3)
-  ├─ [API] GET discord message → fresh CDN URL → stream CDN → client
-  └─ [SW] decryptChunk(AES-GCM)           — decrypted bytes piped to video/audio element
+  ├─ [SW] GET /api/blob/:manifestBlobId/meta → descriptor
+  ├─ [SW] GET /api/blob/:manifestBlobId      → encrypted manifest → decrypt with root FEK
+  ├─ [SW] GET /api/blob/:chunkBlobId         — concurrent prefetch (chunksAhead=3)
+  └─ [SW] decrypt chunk (AES-GCM)            — bytes piped to video/audio element or saved
 ```
+
+A plain (non-streaming) download uses the same blob protocol with `downloadFile()`
+in `apps/frontend/src/lib/download.ts` (concurrency 20, per-chunk timeout 60 s, 2 retries).
 
 ### Chunk size
 
-`chunkSize = 10 MiB − 28 bytes` (AES-GCM overhead: 12B IV + 16B auth tag).
-Discord attachment limit is exactly 10 MiB; the 28B overhead keeps every encrypted chunk within that limit.
+`chunkSize = 10 MiB − 28 bytes` (AES-GCM overhead: 12 B IV + 16 B auth tag).
+Discord's non-boosted attachment limit is exactly 10 MiB; the 28 B overhead keeps
+every encrypted chunk within that limit. On boosted servers `maxChunkSize` allows
+25 MiB − 28 B. Telegram's Bot API caps at 50 MB, so the default chunk fits with
+no changes.
 
 ### Rate limiting
 
-Each webhook maps to a separate Discord channel — rate limits are per-channel.
-The API rotates chunks across all configured webhooks and honours `retry-after` headers.
-Upload retries: up to 5 attempts (5s base backoff on 429, 1s on other errors).
-Download retries: up to 3 attempts (exponential backoff on 5xx / timeout).
+- **Per-sender budgets** — each webhook/bot maps to its own Discord channel or
+  Telegram chat, so rate limits are isolated per sender. The API picks whichever
+  pool has the most free budget right now.
+- **Per-IP API rate limit** — every request is checked against a per-client
+  token bucket (`enforceRateLimit`) and rejected with `429 + Retry-After` when
+  exhausted.
+- **Cloudflare guard** — uploads pause before hitting Discord's ~10k requests /
+  10 min IP ban (`cloudflareErrorThreshold`).
+- Upload retries: up to 5 attempts (5 s base backoff on 429, 1 s on other errors).
+  Download retries: up to 2–3 attempts (exponential backoff on 5xx / timeout).
 
 ---
 
@@ -90,8 +125,9 @@ refresh is needed.
 
 `STORAGE_REPLICA_PROVIDERS` turns on asynchronous mirroring onto **dedicated
 `REPLICA_*` sender pools** — physically separate webhooks/bots/accounts (e.g. a
-second Discord server) reserved for copies. Because their rate-limit budgets are
-separate, replication runs continuously without competing with primary uploads.
+second Discord server or a different Telegram bot) reserved for copies. Because
+their rate-limit budgets are separate, replication runs continuously without
+competing with primary uploads.
 
 - Uploads never wait on replication. The response returns after the primary
   write; a durable `PENDING` placement is enqueued and an opportunistic
@@ -134,12 +170,37 @@ Edit `.env`:
 | Variable | Description |
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string |
-| `WEBHOOK_1..N` | Discord webhook URLs — one per channel for rate limit isolation |
 | `JWT_SECRET` | Random secret for JWT signing |
+| `JWT_EXPIRES_IN` | JWT lifetime (default `7d`) |
 | `APP_MODE` | `full` (users + auth) or `backend-only` (API key only, no login) |
 | `API_KEY` | Required when `APP_MODE=backend-only` |
-| `API_PORT` | Default `3000` |
-| `FRONTEND_PORT` | Default `5173` |
+| `API_PORT` / `FRONTEND_PORT` | Defaults `3000` / `5173` |
+| `STORAGE_PRIMARY_PROVIDERS` | Comma list of providers for new uploads (e.g. `DISCORD,TELEGRAM`) |
+| `BLOB_STORAGE_KIND` | Single-provider fallback (`LOCAL` \| `DISCORD` \| `TELEGRAM`), used when the above is unset |
+| `STORAGE_REPLICA_PROVIDERS` | Providers to asynchronously replicate onto (empty = off) |
+| `REPLICATION_CONCURRENCY` | In-process replication worker parallelism (default 2) |
+| `DDV_PLUGINS` | Comma list of plugin package names to load |
+
+#### Discord senders
+
+| Variable | Description |
+|---|---|
+| `WEBHOOK_1..50` | Discord webhook URLs — one per channel for rate limit isolation |
+| `BOT_1..20` + `BOT_1..20_CHANNEL` | Optional Discord bots (need `READ_MESSAGE_HISTORY` to serve downloads) |
+| `BOT_UPLOADS_ENABLED` | `1` to use bots for uploads too |
+| `RELAY_BASE_URL` / `RELAY_WEBHOOK_IDS` | Optional relay sender pool (external relay API + webhook ids) |
+
+#### Telegram senders
+
+| Variable | Description |
+|---|---|
+| `TG_BOT_1..20` | Telegram bot tokens (`123456:ABC-…`) |
+| `TG_BOT_1..20_CHAT` | Private channel/group chat id the bot can post to (e.g. `-1001234567890`) |
+
+#### Replica sender pools (only with `STORAGE_REPLICA_PROVIDERS`)
+
+`REPLICA_WEBHOOK_1..50`, `REPLICA_BOT_n` + `REPLICA_BOT_n_CHANNEL`,
+`REPLICA_TG_BOT_n` + `REPLICA_TG_BOT_n_CHAT`.
 
 ### 2. Discord webhooks
 
@@ -150,7 +211,20 @@ Edit `.env`:
 
 More webhooks = higher parallelism and upload throughput.
 
-### 3. Database
+### 3. Telegram bot (optional)
+
+Discord is not required — you can run Telegram-only storage, or mix both.
+
+1. Talk to [@BotFather](https://t.me/BotFather) and create a bot → copy the token.
+2. Create a **private** channel (or group) and add the bot to it.
+3. The bot must be an **admin** of the chat so it can delete its own messages on purge.
+4. Get the chat id (starts with `-100…`; e.g. forward a message to
+   [@userinfobot](https://t.me/userinfobot) or use `getUpdates`).
+5. Set `TG_BOT_1=<token>` and `TG_BOT_1_CHAT=<chat id>` in `.env`.
+
+More bots = more throughput. One bot = one private chat, like webhook→channel.
+
+### 4. Database
 
 ```bash
 # Start PostgreSQL via Docker
@@ -160,7 +234,7 @@ npm run infra:up
 npm run db:push
 ```
 
-### 4. Install dependencies
+### 5. Install dependencies
 
 ```bash
 npm install
@@ -194,7 +268,7 @@ npm run benchmark
 
 ### End-to-end benchmark
 
-Tests the full pipeline: generate → encrypt → API upload → Discord → API download → decrypt → verify integrity.
+Tests the full pipeline: generate → encrypt → API upload → provider → API download → decrypt → verify integrity.
 
 ```bash
 # Syntax
@@ -276,97 +350,68 @@ Decrypting and verifying integrity...
 **Pipeline throughput** = `totalBytes / (upload_ms + download_ms + decrypt_ms)`.
 Upload and download run sequentially in the benchmark, so the bottleneck (usually upload at ~50 MB/s) dominates.
 
-**Download is ~2× slower than raw Discord CDN** because the API acts as a proxy:
-`client → API → Discord CDN → API → client`. CDN URLs are private and require a fresh Discord API call per chunk.
+**Download is ~2× slower than raw provider CDN** because the API acts as a proxy:
+`client → API → provider → API → client`. Attachment URLs are private and require
+a fresh provider API call per chunk.
 
 ---
 
-## How to use — Service Worker + API
+## How to use — the blob API
 
-### Upload via Service Worker
-
-The SW receives a `File` object directly (no main-thread buffering), reads it in chunks, encrypts and uploads concurrently. Peak RAM = `concurrency × chunkSize` ≈ 100 MB at concurrency 10.
+### Upload (full flow)
 
 ```typescript
-import { uploadViaSW } from "./lib/swUpload";
-import { generateFEK, generateMasterKey, wrapKey, toBase64 } from "@ddv4/processing";
+import { prepareFileUpload, encryptFileContentChunk, buildEncryptedManifest } from "./lib/crypto";
+import { uploadBlobToApi } from "./lib/api";
+import { gqlRequest } from "./lib/graphql";
 
-// 1. Generate encryption key
-const fek = await generateFEK();
-const masterKey = await generateMasterKey();
-const wrappedFek = await wrapKey(fek, masterKey);
+// 1. Generate a per-file root FEK and encrypt the metadata client-side
+const { rootFek, wrappedFEK, encryptedName, encryptedMimeType } =
+  await prepareFileUpload(filesKey, { fileName: file.name, mimeType: file.type, plaintextSizeBytes: file.size });
 
-// 2. Register file with API (GraphQL initUpload mutation)
-const fileId = await initUpload({
-  name: file.name,
-  mimeType: file.type,
-  size: file.size.toString(),
-  chunkSize: 10485704,          // 10 MiB - 28B
-  chunkCount: Math.ceil(file.size / 10485704),
-  encryptedFEK: toBase64(wrappedFek.data),
-  fekIv: toBase64(wrappedFek.iv),
-});
+// 2. Register the file (GraphQL initUpload)
+const { initUpload } = await gqlRequest<{ initUpload: { fileId: string } }>(`
+  mutation($encryptedName:String,$encryptedMimeType:String,$wrappedFEK:String!,$totalCiphertextBytes:String!,$chunkCount:Int!) {
+    initUpload(encryptedName:$encryptedName,encryptedMimeType:$encryptedMimeType,wrappedFEK:$wrappedFEK,
+               totalCiphertextBytes:$totalCiphertextBytes,chunkCount:$chunkCount) { fileId }
+  }`,
+  { encryptedName, encryptedMimeType, wrappedFEK, totalCiphertextBytes, chunkCount });
+const fileId = initUpload.fileId;
 
-// 3. Upload via SW — streaming, low RAM
-const abort = new AbortController();
+// 3. Encrypt and upload each chunk to its own blob
+const blobs: UploadedBlobTransportInput[] = [];
+for (let i = 0; i < chunkCount; i++) {
+  const ciphertext = await encryptFileContentChunk(rootFek, plaintextChunk); // AES-GCM
+  const resp = await uploadBlobToApi(`${fileId}:chunk:${i}`, ciphertext);    // PUT /api/blob/:blobId
+  blobs.push({ blobId: resp.blobId, storageKind: resp.storageKind, storagePath: resp.storagePath,
+               ciphertextSizeBytes: resp.ciphertextSizeBytes });
+}
 
-await uploadViaSW(file, fileId, fek, 10485704, (progress) => {
-  console.log(`${progress.uploadedChunks}/${progress.totalChunks} chunks`);
-}, abort.signal);
-
-// Cancel anytime: abort.abort()
-
-// 4. Finalize
-await finalizeUpload({ fileId, sha256: await hashFile(file) });
+// 4. Encrypt a manifest (chunk → blobId map) and commit
+const manifestBlobId = `${fileId}:manifest`;
+await uploadBlobToApi(manifestBlobId, await buildEncryptedManifest(rootFek, manifest));
+await gqlRequest(`mutation($fileId:ID!,$manifestBlobId:String!,$totalCiphertextBytes:String!,$chunkCount:Int!,$blobs:[UploadedBlobTransportInput!]!) {
+  commitManifest(fileId:$fileId,manifestBlobId:$manifestBlobId,totalCiphertextBytes:$totalCiphertextBytes,chunkCount:$chunkCount,blobs:$blobs) { success }
+}`, { fileId, manifestBlobId, totalCiphertextBytes, chunkCount, blobs });
 ```
-
-**SW message protocol** (low-level):
-
-```typescript
-// Main thread → SW
-navigator.serviceWorker.controller.postMessage(
-  {
-    type: "UPLOAD_FILE",
-    fileId: "...",
-    file: fileObject,          // File — structured clone (lazy, no data copy)
-    fekRaw: arrayBuffer,       // ArrayBuffer — transferred (zero-copy ownership)
-    token: "Bearer eyJ...",
-    chunkSize: 10485704,
-    totalChunks: 42,
-    concurrency: 10,
-    maxRetries: 5,
-  },
-  [arrayBuffer],               // transfer list — fekRaw moves to SW
-);
-
-// SW → main thread (progress events)
-navigator.serviceWorker.addEventListener("message", (event) => {
-  const { type, fileId, uploadedChunks, bytesUploaded, totalChunks, error } = event.data;
-  // type: "UPLOAD_PROGRESS" | "UPLOAD_DONE" | "UPLOAD_ERROR" | "UPLOAD_CANCELLED"
-});
-
-// Cancel
-navigator.serviceWorker.controller.postMessage({ type: "CANCEL_UPLOAD", fileId });
-```
-
----
 
 ### Stream video/audio via Service Worker
 
-The SW intercepts `GET /sw-stream/:fileId`, fetches and decrypts chunks on demand, and responds with proper `206 Partial Content` — compatible with `<video>` and `<audio>` seek.
+The SW intercepts `GET /sw-stream/:fileId`, fetches and decrypts blobs on demand,
+and responds with proper `206 Partial Content` — compatible with `<video>` and `<audio>` seek.
 
 ```typescript
 import { registerStream, getStreamUrl, unregisterStream } from "./lib/videoStream";
 
-// 1. Register the file with the SW (unwraps FEK, stores metadata)
+// 1. Register the file with the SW (unwraps the FEK, fetches + decrypts the manifest)
 await registerStream({
   fileId: "clx...",
   mimeType: "video/mp4",
-  size: "104857600",           // file.size as string
+  size: "104857600",
   chunkSize: 10485704,
   chunkCount: 10,
-  encryptedFEK: "base64...",
-  fekIv: "base64...",
+  wrappedFEK: "base64...",
+  manifestBlobId: "clx...:manifest",
 });
 
 // 2. Point a video element at the SW stream URL
@@ -381,29 +426,27 @@ await unregisterStream("clx...");
 **SW message protocol** (low-level):
 
 ```typescript
-// Register
+// Register — the SW derives the content key from fekRaw and fetches blobs by id
 navigator.serviceWorker.controller.postMessage({
   type: "REGISTER_STREAM",
   fileId: "clx...",
   token: "Bearer eyJ...",
-  fekRaw: rawKeyArrayBuffer,   // await crypto.subtle.exportKey("raw", fek)
+  fekRaw: rawKeyArrayBuffer,     // derived content key (await crypto.subtle.exportKey("raw", contentKey))
+  blobIds: ["clx...:chunk:0", "clx...:chunk:1", "…"],   // from the decrypted manifest
   chunkSize: 10485704,
   chunkCount: 10,
   totalSize: 104857600,
   mimeType: "video/mp4",
-  chunksAhead: 3,              // chunks to prefetch ahead of playhead
-  chunksBehind: 2,             // chunks to keep in cache behind playhead
+  chunksAhead: 3,                // chunks to prefetch ahead of playhead
+  chunksBehind: 1,               // chunks to keep in cache behind playhead
 });
 
 // Unregister (frees memory)
-navigator.serviceWorker.controller.postMessage({
-  type: "UNREGISTER_STREAM",
-  fileId: "clx...",
-});
+navigator.serviceWorker.controller.postMessage({ type: "UNREGISTER_STREAM", fileId: "clx..." });
 ```
 
 After `REGISTER_STREAM`, the browser fetches `/sw-stream/clx...` normally.
-The SW intercepts it, calls `GET /api/download/:fileId/chunk/:n` with the auth token,
+The SW intercepts it, calls `GET /api/blob/:blobId` per chunk with the auth token,
 decrypts, and assembles the response — including `Range` header support for seeking.
 
 ---
@@ -427,29 +470,37 @@ const gql = (query: string, variables = {}) =>
 
 // Init upload
 const { initUpload: { fileId } } = await gql(`
-  mutation($name:String!,$mimeType:String!,$size:String!,
-           $chunkSize:Int!,$chunkCount:Int!,$encryptedFEK:String!,$fekIv:String!) {
-    initUpload(name:$name,mimeType:$mimeType,size:$size,
-               chunkSize:$chunkSize,chunkCount:$chunkCount,
-               encryptedFEK:$encryptedFEK,fekIv:$fekIv) { fileId }
+  mutation($wrappedFEK:String!,$totalCiphertextBytes:String!,$chunkCount:Int!) {
+    initUpload(wrappedFEK:$wrappedFEK,totalCiphertextBytes:$totalCiphertextBytes,chunkCount:$chunkCount) {
+      fileId
+    }
   }`,
-  { name: "file.bin", mimeType: "application/octet-stream", size: "10485704",
-    chunkSize: 10485704, chunkCount: 1, encryptedFEK: "<base64>", fekIv: "<base64>" });
+  { wrappedFEK: "<base64>", totalCiphertextBytes: "10485704", chunkCount: 1 });
 
-// Upload chunk (raw AES-GCM encrypted bytes)
-await fetch(`${BASE}/api/upload/${fileId}/chunk/0`, {
-  method: "POST",
+// Upload one encrypted chunk blob — the response carries the placement info
+const placed = await fetch(`${BASE}/api/blob/${fileId}:chunk:0`, {
+  method: "PUT",
   headers: { "X-API-Key": "my-secret-key", "Content-Type": "application/octet-stream" },
-  body: encryptedChunkBuffer,
+  body: encryptedChunkBuffer,   // AES-GCM ciphertext
+}).then(r => r.json());         // { blobId, ciphertextSizeBytes, storageKind, storagePath, ... }
+
+// Upload the encrypted manifest and commit
+await fetch(`${BASE}/api/blob/${fileId}:manifest`, {
+  method: "PUT",
+  headers: { "X-API-Key": "my-secret-key", "Content-Type": "application/octet-stream" },
+  body: encryptedManifestBuffer,
 });
 
-// Finalize
 await gql(
-  `mutation { finalizeUpload(fileId: "${fileId}", sha256: "${sha256hex}") { success missingChunks } }`
-);
+  `mutation($fileId:ID!,$manifestBlobId:String!,$totalCiphertextBytes:String!,$chunkCount:Int!,$blobs:[UploadedBlobTransportInput!]!) {
+    commitManifest(fileId:$fileId,manifestBlobId:$manifestBlobId,totalCiphertextBytes:$totalCiphertextBytes,chunkCount:$chunkCount,blobs:$blobs) { success }
+  }`,
+  { fileId, manifestBlobId: `${fileId}:manifest`, totalCiphertextBytes: "10485704", chunkCount: 1,
+    blobs: [{ blobId: placed.blobId, storageKind: placed.storageKind, storagePath: placed.storagePath,
+              ciphertextSizeBytes: placed.ciphertextSizeBytes }] });
 
-// Download chunk (returns encrypted bytes — decrypt with AES-GCM using the FEK)
-const chunk = await fetch(`${BASE}/api/download/${fileId}/chunk/0`,
+// Download a blob (returns encrypted bytes — decrypt with the content key)
+const chunk = await fetch(`${BASE}/api/blob/${fileId}:chunk:0`,
   { headers: { "X-API-Key": "my-secret-key" } }
 ).then(r => r.arrayBuffer());
 
@@ -461,108 +512,125 @@ await gql(`mutation { deleteFile(fileId: "${fileId}") }`);
 
 ## Key Management
 
-DiscorDrive uses a zero-knowledge architecture — the server stores only encrypted key material and never sees any plaintext key or file content.
+DiscorDrive is zero-knowledge end to end. The server stores only wrapped key
+material and a password-derived auth proof; it never sees a plaintext key,
+password, or file byte. All key derivation and wrapping happens in the browser
+(`apps/frontend/src/lib/crypto.ts` + `packages/processing`).
 
 ### Keys
 
 | Key | Algorithm | Purpose | Where it lives |
 |---|---|---|---|
-| KEK (Key Encryption Key) | Argon2id → AES-GCM | Wraps the Master Key | Never stored — derived from password on login |
-| Master Key (MK) | AES-GCM 256-bit | Wraps per-file FEKs | Encrypted in DB (`User.encryptedMasterKey`) |
-| FEK (File Encryption Key) | AES-GCM 256-bit | Encrypts file chunks | Encrypted in DB (`File.encryptedFEK`) |
-| Share Key | AES-GCM 256-bit | Wraps FEK for public shares | Never stored — embedded in share URL |
+| ARK (Account Root Key) | AES-GCM 256-bit | Root of the user's identity — wraps the Files Key | Wrapped by password in DB (`wrappedARKByPassword`); plaintext only in memory |
+| Files Key (domain key) | AES-GCM 256-bit | Wraps every file's Root FEK and every folder key | Wrapped by ARK in DB (`wrappedFilesKey`) |
+| Root FEK (per file) | AES-GCM 256-bit | Encrypts file metadata + manifest, derives per-chunk content keys | Wrapped by Files Key in DB (`wrappedFEK`) |
+| Content Key (per chunk) | AES-GCM 256-bit | Encrypts one chunk's plaintext | Derived from Root FEK, never stored |
+| Share Key | AES-GCM 256-bit | Wraps the Root FEK for public shares | Never stored — share link derives it from a secret embedded in the URL |
+| API Key | — | Authenticates scripts without a password | Server stores only the authPart hash + a wrapped ARK |
 
 ### Key hierarchy
 
 ```
-password + kekSalt
+password + salt
      │
-     │  Argon2id (64 MB, 3 iterations, parallelism 4)
+     │  Argon2id (single run — memoryKB 19456, iterations 2, parallelism 1)
      ▼
-    KEK  ──AES-GCM wrap──►  encryptedMasterKey  ← DB: User.encryptedMasterKey
-                             + wrapIv            ← DB: User.wrapIv
-                             + kekSalt           ← DB: User.kekSalt
+  arkWrapKey ──────► serverAuthProof   (hash stored server-side; server never sees the password)
+     │
+     │  AES-GCM wrap
+     ▼
+   ARK ──AES-GCM wrap──► wrappedFilesKey  ← DB: UserCrypto
+  (memory)
      │
      │  unwrap on login (client only)
      ▼
- Master Key  ──AES-GCM wrap──►  encryptedFEK  ← DB: File.encryptedFEK
-  (memory)                       + fekIv       ← DB: File.fekIv
+ Files Key ──AES-GCM wrap──► wrappedFEK  ← DB: File
+  (memory)
      │
-     │  unwrap on download (client only)
+     │  unwrap per file (client only)
      ▼
-   FEK  ──AES-GCM──►  [12B IV | ciphertext | 16B GCM tag]  ← Discord attachment
-  (memory)             one unique IV per chunk
+  Root FEK ──derive──► contentKey ──AES-GCM──► [12B IV | ciphertext | 16B tag]
+  (memory)                                        one unique IV per chunk
 ```
 
 ### Lifecycle
 
 **Registration** — [`registerCrypto()`](apps/frontend/src/lib/crypto.ts)
-1. Client generates random 16-byte `kekSalt`
-2. Client derives KEK from password + salt via Argon2id
-3. Client generates a fresh 256-bit Master Key
-4. Client wraps Master Key with KEK (AES-GCM, random IV)
-5. Client sends `kekSalt`, `wrapIv`, `encryptedMasterKey` to server — KEK and Master Key never leave the client
+1. Client generates a random salt + a fresh ARK, Files Key and Root FEK.
+2. A single Argon2id run derives both the ARK-wrapping key **and** the server auth proof.
+3. Client wraps the ARK with the password-derived key (`wrappedARKByPassword`)
+   and the Files Key with the ARK (`wrappedFilesKey`).
+4. Client sends the wrapped material + auth proof hash to the server — ARK,
+   Files Key and password never leave the client.
 
-**Login** — [`loginCrypto()`](apps/frontend/src/lib/crypto.ts)
-1. Server verifies password against its own Argon2id hash, returns encrypted key material
-2. Client re-derives KEK from password + stored `kekSalt`
-3. Client unwraps Master Key using KEK
-4. Master Key stored in Zustand store (memory only — not persisted, cleared on page refresh)
+**Login** — challenge-based, no password over the wire
+1. Client fetches `getLoginChallenge` (the user's Argon2id params + salt).
+2. Client derives `arkWrapKey` + `serverAuthProof` locally, unwraps the ARK.
+3. Client sends only `serverAuthProof`; the server compares its hash
+   (`timing-safe equal`). No password, no raw key is transmitted.
+4. Named device logins create a **revocable session**: a long-lived refresh token
+   (stored hashed) + a 1 h JWT bound to the session via the `sid` claim.
 
 **File upload** — [`prepareFileUpload()`](apps/frontend/src/lib/crypto.ts)
-1. Client generates a fresh 256-bit FEK per file
-2. Client wraps FEK with Master Key, sends `encryptedFEK` + `fekIv` to server via `initUpload`
-3. Raw FEK transferred to Service Worker (zero-copy `ArrayBuffer` transfer)
-4. SW encrypts each chunk: `AES-GCM(fek, randomIV, plainChunk)` → `[12B IV | ciphertext]`
-5. FEK discarded from SW memory after upload
+1. Client generates a fresh Root FEK per file and encrypts name/mimeType with it.
+2. Client wraps the Root FEK with the Files Key (`wrappedFEK`) and sends it via `initUpload`.
+3. Each chunk is encrypted with a content key derived from the Root FEK
+   (`deriveFileContentKey`); the manifest is encrypted with the Root FEK and uploaded.
+4. `commitManifest` records the manifest blob + per-chunk blob ids.
 
-**File download** — [`unwrapFEK()`](apps/frontend/src/lib/crypto.ts)
-1. Client fetches `encryptedFEK` + `fekIv` from file metadata
-2. Client unwraps FEK using Master Key
-3. FEK sent to SW for on-demand chunk decryption during streaming
+**File download** — [`downloadFile()`](apps/frontend/src/lib/download.ts)
+1. Client unwraps the Root FEK with the Files Key.
+2. Client fetches + decrypts the manifest, then each chunk blob; decrypts with the
+   derived content key.
+
+**API keys** — [`prepareApiKey()`](apps/frontend/src/lib/crypto.ts)
+1. Client mints a two-half secret: `authPart` (server-authenticates) + `cryptoPart`
+   (never leaves the client).
+2. Server stores only the `authPart` hash and an ARK wrapped by a key derived
+   from `cryptoPart` (`wrappedARKByKey`) — it can never reconstruct the key.
+3. The full secret `ddv4_<authPart>.<cryptoPart>` is shown once; losing it means
+   the key can never decrypt again (by design).
+4. Revoking a key clears the wrapped ARK — cutting off decryption, not just auth.
 
 **Share links** — [`prepareShareLink()`](apps/frontend/src/lib/crypto.ts)
-1. Client unwraps FEK using Master Key
-2. Client generates a random 256-bit Share Key
-3. Client wraps FEK with Share Key, stores `wrappedFEK` + `wrapIv` in DB
-4. Share Key embedded in the public link — never stored server-side
-5. Recipient uses Share Key from URL → `unwrapSharedFEK()` → decrypt chunks
-6. Optionally: share link can be password-protected (Argon2id hash stored in DB)
+1. Client derives wrap/auth keys + a capability token from a random link secret.
+2. A fresh Share Key wraps the Root FEK; the capability token goes in the URL.
+3. Recipient unwraps the Share Key from the link secret → unwraps the FEK →
+   `GET /api/share/blob/:blobId` (capability token, no login).
+4. Optionally password-protected (Argon2id hash stored in DB).
 
 **Password change** — [`changePassword` mutation](apps/api/src/resolvers/auth.ts)
-1. Client verifies old password, derives old KEK, unwraps Master Key
-2. Client derives new KEK from new password + new salt
-3. Client re-wraps Master Key with new KEK
-4. Client unwraps all file FEKs with Master Key, re-wraps them (same MK — only MK wrapping changes)
-5. Server applies all updates in a single DB transaction
+1. Client proves the current password (`currentServerAuthProof`), re-derives the
+   ARK wrap key and re-wraps the ARK under the new password.
+2. Server updates the wrapped ARK + new auth proof in a single transaction.
 
 ### What the server never sees
 
-- Raw password (only Argon2id hash used for authentication)
-- KEK
-- Master Key
-- Any FEK in plaintext
-- File content in plaintext — every byte stored on Discord is AES-GCM encrypted
+- Raw password (only the Argon2id-derived auth proof, stored hashed)
+- ARK, Files Key, Root FEK or any content key in plaintext
+- File content in plaintext — every byte stored on any provider is AES-GCM encrypted
 
 ### Client-side persistence
 
 | Data | Storage | Cleared on |
 |---|---|---|
-| JWT token | `localStorage` | Manual logout |
-| `kekSalt`, `wrapIv`, `encryptedMasterKey` | `localStorage` | Manual logout |
-| Master Key (`CryptoKey`) | Memory (Zustand) | Page refresh |
-| FEK (`CryptoKey`) | SW memory | Upload/download complete |
+| JWT / refresh token | `localStorage` / session storage | Manual logout / session revocation |
+| `wrappedARKByPassword`, `wrappedFilesKey`, `argon2Params` | `localStorage` | Manual logout |
+| ARK + Files Key (`CryptoKey`) | Memory (Zustand) | Page refresh / lock |
+| Root FEK / content keys | Memory (SW) | Upload/download complete |
 
-Page refresh clears the Master Key — the user must re-enter their password to unlock ("Unlock" flow re-derives KEK and unwraps MK without a network round-trip).
+Page refresh clears the ARK — the user must re-enter their password to unlock
+("Unlock" flow re-derives the wrap key and unwraps the ARK without a network
+round-trip).
 
 ### Algorithms
 
 | Component | Algorithm | Parameters |
 |---|---|---|
-| KEK derivation | Argon2id | 64 MB memory, 3 iterations, parallelism 4, 256-bit output |
-| Key wrapping (MK, FEK, Share) | AES-GCM | 256-bit key, 12-byte random IV per wrap operation |
-| Chunk encryption | AES-GCM | 256-bit FEK, 12-byte random IV prepended to each chunk |
-| Auth password hashing | Argon2id | Server-side only, independent salt — not used for key derivation |
+| Login material derivation | Argon2id | Defaults: 19456 KiB memory, 2 iterations, parallelism 1, 256-bit output (per-user params stored with the account) |
+| Key wrapping (ARK, Files Key, FEK, Share) | AES-GCM | 256-bit key, 12-byte random IV per wrap operation |
+| Chunk encryption | AES-GCM | 256-bit content key, 12-byte random IV prepended to each chunk |
+| Server auth proof | SHA-256 | Hash of the derived proof, compared with `timingSafeEqual` |
 | File integrity | SHA-256 | Hash of original plaintext, stored after upload, verified after download |
 
 ---
@@ -571,21 +639,31 @@ Page refresh clears the Master Key — the user must re-enter their password to 
 
 ```
 apps/
-  api/            — Hono API server (GraphQL + REST chunk endpoints)
-  frontend/       — React app + Vite + Service Worker
+  api/            — Node.js http server + GraphQL Yoga (GraphQL + REST blob endpoints)
+  frontend/       — React app + Vite + Service Worker (streaming, upload/download)
+  mobile/         — Mobile app
 
 packages/
-  config/         — Shared config (chunk size, concurrency defaults)
+  config/         — Shared config (chunk size, concurrency defaults; browser-safe constants)
   database/       — Prisma schema + client
-  discord-client/ — Webhook upload/download/delete with rate limiting + retry
-  processing/     — AES-GCM encrypt/decrypt, key derivation, chunk streaming
+  discord-client/ — Discord webhook/bot upload/download/delete with rate limiting + retry
+  telegram-client/— Telegram Bot API client (file_id upload/download/delete)
+  processing/     — AES-GCM encrypt/decrypt, key derivation, chunk streaming, manifest crypto
   stream-engine/  — UploadEngine + DownloadEngine (browser and Node.js compatible)
+  redis/          — Cache layer
+  plugin-sdk/     — Plugin API (route dispatch + GraphQL extension hooks)
+  types/          — Shared types across packages and apps
+
+plugins/
+  gallery/        — Example plugin (loaded via DDV_PLUGINS)
 
 scripts/
   benchmark.ts      — Local crypto-only benchmark
   benchmark-e2e.ts  — Full E2E pipeline benchmark (batch + streaming modes)
   bench-utils.ts    — Shared formatting/timing helpers
+  backfill-blob-placements.ts — Create PRIMARY placements for legacy blobs
+  telegram-smoke.ts — Smoke-test Telegram transport against a real bot
 
 infra/
-  docker-compose.yml — PostgreSQL + pgAdmin
+  docker-compose.yml — PostgreSQL + pgAdmin + Redis
 ```
