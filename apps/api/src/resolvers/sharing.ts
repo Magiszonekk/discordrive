@@ -107,6 +107,10 @@ export async function accessShare(
       wrappedFEKPreview: share.allowPreview && item.wrappedFEKPreview
         ? Buffer.from(item.wrappedFEKPreview).toString("base64")
         : undefined,
+      // Not permission-gated: sizes/chunk counts aren't file content, just
+      // transport shape the video player needs to size its byte-range requests.
+      totalCiphertextBytes: item.file.totalCiphertextBytes.toString(),
+      chunkCount: item.file.chunkCount,
     })),
     allowContent: share.allowContent,
     allowMetadata: share.allowMetadata,

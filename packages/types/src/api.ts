@@ -103,6 +103,9 @@ export interface ShareAccessResponse {
     encryptedMimeType?: string;
     wrappedFEK?: string;
     wrappedFEKPreview?: string;
+    /** Not permission-gated — transport shape, not file content. */
+    totalCiphertextBytes?: string;
+    chunkCount?: number;
   }>;
   allowContent: boolean;
   allowMetadata: boolean;

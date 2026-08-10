@@ -165,6 +165,12 @@ export function buildSchema() {
         encryptedMimeType: String
         wrappedFEK: String
         wrappedFEKPreview: String
+        # Needed by SharedFile.tsx's video player to size the byte-range/chunk
+        # protocol the same way the owner's Dashboard does (see FILES_QUERY).
+        # Not permission-gated like encryptedName/encryptedMimeType — sizes
+        # and chunk counts aren't file content, just transport shape.
+        totalCiphertextBytes: String
+        chunkCount: Int
       }
 
       type ShareAccess {

@@ -267,7 +267,13 @@ describe("core v1 smoke flow", () => {
         {
           fileId: initUploadData.fileId,
           primaryManifestBlobId: manifestBlobId,
+          previewBlobId: undefined,
+          encryptedName: undefined,
+          encryptedMimeType: undefined,
           wrappedFEK,
+          wrappedFEKPreview: undefined,
+          totalCiphertextBytes: ciphertext.byteLength.toString(),
+          chunkCount: 1,
         },
       ],
     });

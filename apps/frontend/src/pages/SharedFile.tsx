@@ -7,26 +7,40 @@ import { deriveShareWrapKey, deriveShareAuthKey, deriveShareCapabilityToken } fr
 import type { ShareAccessResponse } from "@ddv4/types/api";
 import { useNotificationStore } from "../stores/notifications.js";
 import { AuthCard, authPrimaryButtonClass } from "../components/layout/AuthCard.js";
+import { VideoPlayer } from "../components/video/VideoPlayer.js";
 
 const ACCESS_SHARE = `
   query AccessShare($shareId: ID!, $capabilityToken: String!) {
     accessShare(shareId: $shareId, capabilityToken: $capabilityToken) {
       shareId
       wrappedAKShare
-      wrappedObjectKeys { fileId primaryManifestBlobId encryptedName encryptedMimeType wrappedFEK }
+      wrappedObjectKeys {
+        fileId
+        primaryManifestBlobId
+        encryptedName
+        encryptedMimeType
+        wrappedFEK
+        totalCiphertextBytes
+        chunkCount
+      }
       allowContent
     }
   }
 `;
 
+const VIDEO_MIME_PREFIX = "video/";
+
 interface ResolvedShareInfo {
   shareId: string;
+  fileId: string;
   fileName: string;
   mimeType: string;
   allowContent: boolean;
   manifestBlobId: string;
   rootFek: CryptoKey;
   capabilityTokenB64: string;
+  totalCiphertextBytes: string;
+  chunkCount: number;
 }
 
 export function SharedFile() {
@@ -34,6 +48,7 @@ export function SharedFile() {
   const [info, setInfo] = useState<ResolvedShareInfo | null>(null);
   const [error, setError] = useState("");
   const [downloading, setDownloading] = useState(false);
+  const [showPlayer, setShowPlayer] = useState(false);
   const pushNotification = useNotificationStore((s) => s.push);
 
   useEffect(() => {
@@ -89,12 +104,15 @@ export function SharedFile() {
 
         setInfo({
           shareId: accessShare.shareId,
+          fileId: key?.fileId ?? "",
           fileName,
           mimeType,
           allowContent: accessShare.allowContent,
           manifestBlobId,
           rootFek,
           capabilityTokenB64,
+          totalCiphertextBytes: key?.totalCiphertextBytes ?? "0",
+          chunkCount: key?.chunkCount ?? 0,
         });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load share");
@@ -140,20 +158,56 @@ export function SharedFile() {
     );
   }
 
+  const isVideo = info.mimeType.startsWith(VIDEO_MIME_PREFIX);
+
   return (
     <AuthCard title="Shared file">
       <div className="mb-6 space-y-1 text-sm text-ink-2">
         <p className="truncate font-medium text-ink">{info.fileName}</p>
         <p className="font-mono text-xs text-muted">{info.mimeType}</p>
       </div>
-      <button
-        onClick={handleDownload}
-        disabled={downloading || !info.allowContent}
-        className={authPrimaryButtonClass}
-      >
-        {downloading ? "Downloading…" : "Download"}
-      </button>
+      <div className="flex gap-2">
+        {isVideo && (
+          <button
+            onClick={() => setShowPlayer(true)}
+            disabled={!info.allowContent}
+            className={authPrimaryButtonClass}
+          >
+            Play
+          </button>
+        )}
+        <button
+          onClick={handleDownload}
+          disabled={downloading || !info.allowContent}
+          className={authPrimaryButtonClass}
+        >
+          {downloading ? "Downloading…" : "Download"}
+        </button>
+      </div>
       {error && <p className="mt-3 text-sm text-error">{error}</p>}
+
+      {showPlayer && (
+        <VideoPlayer
+          file={{
+            fileId: info.fileId,
+            fileName: info.fileName,
+            mimeType: info.mimeType,
+            size: info.totalCiphertextBytes,
+            chunkSize: info.chunkCount > 0
+              ? Math.ceil(Number(info.totalCiphertextBytes) / info.chunkCount)
+              : 0,
+            chunkCount: info.chunkCount,
+            wrappedFEK: "",
+            manifestBlobId: info.manifestBlobId,
+          }}
+          share={{
+            shareId: info.shareId,
+            capabilityToken: info.capabilityTokenB64,
+            rootFek: info.rootFek,
+          }}
+          onClose={() => setShowPlayer(false)}
+        />
+      )}
     </AuthCard>
   );
 }
