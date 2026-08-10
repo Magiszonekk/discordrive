@@ -495,6 +495,16 @@ async function runTasksWithConcurrency<T>(tasks: Array<() => Promise<T>>, concur
   return results;
 }
 
+// Prisma's connection pool defaults to num_cpus*2+1 (9 on this box). A
+// Promise.all over every file fired one findMany() per file simultaneously —
+// fine for a handful of files, but an account with thousands (seen in
+// production: 4779) opened thousands of concurrent queries against a 9-slot
+// pool, starving every other request on the box until pending ones hit the
+// 10s pool-checkout timeout. Bounding this to the same concurrency the
+// Discord-side health check already uses (see CONCURRENCY below) keeps this
+// query well under the pool size regardless of account size.
+const FILES_HEALTH_CHECK_DB_CONCURRENCY = 5;
+
 export async function getFilesForHealthCheckDisplay(
   ownerUserId: string,
 ): Promise<HealthCheckFileInfo[]> {
@@ -504,7 +514,7 @@ export async function getFilesForHealthCheckDisplay(
     orderBy: { createdAt: "desc" },
   });
 
-  const result = await Promise.all(files.map(async (file) => {
+  const result = await runTasksWithConcurrency(files.map((file) => async () => {
     const chunks = await db.blobTransport.findMany({
       where: { ownerUserId, blobId: { startsWith: `${file.id}:chunk:` } },
       select: { blobId: true, healthStatus: true, healthCheckedAt: true },
@@ -529,7 +539,7 @@ export async function getFilesForHealthCheckDisplay(
         healthCheckedAt: chunk.healthCheckedAt ? chunk.healthCheckedAt.toISOString() : null,
       })),
     } satisfies HealthCheckFileInfo;
-  }));
+  }), FILES_HEALTH_CHECK_DB_CONCURRENCY);
 
   return result;
 }
@@ -559,7 +569,7 @@ export async function getFilesForHealthCheck(
       .map((entry) => entry.file);
   }
 
-  const result = await Promise.all(files.map(async (file) => {
+  const result = await runTasksWithConcurrency(files.map((file) => async () => {
     const chunks = await db.blobTransport.findMany({
       where: {
         ownerUserId,
@@ -588,7 +598,7 @@ export async function getFilesForHealthCheck(
         }))
         .sort((a, b) => a.index - b.index),
     } satisfies HealthCheckFileInfo;
-  }));
+  }), FILES_HEALTH_CHECK_DB_CONCURRENCY);
 
   return result;
 }
