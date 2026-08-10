@@ -37,7 +37,7 @@ function SidebarNavigation({
   ];
 
   return (
-    <nav className="flex-1 space-y-0.5 p-3">
+    <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-3">
       {links.map((link) => {
         const Icon = link.icon;
         return (
@@ -65,7 +65,7 @@ function SidebarFooter() {
   const logout = useAuthStore((s) => s.logout);
 
   return (
-    <div className="border-t border-rule p-4">
+    <div className="mt-auto shrink-0 border-t border-rule bg-paper p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
         <p className="min-w-0 truncate font-mono text-xs text-muted">{user?.email}</p>
         <ColorModeToggle />
@@ -85,7 +85,7 @@ function PaletteTrigger({ onOpen }: { onOpen: () => void }) {
     <button
       type="button"
       onClick={onOpen}
-      className="mx-3 mt-3 flex items-center gap-2 rounded-md border border-rule-2 px-3 py-2 text-left text-sm text-muted transition-colors duration-short ease-out hover:border-accent hover:text-ink-2"
+      className="mx-3 mt-3 flex shrink-0 items-center gap-2 rounded-md border border-rule-2 px-3 py-2 text-left text-sm text-muted transition-colors duration-short ease-out hover:border-accent hover:text-ink-2"
     >
       <Command size={14} strokeWidth={1.75} />
       <span className="flex-1 truncate">Jump to…</span>
@@ -141,7 +141,7 @@ function MobileDrawer({
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div className="flex items-center justify-between border-b border-rule p-4">
+        <div className="flex shrink-0 items-center justify-between border-b border-rule p-4">
           <h2 className="font-display text-lg font-semibold text-ink">DiscorDrive</h2>
           <button
             onClick={onClose}
@@ -179,8 +179,8 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
       <MobileTopbar onMenuOpen={() => setDrawerOpen(true)} onPaletteOpen={() => setPaletteOpen(true)} />
       <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} pathname={location.pathname} />
 
-      <aside className="hidden w-64 flex-col border-r border-rule bg-paper md:flex md:min-h-screen">
-        <div className="border-b border-rule p-4">
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-rule bg-paper md:sticky md:top-0 md:flex md:h-screen">
+        <div className="shrink-0 border-b border-rule p-4">
           <h1 className="font-display text-lg font-semibold text-ink">DiscorDrive</h1>
         </div>
         <PaletteTrigger onOpen={() => setPaletteOpen(true)} />
