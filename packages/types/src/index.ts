@@ -7,6 +7,7 @@ export enum UploadStatus {
   COMMITTING_MANIFEST = "COMMITTING_MANIFEST",
   DONE = "DONE",
   FAILED = "FAILED",
+  CANCELLED = "CANCELLED",
 }
 
 export enum DownloadStatus {

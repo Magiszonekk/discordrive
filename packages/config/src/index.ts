@@ -27,6 +27,19 @@ export const config = {
   // Upload concurrency
   defaultUploadConcurrency: 20,
 
+  // Ceiling on bytes allowed in flight at once, across all upload workers.
+  // Concurrency alone is not a safe knob: at 8 MiB a chunk, 20 workers pinned
+  // ~1.5 GiB of live buffers and OOM'd the tab partway through a multi-GiB
+  // upload. Upload code derives its worker count from this budget instead.
+  //
+  // 192 MiB is a deliberate middle ground, measured rather than guessed: it
+  // yields 12 workers, which still exceeds the 8-webhook Discord pool (so the
+  // fan-out that throughput work depends on is preserved) while keeping peak
+  // live memory around 870 MiB instead of the ~1.5 GiB that crashed the tab.
+  // Dropping to 96 MiB would halve memory again but throttle to 6 workers,
+  // starving the webhook pool.
+  uploadInFlightBudgetBytes: 192 * 1024 * 1024,
+
   // Discord rate limiting
   webhookRateLimitDefault: 120, // req/min starting point
   webhookRateLimitWindow: 60_000, // 1 minute window

@@ -153,6 +153,13 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
   // Chunk count computed from file size — no need to buffer the whole file first.
   const chunkCount = Math.ceil(file.size / LEGACY_UPLOAD_CHUNK_SIZE_BYTES);
   const totalBlobs = chunkCount + 1;
+  const effectiveConcurrency = Math.max(
+    2,
+    Math.min(
+      config.defaultUploadConcurrency,
+      Math.floor(config.uploadInFlightBudgetBytes / (LEGACY_UPLOAD_CHUNK_SIZE_BYTES * 2)),
+    ),
+  );
 
   logUploadEvent({
     type: "upload_session_started",
@@ -162,7 +169,7 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
     folderId,
     chunkSize: LEGACY_UPLOAD_CHUNK_SIZE_BYTES,
     chunkCount,
-    concurrency: config.defaultUploadConcurrency,
+    concurrency: effectiveConcurrency,
     mode: "streaming",
     tokenPresentAtStart: Boolean(authToken),
   });
@@ -207,10 +214,19 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
     });
 
     const realFileId = initUpload.fileId;
+    // A cancel that landed while we were preparing/initialising targeted the
+    // placeholder row. removeUpload() drops that row *and* its controller, so
+    // without re-checking here the abort would be silently forgotten and the
+    // upload would carry on under the new id.
+    const cancelledDuringInit = controller.signal.aborted;
     store.removeUpload(placeholderId);
     activeUploadId = realFileId;
     store.addUpload(realFileId, totalBlobs, file.size, file.name);
     store.registerController(realFileId, controller);
+    if (cancelledDuringInit) {
+      store.updateUpload(realFileId, { status: UploadStatus.CANCELLED });
+      throw new DOMException("Upload aborted", "AbortError");
+    }
     store.updateUpload(realFileId, { status: UploadStatus.UPLOADING });
 
     const manifest: FileChunkManifestPlaintext = {
@@ -232,7 +248,7 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
     let uploadedBytes = 0;
     let uploadedBlobs = 0;
 
-    const CONCURRENCY = config.defaultUploadConcurrency;
+    const CONCURRENCY = effectiveConcurrency;
     uploadStartMs = performance.now();
 
     const uploadChunk = async (chunk: { index: number; data: Uint8Array }) => {
@@ -240,9 +256,11 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
       if (doneChunks.has(chunk.index)) return;
 
       const chunkStartMs = performance.now();
-      const chunkBuffer = chunk.data.buffer.slice(chunk.data.byteOffset, chunk.data.byteOffset + chunk.data.byteLength) as ArrayBuffer;
+      // Encrypt straight from the chunker's view. Copying it into a private
+      // ArrayBuffer first (`.buffer.slice(...)`) doubled the live bytes per
+      // in-flight chunk for no benefit — WebCrypto copies its input anyway.
       const encryptStartMs = performance.now();
-      const ciphertext = await encryptFileContentChunk(prepared.rootFek, chunkBuffer);
+      const ciphertext = await encryptFileContentChunk(prepared.rootFek, chunk.data);
       const encryptMs = performance.now() - encryptStartMs;
       const blobId = `${realFileId}:chunk:${chunk.index}`;
 
@@ -255,10 +273,12 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
       let blobRecord: UploadedBlobTransportInput | null = null;
 
       if (!alreadyStored) {
-        const ciphertextBuffer = ciphertext.buffer.slice(ciphertext.byteOffset, ciphertext.byteOffset + ciphertext.byteLength) as ArrayBuffer;
+        // `ciphertext` is handed to fetch as-is; the retry closure holds this
+        // one reference rather than a second full-size copy that stayed live
+        // across every backoff (up to 3.2 s each, 4 attempts).
         const requestStartMs = performance.now();
         const uploadResult = await withChunkRetry(
-          () => uploadBlobToApi(blobId, ciphertextBuffer, {
+          () => uploadBlobToApi(blobId, ciphertext, {
             authToken,
             extraHeaders: {
               "X-Upload-Id": uploadId,
@@ -266,6 +286,7 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
               "X-Chunk-Count": String(chunkCount),
               "X-Client-Timestamp": new Date().toISOString(),
             },
+            signal: controller.signal,
           }),
           controller.signal,
         );
@@ -395,12 +416,11 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
     const encryptedManifest = await buildEncryptedManifest(prepared.rootFek, manifest);
     const manifestEncryptMs = performance.now() - manifestEncryptStartMs;
     const manifestBlobId = `${realFileId}:manifest`;
-    const manifestBuffer = encryptedManifest.buffer.slice(encryptedManifest.byteOffset, encryptedManifest.byteOffset + encryptedManifest.byteLength) as ArrayBuffer;
     const manifestRequestStartMs = performance.now();
     // Retried like any chunk: every byte is already up by this point, so losing
     // the manifest to a transient blip would waste the whole transfer.
     const manifestUploadResult = await withChunkRetry(
-      () => uploadBlobToApi(manifestBlobId, manifestBuffer, {
+      () => uploadBlobToApi(manifestBlobId, encryptedManifest, {
         authToken,
         extraHeaders: {
           "X-Upload-Id": uploadId,
@@ -408,6 +428,7 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
           "X-Chunk-Count": String(chunkCount),
           "X-Client-Timestamp": new Date().toISOString(),
         },
+        signal: controller.signal,
       }),
       controller.signal,
     );
@@ -532,15 +553,24 @@ export async function uploadFile(file: File, folderId: string | null): Promise<s
     // Abort any stray concurrent workers so they don't silently keep uploading
     // after the upload is already considered failed.
     if (!controller.signal.aborted) controller.abort();
+    // A user cancel is not a failure: surfacing it as FAILED made deliberate
+    // cancels look like upload errors (red bar, "Failed") and muddled real
+    // fault diagnosis in the telemetry.
+    const wasCancelled =
+      controller.signal.aborted ||
+      (error instanceof DOMException && error.name === "AbortError") ||
+      (error instanceof Error && error.name === "AbortError");
     logUploadEvent({
-      type: "upload_session_failed",
+      type: wasCancelled ? "upload_session_cancelled" : "upload_session_failed",
       uploadId,
       fileId: activeUploadId,
       stage: "upload_pipeline",
       elapsedMs: uploadStartMs !== null ? Number((performance.now() - uploadStartMs).toFixed(2)) : undefined,
       error: error instanceof Error ? error.message : String(error),
     });
-    store.updateUpload(activeUploadId, { status: UploadStatus.FAILED });
+    store.updateUpload(activeUploadId, {
+      status: wasCancelled ? UploadStatus.CANCELLED : UploadStatus.FAILED,
+    });
     throw error;
   }
 }

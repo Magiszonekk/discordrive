@@ -52,6 +52,11 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       const uploads = new Map(state.uploads);
       const current = uploads.get(fileId);
       if (!current) return { uploads };
+      // CANCELLED is terminal. The pipeline needs a moment to unwind after an
+      // abort (in-flight rejection, retry-loop checks) and keeps emitting
+      // progress updates on the way out — without this guard those late writes
+      // flip the row back to UPLOADING and the cancel looks like it failed.
+      if (current.status === "CANCELLED" && updates.status !== "CANCELLED") return { uploads };
 
       let speedBps = current.speedBps;
       if (updates.bytesUploaded !== undefined) {
@@ -94,5 +99,18 @@ export const useUploadStore = create<UploadState>((set, get) => ({
 
   getUpload: (fileId) => get().uploads.get(fileId),
   registerController: (fileId, controller) => uploadControllers.set(fileId, controller),
-  cancelUpload: (fileId) => uploadControllers.get(fileId)?.abort(),
+  cancelUpload: (fileId) => {
+    uploadControllers.get(fileId)?.abort();
+    // Mark the row cancelled right away rather than waiting for the pipeline
+    // to unwind. The abort only rejects the in-flight request; encryption and
+    // the retry loop still need a tick to notice, and during that gap the UI
+    // would otherwise keep animating as though the click did nothing.
+    set((state) => {
+      const uploads = new Map(state.uploads);
+      const current = uploads.get(fileId);
+      if (!current) return { uploads };
+      uploads.set(fileId, { ...current, status: "CANCELLED" as UploadStatus, speedBps: 0 });
+      return { uploads };
+    });
+  },
 }));
