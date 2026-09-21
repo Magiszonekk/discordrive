@@ -93,6 +93,57 @@ function collectReplicaTelegramBotConfigs(): Array<{ id: string; token: string; 
   return configs;
 }
 
+// --- Egress proxy pool (round-robin across public IPs) -------------------
+// behind a dynamic home IP whose ban self-clears eventually — but the user
+// explicitly does NOT want reserve static IPs (OVH, Oracle, ...) sitting
+// idle as pure reactive fallbacks. `PROXY_<n>` (optionally `PROXY_<n>_NAME`)
+// configures an ordered pool of standard HTTP forward-proxy URLs
+// (`http://[user:pass@]host:port`, Basic Auth optional) that traffic is
+// round-robined across on EVERY request alongside this host's own direct
+// egress — not only after a ban. Legacy fallback: comma-separated
+// `PROXY_LIST=name:url,name:url` (or bare `url,url`).
+//
+// Transport-wise these are genuinely standard HTTP CONNECT proxies (e.g.
+// tinyproxy with auth) — no custom protocol on the wire. discord-client
+// wraps each one in `undici.ProxyAgent` and passes it as `fetch()`'s
+// `dispatcher`; verified live 2026-09-14 that ProxyAgent correctly performs
+// CONNECT + Basic-Auth against a real proxy and reaches discord.com.
+function collectProxies(): Array<{ name: string; url: string }> {
+  const proxies: Array<{ name: string; url: string }> = [];
+  for (let i = 1; i <= 20; i++) {
+    const url = process.env[`PROXY_${i}`]?.trim();
+    if (url) {
+      const name = process.env[`PROXY_${i}_NAME`]?.trim() || proxyNameFromUrl(url) || `proxy-${i}`;
+      proxies.push({ name, url });
+    }
+  }
+  if (proxies.length === 0 && process.env.PROXY_LIST) {
+    for (const entry of process.env.PROXY_LIST.split(",")) {
+      const trimmed = entry.trim();
+      if (!trimmed) continue;
+      const sepIdx = trimmed.indexOf(":");
+      // "name:http://..." vs a bare "http://..." — only the former has a
+      // non-"//"-starting remainder after the first colon.
+      const looksLikeNamedPair = sepIdx > 0 && !trimmed.slice(sepIdx + 1).startsWith("//");
+      if (looksLikeNamedPair) {
+        const url = trimmed.slice(sepIdx + 1);
+        proxies.push({ name: trimmed.slice(0, sepIdx), url });
+      } else {
+        proxies.push({ name: proxyNameFromUrl(trimmed) || `proxy-${proxies.length + 1}`, url: trimmed });
+      }
+    }
+  }
+  return proxies;
+}
+
+function proxyNameFromUrl(url: string): string | null {
+  try {
+    return new URL(url).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
 export const serverConfig = {
   databaseUrl: process.env.DATABASE_URL ?? "",
   webhooks: collectWebhooks(),
@@ -101,6 +152,7 @@ export const serverConfig = {
     .map((value) => value.trim())
     .filter(Boolean),
   relayBaseUrl: process.env.RELAY_BASE_URL?.trim() ?? "",
+  proxies: collectProxies(),
   jwtSecret: process.env.JWT_SECRET ?? "change-me",
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
   appMode: (process.env.APP_MODE ?? "full") as AppMode,

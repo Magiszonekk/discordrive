@@ -45,7 +45,8 @@ export function UploadProgress() {
       for (const upload of uploads.values()) {
         const spd = upload.speedBps ?? 0;
         const remaining = upload.bytesTotal - upload.bytesUploaded;
-        const isActive = upload.status !== "DONE" && upload.status !== "FAILED";
+        const isActive =
+          upload.status !== "DONE" && upload.status !== "FAILED" && upload.status !== "CANCELLED";
         if (isActive && spd > 0 && remaining > 0) {
           next[upload.fileId] = remaining / spd;
         }
@@ -57,7 +58,10 @@ export function UploadProgress() {
 
   useEffect(() => {
     for (const upload of uploads.values()) {
-      if ((upload.status === "DONE" || upload.status === "FAILED") && !scheduledRef.current.has(upload.fileId)) {
+      if (
+        (upload.status === "DONE" || upload.status === "FAILED" || upload.status === "CANCELLED") &&
+        !scheduledRef.current.has(upload.fileId)
+      ) {
         scheduledRef.current.add(upload.fileId);
         setTimeout(() => {
           removeUpload(upload.fileId);
@@ -86,7 +90,8 @@ export function UploadProgress() {
         <div className="space-y-2 border-t border-rule px-3 py-3">
           {Array.from(uploads.values()).map((upload) => {
             const percent = upload.bytesTotal > 0 ? Math.round((upload.bytesUploaded / upload.bytesTotal) * 100) : 0;
-            const isActive = upload.status !== "DONE" && upload.status !== "FAILED";
+            const isActive =
+              upload.status !== "DONE" && upload.status !== "FAILED" && upload.status !== "CANCELLED";
             const speedBps = upload.speedBps ?? 0;
             const speedStr = isActive ? formatSpeed(speedBps) : "";
             const etaStr = isActive ? formatEta(etas[upload.fileId] ?? 0) : "";
@@ -110,6 +115,8 @@ export function UploadProgress() {
                       "Complete"
                     ) : upload.status === "FAILED" ? (
                       "Failed"
+                    ) : upload.status === "CANCELLED" ? (
+                      "Cancelled"
                     ) : (
                       <span className="font-mono tabular-nums">{percent}%</span>
                     )}
@@ -119,7 +126,13 @@ export function UploadProgress() {
                 <div className="h-1.5 w-full overflow-hidden rounded-full bg-paper-3">
                   <div
                     className={`h-1.5 w-full origin-left rounded-full transition-transform duration-short ease-out ${
-                      upload.status === "FAILED" ? "bg-error" : upload.status === "DONE" ? "bg-success" : "bg-accent"
+                      upload.status === "FAILED"
+                        ? "bg-error"
+                        : upload.status === "DONE"
+                          ? "bg-success"
+                          : upload.status === "CANCELLED"
+                            ? "bg-muted"
+                            : "bg-accent"
                     }`}
                     style={{ transform: `scaleX(${percent / 100})` }}
                   />

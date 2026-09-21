@@ -6,24 +6,31 @@ import {
   unregisterStream,
   getStreamUrl,
   type StreamFileInfo,
+  type ShareStreamAuth,
 } from "../../lib/videoStream.js";
-import { downloadFile } from "../../lib/download.js";
+import { downloadFile, downloadSharedFile } from "../../lib/download.js";
+import { useDownloadStore } from "../../stores/download.js";
 
 interface VideoPlayerProps {
   file: StreamFileInfo & { fileName: string };
   onClose: () => void;
+  /** Present only when opened from a share link (SharedFile.tsx) — routes
+   *  both streaming and the download fallback through the no-account share
+   *  auth path instead of the owner's session. */
+  share?: ShareStreamAuth;
 }
 
-export function VideoPlayer({ file, onClose }: VideoPlayerProps) {
+export function VideoPlayer({ file, onClose, share }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
+  const addDownload = useDownloadStore((s) => s.addDownload);
 
   useEffect(() => {
     let unmounted = false;
 
-    registerStream(file)
+    registerStream(file, share)
       .then(() => {
         if (!unmounted && videoRef.current) {
           videoRef.current.src = getStreamUrl(file.fileId);
@@ -41,7 +48,7 @@ export function VideoPlayer({ file, onClose }: VideoPlayerProps) {
       unmounted = true;
       unregisterStream(file.fileId);
     };
-  }, [file]);
+  }, [file, share]);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -75,14 +82,27 @@ export function VideoPlayer({ file, onClose }: VideoPlayerProps) {
 
   const handleDownloadFallback = useCallback(async () => {
     onClose();
-    await downloadFile({
-      fileId: file.fileId,
-      fileName: file.fileName,
-      mimeType: file.mimeType,
-      manifestBlobId: file.manifestBlobId,
-      wrappedFEK: file.wrappedFEK,
-    });
-  }, [file, onClose]);
+    addDownload(file.fileId, file.fileName, file.mimeType, file.chunkCount, Number(file.size ?? 0));
+    if (share) {
+      await downloadSharedFile({
+        fileId: file.fileId,
+        fileName: file.fileName,
+        mimeType: file.mimeType,
+        manifestBlobId: file.manifestBlobId,
+        rootFek: share.rootFek,
+        shareId: share.shareId,
+        capabilityToken: share.capabilityToken,
+      });
+    } else {
+      await downloadFile({
+        fileId: file.fileId,
+        fileName: file.fileName,
+        mimeType: file.mimeType,
+        manifestBlobId: file.manifestBlobId,
+        wrappedFEK: file.wrappedFEK,
+      });
+    }
+  }, [file, share, onClose, addDownload]);
 
   return (
     <div

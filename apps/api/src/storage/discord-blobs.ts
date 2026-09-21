@@ -10,6 +10,11 @@ import {
   downloadChunkBot,
   deleteChunk,
   deleteChunkBot,
+  DiscordUnavailableError,
+  DIRECT_EGRESS_KEY,
+  buildEgressPool,
+  EgressRoundRobin,
+  type EgressDescriptor,
 } from "@ddv4/discord-client";
 import { serverConfig } from "@ddv4/config/server";
 
@@ -19,6 +24,8 @@ let cachedBots: BotInfo[] | null = null;
 let sharedServerRoundRobinIndex = 0;
 let sharedUserGroupRoundRobinIndex = 0;
 let sharedBotRoundRobinIndex = 0;
+let cachedEgressPool: EgressDescriptor[] | null = null;
+let sharedEgressRoundRobin: EgressRoundRobin | null = null;
 
 // Per-sender concurrency limiter — separate from the rate limiter.
 // Caps how many simultaneous uploads are dispatched to a single sender so load
@@ -46,7 +53,7 @@ export interface DiscordBlobUploadResult {
   discordChannelId: string;
   webhookId: string;
   ciphertext: Uint8Array;
-  transportPath: "direct" | "relay" | "bot";
+  transportPath: "direct" | "relay" | "proxy" | "bot";
   attemptCount: number;
   upstreamStatus: number;
   elapsedMs: number;
@@ -93,6 +100,27 @@ function selectWebhookById<T extends { id: string }>(webhooks: T[], webhookId: s
 
 function shouldUseRelayForWebhook(webhookId: string): boolean {
   return !!serverConfig.relayBaseUrl && serverConfig.relayWebhookIds.includes(webhookId);
+}
+
+/**
+ * Round-robin pool of egress paths this host's Discord traffic goes out on:
+ * always this host's own direct IP (index 0) plus any configured `PROXY_<n>`
+ * forward proxies. Unlike the old reactive tier design, EVERY request pulls
+ * the next egress from the rotation — proxies carry real traffic in parallel
+ * with direct, not only after a ban. `nextOrder()` returns the full pool
+ * starting at the rotating cursor so a blocked/over-budget entry can be
+ * skipped without stalling: the caller walks the order and uses the first
+ * entry that is actually usable.
+ */
+function getEgressRoundRobin(): EgressRoundRobin {
+  if (!sharedEgressRoundRobin || cachedEgressPool === null) {
+    cachedEgressPool = buildEgressPool(serverConfig.proxies);
+    sharedEgressRoundRobin = new EgressRoundRobin(cachedEgressPool);
+    if (cachedEgressPool.length > 1) {
+      console.log(`[discord-blobs] egress pool: ${cachedEgressPool.map((e) => e.name).join(", ")}`);
+    }
+  }
+  return sharedEgressRoundRobin;
 }
 
 function getPositiveIntFromEnv(name: string, fallback: number): number {
@@ -175,15 +203,26 @@ function advanceGroupCursors<T extends { id: string }>(selected: GroupedWebhook<
     : 0;
 }
 
-// Returns a webhook OR a bot. Selection is tiered by latency:
-//   Tier 1 — direct webhooks (group-aware round-robin, fast)
-//   Tier 2 — bots (simple round-robin, fast, direct to Discord API)
-//   Tier 3 — relay webhooks (group-aware round-robin, slower — egress via relay)
-//   Tier 4 — waitForAvailable across all senders (all rate-limited)
-// This ensures relay webhooks are only used when both direct webhooks and bots
-// are saturated, reducing per-upload variance from relay latency.
+// Returns a webhook (with a chosen egress) OR a bot. Selection order:
+//   1. Egress round-robin: pull the NEXT egress from the pool (direct or a
+//      configured PROXY_<n>), rotating on every call — this is what makes
+//      traffic genuinely fan out across direct+proxies in parallel rather
+//      than only failing over to a proxy once direct is banned. Walk the
+//      rotated order and use the first egress that is not Cloudflare-blocked
+//      / over its proactive budget on that path, so one bad egress just gets
+//      skipped this round instead of stalling every request.
+//   2. Within the chosen egress, pick a direct webhook (group-aware
+//      round-robin, same webhook pool used by every egress — a proxy just
+//      changes which IP the SAME webhook request leaves from).
+//   3. If NO egress in the whole pool has a usable webhook this round: bots
+//      (different Discord API route entirely, immune to a webhook-route
+//      ban on every egress at once).
+//   4. Legacy fixed relay webhooks (RELAY_WEBHOOK_IDS), only as a last
+//      resort — narrower than the general egress pool, kept for backward
+//      compatibility with the June throughput experiment.
+//   5. waitForAvailable across all senders (all rate-limited).
 type SelectedSender =
-  | { kind: "webhook"; info: ReturnType<typeof parseWebhookUrls>[number] }
+  | { kind: "webhook"; info: ReturnType<typeof parseWebhookUrls>[number]; egress: EgressDescriptor }
   | { kind: "bot"; info: BotInfo };
 
 async function selectSender(
@@ -197,6 +236,7 @@ async function selectSender(
 
   const directGrouped = groupedWebhooks.filter((g) => !shouldUseRelayForWebhook(g.webhook.id));
   const relayGrouped = groupedWebhooks.filter((g) => shouldUseRelayForWebhook(g.webhook.id));
+  const egressRoundRobin = getEgressRoundRobin();
   const allIds = [...webhooks.map((w) => w.id), ...bots.map((b) => b.id)];
 
   // Poll until a sender slot is available. Two conditions can block:
@@ -204,19 +244,25 @@ async function selectSender(
   //   b) at per-sender concurrency cap (MAX_CONCURRENT_PER_SENDER active uploads)
   // waitForAvailable handles (a); the 100ms sleep handles (b).
   while (true) {
-    // Tier 1: direct webhooks (group-aware round-robin, fast)
-    const availableDirect = directGrouped
-      .filter((c) => sharedRateLimiter.canUse(c.webhook.id) && senderHasCapacity(c.webhook.id))
-      .sort((a, b) => scoreGroupedWebhook(a) - scoreGroupedWebhook(b));
+    // Step 1+2: walk the egress rotation (starts at a different cursor
+    // position EVERY call — that rotation is the round-robin), and within
+    // each egress try the direct webhook pool.
+    const egressOrder = egressRoundRobin.nextOrder();
+    for (const egress of egressOrder) {
+      const availableOnThisEgress = directGrouped
+        .filter((c) => sharedRateLimiter.canUse(c.webhook.id, egress.key) && senderHasCapacity(c.webhook.id))
+        .sort((a, b) => scoreGroupedWebhook(a) - scoreGroupedWebhook(b));
 
-    if (availableDirect.length > 0) {
-      const selected = availableDirect[0]!;
-      advanceGroupCursors(selected, groupedWebhooks);
-      claimSender(selected.webhook.id);
-      return { kind: "webhook", info: selected.webhook };
+      if (availableOnThisEgress.length > 0) {
+        const selected = availableOnThisEgress[0]!;
+        advanceGroupCursors(selected, groupedWebhooks);
+        claimSender(selected.webhook.id);
+        return { kind: "webhook", info: selected.webhook, egress };
+      }
     }
 
-    // Tier 2: bots (simple round-robin, fast)
+    // Step 3: bots (simple round-robin, fast) — reached only when EVERY
+    // egress in the pool has no usable webhook this round.
     if (bots.length > 0) {
       for (let i = 0; i < bots.length; i++) {
         const idx = (sharedBotRoundRobinIndex + i) % bots.length;
@@ -229,7 +275,7 @@ async function selectSender(
       }
     }
 
-    // Tier 3: relay webhooks (group-aware round-robin, slower)
+    // Step 4: legacy relay webhooks (group-aware round-robin, slower)
     const availableRelay = relayGrouped
       .filter((c) => sharedRateLimiter.canUse(c.webhook.id) && senderHasCapacity(c.webhook.id))
       .sort((a, b) => scoreGroupedWebhook(a) - scoreGroupedWebhook(b));
@@ -238,11 +284,16 @@ async function selectSender(
       const selected = availableRelay[0]!;
       advanceGroupCursors(selected, groupedWebhooks);
       claimSender(selected.webhook.id);
-      return { kind: "webhook", info: selected.webhook };
+      return { kind: "webhook", info: selected.webhook, egress: { key: "relay", name: "relay" } };
     }
 
-    // All senders at capacity or rate-limited: wait for whichever unblocks first.
-    // getNextResetMs covers the rate-limit case; 100ms cap covers the capacity case.
+    // All senders at capacity or rate-limited on every egress: wait for
+    // whichever unblocks first. getNextResetMs covers the rate-limit case;
+    // 100ms cap covers the capacity case. During a Cloudflare block on one
+    // egress, getNextResetMs() reports THAT egress's multi-minute reset,
+    // which must not translate into a multi-minute sleep here — the cap
+    // keeps the loop responsive so a different egress/bot is picked up
+    // as soon as one frees.
     const nextReset = sharedRateLimiter.getNextResetMs(allIds);
     await new Promise((resolve) => setTimeout(resolve, Math.max(50, Math.min(nextReset, 100))));
   }
@@ -285,21 +336,78 @@ export async function uploadCiphertextBlobToDiscord(
   const ciphertext = normalizeBytes(bytes);
   const webhooks = getConfiguredWebhooks();
   const bots = getConfiguredBots();
-  const sender = await selectSender(webhooks, bots);
   const filename = `${ownerUserId}-${blobId}.bin`;
+
+  // Retry across senders: a Cloudflare IP block takes out every webhook at
+  // once, so the first pick can fail for a reason that has nothing to do with
+  // this chunk. selectSender() consults the limiter, which now knows webhooks
+  // are blocked, and returns a bot instead. Bounded so a genuine outage still
+  // surfaces as an error rather than looping forever.
+  const maxSenderAttempts = 3;
+  let lastUnavailable: unknown = null;
+
+  for (let senderAttempt = 0; senderAttempt < maxSenderAttempts; senderAttempt++) {
+    const sender = await selectSender(webhooks, bots);
+
+    try {
+      return await uploadViaSender(sender, {
+        ownerUserId,
+        blobId,
+        ciphertext,
+        filename,
+        telemetry,
+      });
+    } catch (error) {
+      // Only a transport-level block is worth re-routing; real failures
+      // (chunk too large, auth) must propagate untouched.
+      if (!(error instanceof DiscordUnavailableError)) throw error;
+      lastUnavailable = error;
+      console.warn(JSON.stringify({
+        ts: new Date().toISOString(),
+        scope: "blob-upload-debug",
+        type: "sender_unavailable_failover",
+        senderId: sender.kind === "webhook" ? sender.info.id : sender.info.id,
+        senderKind: sender.kind,
+        cloudflareBlocked: error.cloudflareBlocked,
+        retryAfterMs: error.retryAfterMs,
+        attempt: senderAttempt + 1,
+      }));
+    }
+  }
+
+  throw lastUnavailable ?? new Error("Discord upload failed: no sender available");
+}
+
+async function uploadViaSender(
+  sender: SelectedSender,
+  args: {
+    ownerUserId: string;
+    blobId: string;
+    ciphertext: Uint8Array;
+    filename: string;
+    telemetry?: {
+      requestId?: string;
+      uploadId?: string | null;
+      chunkIndex?: string | null;
+      chunkCount?: string | null;
+    };
+  },
+): Promise<DiscordBlobUploadResult> {
+  const { blobId, ciphertext, filename, telemetry } = args;
 
   if (sender.kind === "webhook") {
     const webhook = sender.info;
     try {
+      const isLegacyRelay = sender.egress.key === "relay";
       const upload = await uploadChunk(
         webhook,
         ciphertext.slice().buffer,
         filename,
         sharedRateLimiter,
         {
-          ...(shouldUseRelayForWebhook(webhook.id)
-            ? { relayBaseUrl: serverConfig.relayBaseUrl }
-            : {}),
+          ...(isLegacyRelay
+            ? { relayBaseUrl: serverConfig.relayBaseUrl, egressKey: "relay" }
+            : { dispatcher: sender.egress.dispatcher, egressKey: sender.egress.key }),
           telemetry: {
             requestId: telemetry?.requestId,
             blobId,
@@ -320,7 +428,7 @@ export async function uploadCiphertextBlobToDiscord(
         attemptCount: upload.attemptCount,
         upstreamStatus: upload.upstreamStatus,
         elapsedMs: upload.elapsedMs,
-        relayEgress: upload.relayEgress,
+        relayEgress: isLegacyRelay ? upload.relayEgress : sender.egress.name,
         limiterRemaining: limiterSnapshot.remaining,
         limiterInFlight: limiterSnapshot.inFlight,
       };
@@ -377,8 +485,50 @@ export async function fetchCiphertextBlobFromDiscord(
 
   const webhooks = getConfiguredWebhooks();
   const webhook = selectWebhookById(webhooks, webhookId);
-  const stream = await downloadChunk(webhook, discordMessageId, sharedRateLimiter);
-  return streamToUint8Array(stream);
+
+  // A webhook-uploaded chunk is only reachable through the webhook route.
+  // Unlike uploads, there is no bot fallback here (a bot outside the
+  // channel's guild gets 403 on this message) — walking the SAME egress pool
+  // used for uploads is the way to read this specific chunk back when one
+  // egress is Cloudflare-blocked, so try each configured egress in turn
+  // rather than surfacing an error the user cannot do anything about.
+  const egressPool = getEgressRoundRobin().nextOrder();
+  let lastError: unknown = null;
+  for (const egress of egressPool) {
+    try {
+      const stream = await downloadChunk(webhook, discordMessageId, sharedRateLimiter, {
+        egressKey: egress.key,
+        dispatcher: egress.dispatcher,
+      });
+      if (egress.key !== DIRECT_EGRESS_KEY) {
+        console.warn(JSON.stringify({
+          ts: new Date().toISOString(),
+          scope: "blob-download-debug",
+          type: "sender_unavailable_failover",
+          senderId: webhookId,
+          senderKind: "webhook",
+          proxyName: egress.name,
+          cloudflareBlocked: true,
+        }));
+      }
+      return streamToUint8Array(stream);
+    } catch (error) {
+      lastError = error;
+      // Only keep trying other egresses for a transport-level block; a real
+      // failure (message deleted, chunk too large, etc.) must propagate.
+      if (!(error instanceof DiscordUnavailableError)) throw error;
+    }
+  }
+  throw lastError ?? new Error(`Download failed for message ${discordMessageId}: no egress available`);
+}
+
+/**
+ * Test-only access to the process-shared limiter. Used to inject a Cloudflare
+ * block and verify failover without stubbing the transport. Not part of the
+ * runtime path.
+ */
+export function __getSharedRateLimiterForTests(): WebhookRateLimiter {
+  return sharedRateLimiter;
 }
 
 /** Number of configured Discord senders (webhooks + enabled bots). */
@@ -423,7 +573,30 @@ export async function deleteCiphertextBlobFromDiscord(
 
   const webhooks = getConfiguredWebhooks();
   const webhook = selectWebhookById(webhooks, webhookId);
-  await deleteChunk(webhook, discordMessageId, sharedRateLimiter);
+
+  // Same rationale as fetchCiphertextBlobFromDiscord: a webhook-owned message
+  // can only be deleted through the webhook route, and there is no bot
+  // fallback. Without this, a trash-purge sweep running during a Cloudflare
+  // block retries each delete, fails, and its own failed attempts refresh
+  // the block's window — a self-sustaining feedback loop observed live on
+  // the ddrive fork (288 blob_delete_failed in one hour while the ban was
+  // active). Walking every egress in the pool breaks that loop instead of
+  // feeding it.
+  const egressPool = getEgressRoundRobin().nextOrder();
+  let lastError: unknown = null;
+  for (const egress of egressPool) {
+    try {
+      await deleteChunk(webhook, discordMessageId, sharedRateLimiter, {
+        egressKey: egress.key,
+        dispatcher: egress.dispatcher,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof DiscordUnavailableError)) throw error;
+    }
+  }
+  throw lastError ?? new Error(`Delete failed for message ${discordMessageId}: no egress available`);
 }
 
 export async function statDiscordBlob(storagePath: string): Promise<{ exists: boolean; size: number }> {
@@ -438,4 +611,6 @@ export function clearDiscordBlobStore(): void {
   // current serverConfig instead of values cached at first use.
   cachedWebhooks = null;
   cachedBots = null;
+  cachedEgressPool = null;
+  sharedEgressRoundRobin = null;
 }

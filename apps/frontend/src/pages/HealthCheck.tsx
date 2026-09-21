@@ -1,15 +1,32 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ShieldCheck, Play, AlertTriangle } from "lucide-react";
 import { gqlRequest } from "../lib/graphql.js";
+import { StatBarsSkeleton } from "../components/files/Skeleton.js";
 
 // ─── GraphQL ──────────────────────────────────────────────────────────────────
 
+const HEALTH_CHECK_STATS = `
+  query HealthCheckStats {
+    healthCheckStats {
+      total healthy missing modified unchecked fileCount latestCheckedAt
+    }
+  }
+`;
+
 const FILES_FOR_HEALTH_CHECK = `
-  query FilesForHealthCheck {
-    filesForHealthCheck {
+  query FilesForHealthCheck($samplePercent: Float, $fileId: ID) {
+    filesForHealthCheck(samplePercent: $samplePercent, fileId: $fileId) {
       fileId fileName chunkCount
       chunks { id index healthStatus healthCheckedAt }
+    }
+  }
+`;
+
+const FILES_WITH_HEALTH_ISSUES = `
+  query FilesWithHealthIssues {
+    filesWithHealthIssues {
+      fileId fileName healthyCount missingCount modifiedCount
     }
   }
 `;
@@ -53,6 +70,24 @@ interface HealthCheckSummary {
   durationMs: number;
 }
 
+interface HealthCheckStats {
+  total: number;
+  healthy: number;
+  missing: number;
+  modified: number;
+  unchecked: number;
+  fileCount: number;
+  latestCheckedAt: string | null;
+}
+
+interface FileIssueInfo {
+  fileId: string;
+  fileName: string;
+  healthyCount: number;
+  missingCount: number;
+  modifiedCount: number;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatDuration(ms: number): string {
@@ -60,6 +95,13 @@ function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+// Compact timestamp for UI labels — "Aug 25, 2026, 12:14" (no seconds).
+function formatDateTime(d: Date): string {
+  const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const time = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return `${date}, ${time}`;
 }
 
 function aggregateChunks(files: FileHealthInfo[]) {
@@ -137,17 +179,53 @@ export function HealthCheck() {
   const [mode, setMode] = useState<"exists" | "integrity">("exists");
   const [samplePercent, setSamplePercent] = useState(100);
   const [fileId, setFileId] = useState<string | null>(null);
+  const [fileSearch, setFileSearch] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [lastResult, setLastResult] = useState<HealthCheckSummary | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const runStartRef = useRef<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Snapshot of the sampling params actually used by the in-flight run, so
+  // the progress poll below stays scoped to what's running even if the user
+  // fiddles with the sliders while a previous run winds down.
+  const [runParams, setRunParams] = useState<{ samplePercent: number; fileId: string | null } | null>(null);
 
-  // Main health data query — polls during run
-  const { data: healthData, isLoading: healthLoading } = useQuery({
-    queryKey: ["filesForHealthCheck"],
+  // DB-wide state panel — lightweight SQL-aggregated stats (no per-chunk
+  // payload). Fetched once on mount and re-fetched after a run completes;
+  // NOT polled on an interval. This replaces the old approach of reusing
+  // filesForHealthCheck (which pulled every chunk of every file — on the
+  // production scraper account, ~7500 files / ~340k chunks, that single
+  // query took 30s+ and reliably crashed the browser tab) to also drive
+  // both the DB-state panel AND the in-run progress bar via a 3s poll.
+  // Progress during a run now uses runProgressQuery below instead, scoped
+  // to the run's own sample.
+  const { data: dbStatsData, isLoading: healthLoading } = useQuery({
+    queryKey: ["healthCheckStats"],
+    queryFn: () => gqlRequest<{ healthCheckStats: HealthCheckStats }>(HEALTH_CHECK_STATS),
+    staleTime: 0,
+  });
+
+  // "Files with issues" table — scoped server-side to only files that
+  // actually have a MISSING/MODIFIED chunk, instead of scanning every file
+  // client-side.
+  const { data: issuesData } = useQuery({
+    queryKey: ["filesWithHealthIssues"],
+    queryFn: () => gqlRequest<{ filesWithHealthIssues: FileIssueInfo[] }>(FILES_WITH_HEALTH_ISSUES),
+    staleTime: 0,
+  });
+
+  // In-run progress — polls, but scoped to the SAME sample the running
+  // health check is actually processing. For a 1% sample on a 7500-file
+  // account this is ~75 files instead of all 7500, keeping the poll cheap
+  // regardless of total account size.
+  const { data: progressData } = useQuery({
+    queryKey: ["filesForHealthCheck", "progress", runParams?.samplePercent, runParams?.fileId],
     queryFn: () =>
-      gqlRequest<{ filesForHealthCheck: FileHealthInfo[] }>(FILES_FOR_HEALTH_CHECK),
+      gqlRequest<{ filesForHealthCheck: FileHealthInfo[] }>(FILES_FOR_HEALTH_CHECK, {
+        samplePercent: runParams?.fileId ? undefined : runParams?.samplePercent,
+        fileId: runParams?.fileId ?? undefined,
+      }),
+    enabled: isRunning && runParams !== null,
     refetchInterval: isRunning ? 3000 : false,
     staleTime: 0,
   });
@@ -158,22 +236,44 @@ export function HealthCheck() {
     queryFn: () => gqlRequest<{ files: Array<{ id: string; name: string }> }>(FILES_QUERY),
   });
 
-  const files = healthData?.filesForHealthCheck ?? [];
+  const stats: HealthCheckStats = dbStatsData?.healthCheckStats ?? {
+    total: 0, healthy: 0, missing: 0, modified: 0, unchecked: 0, fileCount: 0, latestCheckedAt: null,
+  };
+  const filesWithIssues = issuesData?.filesWithHealthIssues ?? [];
+  const progressFiles = progressData?.filesForHealthCheck ?? [];
   const allFiles = filesData?.files ?? [];
-  const stats = aggregateChunks(files);
+  const progressStats = aggregateChunks(progressFiles);
 
-  // Progress estimation during run
+  // File selector: on a large account rendering every file as a native
+  // <select><option> (7500+ elements on the production scraper account)
+  // makes the DOM huge and slow to interact with, and only grows worse as
+  // the scraper keeps adding files. Filter client-side by name and cap the
+  // rendered option count — the field is a rarely-used "check one specific
+  // file" escape hatch, not a primary navigation control.
+  const FILE_SELECTOR_MAX_OPTIONS = 200;
+  const filteredFiles = useMemo(() => {
+    const needle = fileSearch.trim().toLowerCase();
+    const matches = needle
+      ? allFiles.filter((f) => f.name.toLowerCase().includes(needle))
+      : allFiles;
+    return matches.slice(0, FILE_SELECTOR_MAX_OPTIONS);
+  }, [allFiles, fileSearch]);
+
+  // Progress estimation during run — scoped to the run's own sample, not
+  // the whole account.
   const checkedDuringRun = runStartRef.current
-    ? files.flatMap((f) => f.chunks).filter((c) => {
+    ? progressFiles.flatMap((f) => f.chunks).filter((c) => {
         if (!c.healthCheckedAt || !runStartRef.current) return false;
         return new Date(c.healthCheckedAt).getTime() >= runStartRef.current - 1000;
       }).length
     : 0;
+  const progressTotal = progressStats.total;
 
   const handleRun = useCallback(async () => {
     setIsRunning(true);
     setLastResult(null);
     runStartRef.current = Date.now();
+    setRunParams({ samplePercent, fileId });
 
     timerRef.current = setInterval(() => {
       setElapsed(Date.now() - (runStartRef.current ?? Date.now()));
@@ -192,20 +292,11 @@ export function HealthCheck() {
       if (timerRef.current) clearInterval(timerRef.current);
       setElapsed(0);
       runStartRef.current = null;
-      queryClient.invalidateQueries({ queryKey: ["filesForHealthCheck"] });
+      setRunParams(null);
+      queryClient.invalidateQueries({ queryKey: ["healthCheckStats"] });
+      queryClient.invalidateQueries({ queryKey: ["filesWithHealthIssues"] });
     }
   }, [mode, samplePercent, fileId, queryClient]);
-
-  // Files with issues (for results table)
-  const filesWithIssues = files
-    .map((f) => {
-      const h = f.chunks.filter((c) => c.healthStatus === "HEALTHY").length;
-      const m = f.chunks.filter((c) => c.healthStatus === "MISSING").length;
-      const mod = f.chunks.filter((c) => c.healthStatus === "MODIFIED").length;
-      return { ...f, healthyCount: h, missingCount: m, modifiedCount: mod };
-    })
-    .filter((f) => f.missingCount > 0 || f.modifiedCount > 0)
-    .sort((a, b) => (b.missingCount + b.modifiedCount) - (a.missingCount + a.modifiedCount));
 
   const hasMissingIssues = filesWithIssues.some((f) => f.missingCount > 0);
 
@@ -219,23 +310,41 @@ export function HealthCheck() {
       {/* ── DB state panel ── */}
       <section>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-sm font-medium text-ink">Stan bazy danych</h2>
-          {stats.latestChecked && (
+          <h2 className="text-sm font-medium text-ink">Database status</h2>
+          {stats.latestCheckedAt && (
             <span className="font-mono text-xs tabular-nums text-muted">
-              Ostatnio sprawdzone: {stats.latestChecked.toLocaleString()}
+              Last checked: {formatDateTime(new Date(stats.latestCheckedAt))}
             </span>
           )}
         </div>
 
         {healthLoading ? (
-          <p className="text-sm text-muted">Ładowanie…</p>
+          <StatBarsSkeleton rows={4} />
         ) : stats.total === 0 ? (
-          <p className="text-sm text-muted">Brak plików.</p>
+          <p className="text-sm text-muted">No files yet.</p>
         ) : (
           <div className="space-y-3">
             <p className="mb-3 font-mono text-xs tabular-nums text-muted">
-              {stats.total.toLocaleString()} chunków total &middot; {files.length} plików
+              {stats.total.toLocaleString()} chunks total &middot; {stats.fileCount.toLocaleString()} files
             </p>
+            {/* One segmented bar — the whole composition at a glance */}
+            <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-paper-3" role="img" aria-label={`Chunk health: ${stats.healthy} healthy, ${stats.missing} missing, ${stats.modified} modified, ${stats.unchecked} unchecked`}>
+              {[
+                { value: stats.healthy, cls: "bg-success", label: "Healthy" },
+                { value: stats.missing, cls: "bg-error", label: "Missing" },
+                { value: stats.modified, cls: "bg-warning", label: "Modified" },
+                { value: stats.unchecked, cls: "bg-muted/60", label: "Unchecked" },
+              ]
+                .filter((seg) => seg.value > 0)
+                .map((seg) => (
+                  <div
+                    key={seg.label}
+                    className={`h-full ${seg.cls}`}
+                    style={{ width: `${(seg.value / stats.total) * 100}%` }}
+                    title={`${seg.label}: ${seg.value.toLocaleString()} (${((seg.value / stats.total) * 100).toFixed(1)}%)`}
+                  />
+                ))}
+            </div>
             <StatBar label="Healthy" value={stats.healthy} total={stats.total} variant="success" />
             <StatBar label="Missing" value={stats.missing} total={stats.total} variant="error" />
             <StatBar label="Modified" value={stats.modified} total={stats.total} variant="warning" />
@@ -246,19 +355,20 @@ export function HealthCheck() {
 
       {/* ── Run panel ── */}
       <section className="border-t border-rule pt-8">
-        <h2 className="mb-4 text-sm font-medium text-ink">Uruchom health check</h2>
+        <h2 className="mb-4 text-sm font-medium text-ink">Run health check</h2>
 
         <div className="space-y-4">
           {/* Mode toggle */}
           <div className="flex items-center gap-3">
-            <span className="w-16 shrink-0 text-xs text-muted">Tryb</span>
+            <span className="w-20 shrink-0 text-xs text-muted">Mode</span>
             <div className="flex overflow-hidden rounded-md border border-rule-2">
-              {(["exists", "integrity"] as const).map((m) => (
+              {([["exists", "Exists — chunk presence on Discord (fast)"], ["integrity", "Integrity — download & verify each chunk's SHA-256 (slow, thorough)"]] as const).map(([m, hint]) => (
                 <button
                   key={m}
                   type="button"
                   onClick={() => setMode(m)}
-                  className={`px-4 py-1.5 text-sm transition-colors duration-short ease-out ${
+                  title={hint}
+                  className={`px-4 py-1.5 text-sm capitalize transition-colors duration-short ease-out ${
                     mode === m
                       ? "bg-accent text-accent-ink"
                       : "text-ink-2 hover:bg-paper-2"
@@ -270,14 +380,14 @@ export function HealthCheck() {
             </div>
             <span className="text-xs text-muted">
               {mode === "exists"
-                ? "Sprawdza czy chunki istnieją na Discordzie (szybkie)"
-                : "Pobiera i weryfikuje SHA-256 każdego chunka (wolne, dokładne)"}
+                ? "Checks that chunks exist on Discord (fast)"
+                : "Downloads and verifies the SHA-256 of every chunk (slow, thorough)"}
             </span>
           </div>
 
           {/* Sample % */}
           <div className="flex items-center gap-3">
-            <span className="w-16 shrink-0 text-xs text-muted">Sample</span>
+            <span className="w-20 shrink-0 text-xs text-muted">Sample</span>
             <input
               type="range"
               min={1}
@@ -299,17 +409,29 @@ export function HealthCheck() {
 
           {/* File selector */}
           <div className="flex items-center gap-3">
-            <span className="w-16 shrink-0 text-xs text-muted">Plik</span>
+            <span className="w-20 shrink-0 text-xs text-muted">File</span>
+            <input
+              type="text"
+              placeholder="Search files…"
+              value={fileSearch}
+              onChange={(e) => setFileSearch(e.target.value)}
+              className="w-48 rounded-md border border-rule-2 bg-paper px-3 py-1.5 text-sm text-ink outline-2 outline-offset-1 outline-transparent transition-colors duration-short ease-out hover:bg-paper-2 focus:bg-paper focus:outline-focus"
+            />
             <select
               value={fileId ?? ""}
               onChange={(e) => setFileId(e.target.value || null)}
               className="rounded-md border border-rule-2 bg-paper px-3 py-1.5 text-sm text-ink outline-2 outline-offset-1 outline-transparent transition-colors duration-short ease-out hover:bg-paper-2 focus:bg-paper focus:outline-focus"
             >
-              <option value="">Wszystkie pliki</option>
-              {allFiles.map((f) => (
+              <option value="">All files</option>
+              {filteredFiles.map((f) => (
                 <option key={f.id} value={f.id}>{f.name}</option>
               ))}
             </select>
+            {allFiles.length > filteredFiles.length && (
+              <span className="text-xs text-muted">
+                showing {filteredFiles.length} of {allFiles.length} — narrow the search
+              </span>
+            )}
           </div>
 
           <div className="flex justify-end">
@@ -319,7 +441,7 @@ export function HealthCheck() {
               className="flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-ink transition-colors duration-short ease-out hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-paper-3 disabled:text-muted"
             >
               <Play size={14} />
-              {isRunning ? "Trwa sprawdzanie…" : "Uruchom"}
+              {isRunning ? "Running…" : "Run check"}
             </button>
           </div>
         </div>
@@ -329,14 +451,14 @@ export function HealthCheck() {
       {(isRunning || lastResult) && (
         <section className="border-t border-rule pt-8">
           <h2 className="mb-4 text-sm font-medium text-ink">
-            {isRunning ? "Sprawdzanie w toku…" : "Wyniki ostatniego przebiegu"}
+            {isRunning ? "Check in progress…" : "Last run results"}
           </h2>
 
           {isRunning && (
             <div className="mb-4">
               <div className="mb-1 flex justify-between font-mono text-xs tabular-nums text-muted">
                 <span>
-                  Sprawdzono: ~{checkedDuringRun.toLocaleString()} / {stats.total.toLocaleString()} chunków
+                  Checked: ~{checkedDuringRun.toLocaleString()} / {progressTotal.toLocaleString()} chunks
                 </span>
                 <span>{formatDuration(elapsed)}</span>
               </div>
@@ -344,14 +466,14 @@ export function HealthCheck() {
                 <div
                   className="h-2 w-full origin-left rounded-full bg-accent transition-transform duration-short ease-out"
                   style={{
-                    transform: `scaleX(${stats.total > 0 ? Math.min(1, checkedDuringRun / stats.total) : 0})`,
+                    transform: `scaleX(${progressTotal > 0 ? Math.min(1, checkedDuringRun / progressTotal) : 0})`,
                   }}
                 />
               </div>
               {(() => {
                 const elapsedSec = elapsed / 1000;
                 const chunksPerSec = elapsedSec > 0 ? checkedDuringRun / elapsedSec : 0;
-                const remaining = stats.total - checkedDuringRun;
+                const remaining = progressTotal - checkedDuringRun;
                 const etaMs = chunksPerSec > 0 ? (remaining / chunksPerSec) * 1000 : null;
                 return elapsedSec > 2 && chunksPerSec > 0 ? (
                   <div className="mt-2 flex items-center gap-3 font-mono text-xs tabular-nums text-muted">
@@ -394,14 +516,14 @@ export function HealthCheck() {
               <div className="mb-3 flex items-center gap-2">
                 <AlertTriangle size={14} className={hasMissingIssues ? "text-error" : "text-warning"} />
                 <p className="text-xs font-medium text-ink-2">
-                  Pliki z problemami ({filesWithIssues.length})
+                  Files with issues ({filesWithIssues.length})
                 </p>
               </div>
               <div className="overflow-hidden rounded-card border border-rule bg-paper">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-rule">
-                      <th className="px-4 py-2 text-left font-mono text-xs uppercase tracking-wide text-muted">Plik</th>
+                      <th className="px-4 py-2 text-left font-mono text-xs uppercase tracking-wide text-muted">File</th>
                       <th className="px-4 py-2 text-right font-mono text-xs uppercase tracking-wide text-success">Healthy</th>
                       <th className="px-4 py-2 text-right font-mono text-xs uppercase tracking-wide text-error">Missing</th>
                       <th className="px-4 py-2 text-right font-mono text-xs uppercase tracking-wide text-warning">Modified</th>
@@ -425,7 +547,7 @@ export function HealthCheck() {
           {!isRunning && filesWithIssues.length === 0 && lastResult && (
             <p className="flex items-center gap-2 text-sm text-success">
               <ShieldCheck size={16} />
-              Wszystkie sprawdzone chunki są w porządku.
+              All checked chunks are healthy.
             </p>
           )}
         </section>

@@ -164,7 +164,10 @@ export async function unwrapRootFek(filesKey: CryptoKey, wrappedFEK: string, wra
   return unwrapKey(data, filesKey, iv, ["encrypt", "decrypt", "wrapKey", "unwrapKey"]);
 }
 
-export async function encryptFileContentChunk(rootFek: CryptoKey, plaintext: ArrayBuffer): Promise<Uint8Array> {
+export async function encryptFileContentChunk(
+  rootFek: CryptoKey,
+  plaintext: ArrayBuffer | Uint8Array<ArrayBufferLike>,
+): Promise<Uint8Array> {
   const contentKey = await deriveFileContentKey(rootFek);
   return new Uint8Array(await encryptChunk(plaintext, contentKey));
 }

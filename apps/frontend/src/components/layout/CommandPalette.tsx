@@ -14,7 +14,7 @@ interface StaticCommand {
 
 const STATIC_COMMANDS: StaticCommand[] = [
   { id: "go-files", label: "Go to Files", hint: "root", icon: Files, run: (nav) => nav("/") },
-  { id: "go-health", label: "Go to Healthcheck", hint: "page", icon: ShieldCheck, run: (nav) => nav("/health") },
+  { id: "go-health", label: "Go to Health Check", hint: "page", icon: ShieldCheck, run: (nav) => nav("/health") },
   { id: "go-settings", label: "Go to Settings", hint: "page", icon: Settings, run: (nav) => nav("/settings") },
   { id: "log-out", label: "Log out", hint: "session", icon: LogOut, run: (_nav, logout) => logout() },
 ];

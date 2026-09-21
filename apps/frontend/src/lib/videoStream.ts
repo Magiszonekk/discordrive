@@ -1,4 +1,4 @@
-import { fetchBlobBody } from "./api.js";
+import { fetchBlobBody, fetchBlobBodyShared } from "./api.js";
 import { unwrapRootFek, decryptManifest, toBase64 } from "./crypto.js";
 import { deriveFileContentKey } from "@ddv4/processing";
 import { useAuthStore } from "../stores/auth.js";
@@ -67,17 +67,43 @@ export async function ensureServiceWorker(): Promise<ServiceWorkerRegistration> 
   return reg;
 }
 
-export async function registerStream(file: StreamFileInfo): Promise<void> {
-  const { token, filesKey } = useAuthStore.getState();
-  if (!filesKey) throw new Error("Not authenticated");
+/**
+ * Share-link credentials: no logged-in account, the viewer only ever proves
+ * possession of one file's capability token (derived from the URL fragment
+ * secret in SharedFile.tsx). Passing `share` skips the owner auth path
+ * entirely — mirrors fetchBlobBodyShared() vs fetchBlobBody() on the main
+ * thread, and is exactly what downloadSharedFile() already does for the
+ * non-streaming download path.
+ */
+export interface ShareStreamAuth {
+  shareId: string;
+  capabilityToken: string;
+  /** Already-unwrapped file key — a share viewer has no account filesKey to
+   *  unwrap file.wrappedFEK with, so the caller (SharedFile.tsx) derives this
+   *  via the share-specific key chain and hands it over directly. */
+  rootFek: CryptoKey;
+}
 
+export async function registerStream(file: StreamFileInfo, share?: ShareStreamAuth): Promise<void> {
   const reg = await ensureServiceWorker();
   const sw = reg.active;
   if (!sw) throw new Error("Service Worker not active");
 
-  const rootFek = await unwrapRootFek(filesKey, file.wrappedFEK);
+  let rootFek: CryptoKey;
+  let manifestBody: ArrayBuffer;
+  let token = "";
 
-  const manifestBody = await fetchBlobBody(file.manifestBlobId);
+  if (share) {
+    rootFek = share.rootFek;
+    manifestBody = await fetchBlobBodyShared(file.manifestBlobId, share.shareId, share.capabilityToken);
+  } else {
+    const { token: ownerToken, filesKey } = useAuthStore.getState();
+    if (!filesKey) throw new Error("Not authenticated");
+    token = ownerToken ?? "";
+    rootFek = await unwrapRootFek(filesKey, file.wrappedFEK);
+    manifestBody = await fetchBlobBody(file.manifestBlobId);
+  }
+
   const manifest = await decryptManifest(rootFek, toBase64(new Uint8Array(manifestBody)));
 
   const contentKey = await deriveFileContentKey(rootFek);
@@ -121,7 +147,9 @@ export async function registerStream(file: StreamFileInfo): Promise<void> {
         mimeType: file.mimeType,
         chunksAhead: 3,
         chunksBehind: 1,
-        token: token ?? "",
+        ...(share
+          ? { shareId: share.shareId, capabilityToken: share.capabilityToken }
+          : { token }),
         apiBaseUrl: "",
       },
       [channel.port2],

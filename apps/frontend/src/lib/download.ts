@@ -19,6 +19,13 @@ interface DownloadOptions {
 }
 
 interface SharedDownloadOptions {
+  /** Store key for progress tracking (DownloadProgress / useDownloadStore).
+   *  Optional for backward compat, but callers should pass the share's
+   *  fileId so the caller can addDownload() beforehand — without a prior
+   *  addDownload() the store's updateDownload() is a silent no-op (see
+   *  stores/download.ts), which is why the share page never showed a
+   *  progress bar even though the plumbing below looks like it should. */
+  fileId?: string;
   fileName: string;
   mimeType: string;
   manifestBlobId: string;
@@ -118,6 +125,13 @@ export async function downloadFile(options: DownloadOptions): Promise<DownloadRe
 }
 
 export async function downloadSharedFile(options: SharedDownloadOptions & { signal?: AbortSignal }): Promise<DownloadResult> {
+  const downloadStore = options.fileId ? useDownloadStore.getState() : null;
+  const progressKey = options.fileId;
+
+  // Emitted at the very start, before any bytes exist — matches downloadFile()'s
+  // contract below. Consumers must not print `detail.bytes` as if it were a
+  // final size (it is always 0 here); use DownloadProgress/useDownloadStore
+  // for live byte counts instead.
   emitDownloadStarted({ fileName: options.fileName, bytes: 0 });
 
   const useShare = options.shareId && options.capabilityToken;
@@ -125,6 +139,10 @@ export async function downloadSharedFile(options: SharedDownloadOptions & { sign
     ? (blobId: string, signal?: AbortSignal) =>
         fetchBlobBodyShared(blobId, options.shareId!, options.capabilityToken!, signal)
     : (blobId: string, signal?: AbortSignal) => fetchBlobBody(blobId, signal);
+
+  if (progressKey) {
+    downloadStore?.updateDownload(progressKey, { status: DownloadStatus.DECRYPTING });
+  }
 
   const manifestBody = await fetchFn(options.manifestBlobId, options.signal);
   const manifest = await decryptManifest(options.rootFek, toBase64(new Uint8Array(manifestBody)));
@@ -135,6 +153,13 @@ export async function downloadSharedFile(options: SharedDownloadOptions & { sign
   const DOWNLOAD_CONCURRENCY = 20;
   const CHUNK_TIMEOUT_MS = 60_000;
   const MAX_CHUNK_RETRIES = 2;
+
+  if (progressKey) {
+    downloadStore?.updateDownload(progressKey, {
+      status: DownloadStatus.DOWNLOADING,
+      totalChunks: sharedChunkCount,
+    });
+  }
 
   const fetchSharedChunkWithTimeout = async (blobId: string): Promise<ArrayBuffer> => {
     for (let attempt = 0; attempt <= MAX_CHUNK_RETRIES; attempt++) {
@@ -153,6 +178,8 @@ export async function downloadSharedFile(options: SharedDownloadOptions & { sign
   };
 
   let sharedCursor = 0;
+  let sharedDownloadedBytes = 0;
+  let sharedDownloadedChunks = 0;
   const sharedWorker = async () => {
     while (true) {
       const i = sharedCursor++;
@@ -160,15 +187,38 @@ export async function downloadSharedFile(options: SharedDownloadOptions & { sign
       const chunkBody = await fetchSharedChunkWithTimeout(sharedSortedChunks[i]!.blobId);
       const decrypted = await decryptFileContentChunk(options.rootFek, new Uint8Array(chunkBody));
       chunks[i] = decrypted;
+      if (progressKey) {
+        sharedDownloadedBytes += decrypted.byteLength;
+        sharedDownloadedChunks += 1;
+        downloadStore?.updateDownload(progressKey, {
+          downloadedChunks: sharedDownloadedChunks,
+          bytesDownloaded: sharedDownloadedBytes,
+        });
+      }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(DOWNLOAD_CONCURRENCY, sharedChunkCount) }, sharedWorker));
+
+  try {
+    await Promise.all(Array.from({ length: Math.min(DOWNLOAD_CONCURRENCY, sharedChunkCount) }, sharedWorker));
+  } catch (err) {
+    if (progressKey) {
+      downloadStore?.updateDownload(progressKey, { status: DownloadStatus.FAILED });
+    }
+    throw err;
+  }
 
   saveBlob(chunks, options.fileName, options.mimeType);
   const result = {
     fileName: options.fileName,
     bytes: chunks.reduce((total, chunk) => total + chunk.byteLength, 0),
   };
+  if (progressKey) {
+    downloadStore?.updateDownload(progressKey, {
+      status: DownloadStatus.DONE,
+      downloadedChunks: sharedChunkCount,
+      bytesDownloaded: result.bytes,
+    });
+  }
   return result;
 }
 

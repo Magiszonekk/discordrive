@@ -23,20 +23,36 @@ const uploadEngine = new UploadEngine();
 
 // === Browser-specific adapters ===
 
+/**
+ * Blob source, authorized either as a logged-in user (Bearer token) or as a
+ * share-link viewer (X-Share-Id / X-Capability-Token, no account needed —
+ * mirrors fetchBlobBodyShared() on the main thread, used by downloadSharedFile).
+ * Exactly one of `token` / `share` is set per stream: which fields
+ * REGISTER_STREAM's caller populates decides the auth mode, not this class.
+ */
 class SwChunkSource implements ChunkSource {
   constructor(
-    private token: string,
+    private auth: { token: string } | { shareId: string; capabilityToken: string },
     private blobIds: string[],
     private apiBaseUrl = "",
   ) {}
 
+  private endpointFor(blobId: string): string {
+    return "shareId" in this.auth
+      ? `${this.apiBaseUrl}/api/share/blob/${blobId}`
+      : `${this.apiBaseUrl}/api/blob/${blobId}`;
+  }
+
+  private headersFor(): HeadersInit {
+    return "shareId" in this.auth
+      ? { "X-Share-Id": this.auth.shareId, "X-Capability-Token": this.auth.capabilityToken }
+      : { Authorization: `Bearer ${this.auth.token}` };
+  }
+
   async fetch(_fileId: string, chunkIndex: number): Promise<ArrayBuffer> {
     const blobId = this.blobIds[chunkIndex];
     if (!blobId) throw new Error(`No blobId for chunk ${chunkIndex}`);
-    const res = await globalThis.fetch(
-      `${this.apiBaseUrl}/api/blob/${blobId}`,
-      { headers: { Authorization: `Bearer ${this.token}` } },
-    );
+    const res = await globalThis.fetch(this.endpointFor(blobId), { headers: this.headersFor() });
     if (!res.ok) {
       throw new Error(`Blob ${blobId} fetch failed: ${res.status}`);
     }
@@ -123,9 +139,12 @@ self.addEventListener("message", (event: ExtendableMessageEvent) => {
             chunksAhead: msg.chunksAhead ?? 3,
             chunksBehind: msg.chunksBehind ?? 1,
           });
+          const auth = msg.shareId
+            ? { shareId: msg.shareId as string, capabilityToken: msg.capabilityToken as string }
+            : { token: msg.token as string };
           sources.set(
             msg.fileId,
-            new SwChunkSource(msg.token, msg.blobIds as string[], msg.apiBaseUrl ?? ""),
+            new SwChunkSource(auth, msg.blobIds as string[], msg.apiBaseUrl ?? ""),
           );
           port?.postMessage({ type: "STREAM_REGISTERED", fileId: msg.fileId });
         })

@@ -2,7 +2,14 @@
 
 import { createSchema } from "graphql-yoga";
 import { resolveRequestAuth, isBackendOnly, type ResolvedAuth } from "./middleware/auth.js";
-import { enforceRateLimit } from "./middleware/rate-limit.js";
+import {
+  enforceRateLimit,
+  enforceKeyRateLimit,
+  accountBucketKey,
+  bucketKey,
+  recordFailure,
+  resetKey,
+} from "./middleware/rate-limit.js";
 import * as authResolvers from "./resolvers/auth.js";
 import * as fileResolvers from "./resolvers/files.js";
 import * as folderResolvers from "./resolvers/folders.js";
@@ -158,6 +165,12 @@ export function buildSchema() {
         encryptedMimeType: String
         wrappedFEK: String
         wrappedFEKPreview: String
+        # Needed by SharedFile.tsx's video player to size the byte-range/chunk
+        # protocol the same way the owner's Dashboard does (see FILES_QUERY).
+        # Not permission-gated like encryptedName/encryptedMimeType — sizes
+        # and chunk counts aren't file content, just transport shape.
+        totalCiphertextBytes: String
+        chunkCount: Int
       }
 
       type ShareAccess {
@@ -242,6 +255,24 @@ export function buildSchema() {
         durationMs: Int!
       }
 
+      type HealthCheckStats {
+        total: Int!
+        healthy: Int!
+        missing: Int!
+        modified: Int!
+        unchecked: Int!
+        fileCount: Int!
+        latestCheckedAt: DateTime
+      }
+
+      type HealthCheckFileIssue {
+        fileId: ID!
+        fileName: String!
+        healthyCount: Int!
+        missingCount: Int!
+        modifiedCount: Int!
+      }
+
       input ChunkHealthUpdateInput {
         chunkId: ID!
         status: String!
@@ -287,6 +318,8 @@ export function buildSchema() {
         storageUsage: StorageUsage!
         accessShare(shareId: ID!, capabilityToken: String!): ShareAccess
         filesForHealthCheck(samplePercent: Float, fileId: ID): [HealthCheckFile!]!
+        healthCheckStats: HealthCheckStats!
+        filesWithHealthIssues: [HealthCheckFileIssue!]!
         replicationStatus: ReplicationStatus!
       }
 
@@ -390,7 +423,7 @@ export function buildSchema() {
       Query: {
         getLoginChallenge: async (_parent: unknown, args: { emailOrUsername: string }, ctx: Context) => {
           requireFullMode();
-          enforceRateLimit(ctx.ip, "auth");
+          enforceRateLimit(ctx.ip, "challenge");
           return authResolvers.getLoginChallenge(args.emailOrUsername);
         },
         me: async (_parent: unknown, _args: unknown, ctx: Context) => {
@@ -472,9 +505,17 @@ export function buildSchema() {
           const auth = requireAuth(ctx);
           return fileResolvers.getStorageUsage(auth.userId);
         },
-        filesForHealthCheck: async (_parent: unknown, _args: unknown, ctx: Context) => {
+        filesForHealthCheck: async (_parent: unknown, args: { samplePercent?: number; fileId?: string }, ctx: Context) => {
           const auth = requireAuth(ctx);
-          return fileResolvers.getFilesForHealthCheckDisplay(auth.userId);
+          return fileResolvers.getFilesForHealthCheckDisplay(auth.userId, args.samplePercent ?? null, args.fileId ?? null);
+        },
+        healthCheckStats: async (_parent: unknown, _args: unknown, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return fileResolvers.getHealthCheckStats(auth.userId);
+        },
+        filesWithHealthIssues: async (_parent: unknown, _args: unknown, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return fileResolvers.getFilesWithHealthIssues(auth.userId);
         },
         replicationStatus: async (_parent: unknown, _args: unknown, ctx: Context) => {
           const auth = requireAuth(ctx);
@@ -500,8 +541,24 @@ export function buildSchema() {
         },
         login: async (_parent: unknown, args: { emailOrUsername: string; serverAuthProof: string; deviceName?: string }, ctx: Context) => {
           requireFullMode();
-          enforceRateLimit(ctx.ip, "auth");
-          return authResolvers.login(args.emailOrUsername, args.serverAuthProof, args.deviceName ?? null);
+          // Brute-force guards: the per-(account, IP) bucket only grows on a
+          // failed attempt and is reset on success; the per-IP bucket catches
+          // distributed spraying across many accounts from one egress IP. Both
+          // are checked without consuming a slot — success must not burn budget.
+          const accountKey = accountBucketKey("loginAccount", args.emailOrUsername, ctx.ip);
+          enforceKeyRateLimit(accountKey, "loginAccount");
+          enforceKeyRateLimit(bucketKey("login", ctx.ip), "login");
+          try {
+            const result = await authResolvers.login(args.emailOrUsername, args.serverAuthProof, args.deviceName ?? null);
+            resetKey(accountKey);
+            return result;
+          } catch (error) {
+            if (error instanceof Error && error.message === "Invalid credentials") {
+              recordFailure(accountKey, "loginAccount");
+              recordFailure(bucketKey("login", ctx.ip), "login");
+            }
+            throw error;
+          }
         },
         refreshSession: async (_parent: unknown, args: { refreshToken: string }, ctx: Context) => {
           requireFullMode();

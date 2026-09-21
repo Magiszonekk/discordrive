@@ -88,6 +88,9 @@ describe("share access core contract", () => {
         previewBlobId: `${fileId}:preview`,
         wrappedFEK: Buffer.from("wrapped-share-fek").toString("base64"),
         wrappedFEKPreview: undefined,
+        // Not permission-gated (transport shape, not content) — always present.
+        totalCiphertextBytes: "321",
+        chunkCount: 1,
       },
     ]);
   });

@@ -6,27 +6,43 @@ import { unwrapKeyPacked, toBase64, fromBase64, decryptMeta } from "../lib/crypt
 import { deriveShareWrapKey, deriveShareAuthKey, deriveShareCapabilityToken } from "@ddv4/processing";
 import type { ShareAccessResponse } from "@ddv4/types/api";
 import { useNotificationStore } from "../stores/notifications.js";
+import { useDownloadStore } from "../stores/download.js";
 import { AuthCard, authPrimaryButtonClass } from "../components/layout/AuthCard.js";
+import { VideoPlayer } from "../components/video/VideoPlayer.js";
+import { DownloadProgress } from "../components/files/DownloadProgress.js";
 
 const ACCESS_SHARE = `
   query AccessShare($shareId: ID!, $capabilityToken: String!) {
     accessShare(shareId: $shareId, capabilityToken: $capabilityToken) {
       shareId
       wrappedAKShare
-      wrappedObjectKeys { fileId primaryManifestBlobId encryptedName encryptedMimeType wrappedFEK }
+      wrappedObjectKeys {
+        fileId
+        primaryManifestBlobId
+        encryptedName
+        encryptedMimeType
+        wrappedFEK
+        totalCiphertextBytes
+        chunkCount
+      }
       allowContent
     }
   }
 `;
 
+const VIDEO_MIME_PREFIX = "video/";
+
 interface ResolvedShareInfo {
   shareId: string;
+  fileId: string;
   fileName: string;
   mimeType: string;
   allowContent: boolean;
   manifestBlobId: string;
   rootFek: CryptoKey;
   capabilityTokenB64: string;
+  totalCiphertextBytes: string;
+  chunkCount: number;
 }
 
 export function SharedFile() {
@@ -34,13 +50,18 @@ export function SharedFile() {
   const [info, setInfo] = useState<ResolvedShareInfo | null>(null);
   const [error, setError] = useState("");
   const [downloading, setDownloading] = useState(false);
+  const [showPlayer, setShowPlayer] = useState(false);
   const pushNotification = useNotificationStore((s) => s.push);
+  const addDownload = useDownloadStore((s) => s.addDownload);
 
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ fileName: string; bytes: number }>).detail;
       if (!detail) return;
-      pushNotification("success", `Download started: ${detail.fileName} (${detail.bytes} B)`);
+      // `detail.bytes` is always 0 here — this event fires at download start,
+      // before any bytes exist. Real-time byte/percent/ETA now come from
+      // <DownloadProgress /> (useDownloadStore), not this notification.
+      pushNotification("success", `Download started: ${detail.fileName}`);
     };
     window.addEventListener(DOWNLOAD_SUCCESS_EVENT, handler as EventListener);
     return () => window.removeEventListener(DOWNLOAD_SUCCESS_EVENT, handler as EventListener);
@@ -75,7 +96,15 @@ export function SharedFile() {
         const shareKey = await unwrapKeyPacked(accessShare.wrappedAKShare, shareWrapKey, ["wrapKey", "unwrapKey"]);
         const wrappedFEK = accessShare.wrappedObjectKeys[0]?.wrappedFEK;
         if (!wrappedFEK) throw new Error("Share does not include file decryption material");
-        const rootFek = await unwrapKeyPacked(wrappedFEK, shareKey, ["wrapKey", "unwrapKey"]);
+        // Needs "encrypt"/"decrypt" too, not just "wrapKey"/"unwrapKey" — this
+        // key is used directly below via decryptMeta() (AES-GCM decrypt) for
+        // the file name/mime type, and later handed to VideoPlayer/download
+        // helpers that also decrypt content with it. The owner-session path
+        // (unwrapRootFek in lib/crypto.ts) already grants all four usages;
+        // the share-link path was missing "encrypt"/"decrypt", which surfaced
+        // as "key.usages does not permit this operation" the moment a share
+        // link was opened in an incognito/logged-out browser.
+        const rootFek = await unwrapKeyPacked(wrappedFEK, shareKey, ["encrypt", "decrypt", "wrapKey", "unwrapKey"]);
 
         const key = accessShare.wrappedObjectKeys[0];
         const fileName = key?.encryptedName
@@ -89,12 +118,15 @@ export function SharedFile() {
 
         setInfo({
           shareId: accessShare.shareId,
+          fileId: key?.fileId ?? "",
           fileName,
           mimeType,
           allowContent: accessShare.allowContent,
           manifestBlobId,
           rootFek,
           capabilityTokenB64,
+          totalCiphertextBytes: key?.totalCiphertextBytes ?? "0",
+          chunkCount: key?.chunkCount ?? 0,
         });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load share");
@@ -107,7 +139,9 @@ export function SharedFile() {
     setDownloading(true);
     setError("");
     try {
+      addDownload(info.fileId, info.fileName, info.mimeType, info.chunkCount, Number(info.totalCiphertextBytes));
       await downloadSharedFile({
+        fileId: info.fileId,
         fileName: info.fileName,
         mimeType: info.mimeType,
         manifestBlobId: info.manifestBlobId,
@@ -140,20 +174,57 @@ export function SharedFile() {
     );
   }
 
+  const isVideo = info.mimeType.startsWith(VIDEO_MIME_PREFIX);
+
   return (
     <AuthCard title="Shared file">
       <div className="mb-6 space-y-1 text-sm text-ink-2">
         <p className="truncate font-medium text-ink">{info.fileName}</p>
         <p className="font-mono text-xs text-muted">{info.mimeType}</p>
       </div>
-      <button
-        onClick={handleDownload}
-        disabled={downloading || !info.allowContent}
-        className={authPrimaryButtonClass}
-      >
-        {downloading ? "Downloading…" : "Download"}
-      </button>
+      <DownloadProgress />
+      <div className="flex gap-2">
+        {isVideo && (
+          <button
+            onClick={() => setShowPlayer(true)}
+            disabled={!info.allowContent}
+            className={authPrimaryButtonClass}
+          >
+            Play
+          </button>
+        )}
+        <button
+          onClick={handleDownload}
+          disabled={downloading || !info.allowContent}
+          className={authPrimaryButtonClass}
+        >
+          {downloading ? "Downloading…" : "Download"}
+        </button>
+      </div>
       {error && <p className="mt-3 text-sm text-error">{error}</p>}
+
+      {showPlayer && (
+        <VideoPlayer
+          file={{
+            fileId: info.fileId,
+            fileName: info.fileName,
+            mimeType: info.mimeType,
+            size: info.totalCiphertextBytes,
+            chunkSize: info.chunkCount > 0
+              ? Math.ceil(Number(info.totalCiphertextBytes) / info.chunkCount)
+              : 0,
+            chunkCount: info.chunkCount,
+            wrappedFEK: "",
+            manifestBlobId: info.manifestBlobId,
+          }}
+          share={{
+            shareId: info.shareId,
+            capabilityToken: info.capabilityTokenB64,
+            rootFek: info.rootFek,
+          }}
+          onClose={() => setShowPlayer(false)}
+        />
+      )}
     </AuthCard>
   );
 }

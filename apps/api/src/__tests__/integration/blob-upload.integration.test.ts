@@ -452,6 +452,7 @@ describe("blob transport handlers", () => {
         messageId: "discord-message-blob-discord-upload",
         channelId: "discord-channel-user-123",
         transportPath: "direct",
+        egressKey: "direct",
         attemptCount: 1,
         upstreamStatus: 200,
         elapsedMs: 5,

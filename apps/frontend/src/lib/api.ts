@@ -23,6 +23,13 @@ export interface BlobUploadResponse {
 export interface BlobUploadRequestOptions {
   extraHeaders?: Record<string, string>;
   authToken?: string;
+  /**
+   * Aborts the in-flight PUT. Without this the browser keeps streaming the
+   * whole chunk after a user cancel — the retry loop only checks `aborted`
+   * *between* attempts, so a cancel appeared to do nothing until the current
+   * 8 MiB chunk finished.
+   */
+  signal?: AbortSignal;
 }
 
 export class BlobUploadError extends Error {
@@ -32,13 +39,18 @@ export class BlobUploadError extends Error {
   }
 }
 
-function toUploadBody(data: ArrayBuffer | Uint8Array): ArrayBuffer {
-  return data instanceof ArrayBuffer ? data : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+// `fetch` accepts any BufferSource as a body and copies it into the request
+// itself, so slicing a private ArrayBuffer here only doubled peak memory for
+// every in-flight chunk. Views are passed through untouched.
+type UploadBody = ArrayBuffer | Uint8Array<ArrayBufferLike>;
+
+function toUploadBody(data: UploadBody): BodyInit {
+  return data as BodyInit;
 }
 
 export async function uploadBlobToApi(
   blobId: string,
-  data: ArrayBuffer | Uint8Array,
+  data: UploadBody,
   options: BlobUploadRequestOptions = {},
 ): Promise<BlobUploadResponse> {
   const authHeaders = options.authToken
@@ -53,6 +65,7 @@ export async function uploadBlobToApi(
       ...(options.extraHeaders ?? {}),
     },
     body: toUploadBody(data),
+    signal: options.signal,
   });
 
   if (!response.ok) {

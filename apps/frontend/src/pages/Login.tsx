@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router";
+import { Eye, EyeOff, Lock } from "lucide-react";
 import { gqlRequest } from "../lib/graphql.js";
 import { loginCryptoFromKey, deriveLoginMaterial, toBase64 } from "../lib/crypto.js";
+import { getRateLimitWaitSeconds } from "../lib/rateLimit.js";
+import { getGraphQLErrorMessage } from "../lib/graphql.js";
 import { useAuthStore } from "../stores/auth.js";
 import { AuthCard, authInputClass, authLabelClass, authPrimaryButtonClass } from "../components/layout/AuthCard.js";
 import type { LoginResponse, LoginChallengeDto } from "@ddv4/types/api";
@@ -36,13 +39,25 @@ const LOGIN_MUTATION = `
 export function Login() {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [rateLimitWait, setRateLimitWait] = useState(0);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const setAuth = useAuthStore((s) => s.setAuth);
 
+  // Live countdown for rate-limit rejections; the button stays disabled while > 0.
+  const countdownActive = rateLimitWait > 0;
+
+  useEffect(() => {
+    if (rateLimitWait <= 0) return;
+    const id = window.setTimeout(() => setRateLimitWait((w) => Math.max(0, w - 1)), 1000);
+    return () => window.clearTimeout(id);
+  }, [rateLimitWait]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (countdownActive) return;
     setError("");
     setLoading(true);
 
@@ -78,7 +93,13 @@ export function Login() {
       setAuth(login.token, login.user, ark, filesKey ?? ark);
       navigate("/");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      const wait = getRateLimitWaitSeconds(err);
+      if (wait !== null) {
+        setError(`Too many attempts. Wait ${wait}s before trying again.`);
+        setRateLimitWait(wait);
+      } else {
+        setError(getGraphQLErrorMessage(err));
+      }
     } finally {
       setLoading(false);
     }
@@ -110,18 +131,38 @@ export function Login() {
         </div>
         <div>
           <label className={authLabelClass}>Password</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            className={authInputClass}
-          />
+          <div className="relative">
+            <input
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              autoComplete="current-password"
+              className={`${authInputClass} pr-11`}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted transition-colors duration-micro ease-out hover:text-ink-2"
+            >
+              {showPassword ? <EyeOff size={16} strokeWidth={1.75} /> : <Eye size={16} strokeWidth={1.75} />}
+            </button>
+          </div>
         </div>
         {error && <p className="text-sm text-error">{error}</p>}
-        <button type="submit" disabled={loading} className={authPrimaryButtonClass}>
-          {loading ? "Logging in…" : "Log in"}
+        {countdownActive && (
+          <p className="text-sm text-warning" role="status">
+            Rate limited — try again in {rateLimitWait}s
+          </p>
+        )}
+        <button type="submit" disabled={loading || countdownActive} className={authPrimaryButtonClass}>
+          {countdownActive ? `Wait ${rateLimitWait}s…` : loading ? "Logging in…" : "Log in"}
         </button>
+        <p className="flex items-center justify-center gap-1.5 pt-1 font-mono text-[11px] tracking-wide text-muted">
+          <Lock size={11} strokeWidth={1.75} />
+          End-to-end encrypted &middot; AES-256-GCM &middot; Argon2id
+        </p>
       </form>
     </AuthCard>
   );

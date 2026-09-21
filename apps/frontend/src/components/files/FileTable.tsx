@@ -11,12 +11,14 @@ import {
   Folder,
   FolderDown,
   GripVertical,
+  Lock,
   MoreVertical,
   Pencil,
   Play,
   Search,
   Share2,
   Trash2,
+  UploadCloud,
 } from "lucide-react";
 
 export interface FileItem {
@@ -147,7 +149,7 @@ export function FileTable({
         <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
         <input
           type="text"
-          placeholder="Search files…"
+          placeholder="Filter files…"
           value={query}
           onChange={(e) => { setQuery(e.target.value); setPage(1); }}
           className="h-11 w-full rounded-md border border-rule-2 bg-paper py-3 pl-10 pr-4 text-sm text-ink outline-2 outline-offset-1 outline-transparent transition-colors duration-short ease-out placeholder:text-muted hover:bg-paper-2 focus:bg-paper focus:outline-focus"
@@ -189,7 +191,7 @@ export function FileTable({
             <tr className="border-b border-rule">
               <th className="w-8" />
               <SortHeader label="Name" sortKey="name" current={sort} onSort={handleSort} />
-              <SortHeader label="Size" sortKey="size" current={sort} onSort={handleSort} />
+              <SortHeader label="Size" sortKey="size" current={sort} onSort={handleSort} className="text-right" />
               <SortHeader label="Date" sortKey="date" current={sort} onSort={handleSort} />
               <th className="w-32" />
             </tr>
@@ -248,13 +250,20 @@ export function FileTable({
                   e.dataTransfer.setData(DRAG_TYPE, encodeDrag({ type: "file", id: file.id }));
                   e.dataTransfer.effectAllowed = "move";
                 }}
-                className="border-b border-rule transition-colors duration-short ease-out hover:bg-paper-2"
+                className="group border-b border-rule transition-colors duration-short ease-out hover:bg-paper-2"
               >
                 <td className="px-2 py-3 text-muted cursor-grab active:cursor-grabbing">
                   <GripVertical size={14} />
                 </td>
-                <td className="px-4 py-3 text-ink">{file.name}</td>
-                <td className="px-4 py-3 text-sm text-muted"><span className="font-mono tabular-nums">{formatSize(file.size)}</span></td>
+                <td className="px-4 py-3 text-ink">
+                  <span className="inline-flex items-center gap-2.5">
+                    <span className={`rounded-chip border px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide ${typeBadgeClass(file.mimeType)}`}>
+                      {getTypeBadge(file.mimeType)}
+                    </span>
+                    {file.name}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-sm text-muted text-right"><span className="font-mono tabular-nums">{formatSize(file.size)}</span></td>
                 <td className="px-4 py-3 text-sm text-muted"><span className="font-mono tabular-nums">{formatDate(file.createdAt)}</span></td>
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-end gap-1">
@@ -283,7 +292,21 @@ export function FileTable({
 }
 
 function EmptyState() { return <div className="rounded-card border border-dashed border-rule bg-paper px-4 py-10 text-center text-sm text-muted"><EmptyCopy /></div>; }
-function EmptyCopy() { return <><p className="mb-1 text-base text-ink-2">No files yet</p><p>Drop files above or click Upload</p></>; }
+function EmptyCopy() {
+  return (
+    <div className="flex flex-col items-center">
+      <span className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-paper-2 text-muted">
+        <UploadCloud size={20} strokeWidth={1.5} />
+      </span>
+      <p className="mb-1 text-base font-medium text-ink-2">No files yet</p>
+      <p>Drop files above or click Upload to get started.</p>
+      <p className="mt-4 inline-flex items-center gap-1.5 border-t border-rule pt-3 font-mono text-[11px] tracking-wide">
+        <Lock size={11} strokeWidth={1.75} />
+        Every file is encrypted in your browser before it leaves this device
+      </p>
+    </div>
+  );
+}
 function FilteredEmptyState() { return <div className="rounded-card border border-rule bg-paper px-4 py-8 text-center text-sm text-muted">No files match your search</div>; }
 
 function FolderCard({
@@ -374,7 +397,7 @@ function FileCard({ file, onDownload, onPlay, onShare, onDelete }: { file: FileI
   return (
     <div className="rounded-card border border-rule bg-paper p-4">
       <div className="flex items-start gap-3">
-        <div className="rounded-md bg-paper-2 px-3 py-2 font-mono text-xs font-semibold uppercase tracking-wide text-ink-2">{getFileBadge(file.mimeType)}</div>
+        <div className="rounded-md bg-paper-2 px-3 py-2 font-mono text-xs font-semibold uppercase tracking-wide text-ink-2">{getTypeBadge(file.mimeType)}</div>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -431,11 +454,11 @@ function FileActionMenu({ fileName, onDownload, onPlay, onShare, onDelete }: { f
   );
 }
 
-function SortHeader({ label, sortKey, current, onSort }: { label: string; sortKey: SortKey; current: { key: SortKey; dir: SortDir }; onSort: (key: SortKey) => void }) {
+function SortHeader({ label, sortKey, current, onSort, className }: { label: string; sortKey: SortKey; current: { key: SortKey; dir: SortDir }; onSort: (key: SortKey) => void; className?: string }) {
   const active = current.key === sortKey;
   return (
-    <th className="cursor-pointer select-none px-4 py-3 text-left font-mono text-xs font-medium uppercase tracking-wide text-muted transition-colors duration-short ease-out hover:text-ink-2" onClick={() => onSort(sortKey)}>
-      <span className="inline-flex items-center gap-1">
+    <th className={`cursor-pointer select-none px-4 py-3 font-mono text-xs font-medium uppercase tracking-wide text-muted transition-colors duration-short ease-out hover:text-ink-2 ${className ?? "text-left"}`} onClick={() => onSort(sortKey)}>
+      <span className={`inline-flex items-center gap-1 ${className?.includes("text-right") ? "justify-end w-full" : ""}`}>
         {label}
         {active ? current.dir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} /> : <span className="w-3" />}
       </span>
@@ -455,10 +478,40 @@ function formatSize(bytes: string): string {
   return `${(size / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-function formatDate(value: string): string { return new Date(value).toLocaleString(); }
-function getFileBadge(mimeType: string): string {
+// Per-type accent for the file-type badge — semantic hues from the Cobalt
+// token set (success green / error red / warning amber / muted), everything
+// else stays neutral so the table doesn't turn into a rainbow.
+function typeBadgeClass(mimeType: string): string {
+  switch (getTypeBadge(mimeType)) {
+    case "image":
+    case "video":
+      return "border-accent/40 text-accent";
+    case "pdf":
+    case "doc":
+      return "border-error/40 text-error";
+    case "sheet":
+      return "border-success/40 text-success";
+    case "archive":
+      return "border-warning/40 text-warning";
+    default:
+      return "";
+  }
+}
+
+function formatDate(value: string): string {
+  const d = new Date(value);
+  const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const time = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return `${date} ${time}`;
+}
+function getTypeBadge(mimeType: string): string {
   if (mimeType.startsWith("video/")) return "video";
   if (mimeType.startsWith("image/")) return "image";
   if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType === "application/pdf") return "pdf";
+  if (mimeType.includes("spreadsheet") || mimeType.includes("excel") || mimeType.includes("csv")) return "sheet";
+  if (mimeType.includes("word") || mimeType.includes("document")) return "doc";
+  if (mimeType.includes("zip") || mimeType.includes("gzip") || mimeType.includes("tar") || mimeType.includes("compressed")) return "archive";
+  if (mimeType.startsWith("text/")) return "text";
   return "file";
 }

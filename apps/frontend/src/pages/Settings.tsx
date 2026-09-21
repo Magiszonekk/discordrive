@@ -6,6 +6,8 @@ import { useThemeStore, THEME_PRESETS } from "../stores/theme.js";
 import { useColorModeStore, type ColorMode } from "../stores/colorMode.js";
 import { authInputClass, authLabelClass } from "../components/layout/AuthCard.js";
 import { ApiKeysSection } from "../components/settings/ApiKeysSection.js";
+import { BiometricSection } from "../components/settings/BiometricSection.js";
+import { StatTilesSkeleton } from "../components/files/Skeleton.js";
 import {
   deriveLoginMaterial,
   generateSalt,
@@ -28,7 +30,6 @@ const CHANGE_PASSWORD_MUTATION = `
 
 export function Settings() {
   const user = useAuthStore((s) => s.user);
-  const logout = useAuthStore((s) => s.logout);
   const setUser = useAuthStore((s) => s.setUser);
   const accentName = useThemeStore((s) => s.accentName);
   const setAccentPreset = useThemeStore((s) => s.setAccentPreset);
@@ -232,28 +233,30 @@ export function Settings() {
           </div>
         </section>
 
+        <BiometricSection />
+
         <ApiKeysSection />
 
         {/* Storage */}
         <section className="border-t border-rule pt-8">
           <h2 className="mb-4 text-lg font-semibold text-ink">Storage Usage</h2>
           {data ? (
-            <div className="space-y-1">
-              <div className="flex items-baseline gap-2">
-                <span className="font-mono text-2xl font-semibold tabular-nums text-ink">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div className="rounded-md bg-paper-2 px-4 py-3">
+                <p className="mb-1 font-mono text-[11px] uppercase tracking-wide text-muted">Used</p>
+                <p className="font-mono text-lg font-semibold tabular-nums text-ink">
                   {formatSize(data.storageUsage.totalBytes)}
-                </span>
-                <span className="text-sm text-muted">used</span>
+                </p>
               </div>
-              <div className="flex items-baseline gap-2">
-                <span className="font-mono text-sm tabular-nums text-ink-2">
+              <div className="rounded-md bg-paper-2 px-4 py-3">
+                <p className="mb-1 font-mono text-[11px] uppercase tracking-wide text-muted">Files</p>
+                <p className="font-mono text-lg font-semibold tabular-nums text-ink">
                   {data.storageUsage.fileCount.toLocaleString()}
-                </span>
-                <span className="text-sm text-muted">files</span>
+                </p>
               </div>
             </div>
           ) : (
-            <p className="text-sm text-muted">Loading…</p>
+            <StatTilesSkeleton />
           )}
         </section>
 
@@ -317,8 +320,8 @@ export function Settings() {
                     style={{ backgroundColor: preset.accent }}
                   />
                   <span
-                    className={`font-mono text-[10px] uppercase tracking-wide ${
-                      isSelected ? "text-ink" : "text-muted"
+                    className={`font-mono text-[11px] uppercase tracking-wide transition-colors duration-short ease-out ${
+                      isSelected ? "text-ink" : "text-ink-2"
                     }`}
                   >
                     {preset.name}
@@ -336,16 +339,6 @@ export function Settings() {
             <span className="font-mono text-xs font-medium uppercase tracking-wide text-muted">Preview</span>
           </div>
         </section>
-
-        <div className="border-t border-rule pt-8">
-          <button
-            type="button"
-            onClick={logout}
-            className="h-11 w-full rounded-md border border-error px-4 text-sm font-medium text-error transition-colors duration-short ease-out hover:bg-error hover:text-error-ink md:w-auto"
-          >
-            Log out
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -353,8 +346,10 @@ export function Settings() {
 
 function formatSize(bytes: string): string {
   const size = Number(bytes);
+  if (!Number.isFinite(size) || size < 0) return "\u2014";
   if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(size / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  if (size < 1024 ** 2) return `${(size / 1024).toFixed(1)} KB`;
+  if (size < 1024 ** 3) return `${(size / 1024 ** 2).toFixed(1)} MB`;
+  if (size < 1024 ** 4) return `${(size / 1024 ** 3).toFixed(2)} GB`;
+  return `${(size / 1024 ** 4).toFixed(2)} TB`;
 }

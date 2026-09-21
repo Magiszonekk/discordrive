@@ -292,9 +292,17 @@ export async function deriveShareCapabilityToken(authKey: CryptoKey): Promise<Ui
 
 // === Chunk encryption/decryption ===
 
-export async function encryptChunk(chunk: ArrayBuffer, fek: CryptoKey): Promise<ArrayBuffer> {
+// Accepts any BufferSource so callers can hand over a view straight from the
+// chunker instead of materialising a private ArrayBuffer copy first. WebCrypto
+// already copies its input internally, so the extra `.slice()` callers used to
+// do was pure overhead — at 8 MiB a chunk and 20 in flight it was hundreds of
+// MiB of avoidable live heap.
+export async function encryptChunk(
+  chunk: ArrayBuffer | Uint8Array<ArrayBufferLike>,
+  fek: CryptoKey,
+): Promise<ArrayBuffer> {
   const iv = randomBytes(IV_LENGTH);
-  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv as BufferSource }, fek, chunk);
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv as BufferSource }, fek, chunk as BufferSource);
   const output = new Uint8Array(iv.byteLength + ciphertext.byteLength);
   output.set(iv, 0);
   output.set(new Uint8Array(ciphertext), iv.byteLength);
