@@ -480,68 +480,141 @@ function parseChunkIndex(blobId: string): number {
   return m ? Number(m[1]) : 0;
 }
 
-async function runTasksWithConcurrency<T>(tasks: Array<() => Promise<T>>, concurrency: number): Promise<T[]> {
-  const results: T[] = new Array(tasks.length);
-  let cursor = 0;
-  async function worker() {
-    while (true) {
-      const index = cursor++;
-      if (index >= tasks.length) return;
-      results[index] = await tasks[index]();
-    }
+// Prisma's connection pool defaults to num_cpus*2+1 (9 on this box). The old
+// implementation here did a Promise.all over every file with one findMany()
+// per file — fine for a handful of files, but an account with thousands
+// (seen in production: 4779, then 7500+) opened thousands of concurrent/
+// sequential queries, starving the box and even timing out the frontend tab
+// polling it every 3s. Replaced with a single bulk query per run (see
+// bulkFetchDisplayChunks / bulkFetchRunChunks below) instead of bounding
+// concurrency on an N+1 — a single indexed scan over ownerUserId stayed
+// ~2s even at 300k+ BlobTransport rows in production testing.
+
+// Above ~this many sampled files, building one WHERE blobId LIKE '<id>:chunk:%'
+// OR-branch per file stops being a bandwidth win over just scanning every
+// chunk row the owner has (indexed on ownerUserId, ~2s even at 300k+ rows —
+// see the healthcheck-N+1 incident note above FILES_HEALTH_CHECK_DB_CONCURRENCY)
+// and filtering/grouping in JS. Below the threshold, the targeted OR query
+// keeps the transferred payload proportional to the actual sample.
+const HEALTH_CHECK_TARGETED_QUERY_FILE_THRESHOLD = 300;
+
+function groupChunksByFileId<T extends { blobId: string }>(
+  chunks: T[],
+  fileIds: Set<string>,
+): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const chunk of chunks) {
+    const sep = chunk.blobId.indexOf(":chunk:");
+    if (sep === -1) continue;
+    const chunkFileId = chunk.blobId.slice(0, sep);
+    if (!fileIds.has(chunkFileId)) continue;
+    const bucket = grouped.get(chunkFileId);
+    if (bucket) bucket.push(chunk);
+    else grouped.set(chunkFileId, [chunk]);
   }
-  const workers = Array.from({ length: Math.max(1, Math.min(concurrency, tasks.length || 1)) }, () => worker());
-  await Promise.all(workers);
-  return results;
+  return grouped;
 }
 
-// Prisma's connection pool defaults to num_cpus*2+1 (9 on this box). A
-// Promise.all over every file fired one findMany() per file simultaneously —
-// fine for a handful of files, but an account with thousands (seen in
-// production: 4779) opened thousands of concurrent queries against a 9-slot
-// pool, starving every other request on the box until pending ones hit the
-// 10s pool-checkout timeout. Bounding this to the same concurrency the
-// Discord-side health check already uses (see CONCURRENCY below) keeps this
-// query well under the pool size regardless of account size.
-const FILES_HEALTH_CHECK_DB_CONCURRENCY = 5;
+// Fetches every BlobTransport row for the given (already-sampled) file IDs in
+// ONE query — instead of the old pattern of one findMany() per file (an N+1
+// that took multiple minutes wall-clock on the 7500+-file scraper account and
+// even crashed the frontend tab polling it every 3s). Small file sets use a
+// targeted OR-of-startsWith filter so the DB only touches relevant rows;
+// large/whole-account sets fall back to a single ownerUserId scan + JS
+// grouping, which is still a single round trip instead of thousands.
+async function bulkFetchDisplayChunks(
+  ownerUserId: string,
+  fileIds: string[],
+): Promise<Map<string, Array<{ blobId: string; healthStatus: string | null; healthCheckedAt: Date | null }>>> {
+  if (fileIds.length === 0) return new Map();
+
+  const select = { blobId: true, healthStatus: true, healthCheckedAt: true } as const;
+  const orderBy = { createdAt: "asc" as const };
+
+  if (fileIds.length <= HEALTH_CHECK_TARGETED_QUERY_FILE_THRESHOLD) {
+    const chunks = await db.blobTransport.findMany({
+      where: { ownerUserId, OR: fileIds.map((id) => ({ blobId: { startsWith: `${id}:chunk:` } })) },
+      select,
+      orderBy,
+    });
+    return groupChunksByFileId(chunks, new Set(fileIds));
+  }
+
+  const chunks = await db.blobTransport.findMany({ where: { ownerUserId }, select, orderBy });
+  return groupChunksByFileId(chunks, new Set(fileIds));
+}
+
+// Same as bulkFetchDisplayChunks but selects every field runHealthCheck needs
+// to actually reach out to Discord (storageKind/storagePath/messageId/etc.),
+// not just the display-only health status.
+async function bulkFetchRunChunks(
+  ownerUserId: string,
+  fileIds: string[],
+) {
+  const orderBy = { createdAt: "asc" as const };
+
+  if (fileIds.length === 0) return new Map<string, Array<Awaited<ReturnType<typeof db.blobTransport.findMany>>[number]>>();
+
+  if (fileIds.length <= HEALTH_CHECK_TARGETED_QUERY_FILE_THRESHOLD) {
+    const chunks = await db.blobTransport.findMany({
+      where: { ownerUserId, OR: fileIds.map((id) => ({ blobId: { startsWith: `${id}:chunk:` } })) },
+      orderBy,
+    });
+    return groupChunksByFileId(chunks, new Set(fileIds));
+  }
+
+  const chunks = await db.blobTransport.findMany({ where: { ownerUserId }, orderBy });
+  return groupChunksByFileId(chunks, new Set(fileIds));
+}
+
+function sampleFiles<T>(files: T[], samplePercent: number | null | undefined, skipSampling: boolean): T[] {
+  const pct = samplePercent ?? 100;
+  if (skipSampling || pct >= 100) return files;
+  const sampleSize = Math.max(1, Math.ceil(files.length * (pct / 100)));
+  return files
+    .map((file) => ({ sortKey: Math.random(), file }))
+    .sort((a, b) => a.sortKey - b.sortKey)
+    .slice(0, sampleSize)
+    .map((entry) => entry.file);
+}
 
 export async function getFilesForHealthCheckDisplay(
   ownerUserId: string,
+  samplePercent?: number | null,
+  fileId?: string | null,
 ): Promise<HealthCheckFileInfo[]> {
   const files = await db.file.findMany({
-    where: { ownerUserId, deletedAt: null, status: "READY" },
+    where: {
+      ownerUserId,
+      deletedAt: null,
+      status: "READY",
+      ...(fileId ? { id: fileId } : {}),
+    },
     select: { id: true, chunkCount: true },
     orderBy: { createdAt: "desc" },
   });
 
-  const result = await runTasksWithConcurrency(files.map((file) => async () => {
-    const chunks = await db.blobTransport.findMany({
-      where: { ownerUserId, blobId: { startsWith: `${file.id}:chunk:` } },
-      select: { blobId: true, healthStatus: true, healthCheckedAt: true },
-      orderBy: { createdAt: "asc" },
-    });
+  const sampled = sampleFiles(files, samplePercent, Boolean(fileId));
+  const chunksByFile = await bulkFetchDisplayChunks(ownerUserId, sampled.map((f) => f.id));
 
-    return {
-      fileId: file.id,
-      fileName: file.id,
-      chunkCount: file.chunkCount,
-      chunks: chunks.map((chunk) => ({
-        id: chunk.blobId,
-        index: parseChunkIndex(chunk.blobId),
-        storageKind: "DISCORD" as const,
-        storagePath: "",
-        messageId: "",
-        webhookId: "",
-        channelId: null,
-        size: 0,
-        encryptedHash: null,
-        healthStatus: chunk.healthStatus ?? null,
-        healthCheckedAt: chunk.healthCheckedAt ? chunk.healthCheckedAt.toISOString() : null,
-      })),
-    } satisfies HealthCheckFileInfo;
-  }), FILES_HEALTH_CHECK_DB_CONCURRENCY);
-
-  return result;
+  return sampled.map((file) => ({
+    fileId: file.id,
+    fileName: file.id,
+    chunkCount: file.chunkCount,
+    chunks: (chunksByFile.get(file.id) ?? []).map((chunk) => ({
+      id: chunk.blobId,
+      index: parseChunkIndex(chunk.blobId),
+      storageKind: "DISCORD" as const,
+      storagePath: "",
+      messageId: "",
+      webhookId: "",
+      channelId: null,
+      size: 0,
+      encryptedHash: null,
+      healthStatus: chunk.healthStatus ?? null,
+      healthCheckedAt: chunk.healthCheckedAt ? chunk.healthCheckedAt.toISOString() : null,
+    })),
+  } satisfies HealthCheckFileInfo));
 }
 
 export async function getFilesForHealthCheck(
@@ -549,7 +622,7 @@ export async function getFilesForHealthCheck(
   samplePercent?: number | null,
   fileId?: string | null,
 ): Promise<HealthCheckFileInfo[]> {
-  let files = await db.file.findMany({
+  const files = await db.file.findMany({
     where: {
       ownerUserId,
       deletedAt: null,
@@ -559,48 +632,126 @@ export async function getFilesForHealthCheck(
     orderBy: { createdAt: "desc" },
   });
 
-  const pct = samplePercent ?? 100;
-  if (!fileId && pct < 100) {
-    const sampleSize = Math.max(1, Math.ceil(files.length * (pct / 100)));
-    files = files
-      .map((file) => ({ sortKey: Math.random(), file }))
-      .sort((a, b) => a.sortKey - b.sortKey)
-      .slice(0, sampleSize)
-      .map((entry) => entry.file);
+  const sampled = sampleFiles(files, samplePercent, Boolean(fileId));
+  const chunksByFile = await bulkFetchRunChunks(ownerUserId, sampled.map((f) => f.id));
+
+  return sampled.map((file) => ({
+    fileId: file.id,
+    fileName: file.id,
+    chunkCount: file.chunkCount,
+    chunks: (chunksByFile.get(file.id) ?? [])
+      .map((chunk) => ({
+        id: chunk.blobId,
+        index: parseChunkIndex(chunk.blobId),
+        storageKind: chunk.storageKind,
+        storagePath: chunk.storagePath,
+        messageId: chunk.discordMessageId ?? "",
+        webhookId: chunk.webhookId ?? "",
+        channelId: chunk.discordChannelId ?? null,
+        size: Number(chunk.ciphertextSizeBytes),
+        encryptedHash: chunk.ciphertextHash ?? null,
+        healthStatus: chunk.healthStatus ?? null,
+        healthCheckedAt: chunk.healthCheckedAt ? chunk.healthCheckedAt.toISOString() : null,
+      }))
+      .sort((a, b) => a.index - b.index),
+  } satisfies HealthCheckFileInfo));
+}
+
+type HealthCheckStats = {
+  total: number;
+  healthy: number;
+  missing: number;
+  modified: number;
+  unchecked: number;
+  fileCount: number;
+  latestCheckedAt: string | null;
+};
+
+// Lightweight aggregate for the "Stan bazy danych" panel — uses SQL
+// GROUP BY instead of pulling every chunk row into JS like
+// getFilesForHealthCheckDisplay does. On the production scraper account
+// (~340k BlobTransport rows) this keeps panel load near-instant instead of
+// costing the same 30s+ full fetch every time the Health Check page mounts.
+export async function getHealthCheckStats(ownerUserId: string): Promise<HealthCheckStats> {
+  const [statusGroups, latest, fileCount] = await Promise.all([
+    db.blobTransport.groupBy({
+      by: ["healthStatus"],
+      where: { ownerUserId },
+      _count: { _all: true },
+    }),
+    db.blobTransport.findFirst({
+      where: { ownerUserId, healthCheckedAt: { not: null } },
+      orderBy: { healthCheckedAt: "desc" },
+      select: { healthCheckedAt: true },
+    }),
+    db.file.count({ where: { ownerUserId, deletedAt: null, status: "READY" } }),
+  ]);
+
+  let healthy = 0, missing = 0, modified = 0, unchecked = 0;
+  for (const group of statusGroups) {
+    const count = group._count._all;
+    if (group.healthStatus === "HEALTHY") healthy += count;
+    else if (group.healthStatus === "MISSING") missing += count;
+    else if (group.healthStatus === "MODIFIED") modified += count;
+    else unchecked += count;
   }
 
-  const result = await runTasksWithConcurrency(files.map((file) => async () => {
-    const chunks = await db.blobTransport.findMany({
-      where: {
-        ownerUserId,
-        blobId: { startsWith: `${file.id}:chunk:` },
-      },
-      orderBy: { createdAt: "asc" },
-    });
+  return {
+    total: healthy + missing + modified + unchecked,
+    healthy,
+    missing,
+    modified,
+    unchecked,
+    fileCount,
+    latestCheckedAt: latest?.healthCheckedAt ? latest.healthCheckedAt.toISOString() : null,
+  };
+}
 
-    return {
-      fileId: file.id,
-      fileName: file.id,
-      chunkCount: file.chunkCount,
-      chunks: chunks
-        .map((chunk) => ({
-          id: chunk.blobId,
-          index: parseChunkIndex(chunk.blobId),
-          storageKind: chunk.storageKind,
-          storagePath: chunk.storagePath,
-          messageId: chunk.discordMessageId ?? "",
-          webhookId: chunk.webhookId ?? "",
-          channelId: chunk.discordChannelId ?? null,
-          size: Number(chunk.ciphertextSizeBytes),
-          encryptedHash: chunk.ciphertextHash ?? null,
-          healthStatus: chunk.healthStatus ?? null,
-          healthCheckedAt: chunk.healthCheckedAt ? chunk.healthCheckedAt.toISOString() : null,
-        }))
-        .sort((a, b) => a.index - b.index),
-    } satisfies HealthCheckFileInfo;
-  }), FILES_HEALTH_CHECK_DB_CONCURRENCY);
+type HealthCheckFileIssue = {
+  fileId: string;
+  fileName: string;
+  healthyCount: number;
+  missingCount: number;
+  modifiedCount: number;
+};
 
-  return result;
+// Backs the "Pliki z problemami" table. Scoped to only the files that
+// actually have a MISSING or MODIFIED chunk instead of pulling every file's
+// full chunk list (what the old single filesForHealthCheck query did) — on
+// a healthy production account this returns an empty/small list almost
+// instantly regardless of how many total files the owner has.
+export async function getFilesWithHealthIssues(ownerUserId: string): Promise<HealthCheckFileIssue[]> {
+  const problemChunks = await db.blobTransport.findMany({
+    where: { ownerUserId, healthStatus: { in: ["MISSING", "MODIFIED"] } },
+    select: { blobId: true, healthStatus: true },
+  });
+
+  if (problemChunks.length === 0) return [];
+
+  const fileIds = new Set<string>();
+  for (const chunk of problemChunks) {
+    const sep = chunk.blobId.indexOf(":chunk:");
+    if (sep !== -1) fileIds.add(chunk.blobId.slice(0, sep));
+  }
+
+  const fileIdList = Array.from(fileIds);
+  const allChunksForAffectedFiles = await db.blobTransport.findMany({
+    where: { ownerUserId, OR: fileIdList.map((id) => ({ blobId: { startsWith: `${id}:chunk:` } })) },
+    select: { blobId: true, healthStatus: true },
+  });
+
+  const byFile = groupChunksByFileId(allChunksForAffectedFiles, fileIds);
+
+  return fileIdList.map((fileId) => {
+    const chunks = byFile.get(fileId) ?? [];
+    let healthyCount = 0, missingCount = 0, modifiedCount = 0;
+    for (const chunk of chunks) {
+      if (chunk.healthStatus === "HEALTHY") healthyCount++;
+      else if (chunk.healthStatus === "MISSING") missingCount++;
+      else if (chunk.healthStatus === "MODIFIED") modifiedCount++;
+    }
+    return { fileId, fileName: fileId, healthyCount, missingCount, modifiedCount };
+  }).sort((a, b) => (b.missingCount + b.modifiedCount) - (a.missingCount + a.modifiedCount));
 }
 
 export async function updateChunkHealthBatch(

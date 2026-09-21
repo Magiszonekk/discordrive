@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@ddv4/types": "*",
-    "@ddv4/config": "*"
+    "@ddv4/config": "*",
+    "undici": "^6.23.0"
   }
 }

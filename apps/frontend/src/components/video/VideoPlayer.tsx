@@ -9,6 +9,7 @@ import {
   type ShareStreamAuth,
 } from "../../lib/videoStream.js";
 import { downloadFile, downloadSharedFile } from "../../lib/download.js";
+import { useDownloadStore } from "../../stores/download.js";
 
 interface VideoPlayerProps {
   file: StreamFileInfo & { fileName: string };
@@ -24,6 +25,7 @@ export function VideoPlayer({ file, onClose, share }: VideoPlayerProps) {
   const backdropRef = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
+  const addDownload = useDownloadStore((s) => s.addDownload);
 
   useEffect(() => {
     let unmounted = false;
@@ -80,8 +82,10 @@ export function VideoPlayer({ file, onClose, share }: VideoPlayerProps) {
 
   const handleDownloadFallback = useCallback(async () => {
     onClose();
+    addDownload(file.fileId, file.fileName, file.mimeType, file.chunkCount, Number(file.size ?? 0));
     if (share) {
       await downloadSharedFile({
+        fileId: file.fileId,
         fileName: file.fileName,
         mimeType: file.mimeType,
         manifestBlobId: file.manifestBlobId,
@@ -98,7 +102,7 @@ export function VideoPlayer({ file, onClose, share }: VideoPlayerProps) {
         wrappedFEK: file.wrappedFEK,
       });
     }
-  }, [file, share, onClose]);
+  }, [file, share, onClose, addDownload]);
 
   return (
     <div

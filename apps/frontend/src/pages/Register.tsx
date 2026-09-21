@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router";
-import { gqlRequest } from "../lib/graphql.js";
+import { gqlRequest, getGraphQLErrorMessage } from "../lib/graphql.js";
 import { registerCrypto } from "../lib/crypto.js";
 import { useAuthStore } from "../stores/auth.js";
 import { AuthCard, authInputClass, authLabelClass, authPrimaryButtonClass } from "../components/layout/AuthCard.js";
@@ -80,7 +80,7 @@ export function Register() {
       setAuth(register.token, register.user, crypto.ark, crypto.filesKey);
       navigate("/");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Registration failed");
+      setError(getGraphQLErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -139,6 +139,13 @@ export function Register() {
             required
             className={authInputClass}
           />
+        </div>
+        <div className="rounded-md border border-rule bg-paper-2 p-3 text-sm text-muted">
+          <p className="font-medium text-ink-2">No password recovery</p>
+          <p className="mt-1">
+            DiscordDrive is end-to-end encrypted — your password never leaves your device, so we
+            cannot reset it for you. If you forget it, your files become permanently inaccessible.
+          </p>
         </div>
         {error && <p className="text-sm text-error">{error}</p>}
         <button type="submit" disabled={loading} className={authPrimaryButtonClass}>

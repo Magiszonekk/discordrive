@@ -255,6 +255,24 @@ export function buildSchema() {
         durationMs: Int!
       }
 
+      type HealthCheckStats {
+        total: Int!
+        healthy: Int!
+        missing: Int!
+        modified: Int!
+        unchecked: Int!
+        fileCount: Int!
+        latestCheckedAt: DateTime
+      }
+
+      type HealthCheckFileIssue {
+        fileId: ID!
+        fileName: String!
+        healthyCount: Int!
+        missingCount: Int!
+        modifiedCount: Int!
+      }
+
       input ChunkHealthUpdateInput {
         chunkId: ID!
         status: String!
@@ -300,6 +318,8 @@ export function buildSchema() {
         storageUsage: StorageUsage!
         accessShare(shareId: ID!, capabilityToken: String!): ShareAccess
         filesForHealthCheck(samplePercent: Float, fileId: ID): [HealthCheckFile!]!
+        healthCheckStats: HealthCheckStats!
+        filesWithHealthIssues: [HealthCheckFileIssue!]!
         replicationStatus: ReplicationStatus!
       }
 
@@ -485,9 +505,17 @@ export function buildSchema() {
           const auth = requireAuth(ctx);
           return fileResolvers.getStorageUsage(auth.userId);
         },
-        filesForHealthCheck: async (_parent: unknown, _args: unknown, ctx: Context) => {
+        filesForHealthCheck: async (_parent: unknown, args: { samplePercent?: number; fileId?: string }, ctx: Context) => {
           const auth = requireAuth(ctx);
-          return fileResolvers.getFilesForHealthCheckDisplay(auth.userId);
+          return fileResolvers.getFilesForHealthCheckDisplay(auth.userId, args.samplePercent ?? null, args.fileId ?? null);
+        },
+        healthCheckStats: async (_parent: unknown, _args: unknown, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return fileResolvers.getHealthCheckStats(auth.userId);
+        },
+        filesWithHealthIssues: async (_parent: unknown, _args: unknown, ctx: Context) => {
+          const auth = requireAuth(ctx);
+          return fileResolvers.getFilesWithHealthIssues(auth.userId);
         },
         replicationStatus: async (_parent: unknown, _args: unknown, ctx: Context) => {
           const auth = requireAuth(ctx);

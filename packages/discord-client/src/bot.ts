@@ -53,6 +53,7 @@ export async function uploadChunkBot(
         messageId: json.id,
         channelId: json.channel_id,
         transportPath: "bot",
+        egressKey: "bot",
         attemptCount: attempt + 1,
         upstreamStatus: response.status,
         elapsedMs: Number((performance.now() - attemptStartMs).toFixed(2)),
@@ -62,8 +63,13 @@ export async function uploadChunkBot(
 
     if (response.status === 429) {
       rateLimiter.recordError(429);
+      // Bots hit /api/v10/channels/*, a different route from webhooks. Their
+      // 429s are per-bot Discord limits (small retry-after), never the
+      // Cloudflare webhook-route block — so record them as per-sender only.
       const retryAfter = response.headers.get("retry-after");
-      await new Promise((r) => setTimeout(r, retryAfter ? parseFloat(retryAfter) * 1000 : 5000));
+      const waitMs = retryAfter ? parseFloat(retryAfter) * 1000 : 5000;
+      rateLimiter.recordThrottle(bot.id, waitMs, false);
+      await new Promise((r) => setTimeout(r, Math.min(waitMs, 60_000)));
       continue;
     }
     if (response.status === 413) throw new Error("CHUNK_TOO_LARGE");

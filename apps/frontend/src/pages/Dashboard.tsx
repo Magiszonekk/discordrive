@@ -11,6 +11,7 @@ import { createOwnerPreview, revokePreview, type PreviewResult } from "../lib/pr
 import { useUploadStore } from "../stores/upload.js";
 import { useDownloadStore } from "../stores/download.js";
 import { FileTable, type FolderItem } from "../components/files/FileTable.js";
+import { TableSkeleton } from "../components/files/Skeleton.js";
 import { UploadProgress } from "../components/files/UploadProgress.js";
 import { DownloadProgress } from "../components/files/DownloadProgress.js";
 import { FolderBreadcrumb } from "../components/files/FolderBreadcrumb.js";
@@ -462,7 +463,7 @@ export function Dashboard() {
       )}
 
       {isLoading ? (
-        <div className="text-muted">Loading…</div>
+        <TableSkeleton rows={5} />
       ) : (
         <FileTable
           files={uiFiles}

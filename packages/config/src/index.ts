@@ -46,6 +46,21 @@ export const config = {
   cloudflareErrorThreshold: 8_000, // stop before 10k/10min IP ban
   cloudflareWindowMs: 10 * 60 * 1000, // 10 minutes
 
+  // Proactive per-IP request throttle. Cloudflare bans the webhook route at
+  // ~10k requests/10min from one IP (empirically confirmed on prod — see
+  // cloudflareErrorThreshold above, which only counts 401/403/429 responses
+  // AFTER the fact). This budget throttles ALL outbound webhook requests
+  // (successful or not) against a rolling window, so sustained upload/delete
+  // traffic backs off before Cloudflare notices, not after. Set comfortably
+  // under the observed threshold to leave headroom for bursts.
+  egressRequestBudgetPerWindow: 6_000, // requests per rolling window, per egress IP
+  egressRequestWindowMs: 10 * 60 * 1000, // 10 minutes, matches Cloudflare's own window
+  // Base + jitter added between webhook requests once the budget is more than
+  // half consumed, so the request rate tapers off smoothly instead of hitting
+  // a hard wall right at the threshold.
+  egressBackoffBaseMs: 150,
+  egressBackoffJitterMs: 250,
+
   // Misc
   anonymousTTLDays: 30,
 } as const;

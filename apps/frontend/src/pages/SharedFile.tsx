@@ -6,8 +6,10 @@ import { unwrapKeyPacked, toBase64, fromBase64, decryptMeta } from "../lib/crypt
 import { deriveShareWrapKey, deriveShareAuthKey, deriveShareCapabilityToken } from "@ddv4/processing";
 import type { ShareAccessResponse } from "@ddv4/types/api";
 import { useNotificationStore } from "../stores/notifications.js";
+import { useDownloadStore } from "../stores/download.js";
 import { AuthCard, authPrimaryButtonClass } from "../components/layout/AuthCard.js";
 import { VideoPlayer } from "../components/video/VideoPlayer.js";
+import { DownloadProgress } from "../components/files/DownloadProgress.js";
 
 const ACCESS_SHARE = `
   query AccessShare($shareId: ID!, $capabilityToken: String!) {
@@ -50,12 +52,16 @@ export function SharedFile() {
   const [downloading, setDownloading] = useState(false);
   const [showPlayer, setShowPlayer] = useState(false);
   const pushNotification = useNotificationStore((s) => s.push);
+  const addDownload = useDownloadStore((s) => s.addDownload);
 
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ fileName: string; bytes: number }>).detail;
       if (!detail) return;
-      pushNotification("success", `Download started: ${detail.fileName} (${detail.bytes} B)`);
+      // `detail.bytes` is always 0 here — this event fires at download start,
+      // before any bytes exist. Real-time byte/percent/ETA now come from
+      // <DownloadProgress /> (useDownloadStore), not this notification.
+      pushNotification("success", `Download started: ${detail.fileName}`);
     };
     window.addEventListener(DOWNLOAD_SUCCESS_EVENT, handler as EventListener);
     return () => window.removeEventListener(DOWNLOAD_SUCCESS_EVENT, handler as EventListener);
@@ -90,7 +96,15 @@ export function SharedFile() {
         const shareKey = await unwrapKeyPacked(accessShare.wrappedAKShare, shareWrapKey, ["wrapKey", "unwrapKey"]);
         const wrappedFEK = accessShare.wrappedObjectKeys[0]?.wrappedFEK;
         if (!wrappedFEK) throw new Error("Share does not include file decryption material");
-        const rootFek = await unwrapKeyPacked(wrappedFEK, shareKey, ["wrapKey", "unwrapKey"]);
+        // Needs "encrypt"/"decrypt" too, not just "wrapKey"/"unwrapKey" — this
+        // key is used directly below via decryptMeta() (AES-GCM decrypt) for
+        // the file name/mime type, and later handed to VideoPlayer/download
+        // helpers that also decrypt content with it. The owner-session path
+        // (unwrapRootFek in lib/crypto.ts) already grants all four usages;
+        // the share-link path was missing "encrypt"/"decrypt", which surfaced
+        // as "key.usages does not permit this operation" the moment a share
+        // link was opened in an incognito/logged-out browser.
+        const rootFek = await unwrapKeyPacked(wrappedFEK, shareKey, ["encrypt", "decrypt", "wrapKey", "unwrapKey"]);
 
         const key = accessShare.wrappedObjectKeys[0];
         const fileName = key?.encryptedName
@@ -125,7 +139,9 @@ export function SharedFile() {
     setDownloading(true);
     setError("");
     try {
+      addDownload(info.fileId, info.fileName, info.mimeType, info.chunkCount, Number(info.totalCiphertextBytes));
       await downloadSharedFile({
+        fileId: info.fileId,
         fileName: info.fileName,
         mimeType: info.mimeType,
         manifestBlobId: info.manifestBlobId,
@@ -166,6 +182,7 @@ export function SharedFile() {
         <p className="truncate font-medium text-ink">{info.fileName}</p>
         <p className="font-mono text-xs text-muted">{info.mimeType}</p>
       </div>
+      <DownloadProgress />
       <div className="flex gap-2">
         {isVideo && (
           <button

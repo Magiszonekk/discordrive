@@ -5,13 +5,15 @@ export {
   getWebhookApiUrl,
 } from "./webhooks.js";
 
-export { WebhookRateLimiter } from "./rate-limiter.js";
+export { WebhookRateLimiter, DIRECT_EGRESS_KEY } from "./rate-limiter.js";
 
 export { uploadChunk, type UploadResult } from "./uploader.js";
 
-export { getChunkUrl, streamChunk, downloadChunk } from "./downloader.js";
+export { getChunkUrl, streamChunk, downloadChunk, DiscordUnavailableError, isCloudflareBlock, retryAfterMsFrom, type EgressRequestOptions } from "./downloader.js";
 
 export { deleteChunk } from "./deleter.js";
+
+export { buildEgressPool, EgressRoundRobin, type EgressDescriptor } from "./egress-pool.js";
 
 export {
   type BotInfo,

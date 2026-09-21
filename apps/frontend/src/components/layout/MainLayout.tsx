@@ -8,6 +8,19 @@ import { useAuthStore } from "../../stores/auth.js";
 import { CommandPalette } from "./CommandPalette.js";
 import { ColorModeToggle } from "./ColorModeToggle.js";
 
+// Product mark — one accent square carrying the wordmark initial. Kept tiny so
+// Cobalt's ≤5% accent budget survives (design.md).
+function LogoMark() {
+  return (
+    <span
+      aria-hidden
+      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent font-display text-[13px] font-semibold leading-none text-accent-ink"
+    >
+      D
+    </span>
+  );
+}
+
 function SidebarNavigation({
   pathname,
   onNavigate,
@@ -24,7 +37,7 @@ function SidebarNavigation({
     },
     {
       to: "/health",
-      label: "Healthcheck",
+      label: "Health Check",
       icon: ShieldCheck,
       active: pathname === "/health",
     },
@@ -67,12 +80,12 @@ function SidebarFooter() {
   return (
     <div className="mt-auto shrink-0 border-t border-rule bg-paper p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <p className="min-w-0 truncate font-mono text-xs text-muted">{user?.email}</p>
+        <p title={user?.email} className="min-w-0 truncate font-mono text-xs text-muted">{user?.email}</p>
         <ColorModeToggle />
       </div>
       <button
         onClick={logout}
-        className="w-full rounded-md border border-rule-2 px-3 py-2.5 text-left text-sm text-ink-2 transition-colors duration-short ease-out hover:border-rule-2 hover:bg-paper-2 hover:text-ink"
+        className="w-full rounded-md px-3 py-1.5 text-left text-sm text-muted transition-colors duration-short ease-out hover:bg-paper-2 hover:text-ink"
       >
         Log out
       </button>
@@ -180,7 +193,8 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
       <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} pathname={location.pathname} />
 
       <aside className="hidden w-64 shrink-0 flex-col border-r border-rule bg-paper md:sticky md:top-0 md:flex md:h-screen">
-        <div className="shrink-0 border-b border-rule p-4">
+        <div className="flex shrink-0 items-center gap-2.5 border-b border-rule p-4">
+          <LogoMark />
           <h1 className="font-display text-lg font-semibold text-ink">DiscorDrive</h1>
         </div>
         <PaletteTrigger onOpen={() => setPaletteOpen(true)} />
