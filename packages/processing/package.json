@@ -1,0 +1,23 @@
+{
+  "name": "@ddv4/processing",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./crypto": "./src/crypto.ts"
+  },
+  "scripts": {
+    "test": "vitest run --reporter=verbose",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.5"
+  },
+  "dependencies": {
+    "@ddv4/config": "*",
+    "hash-wasm": "^4.11.0"
+  }
+}

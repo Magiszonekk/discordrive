@@ -1,0 +1,28 @@
+node_modules/
+dist/
+.env
+.env.local
+.env*.bak
+.env.bak*
+.env.backup*
+.env.pre-*
+*.log
+.DS_Store
+packages/database/node_modules/.prisma
+test-results
+fixtures
+var/
+.tmp/
+.hermes/
+
+# TypeScript build outputs and incremental metadata
+*.tsbuildinfo
+
+# Generated JS/d.ts/sourcemaps emitted next to TS sources
+**/*.js
+**/*.js.map
+**/*.d.ts
+**/*.d.ts.map
+
+# Keep Vite ambient types tracked
+!apps/frontend/src/vite-env.d.ts

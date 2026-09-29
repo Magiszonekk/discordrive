@@ -1,0 +1,91 @@
+{
+  "description": "DiscorDrive v4 cross-platform crypto test vectors. Generated from @ddv4/processing (hash-wasm Argon2id + WebCrypto). Any client implementation MUST reproduce these byte-for-byte.",
+  "generatedAt": "2026-06-11T12:20:22.299Z",
+  "argon2id": [
+    {
+      "name": "fast-params",
+      "password": "correct horse battery staple — zażółć gęślą jaźń",
+      "saltB64": "AAECAwQFBgcICQoLDA0ODw==",
+      "memoryKB": 8192,
+      "iterations": 2,
+      "parallelism": 1,
+      "hashLength": 32,
+      "hashB64": "Ec2wiG1We3jaxRYTopHQ1gC/OC8h0FSn0hIjOMx9dwM="
+    },
+    {
+      "name": "prod-params",
+      "password": "correct horse battery staple — zażółć gęślą jaźń",
+      "saltB64": "AAECAwQFBgcICQoLDA0ODw==",
+      "memoryKB": 19456,
+      "iterations": 2,
+      "parallelism": 1,
+      "hashLength": 32,
+      "hashB64": "IsMbLkWxZH9C5Wa/SNymXngXAxpG1tYunMDAoNOobIs="
+    }
+  ],
+  "serverAuthProof": {
+    "note": "HKDF-SHA256(ikm=argon2 hash, salt=empty, info='ddv4-server-auth-v1', 32B)",
+    "argon2HashB64": "Ec2wiG1We3jaxRYTopHQ1gC/OC8h0FSn0hIjOMx9dwM=",
+    "proofB64": "hVP9O+P16+NsmStgOq/zUwipL0Af5YzMEcm4uEz8V+w="
+  },
+  "hkdf": [
+    {
+      "info": "ddv4-file-content-v1",
+      "ikmB64": "kJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq8=",
+      "okmB64": "iBhZo8dGFuI/OWqHWr/YUP9AsG4NfyDEVWBTQcSX140="
+    },
+    {
+      "info": "ddv4-file-metadata-v1",
+      "ikmB64": "kJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq8=",
+      "okmB64": "JYS9GIuAMsMpfgGyIILAH84crT4I0843Xhua1ofOyGw="
+    },
+    {
+      "info": "ddv4-files-share-wrap-v1",
+      "ikmB64": "cHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yNjo8=",
+      "okmB64": "iTT1MWqFJPd6dinIz7gE5NEBNkMneMU3EL87IkOxlqY="
+    },
+    {
+      "info": "ddv4-files-share-auth-v1",
+      "ikmB64": "cHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yNjo8=",
+      "okmB64": "CqouBAuvltcT4HmwwW15ykdqgLQ8+RXQviV4LbWsnRc="
+    },
+    {
+      "info": "generic",
+      "ikmB64": "EBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8=",
+      "okmB64": "mpqoIRrptQsevYwT7SH9wYQDzW3+hkZ7Kh4RMGS+DJg="
+    }
+  ],
+  "shareCapabilityToken": {
+    "note": "HMAC-SHA256(key=HKDF(linkSecret,'ddv4-files-share-auth-v1'), msg='ddv4-files-share-token-v1')",
+    "linkSecretB64": "cHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yNjo8=",
+    "tokenB64": "Izcqvimdn09PRN4k7klXjiC1N8u3yGPqrEkEOe3BSQc="
+  },
+  "aesGcmChunk": {
+    "note": "packed = IV(12B) || ciphertext || GCM tag(16B); AES-256-GCM, no AAD",
+    "keyB64": "MDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk8=",
+    "ivB64": "oKGio6Slpqeoqaqr",
+    "plaintextB64": "RGlzY29yRHJpdmUgY2h1bmsgcGxhaW50ZXh0IPCflJIgYnl0ZXM=",
+    "packedB64": "oKGio6SlpqeoqaqrjimeZkGewI00NxKwNep1MCex4GmpByFxqn3KTUXc6TGz8XZ+lFKjTsqeuoPJrkV1PP59A1be"
+  },
+  "wrapKey": {
+    "note": "wrapKey = AES-GCM(rawKeyBytes); packWrappedKey = IV || wrapped (same packing as chunks)",
+    "wrappingKeyB64": "MDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk8=",
+    "keyToWrapB64": "UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8=",
+    "ivB64": "oKGio6Slpqeoqaqr",
+    "packedB64": "oKGio6SlpqeoqaqrmhG/Vnq50qgFGC3LCt9eASzw8masCylip2zUBtkuE8xySHbnQCMrQglUKBoVGBjg"
+  },
+  "fileMetadata": {
+    "note": "encryptFileMetadataPlaintext: AES-GCM(JSON bytes) under HKDF(rootFek,'ddv4-file-metadata-v1'), packed IV||ct||tag",
+    "rootFekB64": "kJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq8=",
+    "ivB64": "oKGio6Slpqeoqaqr",
+    "plaintextJson": "{\"fileName\":\"zdjęcie 🏖️.jpg\",\"mimeType\":\"image/jpeg\",\"plaintextSize\":12345}",
+    "packedB64": "oKGio6SlpqeoqaqrjmIUP6EpD/A5EnwA23Lf4yUSHp4Ocjzfhjmo5AlNL4FzfIx8aFjrXl1WkiUKplpNPbo1n+ByHEuAp2uSjttEsyhbXXlzqQHi+ErEFG4V+2JF91ngZ66vOlFcfudJBJGADg=="
+  },
+  "fileManifest": {
+    "note": "encryptFileManifestPlaintext: AES-GCM(JSON bytes) under HKDF(rootFek,'ddv4-file-content-v1')",
+    "rootFekB64": "kJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq8=",
+    "ivB64": "oKGio6Slpqeoqaqr",
+    "plaintextJson": "{\"chunkSizeBytes\":8388608,\"chunks\":[{\"index\":0,\"blobId\":\"f1:chunk:0\",\"ciphertextSizeBytes\":100}]}",
+    "packedB64": "oKGio6SlpqeoqaqrsmDxvPq67YI/D4kBxXM6g79DNG20wwVI5Cj7BCTZ+lQJC1ORd3zyX6v/+BuS7g57RMsgGtcaUt3uaDGApc4Bzk1nxG9PorEWK2MB/O5FA8Z7Zu870gXXwGV7U4ZMiIVwiwBgPzF7WMUyueeUAbhvE0E="
+  }
+}

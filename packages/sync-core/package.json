@@ -1,0 +1,23 @@
+{
+  "name": "@ddv4/sync-core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "discordrive-next: shared sync core (index model, operation log, conflict rules). No Discord, no DB, no UI; runs in Node and in the browser.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:fuzz": "FUZZ_RUNS=20000 vitest run test/fuzz.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check:browser": "esbuild src/index.ts --bundle --platform=browser --format=esm --outfile=.tmp/sync-core.browser.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.0",
+    "fast-check": "^4.3.0",
+    "vitest": "^4.1.5"
+  }
+}
