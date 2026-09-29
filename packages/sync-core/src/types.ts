@@ -182,7 +182,7 @@ export type SingleOp =
 
 export type Operation = SingleOp | GroupOp;
 
-/** What a client submits (op payload is encrypted in the real system; opId/rulesVersion/baseSeq are plaintext for the server). */
+/** What a client submits (op payload is encrypted in the real system; opId/rulesVersion/baseSeq/leaseGuard are plaintext for the server). */
 export interface OpEnvelope {
   opId: OpId;
   rulesVersion: number;
@@ -191,6 +191,14 @@ export interface OpEnvelope {
   device: DeviceInfo;
   /** Device clock, display only (§5.2.1). */
   createdAt: number;
+  /**
+   * Rule 8: uploads this op touches (begin/commit/abort, or content bound by
+   * create/new_content_version). Plaintext, like the leases themselves (§3.3).
+   * The server accepts the op only while the submitting device holds an
+   * unexpired lease on each of them; apply() rejects upload-touching ops
+   * that do not list their upload here.
+   */
+  leaseGuard?: UploadId[];
   op: Operation;
 }
 

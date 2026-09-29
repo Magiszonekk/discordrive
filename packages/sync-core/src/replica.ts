@@ -7,7 +7,7 @@
 // makes long offline periods trivial: fetch the tail, then send the outbox
 // (rule 10), with no time limit.
 
-import { applyEntry, initIndex, type ApplyResult } from "./apply.js";
+import { applyEntry, initIndex, uploadsTouched, type ApplyResult } from "./apply.js";
 import type { Sequencer, SubmitResult } from "./sequencer.js";
 import { loadSnapshot, takeSnapshot, type IndexSnapshot } from "./snapshot.js";
 import { MemoryIndexStore, type IndexStore } from "./store.js";
@@ -50,13 +50,14 @@ export class Replica {
   }
 
   /** Queue a local operation. baseSeq = what this device has applied right now. */
-  enqueue(op: Operation): OpEnvelope {
+  enqueue(op: Operation, leaseGuard: string[] = uploadsTouched(op)): OpEnvelope {
     const env: OpEnvelope = {
       opId: this.newOpId(),
       rulesVersion: this.rulesVersion,
       baseSeq: this.headSeq,
       device: { ...this.device },
       createdAt: this.now(),
+      ...(leaseGuard.length > 0 ? { leaseGuard: [...leaseGuard] } : {}),
       op,
     };
     this.outbox.push(env);
@@ -85,24 +86,31 @@ export class Replica {
   /**
    * Send the oldest queued op. The op keeps its original baseSeq (what the
    * author saw when it was made), which is exactly what rules 1 and 4 need.
+   * A refused op (rules version, lease) stays at the head of the outbox; the
+   * caller decides (update the client / drop the op and start the upload over).
    */
   pushOne(server: Sequencer): SubmitResult | null {
     const env = this.outbox[0];
     if (!env) return null;
-    const r = server.submit(env);
-    if (r.status === "rules_version_rejected") return r;
-    // accepted or duplicate: the entry will arrive through pull() and leave the outbox there.
-    return r;
+    // accepted or duplicate: the entry arrives through pull() and leaves the outbox there.
+    return server.submit(env);
+  }
+
+  /** Drop a queued op (e.g. after lease_rejected). */
+  drop(opId: string): void {
+    const i = this.outbox.findIndex((o) => o.opId === opId);
+    if (i >= 0) this.outbox.splice(i, 1);
   }
 
   /** Rule 10: after being offline, first catch up, then send own ops at the end. */
-  sync(server: Sequencer): void {
+  sync(server: Sequencer): SubmitResult | null {
     this.pull(server);
     while (this.outbox.length > 0) {
       const r = this.pushOne(server);
-      if (!r || r.status === "rules_version_rejected") break;
+      if (!r || (r.status !== "accepted" && r.status !== "duplicate")) return r;
       this.pull(server);
     }
+    return null;
   }
 
   snapshot(): IndexSnapshot {

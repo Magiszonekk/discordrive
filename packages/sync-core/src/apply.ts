@@ -76,6 +76,10 @@ export type NoticeCode =
   | "upload_aborted"
   /** Purge of a node that is not in the trash (e.g. restored meanwhile), skipped. */
   | "purge_not_in_trash"
+  /** Purge skipped: the subtree has content/placements the author had not seen (§5.2.3). */
+  | "purge_skipped_unseen_changes"
+  /** Trash of a file skipped: it has new content the author had not seen (§5.2.3). */
+  | "trash_skipped_unseen_content"
   /** Group op rolled back because a sub-op was skipped or rejected. */
   | "group_rolled_back"
   /** Invalid operation (client bug or malicious client), consumed as no-op. */
@@ -281,9 +285,9 @@ class Ctx {
     return m.seq > this.e.baseSeq && m.deviceId !== this.e.device.id;
   }
 
-  /** Deterministic ID for nodes created by rules (conflict copies, recovered content). */
+  /** Deterministic ID for nodes created by rules (conflict copies, recovered content). Unique: seq is. */
   derivedId(tag: string): NodeId {
-    return `d:${this.e.opId}:${this.sub}:${tag}`;
+    return `d:${this.e.seq}:${this.sub}:${tag}`;
   }
 
   notice(n: Omit<Notice, "seq" | "opId" | "deviceId">): void {
@@ -293,6 +297,12 @@ class Ctx {
   reject(reason: string, nodeId?: NodeId): Outcome {
     this.notice({ code: "invalid_op", reason, ...(nodeId !== undefined ? { nodeId } : {}) });
     return "rejected";
+  }
+
+  /** Rule 8: an op touching an upload must declare it, so the server could check the lease. */
+  guarded(uploadId: string): boolean {
+    const g = this.e.leaseGuard;
+    return Array.isArray(g) && g.includes(uploadId);
   }
 }
 
@@ -312,6 +322,9 @@ function validateEnvelope(e: LogEntry): string | null {
     return "bad_device";
   }
   if (typeof e.createdAt !== "number" || !Number.isFinite(e.createdAt)) return "bad_created_at";
+  if (e.leaseGuard !== undefined && (!Array.isArray(e.leaseGuard) || !e.leaseGuard.every(isClientId))) {
+    return "bad_lease_guard";
+  }
   if (!e.op || typeof e.op !== "object") return "bad_op";
   return null;
 }
@@ -448,8 +461,9 @@ function releaseUpload(ctx: Ctx, uploadId: string, reason: "purged" | "supersede
   });
 }
 
-/** Upload usable as content: committed and not referenced yet (rule 8). */
+/** Upload usable as content: declared in leaseGuard, committed and not referenced yet (rule 8). */
 function checkUploadUsable(ctx: Ctx, uploadId: string): string | null {
+  if (!ctx.guarded(uploadId)) return "upload_not_guarded";
   const u = ctx.s.getUpload(uploadId);
   if (!u) return "upload_unknown";
   if (u.status === "aborted") return "upload_aborted";
@@ -578,6 +592,13 @@ function opTrash(ctx: Ctx, op: TrashOp): Outcome {
     return "skipped";
   }
   if (node.trashed) return "noop";
+  if (node.content && ctx.unseen({ seq: node.content.seq, deviceId: node.content.device.id })) {
+    // §5.2.3 + rule 3 in the other order: new content the author has not
+    // seen keeps the file alive (with rule 3's order the file would come back
+    // from the trash anyway). PROVISIONAL, see QUESTIONS.md Q2.
+    ctx.notice({ code: "trash_skipped_unseen_content", nodeId: node.id });
+    return "skipped";
+  }
   ctx.s.putNode({ ...node, trashed: { seq: ctx.e.seq, at: ctx.e.serverTime } });
   if (node.kind === "folder") rescueUnseen(ctx, node.id);
   return "applied";
@@ -586,7 +607,9 @@ function opTrash(ctx: Ctx, op: TrashOp): Outcome {
 /**
  * Rule 4, other order: nodes placed into the folder's subtree by operations
  * the trashing author had not seen go to „Odzyskane” instead of the trash.
- * (With the plain order the rule applies in opCreate.)
+ * (With the plain order the rule applies in opCreate.) The same holds for
+ * files whose content changed unseen (§5.2.3: new content never silently
+ * ends up in the trash; rule 3 in the other order).
  */
 function rescueUnseen(ctx: Ctx, folderId: NodeId): void {
   const stack: NodeId[] = [folderId];
@@ -598,8 +621,10 @@ function rescueUnseen(ctx: Ctx, folderId: NodeId): void {
     for (const kid of kids) {
       const rec = ctx.s.getNode(kid)!;
       if (rec.trashed) continue;
-      if (ctx.unseen(rec.placed)) {
-        placeRecovered(ctx, rec, rec.parentId, "added_to_deleted_folder");
+      const unseenContent =
+        rec.content !== null && ctx.unseen({ seq: rec.content.seq, deviceId: rec.content.device.id });
+      if (ctx.unseen(rec.placed) || unseenContent) {
+        placeRecovered(ctx, rec, rec.parentId, unseenContent ? "content_changed_in_deleted_folder" : "added_to_deleted_folder");
       } else if (rec.kind === "folder") {
         descend.push(kid);
       }
@@ -616,12 +641,13 @@ function opRestore(ctx: Ctx, op: RestoreOp): Outcome {
     ctx.notice({ code: "node_purged", nodeId: op.nodeId, reason: "restore" });
     return "skipped";
   }
-  if (!node.trashed) return "noop";
+  if (!inTrash(ctx.s, node.id)) return "noop";
   const parentId = node.parentId!;
   const restored: NodeRecord = { ...node, trashed: null, placed: ctx.mark };
-  if (ctx.s.getNode(parentId) && !inTrash(ctx.s, parentId)) {
+  if (node.trashed && !inTrash(ctx.s, parentId)) {
     placeLive(ctx, restored, parentId, node.name);
   } else {
+    // Parent (or the node's own ancestor) is still in the trash.
     placeRecovered(ctx, restored, parentId, "restore_parent_in_trash");
   }
   return "applied";
@@ -644,7 +670,19 @@ function opPurge(ctx: Ctx, op: PurgeOp): Outcome {
     all.push(id);
     for (const kid of sortedChildren(ctx.s, id)) stack.push(kid);
   }
-  for (const id of all.sort(cmp)) {
+  all.sort(cmp);
+  // §5.2.3: never physically forget content or placements the purging author
+  // has not seen. PROVISIONAL, see QUESTIONS.md Q3.
+  for (const id of all) {
+    const rec = ctx.s.getNode(id)!;
+    const unseen =
+      ctx.unseen(rec.placed) || (rec.content !== null && ctx.unseen({ seq: rec.content.seq, deviceId: rec.content.device.id }));
+    if (unseen) {
+      ctx.notice({ code: "purge_skipped_unseen_changes", nodeId: node.id, relatedNodeId: id });
+      return "skipped";
+    }
+  }
+  for (const id of all) {
     const rec = ctx.s.getNode(id)!;
     if (rec.content) releaseUpload(ctx, rec.content.uploadId, "purged");
     ctx.s.deleteNode(id);
@@ -729,6 +767,7 @@ function opNewContent(ctx: Ctx, op: NewContentVersionOp): Outcome {
 
 function opUploadBegin(ctx: Ctx, op: UploadBeginOp): Outcome {
   if (!isClientId(op.uploadId)) return ctx.reject("bad_upload_id");
+  if (!ctx.guarded(op.uploadId)) return ctx.reject("upload_not_guarded");
   if (ctx.s.getUpload(op.uploadId)) return ctx.reject("upload_exists");
   const rec: UploadRecord = { id: op.uploadId, status: "open", began: ctx.mark, boundTo: null, ended: null };
   ctx.s.putUpload(rec);
@@ -737,6 +776,7 @@ function opUploadBegin(ctx: Ctx, op: UploadBeginOp): Outcome {
 
 function opUploadCommit(ctx: Ctx, op: UploadCommitOp): Outcome {
   if (!isClientId(op.uploadId)) return ctx.reject("bad_upload_id");
+  if (!ctx.guarded(op.uploadId)) return ctx.reject("upload_not_guarded");
   const u = ctx.s.getUpload(op.uploadId);
   if (!u) return ctx.reject("upload_unknown");
   if (u.status === "aborted") {
@@ -751,6 +791,7 @@ function opUploadCommit(ctx: Ctx, op: UploadCommitOp): Outcome {
 
 function opUploadAbort(ctx: Ctx, op: UploadAbortOp): Outcome {
   if (!isClientId(op.uploadId)) return ctx.reject("bad_upload_id");
+  if (!ctx.guarded(op.uploadId)) return ctx.reject("upload_not_guarded");
   const u = ctx.s.getUpload(op.uploadId);
   if (!u) return ctx.reject("upload_unknown");
   if (u.status === "aborted") return "noop";
@@ -765,3 +806,28 @@ function opUploadAbort(ctx: Ctx, op: UploadAbortOp): Outcome {
 
 // Re-exported for callers that build operations.
 export type { Operation };
+
+/** Uploads an operation touches; the envelope's leaseGuard must list them (rule 8). */
+export function uploadsTouched(op: Operation): string[] {
+  const out = new Set<string>();
+  const visit = (o: SingleOp) => {
+    switch (o.type) {
+      case "upload_begin":
+      case "upload_commit":
+      case "upload_abort":
+        out.add(o.uploadId);
+        break;
+      case "create":
+        if (o.content) out.add(o.content.uploadId);
+        break;
+      case "new_content_version":
+        out.add(o.content.uploadId);
+        break;
+      default:
+        break;
+    }
+  };
+  if (op.type === "group") op.ops.forEach(visit);
+  else visit(op);
+  return [...out].sort(cmp);
+}

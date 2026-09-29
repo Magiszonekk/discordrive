@@ -94,18 +94,33 @@ export function validateName(name: unknown): string | null {
   return null;
 }
 
-/** Split into base and extension. Folders and dotfiles have no extension. */
+/** Split into base and extension. Folders and dotfiles have no extension; absurdly long "extensions" neither. */
 export function splitExt(name: string, kind: NodeKind): [string, string] {
   if (kind === "folder") return [name, ""];
   const i = name.lastIndexOf(".");
-  if (i <= 0 || i === name.length - 1) return [name, ""];
+  if (i <= 0 || i === name.length - 1 || name.length - i > 64) return [name, ""];
   return [name.slice(0, i), name.slice(i)];
+}
+
+/** Cut to at most `max` UTF-16 units without splitting a surrogate pair. */
+function safeSlice(s: string, max: number): string {
+  if (s.length <= max) return s;
+  let end = Math.max(0, max);
+  const c = s.charCodeAt(end - 1);
+  if (c >= 0xd800 && c <= 0xdbff) end--;
+  return s.slice(0, end);
+}
+
+/** base + insert + ext, with base shortened so the result stays within MAX_NAME_LENGTH. */
+function composeName(base: string, insert: string, ext: string): string {
+  const budget = MAX_NAME_LENGTH - insert.length - ext.length;
+  return `${safeSlice(base, budget)}${insert}${ext}`;
 }
 
 /** `nazwa (n).ext` (rule 2). */
 export function suffixedName(name: string, kind: NodeKind, n: number): string {
   const [base, ext] = splitExt(name, kind);
-  return `${base} (${n})${ext}`;
+  return composeName(base, ` (${n})`, ext);
 }
 
 /** UTC, minute precision, no ':' (Windows). Deterministic: no local timezone. */
@@ -120,7 +135,7 @@ export function formatConflictDate(ms: number): string {
 export function conflictName(name: string, deviceName: string, createdAtMs: number): string {
   const [base, ext] = splitExt(name, "file");
   const dev = sanitizeLabel(deviceName) || "?";
-  return `${base} (konflikt, ${dev}, ${formatConflictDate(createdAtMs)})${ext}`;
+  return composeName(base, ` (konflikt, ${dev}, ${formatConflictDate(createdAtMs)})`, ext);
 }
 
 /** Make a free-form label usable inside a name without failing validateName. */

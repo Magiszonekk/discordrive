@@ -13,7 +13,9 @@ export type SubmitResult =
   /** Rule 9: known opId. Returns the original entry so a retrying client can confirm it. */
   | { status: "duplicate"; entry: LogEntry }
   /** §5.4: client rules too old (or unknown to this server). Client must update before writing. */
-  | { status: "rules_version_rejected"; minRulesVersion: number; maxRulesVersion: number };
+  | { status: "rules_version_rejected"; minRulesVersion: number; maxRulesVersion: number }
+  /** Rule 8: the device does not hold an unexpired lease on a guarded upload. */
+  | { status: "lease_rejected"; uploadId: UploadId };
 
 export interface SequencerOptions {
   /** Oldest rules version the server accepts for NEW operations. */
@@ -62,7 +64,12 @@ export class Sequencer {
         maxRulesVersion: this.maxRulesVersion,
       };
     }
-    const entry: LogEntry = { ...structuredCloneSafe(env), seq: this.log.length + 1, serverTime: this.now() };
+    const now = this.now();
+    for (const uploadId of env.leaseGuard ?? []) {
+      const l = this.leases.get(uploadId);
+      if (!l || l.deviceId !== env.device.id || l.expiresAt <= now) return { status: "lease_rejected", uploadId };
+    }
+    const entry: LogEntry = { ...structuredCloneSafe(env), seq: this.log.length + 1, serverTime: now };
     this.log.push(entry);
     this.byOpId.set(entry.opId, entry);
     return { status: "accepted", entry };
@@ -74,8 +81,18 @@ export class Sequencer {
   }
 
   // --- Upload leases (outside the log, plaintext on the server; §3.3, rule 8)
+  //
+  // Protocol (rule 8):
+  //  uploader: renewLease(U) -> upload_begin [guard U] -> fragments (renewing)
+  //            -> group[upload_commit U, create/new_content_version U] [guard U]
+  //            -> releaseLease(U)
+  //  cleaner:  expiredLeases() -> renewLease(U) (takes over an expired lease)
+  //            -> pull the log -> if U is still open/committed in the index:
+  //               delete fragments -> upload_abort U [guard U]
+  //  Once the cleaner holds the lease, the uploader's guarded commit/bind is
+  //  refused by the server, so fragments are never deleted under a file.
 
-  /** Start or renew. Returns false if another device holds an unexpired lease. */
+  /** Start, renew, or take over an expired lease. False if another device holds an unexpired lease. */
   renewLease(uploadId: UploadId, deviceId: string): boolean {
     const now = this.now();
     const cur = this.leases.get(uploadId);
@@ -84,26 +101,15 @@ export class Sequencer {
     return true;
   }
 
-  releaseLease(uploadId: UploadId): void {
-    this.leases.delete(uploadId);
+  /** Only the holder can release. */
+  releaseLease(uploadId: UploadId, deviceId: string): void {
+    if (this.leases.get(uploadId)?.deviceId === deviceId) this.leases.delete(uploadId);
   }
 
-  /** Expired leases: candidates for cleanup (delete fragments, then upload_abort). */
+  /** Expired leases: candidates for cleanup. */
   expiredLeases(): Lease[] {
     const now = this.now();
     return [...this.leases.values()].filter((l) => l.expiresAt <= now).sort((a, b) => (a.uploadId < b.uploadId ? -1 : 1));
-  }
-
-  /**
-   * Cleanup may only start after the lease expired (rule 8). A cleaning device
-   * takes the lease over, so the original uploader's renew fails from now on.
-   */
-  claimExpiredLease(uploadId: UploadId, deviceId: string): boolean {
-    const now = this.now();
-    const cur = this.leases.get(uploadId);
-    if (!cur || cur.expiresAt > now) return false;
-    this.leases.set(uploadId, { uploadId, deviceId, expiresAt: now + this.leaseMs });
-    return true;
   }
 }
 

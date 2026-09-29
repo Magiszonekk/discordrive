@@ -9,6 +9,7 @@ export {
   inTrash,
   isClientId,
   pathOf,
+  uploadsTouched,
   LogGapError,
   UnsupportedRulesVersionError,
   type ApplyResult,
