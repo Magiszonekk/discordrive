@@ -12,8 +12,10 @@
   "scripts": {
     "test": "vitest run",
     "test:fuzz": "FUZZ_RUNS=20000 vitest run test/fuzz.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check:browser": "esbuild src/index.ts --bundle --platform=browser --format=esm --outfile=.tmp/sync-core.browser.js"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "check:browser": "tsx test/browser-check.ts 40 7",
+    "check:mutations": "python3 scripts/mutation-check.py",
+    "gen:casefold": "node scripts/gen-casefold.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.27.0",

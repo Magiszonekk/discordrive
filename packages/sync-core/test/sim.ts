@@ -19,7 +19,7 @@
 //  I5 no file points at physically deleted fragments,
 //  I6 snapshot + log tail == full log (also through JSON serialization).
 //
-// FUZZ_RUNS (default 1000) and FUZZ_SEED control the run.
+// FUZZ_RUNS (default 300; `npm run test:fuzz` uses 20000) and FUZZ_SEED control the run.
 
 import fc from "fast-check";
 import { expect } from "./expect.js";

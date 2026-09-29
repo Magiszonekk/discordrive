@@ -31,6 +31,9 @@ MUTATIONS = [
 ]
 
 orig = SRC.read_text()
+only = os.environ.get("ONLY")
+if only:
+    MUTATIONS = [m for m in MUTATIONS if only in m[0]]
 survivors = []
 try:
     for name, old, new in MUTATIONS:

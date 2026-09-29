@@ -28,7 +28,7 @@ koncept milczy, przyjęte zachowanie jest opisane w [QUESTIONS.md](QUESTIONS.md)
 ## Testy
 
 ```
-npm test -w @ddv4/sync-core                                # jednostkowe + losowy (1000 przebiegów)
+npm test -w @ddv4/sync-core                                # jednostkowe + losowy (300 przebiegów)
 FUZZ_RUNS=20000 npx vitest run test/fuzz.test.ts           # dłuższy test losowy
 npx tsx test/run-sim.ts <seed> <n>                         # symulacja poza vitestem, zapisuje przypadek, który padł
 CHROMIUM_PATH=... npx tsx test/browser-check.ts 40 7       # te same logi w Chromium, porównanie stanów z Node

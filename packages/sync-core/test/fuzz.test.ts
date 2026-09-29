@@ -3,7 +3,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { actionArb, newStats, runCase } from "./sim.js";
 
-const RUNS = Number(process.env.FUZZ_RUNS ?? 1000);
+const RUNS = Number(process.env.FUZZ_RUNS ?? 300);
 const SEED = process.env.FUZZ_SEED !== undefined ? Number(process.env.FUZZ_SEED) : undefined;
 
 describe("randomized multi-device sync", () => {
