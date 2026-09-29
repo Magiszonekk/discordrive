@@ -83,14 +83,17 @@ export class Sequencer {
   // --- Upload leases (outside the log, plaintext on the server; §3.3, rule 8)
   //
   // Protocol (rule 8):
-  //  uploader: renewLease(U) -> upload_begin [guard U] -> fragments (renewing)
-  //            -> group[upload_commit U, create/new_content_version U] [guard U]
+  //  uploader: renewLease(U) -> upload_begin [guard U], wait until it is in
+  //            the log -> fragments (renewing the lease) ->
+  //            group[upload_commit U, create/new_content_version U] [guard U]
   //            -> releaseLease(U)
   //  cleaner:  expiredLeases() -> renewLease(U) (takes over an expired lease)
   //            -> pull the log -> if U is still open/committed in the index:
-  //               delete fragments -> upload_abort U [guard U]
-  //  Once the cleaner holds the lease, the uploader's guarded commit/bind is
-  //  refused by the server, so fragments are never deleted under a file.
+  //               upload_abort U [guard U] -> once applied, delete fragments
+  //  Abort goes into the log BEFORE fragments are deleted. A commit/bind after
+  //  the abort is rejected by apply(), so even if the cleaner dies midway and
+  //  the uploader later regains the lease, no file can point at deleted
+  //  fragments. The lease only stops cleanup of uploads that are still alive.
 
   /** Start, renew, or take over an expired lease. False if another device holds an unexpired lease. */
   renewLease(uploadId: UploadId, deviceId: string): boolean {

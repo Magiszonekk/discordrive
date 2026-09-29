@@ -44,3 +44,4 @@ export {
 export { CASEFOLD_UNICODE_VERSION } from "./casefold-table.js";
 export { Replica, type ReplicaOptions } from "./replica.js";
 export { ManifestCache, type ManifestSource, type ChunkManifest, type ChunkRef } from "./manifest.js";
+export { deletableUploads, expiredTrash, DAY_MS, TRASH_RETENTION_MS, FRAGMENT_RETENTION_MS } from "./gc.js";

@@ -27,6 +27,8 @@ export class Replica {
   readonly device: DeviceInfo;
   readonly store: IndexStore;
   readonly outbox: OpEnvelope[] = [];
+  /** opIds the server has accepted (or reported as duplicate) but whose entry has not been pulled yet. */
+  private readonly acked = new Set<string>();
   readonly results: ApplyResult[] = [];
   private readonly now: () => number;
   private readonly newOpId: () => string;
@@ -74,6 +76,7 @@ export class Replica {
       this.results.push(r);
       const i = this.outbox.findIndex((o) => o.opId === e.opId);
       if (i >= 0) this.outbox.splice(i, 1);
+      this.acked.delete(e.opId);
     }
     return out;
   }
@@ -84,28 +87,43 @@ export class Replica {
   }
 
   /**
-   * Send the oldest queued op. The op keeps its original baseSeq (what the
-   * author saw when it was made), which is exactly what rules 1 and 4 need.
-   * A refused op (rules version, lease) stays at the head of the outbox; the
-   * caller decides (update the client / drop the op and start the upload over).
+   * Send the oldest op that the server has not acknowledged yet. The op keeps
+   * its original baseSeq (what the author saw when it was made), which is
+   * exactly what rules 1 and 4 need. Acknowledged ops stay in the outbox
+   * until their entry arrives through pull() (so the UI can still show them
+   * as pending), but are not re-sent. A refused op (rules version, lease)
+   * stays at the head; the caller decides (update the client / drop the op
+   * and start the upload over).
    */
   pushOne(server: Sequencer): SubmitResult | null {
-    const env = this.outbox[0];
+    const env = this.nextToSend();
     if (!env) return null;
-    // accepted or duplicate: the entry arrives through pull() and leaves the outbox there.
-    return server.submit(env);
+    const r = server.submit(env);
+    if (r.status === "accepted" || r.status === "duplicate") this.acked.add(env.opId);
+    return r;
+  }
+
+  /** The envelope pushOne() would send next (oldest not yet acknowledged). */
+  nextToSend(): OpEnvelope | undefined {
+    return this.outbox.find((o) => !this.acked.has(o.opId));
+  }
+
+  /** Ops not yet acknowledged by the server. */
+  get unsent(): number {
+    return this.outbox.filter((o) => !this.acked.has(o.opId)).length;
   }
 
   /** Drop a queued op (e.g. after lease_rejected). */
   drop(opId: string): void {
     const i = this.outbox.findIndex((o) => o.opId === opId);
     if (i >= 0) this.outbox.splice(i, 1);
+    this.acked.delete(opId);
   }
 
   /** Rule 10: after being offline, first catch up, then send own ops at the end. */
   sync(server: Sequencer): SubmitResult | null {
     this.pull(server);
-    while (this.outbox.length > 0) {
+    while (this.unsent > 0) {
       const r = this.pushOne(server);
       if (!r || (r.status !== "accepted" && r.status !== "duplicate")) return r;
       this.pull(server);

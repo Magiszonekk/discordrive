@@ -507,7 +507,8 @@ function opCreate(ctx: Ctx, op: CreateOp): Outcome {
   };
 
   const parent = ctx.s.getNode(op.parentId);
-  if (!parent || parent.kind !== "folder") {
+  if (parent && parent.kind !== "folder") return ctx.reject("parent_not_folder", op.nodeId);
+  if (!parent) {
     // Rule 4 with a purged target folder (unknown ID = purged, rule 3b).
     placeRecovered(ctx, rec, op.parentId, "parent_purged");
   } else if (inTrash(ctx.s, op.parentId)) {
