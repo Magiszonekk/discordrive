@@ -103,6 +103,29 @@ describe("rule 2: name collisions", () => {
     s.expectValid();
   });
 
+  it("group op with a skipped member changes nothing (all or nothing, §4)", () => {
+    const s = new Scenario();
+    s.folder(A, "fold0001", ROOT_ID, "dst");
+    s.folder(A, "fold0002", ROOT_ID, "trashed");
+    s.file(A, "file0001", ROOT_ID, "a.txt");
+    s.file(A, "file0002", ROOT_ID, "b.txt");
+    s.op(A, { type: "trash", nodeId: "fold0002" });
+    const before = JSON.stringify([...s.store.allNodes()].sort((x, y) => (x.id < y.id ? -1 : 1)));
+    const r = s.add(B, {
+      type: "group",
+      ops: [
+        { type: "move", nodeId: "file0001", parentId: "fold0001" },
+        { type: "rename", nodeId: "file0002", name: "c.txt" },
+        { type: "move", nodeId: "file0002", parentId: "fold0002" }, // rule 5: skipped
+      ],
+    });
+    expect(r.outcome).toBe("skipped");
+    expect(r.notices.map((n) => n.code)).toEqual(["move_target_in_trash", "group_rolled_back"]);
+    const after = JSON.stringify([...s.store.allNodes()].sort((x, y) => (x.id < y.id ? -1 : 1)));
+    expect(after).toBe(before);
+    expect(s.store.getMeta().headSeq).toBe(s.seq);
+  });
+
   it("swapping two names inside one group op works (all-or-nothing, no transient collision)", () => {
     const s = new Scenario();
     s.file(A, "file0001", ROOT_ID, "a.txt");

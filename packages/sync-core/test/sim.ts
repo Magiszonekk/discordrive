@@ -39,6 +39,7 @@ import {
   type ApplyResult,
   type DeviceInfo,
   type IndexSnapshot,
+  type IndexStore,
   type LogEntry,
   type NodeRecord,
   type Operation,
@@ -135,6 +136,12 @@ class ReversedStore extends MemoryIndexStore {
 const pick = <T>(arr: readonly T[], n: number): T | undefined => (arr.length === 0 ? undefined : arr[n % arr.length]);
 const pad = (n: number) => String(n).padStart(5, "0");
 
+/** Canonical nodes + uploads without meta (headSeq always moves). */
+function canonicalTree(store: IndexStore): string {
+  const s = takeSnapshot(store);
+  return JSON.stringify([s.nodes, s.uploads]);
+}
+
 export interface Stats {
   runs: number;
   entries: number;
@@ -148,6 +155,12 @@ export interface Stats {
 
 export function newStats(): Stats {
   return { runs: 0, entries: 0, outcomes: {}, notices: {}, leaseRejected: 0, fragmentsDeleted: 0, joins: 0, maxLog: 0 };
+}
+
+let lastLogValue: LogEntry[] | null = null;
+/** Log of the most recent runCase() (for cross-engine replay). */
+export function lastLog(): LogEntry[] | null {
+  return lastLogValue;
 }
 
 export function runCase(actions: Action[], stats: Stats): void {
@@ -395,15 +408,23 @@ export function runCase(actions: Action[], stats: Stats): void {
   }
 
   const log = server.read(0);
+  lastLogValue = log;
   stats.runs++;
   stats.entries += log.length;
   stats.maxLog = Math.max(stats.maxLog, log.length);
 
   // I1 + I2 + I3: replay the full log, checking every prefix.
+  // Also: an entry that was not applied (skipped/rejected) must not change
+  // the state at all (all-or-nothing, §4), only headSeq.
   const full = initIndex(new MemoryIndexStore());
   const results: ApplyResult[] = [];
   for (const e of log) {
-    results.push(applyEntry(full, e));
+    const before = canonicalTree(full);
+    const r = applyEntry(full, e);
+    results.push(r);
+    if ((r.outcome === "skipped" || r.outcome === "rejected" || r.outcome === "noop") && canonicalTree(full) !== before) {
+      throw new Error(`entry ${e.seq} (${r.outcome}) changed the state`);
+    }
     const v = checkInvariants(full);
     if (v.length > 0) throw new Error(`invariants broken after seq ${e.seq}: ${JSON.stringify(v)}`);
   }

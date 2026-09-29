@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Mutation check: break one rule at a time in src/apply.ts and verify the tests catch it.
+
+Each mutation is (name, old, new). The file is restored after every run.
+A mutation that still passes all tests means the tests do not guard that rule.
+"""
+import subprocess, sys, os, pathlib
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+SRC = ROOT / "src" / "apply.ts"
+ENV = dict(os.environ, PATH="/usr/local/bin:" + os.environ["PATH"], FUZZ_RUNS=os.environ.get("FUZZ_RUNS", "200"))
+
+MUTATIONS = [
+    ("r1 no unseen notice", 'if (ctx.unseen(node.nameChanged)) {', 'if (false && ctx.unseen(node.nameChanged)) {'),
+    ("r2 no suffix", "  if (!taken(name)) return name;\n", "  return name;\n"),
+    ("r2 case-sensitive", "const other = s.childByKey(parentId, nameKey(n));", "const other = s.childByKey(parentId, n);"),
+    ("r3 no restore on content", "  if (inTrash(ctx.s, node.id)) {\n    const parentId = node.parentId!;", "  if (false) {\n    const parentId = node.parentId!;"),
+    ("r3b drop content", "    placeRecovered(ctx, rec, null, \"content_for_purged_file\");", "    return \"skipped\";"),
+    ("r4 create into trash stays", "  } else if (inTrash(ctx.s, op.parentId)) {\n    // Rule 4: added to a deleted folder.\n    placeRecovered(ctx, rec, op.parentId, \"parent_in_trash\");", "  } else if (inTrash(ctx.s, op.parentId)) {\n    placeLive(ctx, rec, op.parentId, op.name);"),
+    ("r4 no rescue", "  if (node.kind === \"folder\") rescueUnseen(ctx, node.id);", ""),
+    ("r5 move into trash allowed", "  if (inTrash(ctx.s, op.parentId)) {\n    // Rule 5.", "  if (false) {\n    // Rule 5."),
+    ("r6 no cycle check", "  if (isSelfOrAncestor(ctx.s, node.id, op.parentId)) {", "  if (node.id === op.parentId) {"),
+    ("r7 no conflict copy", "  if (cur && cur.versionId !== op.baseVersionId) {", "  if (false) {"),
+    ("r8 commit after abort", "  if (u.status === \"aborted\") {\n    // Rule 8", "  if (u.status === \"aborted\" && false) {\n    // Rule 8"),
+    ("r8 abort bound upload", "  if (u.status === \"bound\" || u.status === \"released\") return ctx.reject(\"upload_in_use\");", ""),
+    ("group not atomic", "  const target = ok ? ov : new OverlayStore(store);", "  const target = ov;"),
+    ("purge ignores unseen", "    if (unseen) {\n      ctx.notice({ code: \"purge_skipped_unseen_changes\"", "    if (false) {\n      ctx.notice({ code: \"purge_skipped_unseen_changes\""),
+    ("trash ignores unseen content", "  if (node.content && ctx.unseen({ seq: node.content.seq, deviceId: node.content.device.id })) {", "  if (false) {"),
+    ("nondeterministic order", "  return [...s.childIds(parentId)].sort(cmp);", "  return [...s.childIds(parentId)];"),
+    ("unseen ignores own device", "    return m.seq > this.e.baseSeq && m.deviceId !== this.e.device.id;", "    return m.seq > this.e.baseSeq;"),
+]
+
+orig = SRC.read_text()
+survivors = []
+try:
+    for name, old, new in MUTATIONS:
+        if orig.count(old) != 1:
+            print(f"?? {name}: pattern found {orig.count(old)} times, skipped")
+            survivors.append(name + " (pattern)")
+            continue
+        SRC.write_text(orig.replace(old, new))
+        r = subprocess.run(["npx", "vitest", "run"], cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=600)
+        caught = r.returncode != 0
+        failed = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith("×") or "FAIL" in l][:3]
+        print(f"{'caught ' if caught else 'SURVIVED'} {name}" + (f"  <- {failed[0][:110]}" if failed else ""))
+        if not caught:
+            survivors.append(name)
+finally:
+    SRC.write_text(orig)
+print(f"\n{len(MUTATIONS) - len(survivors)}/{len(MUTATIONS)} mutations caught")
+if survivors:
+    print("survivors:", survivors)
+    sys.exit(1)
