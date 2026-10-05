@@ -10,7 +10,8 @@
 //
 // Invariants checked at the end of every case:
 //  I1 all replicas (incl. a fresh replay, a replay into a store with reversed
-//     iteration order, and snapshot+tail at a random cut) have identical state,
+//     iteration order, and snapshot+tail at a random cut) have identical state;
+//     the reversed-order replay also yields identical notices,
 //  I2 no cycles, every node reachable from a root, no orphans (every prefix
 //     of the log, not only the final state),
 //  I3 names unique per folder (case-folded), every prefix,
@@ -459,9 +460,12 @@ export function runCase(actions: Action[], stats: Stats): void {
 
   for (const d of devs) expect(canonicalState(d.r.store)).toBe(want);
 
+  // Same state AND same notices (every replica shows the user the same thing),
+  // whatever the store's iteration order.
   const rev = initIndex(new ReversedStore());
-  for (const e of log) applyEntry(rev, e);
+  const revResults = log.map((e) => applyEntry(rev, e));
   expect(canonicalState(rev)).toBe(want);
+  expect(JSON.stringify(revResults)).toBe(JSON.stringify(results));
 
   // I6: snapshot at a random cut (derived from the actions) + tail.
   const cut = log.length === 0 ? 0 : (actions.length * 7 + (actions[0]?.x ?? 0)) % (log.length + 1);

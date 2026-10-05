@@ -34,7 +34,9 @@ MUTATIONS = [
     ("Q7 identical still conflicts", "  if (cur && cur.versionId !== op.baseVersionId && !identical) {", "  if (cur && cur.versionId !== op.baseVersionId) {"),
     ("Q7 null hashes count as identical", "cur !== null && cur.plaintextSha256 !== null && cur.plaintextSha256 === version.plaintextSha256;", "cur !== null && cur.plaintextSha256 === version.plaintextSha256;"),
     ("Q9 skipped rolls back group", "    if (r === \"rejected\") {\n      // Q9", "    if (r === \"rejected\" || r === \"skipped\") {\n      // Q9"),
-    ("Q9 skipped member leaves traces", "    if (r === \"skipped\") {\n      skipped.push(String(i));", "    if (r === \"skipped\") {\n      memberStore.commit();\n      skipped.push(String(i));"),
+    # Not listed: committing a skipped member's overlay. Every rule returns
+    # "skipped" before writing anything, so that mutant is equivalent; the
+    # per-member overlay is a guard for future rules.
     ("Q9 rejected member does not roll back", "      ctx.notice({ code: \"group_rolled_back\", reason: `sub_${i}` });\n      return r;", "      continue;"),
     ("nondeterministic order", "  return [...s.childIds(parentId)].sort(cmp);", "  return [...s.childIds(parentId)];"),
     ("unseen ignores own device", "    return m.seq > this.e.baseSeq && m.deviceId !== this.e.device.id;", "    return m.seq > this.e.baseSeq;"),
