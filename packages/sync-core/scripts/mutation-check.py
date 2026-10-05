@@ -4,7 +4,7 @@
 Each mutation is (name, old, new). The file is restored after every run.
 A mutation that still passes all tests means the tests do not guard that rule.
 """
-import subprocess, sys, os, pathlib
+import subprocess, sys, os, pathlib, signal
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "src" / "apply.ts"
@@ -52,7 +52,17 @@ try:
             survivors.append(name + " (pattern)")
             continue
         SRC.write_text(orig.replace(old, new))
-        r = subprocess.run(["npx", "vitest", "run"], cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=600)
+        proc = subprocess.Popen(["npx", "vitest", "run"], cwd=ROOT, env=ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            out, _ = proc.communicate(timeout=300)
+        except subprocess.TimeoutExpired:
+            # A hang counts as caught (e.g. a cycle let through makes a tree walk spin),
+            # but kill the whole process group so vitest workers do not linger.
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.communicate()
+            print(f"caught  {name}  <- timeout (hang)")
+            continue
+        r = subprocess.CompletedProcess(proc.args, proc.returncode, out, "")
         caught = r.returncode != 0
         failed = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith("×") or "FAIL" in l][:3]
         print(f"{'caught ' if caught else 'SURVIVED'} {name}" + (f"  <- {failed[0][:110]}" if failed else ""))

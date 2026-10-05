@@ -695,8 +695,11 @@ function notifyUnseenTrashed(ctx: Ctx, folderId: NodeId): void {
   // Depth-first, children in ascending ID order; `told` = devices already
   // notified about an ancestor on the current path.
   const stack: { id: NodeId; told: ReadonlySet<string> }[] = [{ id: folderId, told: new Set() }];
+  const visited = new Set<NodeId>(); // defensive: the tree has no cycles (rule 6)
   while (stack.length > 0) {
     const { id, told } = stack.pop()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
     const descend: { id: NodeId; told: ReadonlySet<string> }[] = [];
     for (const kid of sortedChildren(ctx.s, id)) {
       const rec = ctx.s.getNode(kid)!;
@@ -760,8 +763,11 @@ function opPurge(ctx: Ctx, op: PurgeOp): Outcome {
   const keptRoots: NodeId[] = [];
   const containers = new Set<NodeId>();
   const walk: { id: NodeId; path: NodeId[] }[] = [{ id: node.id, path: [] }];
+  const visited = new Set<NodeId>(); // defensive: the tree has no cycles (rule 6)
   while (walk.length > 0) {
     const { id, path } = walk.pop()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
     const rec = ctx.s.getNode(id)!;
     const unseen = ctx.unseen(rec.placed) || (rec.content !== null && ctx.unseen(contentMark(rec.content)));
     if (unseen) {
