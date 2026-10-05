@@ -225,7 +225,8 @@ export interface OpEnvelope {
   /**
    * Author's UTC offset in minutes at createdAt (CEST = 120). Display only:
    * the rule-7 conflict copy name shows the author's local time (Q6).
-   * Integer in [-1080, 1080]; missing = 0.
+   * Integer in [-1080, 1080]; missing = 0. Encrypted with the payload, like
+   * createdAt and device (not in the server's plaintext list, koncept §3.3).
    */
   tzOffsetMin?: number;
   /**

@@ -85,9 +85,9 @@ Decyzja: wariant 3. `raport (konflikt, Laptop, 2026-09-29 16.05).docx`, bez „U
 - `FileVersion` zapamiętuje `tzOffsetMin` wersji, a nazwa kopii to
   `createdAt + tzOffsetMin` formatowane wyłącznie getterami UTC, więc każda replika daje
   identyczną nazwę niezależnie od własnej strefy.
-- `tzOffsetMin` jest w kopercie jawny dla serwera (jak `createdAt`). W metadata only
-  zdradza przybliżoną strefę urządzenia. Jeśli to problem, pole można przenieść do
-  zaszyfrowanego payloadu bez zmiany reguł.
+- `tzOffsetMin` należy do zaszyfrowanej części koperty, razem z `createdAt` i `device`.
+  Jawne dla serwera są tylko `opId`, `rulesVersion`, `baseSeq` i `leaseGuard` (kontrakt
+  §3.3), więc w metadata only serwer nie poznaje strefy urządzenia.
 
 ## Q7. Konflikt treści: brak `baseVersionId` = konflikt, ale identyczna treść = brak konfliktu
 Decyzja: wariant 1 z wyjątkiem. Gdy nowa wersja ma ten sam hash treści co bieżąca, nie
