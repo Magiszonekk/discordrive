@@ -10,7 +10,7 @@ export type NodeKind = "file" | "folder";
  * Rules version implemented by this build. Recorded in every log entry (§5.4).
  *
  * History:
- *  1 - first stage-1 rules (provisional answers to QUESTIONS Q1-Q10).
+ *  1 - first stage-1 rules (provisional answers to the stage-1 questions).
  *  2 - owner decisions of 2026-10-05 (DECISIONS.md): folder trash takes unseen
  *      nodes along (Q1), silent trash skip (Q2), partial purge keeping unseen
  *      nodes (Q3), conflict copy in the author's local time (Q6), identical
