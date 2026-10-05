@@ -21,7 +21,7 @@ MUTATIONS = [
     ("Q1 notify own device", "      if (ctx.unseen(rec.placed)) devices.add(rec.placed.deviceId);", "      devices.add(rec.placed.deviceId);"),
     ("r5 move into trash allowed", "  if (inTrash(ctx.s, op.parentId)) {\n    // Rule 5.", "  if (false) {\n    // Rule 5."),
     ("r6 no cycle check", "  if (isSelfOrAncestor(ctx.s, node.id, op.parentId)) {", "  if (node.id === op.parentId) {"),
-    ("r7 no conflict copy", "  if (cur && cur.versionId !== op.baseVersionId) {", "  if (false) {"),
+    ("r7 no conflict copy", "  if (cur && cur.versionId !== op.baseVersionId && !identical) {", "  if (false) {"),
     ("r8 commit after abort", "  if (u.status === \"aborted\") {\n    // Rule 8", "  if (u.status === \"aborted\" && false) {\n    // Rule 8"),
     ("r8 abort bound upload", "  if (u.status === \"bound\" || u.status === \"released\") return ctx.reject(\"upload_in_use\");", ""),
     ("group not atomic", "  const target = ok ? ov : new OverlayStore(store);", "  const target = ov;"),
