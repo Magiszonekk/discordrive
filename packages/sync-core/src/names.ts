@@ -123,19 +123,26 @@ export function suffixedName(name: string, kind: NodeKind, n: number): string {
   return composeName(base, ` (${n})`, ext);
 }
 
-/** UTC, minute precision, no ':' (Windows). Deterministic: no local timezone. */
-export function formatConflictDate(ms: number): string {
-  const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return "0000-00-00 00.00 UTC";
+/**
+ * Author's local wall-clock time (owner decision Q6): `createdAt` shifted by
+ * the author's UTC offset from the envelope, minute precision, no ':'
+ * (Windows), no zone label. Deterministic: only UTC getters on a shifted
+ * instant, never the replica's own timezone.
+ */
+export function formatConflictDate(ms: number, tzOffsetMin = 0): string {
+  const d = new Date(ms + tzOffsetMin * 60_000);
+  if (Number.isNaN(d.getTime())) return "0000-00-00 00.00";
   const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}.${p(d.getUTCMinutes())} UTC`;
+  const y = d.getUTCFullYear();
+  const year = y >= 0 && y <= 9999 ? String(y).padStart(4, "0") : String(y);
+  return `${year}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}.${p(d.getUTCMinutes())}`;
 }
 
 /** `nazwa (konflikt, <urządzenie>, <data>).ext` (rule 7). */
-export function conflictName(name: string, deviceName: string, createdAtMs: number): string {
+export function conflictName(name: string, deviceName: string, createdAtMs: number, tzOffsetMin = 0): string {
   const [base, ext] = splitExt(name, "file");
   const dev = sanitizeLabel(deviceName) || "?";
-  return composeName(base, ` (konflikt, ${dev}, ${formatConflictDate(createdAtMs)})`, ext);
+  return composeName(base, ` (konflikt, ${dev}, ${formatConflictDate(createdAtMs, tzOffsetMin)})`, ext);
 }
 
 /** Make a free-form label usable inside a name without failing validateName. */

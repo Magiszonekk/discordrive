@@ -21,6 +21,17 @@ export interface ReplicaOptions {
   /** Op ID generator (random in production). */
   newOpId: () => string;
   rulesVersion?: number;
+  /**
+   * Device UTC offset in minutes at a given instant (CEST = 120); goes into
+   * every envelope for the conflict-copy name (Q6). Default: the JS runtime's
+   * local zone.
+   */
+  tzOffsetMin?: (atMs: number) => number;
+}
+
+function localTzOffsetMin(atMs: number): number {
+  const off = -new Date(atMs).getTimezoneOffset();
+  return Number.isInteger(off) && off >= -1080 && off <= 1080 ? off : 0;
 }
 
 export class Replica {
@@ -32,6 +43,7 @@ export class Replica {
   readonly results: ApplyResult[] = [];
   private readonly now: () => number;
   private readonly newOpId: () => string;
+  private readonly tzOffsetMin: (atMs: number) => number;
   readonly rulesVersion: number;
 
   constructor(opts: ReplicaOptions) {
@@ -40,6 +52,7 @@ export class Replica {
     this.now = opts.now ?? (() => Date.now());
     this.newOpId = opts.newOpId;
     this.rulesVersion = opts.rulesVersion ?? RULES_VERSION;
+    this.tzOffsetMin = opts.tzOffsetMin ?? localTzOffsetMin;
   }
 
   static fromSnapshot(snap: IndexSnapshot, opts: ReplicaOptions): Replica {
@@ -53,12 +66,14 @@ export class Replica {
 
   /** Queue a local operation. baseSeq = what this device has applied right now. */
   enqueue(op: Operation, leaseGuard: string[] = uploadsTouched(op)): OpEnvelope {
+    const createdAt = this.now();
     const env: OpEnvelope = {
       opId: this.newOpId(),
       rulesVersion: this.rulesVersion,
       baseSeq: this.headSeq,
       device: { ...this.device },
-      createdAt: this.now(),
+      createdAt,
+      tzOffsetMin: this.tzOffsetMin(createdAt),
       ...(leaseGuard.length > 0 ? { leaseGuard: [...leaseGuard] } : {}),
       op,
     };

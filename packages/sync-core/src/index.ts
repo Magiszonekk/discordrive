@@ -8,6 +8,8 @@ export {
   initIndex,
   inTrash,
   isClientId,
+  isTzOffset,
+  SILENT_NOTICE_CODES,
   pathOf,
   uploadsTouched,
   LogGapError,

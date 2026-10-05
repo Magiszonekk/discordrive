@@ -6,10 +6,23 @@ export type UploadId = string;
 export type VersionId = string;
 export type NodeKind = "file" | "folder";
 
-/** Rules version implemented by this build. Recorded in every log entry (§5.4). */
-export const RULES_VERSION = 1;
-/** Oldest rules version this build can still replay. */
-export const MIN_REPLAY_RULES_VERSION = 1;
+/**
+ * Rules version implemented by this build. Recorded in every log entry (§5.4).
+ *
+ * History:
+ *  1 - first stage-1 rules (provisional answers to QUESTIONS Q1-Q10).
+ *  2 - owner decisions of 2026-10-05 (DECISIONS.md): folder trash takes unseen
+ *      nodes along (Q1), silent trash skip (Q2), partial purge keeping unseen
+ *      nodes (Q3), conflict copy in the author's local time (Q6), identical
+ *      content is not a conflict (Q7), group ops skip only "skipped" members (Q9).
+ */
+export const RULES_VERSION = 2;
+/**
+ * Oldest rules version this build can still replay. Version 1 logs are not
+ * replayable: no v1 log exists outside tests (stage 1 never ran against a
+ * real server), so keeping a second rule set would be cost without data.
+ */
+export const MIN_REPLAY_RULES_VERSION = 2;
 
 /** Fixed system node IDs. Both are roots (parentId = null) and can never be deleted. */
 export const ROOT_ID: NodeId = "root";
@@ -41,13 +54,24 @@ export interface ContentRef {
    */
   manifestRef: string;
   chunkCount: number;
+  /**
+   * SHA-256 of the file plaintext, lowercase hex (Q7). The uploading client
+   * computes it while streaming the plaintext through the chunker, before
+   * encryption; it travels only inside the (encrypted) op payload and the
+   * (encrypted) tree, so the server never sees it in metadata only. Optional:
+   * without it a concurrent version is always a conflict.
+   */
+  plaintextSha256?: string;
 }
 
 /** A version as stored in the tree. */
-export interface FileVersion extends ContentRef {
+export interface FileVersion extends Omit<ContentRef, "plaintextSha256"> {
+  plaintextSha256: string | null;
   /** Who wrote it and when (device clock, display only: rule 7 copy label). */
   device: DeviceInfo;
   createdAt: number;
+  /** Author's UTC offset in minutes at createdAt (envelope tzOffsetMin, Q6). */
+  tzOffsetMin: number;
   /** Log position that made it current. */
   seq: number;
 }
@@ -64,7 +88,11 @@ export interface NodeRecord {
   name: string;
   /** null only for the two system roots. */
   parentId: NodeId | null;
-  /** Set when the node itself was trashed (not when an ancestor was). */
+  /**
+   * Set when the node itself was trashed (not when an ancestor was).
+   * seq: the trash op. at: start of the 30-day retention clock (server time of
+   * the trash op; reset by a purge that had to keep unseen nodes, Q3).
+   */
   trashed: { seq: number; at: number } | null;
   created: ChangeMark;
   nameChanged: ChangeMark;
@@ -162,7 +190,10 @@ export interface UploadAbortOp {
   type: "upload_abort";
   uploadId: UploadId;
 }
-/** Group operation: applied entirely or not at all (see apply.ts for the exact contract). */
+/**
+ * Group operation (Q9): members skipped by a conflict rule are left out and
+ * the rest applies; a rejected (invalid) member rolls back the whole group.
+ */
 export interface GroupOp {
   type: "group";
   ops: SingleOp[];
@@ -191,6 +222,12 @@ export interface OpEnvelope {
   device: DeviceInfo;
   /** Device clock, display only (§5.2.1). */
   createdAt: number;
+  /**
+   * Author's UTC offset in minutes at createdAt (CEST = 120). Display only:
+   * the rule-7 conflict copy name shows the author's local time (Q6).
+   * Integer in [-1080, 1080]; missing = 0.
+   */
+  tzOffsetMin?: number;
   /**
    * Rule 8: uploads this op touches (begin/commit/abort, or content bound by
    * create/new_content_version). Plaintext, like the leases themselves (§3.3).

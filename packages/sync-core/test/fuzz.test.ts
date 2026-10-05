@@ -40,7 +40,12 @@ describe("randomized multi-device sync", () => {
       "move_target_in_trash",
       "move_cycle",
       "content_conflict",
+      "content_identical",
       "group_rolled_back",
+      "group_members_skipped",
+      "unseen_trashed_with_folder",
+      "purge_kept_unseen",
+      "trash_skipped_unseen_content",
       "invalid_op",
     ]) {
       if (RUNS >= 200) expect(stats.notices[code] ?? 0, code).toBeGreaterThan(0);

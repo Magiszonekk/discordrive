@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RECOVERED_ID, ROOT_ID, Sequencer, RULES_VERSION, Replica } from "../src/index.js";
-import { A, B, C, Scenario, codes } from "./helpers.js";
+import { A, B, C, Scenario, codes, visibleCodes } from "./helpers.js";
 
 describe("rule 1: two renames", () => {
   it("later rename wins, notice when the author had not seen the earlier one", () => {
@@ -103,14 +103,13 @@ describe("rule 2: name collisions", () => {
     s.expectValid();
   });
 
-  it("group op with a skipped member changes nothing (all or nothing, §4)", () => {
+  it("group op with a skipped member applies the rest (Q9)", () => {
     const s = new Scenario();
     s.folder(A, "fold0001", ROOT_ID, "dst");
     s.folder(A, "fold0002", ROOT_ID, "trashed");
     s.file(A, "file0001", ROOT_ID, "a.txt");
     s.file(A, "file0002", ROOT_ID, "b.txt");
     s.op(A, { type: "trash", nodeId: "fold0002" });
-    const before = JSON.stringify([...s.store.allNodes()].sort((x, y) => (x.id < y.id ? -1 : 1)));
     const r = s.add(B, {
       type: "group",
       ops: [
@@ -119,10 +118,32 @@ describe("rule 2: name collisions", () => {
         { type: "move", nodeId: "file0002", parentId: "fold0002" }, // rule 5: skipped
       ],
     });
-    expect(r.outcome).toBe("skipped");
-    expect(r.notices.map((n) => n.code)).toEqual(["move_target_in_trash", "group_rolled_back"]);
-    const after = JSON.stringify([...s.store.allNodes()].sort((x, y) => (x.id < y.id ? -1 : 1)));
-    expect(after).toBe(before);
+    expect(r.outcome).toBe("applied");
+    expect(codes(r)).toEqual(["move_target_in_trash", "group_members_skipped"]);
+    expect(r.notices[1]!.items).toEqual(["2"]);
+    expect(s.node("file0001").parentId).toBe("fold0001");
+    expect(s.node("file0002").name).toBe("c.txt");
+    expect(s.node("file0002").parentId).toBe(ROOT_ID);
+    s.expectValid();
+  });
+
+  it("group op with a rejected member changes nothing (Q9)", () => {
+    const s = new Scenario();
+    s.folder(A, "fold0001", ROOT_ID, "dst");
+    s.file(A, "file0001", ROOT_ID, "a.txt");
+    s.file(A, "file0002", ROOT_ID, "b.txt");
+    const before = s.dump();
+    const r = s.add(B, {
+      type: "group",
+      ops: [
+        { type: "move", nodeId: "file0001", parentId: "fold0001" },
+        { type: "rename", nodeId: "file0002", name: "x/y" }, // invalid name: rejected
+        { type: "rename", nodeId: "file0002", name: "c.txt" },
+      ],
+    });
+    expect(r.outcome).toBe("rejected");
+    expect(codes(r)).toEqual(["invalid_op", "group_rolled_back"]);
+    expect(s.dump()).toBe(before);
     expect(s.store.getMeta().headSeq).toBe(s.seq);
   });
 
@@ -194,16 +215,29 @@ describe("rule 3: operations on a file in the trash", () => {
     s.expectValid();
   });
 
-  it("other order: trash after an unseen new version is skipped (provisional, Q2)", () => {
+  it("other order: trash after an unseen new version is skipped, silently (Q2)", () => {
     const s = new Scenario();
     s.file(A, "file0001", ROOT_ID, "a.txt");
     const v1 = s.version("file0001");
     const base = s.seq;
     s.edit(B, "file0001", v1, { baseSeq: base });
+    const v2 = s.version("file0001");
     const r = s.op(A, { type: "trash", nodeId: "file0001" }, { baseSeq: base });
     expect(r.outcome).toBe("skipped");
     expect(codes(r)).toEqual(["trash_skipped_unseen_content"]);
+    expect(r.notices[0]!.silent).toBe(true);
+    expect(visibleCodes(r)).toEqual([]);
     expect(s.node("file0001").trashed).toBeNull();
+    expect(s.version("file0001")).toBe(v2);
+  });
+
+  it("Q2: trash by an author who had seen the new version applies", () => {
+    const s = new Scenario();
+    s.file(A, "file0001", ROOT_ID, "a.txt");
+    s.edit(B, "file0001", s.version("file0001"));
+    const r = s.op(A, { type: "trash", nodeId: "file0001" });
+    expect(r.outcome).toBe("applied");
+    expect(s.node("file0001").trashed).not.toBeNull();
   });
 });
 
@@ -254,7 +288,7 @@ describe("rule 3b: operations on a purged file", () => {
     expect(s.recovered().map((n) => n.name)).toEqual(["x.bin"]);
   });
 
-  it("other order: purge after unseen new content is skipped (provisional, Q3)", () => {
+  it("other order: purge after unseen new content finds the file restored by rule 3 (skipped)", () => {
     const s = new Scenario();
     s.file(A, "file0001", ROOT_ID, "a.txt");
     const v1 = s.version("file0001");
@@ -263,6 +297,7 @@ describe("rule 3b: operations on a purged file", () => {
     s.edit(B, "file0001", v1, { baseSeq: base });
     const r = s.op(A, { type: "purge", nodeId: "file0001" }, { baseSeq: base });
     expect(r.outcome).toBe("skipped");
+    expect(codes(r)).toEqual(["purge_not_in_trash"]);
     expect(s.node("file0001").trashed).toBeNull();
   });
 });
@@ -295,7 +330,7 @@ describe("rule 4: file added to a deleted folder", () => {
     s.expectValid();
   });
 
-  it("other order: trashing a folder rescues children added unseen", () => {
+  it("other order: trashing a folder takes unseen children along, their author is notified (Q1)", () => {
     const s = new Scenario();
     s.folder(A, "fold0001", ROOT_ID, "docs");
     s.file(A, "file0000", "fold0001", "old.txt");
@@ -303,11 +338,12 @@ describe("rule 4: file added to a deleted folder", () => {
     s.file(B, "file0001", "fold0001", "new.txt", { baseSeq: base });
     const r = s.op(A, { type: "trash", nodeId: "fold0001" }, { baseSeq: base });
     expect(r.outcome).toBe("applied");
-    expect(codes(r)).toContain("moved_to_recovered");
-    expect(s.node("file0001").parentId).toBe(RECOVERED_ID);
-    expect(s.node("file0001").trashed).toBeNull();
-    // Seen content goes to the trash with the folder.
-    expect(s.node("file0000").parentId).toBe("fold0001");
+    expect(codes(r)).toEqual(["unseen_trashed_with_folder"]);
+    expect(r.notices[0]).toMatchObject({ nodeId: "file0001", relatedNodeId: "fold0001", notifyDeviceId: B.id, deviceId: A.id });
+    expect(s.node("file0001").parentId).toBe("fold0001");
+    expect(s.inTrash("file0001")).toBe(true);
+    expect(s.inTrash("file0000")).toBe(true);
+    expect(s.recovered()).toEqual([]);
     s.expectValid();
   });
 
@@ -421,7 +457,7 @@ describe("rule 7: two content versions", () => {
     expect(codes(r)).toContain("content_conflict");
     const vB = s.version("file0001");
     expect(vB).not.toBe(vA);
-    expect(s.names()).toEqual(["notatki (konflikt, laptop, 2026-09-29 14.05 UTC).md", "notatki.md"]);
+    expect(s.names()).toEqual(["notatki (konflikt, laptop, 2026-09-29 14.05).md", "notatki.md"]);
     const copy = s.recovered().length === 0 ? [...s.store.allNodes()].find((n) => n.conflictOf) : undefined;
     expect(copy?.content?.versionId).toBe(vA);
     expect(copy?.conflictOf?.nodeId).toBe("file0001");
@@ -493,7 +529,7 @@ describe("rule 8: interrupted upload", () => {
     const s = new Scenario();
     s.file(A, "file0001", ROOT_ID, "a.txt");
     const c = s.node("file0001").content!;
-    const r = s.op(B, { type: "create", kind: "file", nodeId: "file0002", parentId: ROOT_ID, name: "b.txt", content: { ...c, versionId: "ver-other1" } });
+    const r = s.op(B, { type: "create", kind: "file", nodeId: "file0002", parentId: ROOT_ID, name: "b.txt", content: { ...c, plaintextSha256: undefined, versionId: "ver-other1" } });
     expect(r.outcome).toBe("rejected");
     const c2 = s.newContent();
     s.op(A, { type: "upload_begin", uploadId: c2.uploadId });

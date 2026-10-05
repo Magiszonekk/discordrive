@@ -10,8 +10,10 @@
 //    bad client cannot stall every replica. Exceptions mean a bug in the core
 //    (or a log gap / unsupported rules version).
 //  - Each entry is applied in a write overlay and committed atomically. A
-//    group op is all-or-nothing: if any sub-op is skipped or rejected, the
-//    whole group is rolled back (§4).
+//    group op (§4, owner decision Q9, DECISIONS.md): members skipped by a
+//    conflict rule are left out (each in its own nested overlay, so a skipped
+//    member never leaves traces) and the rest applies, with one summary
+//    notice; a rejected (invalid) member rolls back the whole group.
 
 import {
   conflictName,
@@ -76,12 +78,25 @@ export type NoticeCode =
   | "upload_aborted"
   /** Purge of a node that is not in the trash (e.g. restored meanwhile), skipped. */
   | "purge_not_in_trash"
-  /** Purge skipped: the subtree has content/placements the author had not seen (§5.2.3). */
-  | "purge_skipped_unseen_changes"
-  /** Trash of a file skipped: it has new content the author had not seen (§5.2.3). */
+  /**
+   * Q3: purge deleted only what its author had seen; these nodes (`items`,
+   * subtree roots) stay in the trash and their 30-day clock restarts.
+   */
+  | "purge_kept_unseen"
+  /**
+   * Q1: a node changed by another device (added/moved/restored or new
+   * content) that the trashing author had not seen went to the trash with
+   * the folder. Addressed to `notifyDeviceId`; relatedNodeId = the folder.
+   */
+  | "unseen_trashed_with_folder"
+  /** Q2: trash of a file skipped, it has new content the author had not seen. Silent. */
   | "trash_skipped_unseen_content"
-  /** Group op rolled back because a sub-op was skipped or rejected. */
+  /** Q7: concurrent version with identical content (same plaintext hash), no conflict copy. Silent. */
+  | "content_identical"
+  /** Group op rolled back because a sub-op was rejected (Q9). */
   | "group_rolled_back"
+  /** Group op applied without the members a conflict rule skipped; `items` lists their indexes (Q9). */
+  | "group_members_skipped"
   /** Invalid operation (client bug or malicious client), consumed as no-op. */
   | "invalid_op";
 
@@ -97,7 +112,22 @@ export interface Notice {
   reason?: string;
   /** For moved_to_recovered: path of the intended target (names from its root). */
   targetPath?: string[] | null;
+  /**
+   * Device that should be told, when it is not the author of the operation
+   * (e.g. Q1: the author of a change that went to the trash with a folder).
+   */
+  notifyDeviceId?: string;
+  /** Summary lists (Q3: nodes kept in the trash, Q9: skipped member indexes). */
+  items?: string[];
+  /** Deterministic, but the UI does not show it by default (Q2). */
+  silent?: true;
 }
+
+/** Notices kept for debugging/telemetry that the UI hides by default (Q2). */
+export const SILENT_NOTICE_CODES: ReadonlySet<NoticeCode> = new Set<NoticeCode>([
+  "trash_skipped_unseen_content",
+  "content_identical",
+]);
 
 export type Outcome =
   /** State changed as the operation (possibly transformed by a rule) says. */
@@ -190,8 +220,9 @@ export function applyEntry(store: IndexStore, entry: LogEntry): ApplyResult {
   ) {
     throw new UnsupportedRulesVersionError(entry.seq, entry.rulesVersion);
   }
-  // Only rules version 1 exists. A future version dispatches here on
-  // entry.rulesVersion, so old entries keep replaying with their own rules.
+  // Only one rule set is replayable (MIN_REPLAY_RULES_VERSION ==
+  // RULES_VERSION, see types.ts). A future version that keeps older logs
+  // replayable dispatches here on entry.rulesVersion.
 
   const ov = new OverlayStore(store);
   const ctx = new Ctx(ov, entry);
@@ -218,22 +249,47 @@ function applyGroup(ctx: Ctx, ops: unknown): Outcome {
     ctx.notice({ code: "invalid_op", reason: "bad_group" });
     return "rejected";
   }
+  const groupStore = ctx.s;
+  const groupFirstNotice = ctx.notices.length;
   let any = false;
+  const skipped: string[] = [];
+  let allSkipsSilent = true;
   for (let i = 0; i < ops.length; i++) {
     const sub = ops[i] as SingleOp;
     if (!sub || typeof sub !== "object" || (sub as { type?: unknown }).type === "group") {
+      ctx.notices = ctx.notices.slice(0, groupFirstNotice);
       ctx.notice({ code: "invalid_op", reason: "bad_group_member" });
       ctx.notice({ code: "group_rolled_back", reason: `sub_${i}` });
       return "rejected";
     }
+    // Each member in its own overlay: a skipped member is dropped as a whole.
+    const memberStore = new OverlayStore(groupStore);
+    ctx.s = memberStore;
+    const firstNotice = ctx.notices.length;
     const r = applySingle(ctx, sub, i);
-    if (r === "skipped" || r === "rejected") {
+    ctx.s = groupStore;
+    if (r === "rejected") {
+      // Q9: an invalid member means a broken operation: roll back everything.
+      // Notices of the members applied before it describe changes that did
+      // not happen; keep only the rejected member's and the rollback notice.
+      ctx.notices = [...ctx.notices.slice(0, groupFirstNotice), ...ctx.notices.slice(firstNotice)];
       ctx.notice({ code: "group_rolled_back", reason: `sub_${i}` });
       return r;
     }
+    if (r === "skipped") {
+      skipped.push(String(i));
+      if (!ctx.notices.slice(firstNotice).every((n) => n.silent)) allSkipsSilent = false;
+      continue;
+    }
+    memberStore.commit();
     if (r === "applied") any = true;
   }
-  return any ? "applied" : "noop";
+  if (skipped.length > 0) {
+    // Q9: one summary notice listing the members that were left out.
+    ctx.notice({ code: "group_members_skipped", items: skipped, ...(allSkipsSilent ? { silent: true as const } : {}) });
+  }
+  if (any) return "applied";
+  return skipped.length > 0 ? "skipped" : "noop";
 }
 
 function applySingle(ctx: Ctx, op: SingleOp, sub: number): Outcome {
@@ -272,7 +328,8 @@ class Ctx {
   notices: Notice[] = [];
   sub = 0;
   constructor(
-    readonly s: IndexStore,
+    /** Write target; a group swaps in a per-member overlay. */
+    public s: IndexStore,
     readonly e: LogEntry,
   ) {}
 
@@ -291,7 +348,8 @@ class Ctx {
   }
 
   notice(n: Omit<Notice, "seq" | "opId" | "deviceId">): void {
-    this.notices.push({ seq: this.e.seq, opId: this.e.opId, deviceId: this.e.device.id, ...n });
+    const silent = SILENT_NOTICE_CODES.has(n.code) ? { silent: true as const } : {};
+    this.notices.push({ seq: this.e.seq, opId: this.e.opId, deviceId: this.e.device.id, ...silent, ...n });
   }
 
   reject(reason: string, nodeId?: NodeId): Outcome {
@@ -322,12 +380,20 @@ function validateEnvelope(e: LogEntry): string | null {
     return "bad_device";
   }
   if (typeof e.createdAt !== "number" || !Number.isFinite(e.createdAt)) return "bad_created_at";
+  if (e.tzOffsetMin !== undefined && !isTzOffset(e.tzOffsetMin)) return "bad_tz_offset";
   if (e.leaseGuard !== undefined && (!Array.isArray(e.leaseGuard) || !e.leaseGuard.every(isClientId))) {
     return "bad_lease_guard";
   }
   if (!e.op || typeof e.op !== "object") return "bad_op";
   return null;
 }
+
+/** UTC offset in minutes, -18h..+18h (the range JS/ICU and every real zone stay within). */
+export function isTzOffset(v: unknown): v is number {
+  return Number.isInteger(v) && (v as number) >= -1080 && (v as number) <= 1080;
+}
+
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
 function validateContent(c: unknown): string | null {
   if (!c || typeof c !== "object") return "content_missing";
@@ -337,6 +403,9 @@ function validateContent(c: unknown): string | null {
   if (!Number.isSafeInteger(x.sizeBytes) || x.sizeBytes < 0) return "bad_size";
   if (!Number.isSafeInteger(x.chunkCount) || x.chunkCount < 0) return "bad_chunk_count";
   if (!isRef(x.manifestRef)) return "bad_manifest_ref";
+  if (x.plaintextSha256 !== undefined && (typeof x.plaintextSha256 !== "string" || !SHA256_HEX_RE.test(x.plaintextSha256))) {
+    return "bad_plaintext_hash";
+  }
   return null;
 }
 
@@ -348,8 +417,10 @@ function toVersion(ctx: Ctx, c: ContentRef): FileVersion {
     sizeBytes: c.sizeBytes,
     manifestRef: c.manifestRef,
     chunkCount: c.chunkCount,
+    plaintextSha256: c.plaintextSha256 ?? null,
     device: { id: ctx.e.device.id, name: ctx.e.device.name },
     createdAt: ctx.e.createdAt,
+    tzOffsetMin: ctx.e.tzOffsetMin ?? 0,
     seq: ctx.e.seq,
   };
 }
@@ -593,42 +664,60 @@ function opTrash(ctx: Ctx, op: TrashOp): Outcome {
     return "skipped";
   }
   if (node.trashed) return "noop";
-  if (node.content && ctx.unseen({ seq: node.content.seq, deviceId: node.content.device.id })) {
-    // §5.2.3 + rule 3 in the other order: new content the author has not
-    // seen keeps the file alive (with rule 3's order the file would come back
-    // from the trash anyway). PROVISIONAL, see QUESTIONS.md Q2.
+  if (node.content && ctx.unseen(contentMark(node.content))) {
+    // Rule 3 in the other order, owner decision Q2: new content the author
+    // has not seen keeps the file alive (with rule 3's order the file would
+    // come back from the trash anyway). The notice is silent.
     ctx.notice({ code: "trash_skipped_unseen_content", nodeId: node.id });
     return "skipped";
   }
   ctx.s.putNode({ ...node, trashed: { seq: ctx.e.seq, at: ctx.e.serverTime } });
-  if (node.kind === "folder") rescueUnseen(ctx, node.id);
+  if (node.kind === "folder") notifyUnseenTrashed(ctx, node.id);
   return "applied";
 }
 
+function contentMark(c: FileVersion): ChangeMark {
+  return { seq: c.seq, deviceId: c.device.id };
+}
+
 /**
- * Rule 4, other order: nodes placed into the folder's subtree by operations
- * the trashing author had not seen go to „Odzyskane” instead of the trash.
- * (With the plain order the rule applies in opCreate.) The same holds for
- * files whose content changed unseen (§5.2.3: new content never silently
- * ends up in the trash; rule 3 in the other order).
+ * Rule 4 in the other order, owner decision Q1: the folder goes to the trash
+ * together with nodes the trashing author had not seen (added, moved in or
+ * restored after its baseSeq, or with new content). Nothing is rescued to
+ * „Odzyskane”; instead every device whose unseen change went to the trash
+ * gets a notice (the trash keeps it for 30 days, so it is reversible).
+ *
+ * One notice per (device, topmost node with that device's unseen change):
+ * a device that uploaded a folder with 1000 files gets one notice, not 1001.
+ * Nodes trashed on their own earlier are skipped (they were already in the trash).
  */
-function rescueUnseen(ctx: Ctx, folderId: NodeId): void {
-  const stack: NodeId[] = [folderId];
+function notifyUnseenTrashed(ctx: Ctx, folderId: NodeId): void {
+  // Depth-first, children in ascending ID order; `told` = devices already
+  // notified about an ancestor on the current path.
+  const stack: { id: NodeId; told: ReadonlySet<string> }[] = [{ id: folderId, told: new Set() }];
   while (stack.length > 0) {
-    const id = stack.pop()!;
-    const kids = sortedChildren(ctx.s, id);
-    // Process in ascending ID order: push reversed so pop yields ascending.
-    const descend: NodeId[] = [];
-    for (const kid of kids) {
+    const { id, told } = stack.pop()!;
+    const descend: { id: NodeId; told: ReadonlySet<string> }[] = [];
+    for (const kid of sortedChildren(ctx.s, id)) {
       const rec = ctx.s.getNode(kid)!;
       if (rec.trashed) continue;
-      const unseenContent =
-        rec.content !== null && ctx.unseen({ seq: rec.content.seq, deviceId: rec.content.device.id });
-      if (ctx.unseen(rec.placed) || unseenContent) {
-        placeRecovered(ctx, rec, rec.parentId, unseenContent ? "content_changed_in_deleted_folder" : "added_to_deleted_folder");
-      } else if (rec.kind === "folder") {
-        descend.push(kid);
+      const devices = new Set<string>();
+      if (ctx.unseen(rec.placed)) devices.add(rec.placed.deviceId);
+      if (rec.content && ctx.unseen(contentMark(rec.content))) devices.add(rec.content.device.id);
+      let next = told;
+      for (const dev of [...devices].sort(cmp)) {
+        if (told.has(dev)) continue;
+        ctx.notice({
+          code: "unseen_trashed_with_folder",
+          nodeId: rec.id,
+          relatedNodeId: folderId,
+          notifyDeviceId: dev,
+          reason: dev === rec.placed.deviceId && ctx.unseen(rec.placed) ? "placed" : "content",
+        });
+        if (next === told) next = new Set(told);
+        (next as Set<string>).add(dev);
       }
+      if (rec.kind === "folder") descend.push({ id: kid, told: next });
     }
     for (let i = descend.length - 1; i >= 0; i--) stack.push(descend[i]!);
   }
@@ -663,31 +752,51 @@ function opPurge(ctx: Ctx, op: PurgeOp): Outcome {
     ctx.notice({ code: "purge_not_in_trash", nodeId: node.id });
     return "skipped";
   }
-  // Whole subtree, deterministic order.
-  const all: NodeId[] = [];
-  const stack = [node.id];
-  while (stack.length > 0) {
-    const id = stack.pop()!;
-    all.push(id);
-    for (const kid of sortedChildren(ctx.s, id)) stack.push(kid);
-  }
-  all.sort(cmp);
-  // §5.2.3: never physically forget content or placements the purging author
-  // has not seen. PROVISIONAL, see QUESTIONS.md Q3.
-  for (const id of all) {
+  // Owner decision Q3: delete what the author had seen. A node whose place or
+  // content the author had not seen stays in the trash with its whole
+  // subtree; its ancestors up to the purged node stay as containers (so
+  // nothing is orphaned). The 30-day clock of the kept nodes restarts.
+  const doomed: NodeId[] = [];
+  const keptRoots: NodeId[] = [];
+  const containers = new Set<NodeId>();
+  const walk: { id: NodeId; path: NodeId[] }[] = [{ id: node.id, path: [] }];
+  while (walk.length > 0) {
+    const { id, path } = walk.pop()!;
     const rec = ctx.s.getNode(id)!;
-    const unseen =
-      ctx.unseen(rec.placed) || (rec.content !== null && ctx.unseen({ seq: rec.content.seq, deviceId: rec.content.device.id }));
+    const unseen = ctx.unseen(rec.placed) || (rec.content !== null && ctx.unseen(contentMark(rec.content)));
     if (unseen) {
-      ctx.notice({ code: "purge_skipped_unseen_changes", nodeId: node.id, relatedNodeId: id });
-      return "skipped";
+      keptRoots.push(id);
+      for (const a of path) containers.add(a);
+      continue;
     }
+    doomed.push(id);
+    for (const kid of sortedChildren(ctx.s, id)) walk.push({ id: kid, path: [...path, id] });
   }
-  for (const id of all) {
+  if (keptRoots.length === 0) {
+    doomed.sort(cmp);
+    for (const id of doomed) {
+      const rec = ctx.s.getNode(id)!;
+      if (rec.content) releaseUpload(ctx, rec.content.uploadId, "purged");
+      ctx.s.deleteNode(id);
+    }
+    return "applied";
+  }
+  const toDelete = doomed.filter((id) => !containers.has(id)).sort(cmp);
+  for (const id of toDelete) {
     const rec = ctx.s.getNode(id)!;
     if (rec.content) releaseUpload(ctx, rec.content.uploadId, "purged");
     ctx.s.deleteNode(id);
   }
+  // Restart the clock that expiredTrash() reads: the topmost trashed node on
+  // the chain from the purged node up (purged node itself or an ancestor).
+  let top: NodeRecord | undefined;
+  for (let cur: NodeRecord | undefined = node, guard = 0; cur && guard < 1_000_000; guard++) {
+    if (cur.trashed) top = cur;
+    cur = cur.parentId === null ? undefined : ctx.s.getNode(cur.parentId);
+  }
+  if (top) ctx.s.putNode({ ...top, trashed: { seq: top.trashed!.seq, at: ctx.e.serverTime } });
+  keptRoots.sort(cmp);
+  ctx.notice({ code: "purge_kept_unseen", nodeId: node.id, items: keptRoots });
   return "applied";
 }
 
@@ -738,13 +847,22 @@ function opNewContent(ctx: Ctx, op: NewContentVersionOp): Outcome {
   }
 
   const cur = rec.content;
-  if (cur && cur.versionId !== op.baseVersionId) {
+  const identical =
+    cur !== null && cur.plaintextSha256 !== null && cur.plaintextSha256 === version.plaintextSha256;
+  if (cur && cur.versionId !== op.baseVersionId && identical) {
+    // Owner decision Q7: same plaintext as the current version, so nothing
+    // can be lost: no conflict, no copy. The later version becomes current.
+    ctx.notice({ code: "content_identical", nodeId: rec.id });
+  }
+  if (cur && cur.versionId !== op.baseVersionId && !identical) {
     // Rule 7: the later version is current; the earlier one stays as a visible copy.
+    // (Also when the author knew no version at all, baseVersionId = null, Q7.)
     const copyId = ctx.derivedId("conflict");
     const copy: NodeRecord = {
       id: copyId,
       kind: "file",
-      name: conflictName(rec.name, cur.device.name, cur.createdAt),
+      // Q6: local time of the losing version's author, from its envelope offset.
+      name: conflictName(rec.name, cur.device.name, cur.createdAt, cur.tzOffsetMin),
       parentId: null,
       trashed: null,
       created: ctx.mark,

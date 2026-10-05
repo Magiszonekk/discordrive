@@ -34,6 +34,9 @@ export interface AddOpts {
   opId?: string;
   leaseGuard?: string[];
   rulesVersion?: number;
+  tzOffsetMin?: number;
+  /** Plaintext hash for the content created by file()/edit() (Q7). */
+  hash?: string;
 }
 
 /** A log plus a replica that applies it as it grows. */
@@ -57,6 +60,7 @@ export class Scenario {
       device: dev,
       createdAt: o.createdAt ?? T0 + this.n * 60_000,
       leaseGuard: o.leaseGuard ?? uploadsTouched(op),
+      ...(o.tzOffsetMin !== undefined ? { tzOffsetMin: o.tzOffsetMin } : {}),
       op,
       seq: this.seq + 1,
       serverTime: T0 + this.n * 1000,
@@ -69,7 +73,7 @@ export class Scenario {
 
   /** upload_begin + group[upload_commit, create]. Returns the create result. */
   file(dev: DeviceInfo, nodeId: string, parentId: string, name: string, o: AddOpts = {}): ApplyResult {
-    const c = this.newContent();
+    const c = this.newContent(o.hash);
     this.add(dev, { type: "upload_begin", uploadId: c.uploadId }, { baseSeq: o.baseSeq ?? this.seq });
     return this.add(
       dev,
@@ -90,7 +94,7 @@ export class Scenario {
 
   /** New content version for nodeId based on baseVersionId. */
   edit(dev: DeviceInfo, nodeId: string, baseVersionId: string | null, o: AddOpts & { nameHint?: string } = {}): ApplyResult {
-    const c = this.newContent();
+    const c = this.newContent(o.hash);
     this.add(dev, { type: "upload_begin", uploadId: c.uploadId }, { baseSeq: o.baseSeq ?? this.seq });
     return this.add(
       dev,
@@ -109,10 +113,30 @@ export class Scenario {
     return this.add(dev, op, o);
   }
 
-  newContent(): ContentRef {
+  newContent(hash?: string): ContentRef {
     this.up++;
     const n = String(this.up).padStart(6, "0");
-    return { versionId: `ver-${n}`, uploadId: `upl-${n}`, sizeBytes: 100 * this.up, manifestRef: `mf-${n}`, chunkCount: 1 };
+    return {
+      versionId: `ver-${n}`,
+      uploadId: `upl-${n}`,
+      sizeBytes: 100 * this.up,
+      manifestRef: `mf-${n}`,
+      chunkCount: 1,
+      ...(hash !== undefined ? { plaintextSha256: hash } : {}),
+    };
+  }
+
+  /** Nodes whose own trashed flag is set or whose ancestor is trashed. */
+  inTrash(id: string): boolean {
+    for (let n = this.store.getNode(id); n; n = n.parentId === null ? undefined : this.store.getNode(n.parentId)) {
+      if (n.trashed) return true;
+    }
+    return false;
+  }
+
+  /** Canonical node list (for "nothing changed" checks). */
+  dump(): string {
+    return JSON.stringify([...this.store.allNodes()].sort((x, y) => (x.id < y.id ? -1 : 1)));
   }
 
   node(id: string): NodeRecord {
@@ -148,3 +172,9 @@ export class Scenario {
 }
 
 export const codes = (r: ApplyResult) => r.notices.map((n) => n.code);
+
+/** Notice codes the UI shows by default (silent ones hidden, Q2). */
+export const visibleCodes = (r: ApplyResult) => r.notices.filter((n) => !n.silent).map((n) => n.code);
+
+export const H1 = "1".repeat(64);
+export const H2 = "2".repeat(64);

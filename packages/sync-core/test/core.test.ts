@@ -218,7 +218,10 @@ describe("names", () => {
     expect(suf.endsWith(" (12).txt")).toBe(true);
     const c = conflictName(long, "tel/efon", Date.UTC(2026, 0, 2, 3, 4));
     expect(validateName(c)).toBeNull();
-    expect(c.endsWith(" (konflikt, tel_efon, 2026-01-02 03.04 UTC).txt")).toBe(true);
+    expect(c.endsWith(" (konflikt, tel_efon, 2026-01-02 03.04).txt")).toBe(true);
+    const c2 = conflictName(long, "tel", Date.UTC(2026, 0, 2, 23, 30), 120);
+    expect(validateName(c2)).toBeNull();
+    expect(c2.endsWith(" (konflikt, tel, 2026-01-03 01.30).txt")).toBe(true);
     // Surrogate pair at the cut is not split.
     const emoji = "😀".repeat(MAX_NAME_LENGTH / 2);
     expect(validateName(suffixedName(emoji, "folder", 2))).toBeNull();

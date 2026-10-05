@@ -7,10 +7,11 @@
 
 import { applyEntries, initIndex, type ApplyResult } from "./apply.js";
 import { MemoryIndexStore, type IndexStore } from "./store.js";
-import { RULES_VERSION, type IndexMeta, type LogEntry, type NodeRecord, type UploadRecord } from "./types.js";
+import { MIN_REPLAY_RULES_VERSION, RULES_VERSION, type IndexMeta, type LogEntry, type NodeRecord, type UploadRecord } from "./types.js";
 
 export const SNAPSHOT_FORMAT = "ddn-index-snapshot";
-export const SNAPSHOT_FORMAT_VERSION = 1;
+/** 2: FileVersion.plaintextSha256 and tzOffsetMin (rules v2). */
+export const SNAPSHOT_FORMAT_VERSION = 2;
 
 export interface IndexSnapshot {
   format: typeof SNAPSHOT_FORMAT;
@@ -42,6 +43,11 @@ export function loadSnapshot(snap: IndexSnapshot, store: IndexStore = new Memory
   }
   if (snap.meta.rulesVersion > RULES_VERSION) {
     throw new Error(`snapshot needs rules version ${snap.meta.rulesVersion}; this build has ${RULES_VERSION}`);
+  }
+  // 0 = empty log. A state built by rules this build no longer replays could
+  // differ from what a full replay gives, so it is not a valid base.
+  if (snap.meta.rulesVersion !== 0 && snap.meta.rulesVersion < MIN_REPLAY_RULES_VERSION) {
+    throw new Error(`snapshot built with rules version ${snap.meta.rulesVersion}; this build replays ${MIN_REPLAY_RULES_VERSION}..${RULES_VERSION}`);
   }
   store.atomically(() => {
     // Parents before children is not required: the store indexes by parent ID.
@@ -86,8 +92,10 @@ function canonicalNode(n: NodeRecord): NodeRecord {
           sizeBytes: n.content.sizeBytes,
           manifestRef: n.content.manifestRef,
           chunkCount: n.content.chunkCount,
+          plaintextSha256: n.content.plaintextSha256,
           device: { id: n.content.device.id, name: n.content.device.name },
           createdAt: n.content.createdAt,
+          tzOffsetMin: n.content.tzOffsetMin,
           seq: n.content.seq,
         }
       : null,

@@ -14,8 +14,10 @@
 //  I2 no cycles, every node reachable from a root, no orphans (every prefix
 //     of the log, not only the final state),
 //  I3 names unique per folder (case-folded), every prefix,
-//  I4 no content lost without a delete operation whose author had seen it,
-//     no file silently in the trash with content its trasher had not seen,
+//  I4 no content lost without a delete operation whose author had seen it
+//     (or an identical-content replacement, Q7), no file in the trash with
+//     content its trasher had not seen unless the content's author was
+//     notified (Q1),
 //  I5 no file points at physically deleted fragments,
 //  I6 snapshot + log tail == full log (also through JSON serialization).
 //
@@ -170,7 +172,14 @@ export function runCase(actions: Action[], stats: Stats): void {
   const devs: Dev[] = [];
   const mkDev = (i: number, snap?: IndexSnapshot): Dev => {
     const info = { id: `dev-${i}`, name: `urządzenie ${i}` };
-    const opts = { device: info, now: () => 1_700_000_000_000 + now, newOpId: () => `op-${i}-${pad(++opCounter)}` };
+    // Devices in different zones (Q6): CEST, US east, India, UTC.
+    const tz = [120, -300, 330, 0][i % 4]!;
+    const opts = {
+      device: info,
+      now: () => 1_700_000_000_000 + now,
+      newOpId: () => `op-${i}-${pad(++opCounter)}`,
+      tzOffsetMin: () => tz,
+    };
     const r = snap ? Replica.fromSnapshot(snap, opts) : new Replica(opts);
     return { info, r, nodeN: 0, upN: 0, myUploads: [] };
   };
@@ -236,7 +245,16 @@ export function runCase(actions: Action[], stats: Stats): void {
 
   /** Commit an open upload of this device as a new file or a new version of a known file. */
   const finish = (d: Dev, u: UploadId, a: Action) => {
-    const content = { versionId: `v-${u}`, uploadId: u, sizeBytes: a.y % 5000, manifestRef: `mf-${u}`, chunkCount: 1 + (a.y % 3) };
+    // Plaintext hash from a tiny pool, so identical content (Q7) happens often; sometimes absent.
+    const hash = a.x % 4 === 0 ? undefined : String(a.x % 3).repeat(64);
+    const content = {
+      versionId: `v-${u}`,
+      uploadId: u,
+      sizeBytes: a.y % 5000,
+      manifestRef: `mf-${u}`,
+      chunkCount: 1 + (a.y % 3),
+      ...(hash !== undefined ? { plaintextSha256: hash } : {}),
+    };
     const fl = files(d);
     let op: SingleOp;
     if (fl.length > 0 && a.z % 3 !== 0) {
@@ -326,12 +344,17 @@ export function runCase(actions: Action[], stats: Stats): void {
         break;
       }
       case "group": {
-        // Group op: 2-4 metadata ops, applied all or nothing.
+        // Group op: 2-4 metadata ops (Q9: skipped members are left out,
+        // an invalid member rolls back everything). Sometimes one member is
+        // invalid on purpose.
         const ops: SingleOp[] = [];
         const k = 2 + (a.z % 3);
         for (let i = 0; i < k; i++) {
           const sub = metaOp(d, { ...a, x: a.x + i * 7919, y: a.y + i * 104729 }, (a.z >> i) & 3);
           if (sub) ops.push(sub);
+        }
+        if (ops.length > 0 && a.y % 9 === 0) {
+          ops.splice(a.x % (ops.length + 1), 0, { type: "rename", nodeId: ops[0]!.type === "create" ? ops[0]!.nodeId : "zzzzzzzz", name: "a/b" });
         }
         if (ops.length > 0) d.r.enqueue({ type: "group", ops } as Operation);
         break;
@@ -451,7 +474,7 @@ export function runCase(actions: Action[], stats: Stats): void {
 
   // I4 + I5.
   expect(checkNoSilentLoss(log, full)).toEqual([]);
-  expect(checkTrashSawContent(log, full)).toEqual([]);
+  expect(checkTrashSawContent(log, full, results)).toEqual([]);
   expect(checkNoDeletedFragments(full, deleted)).toEqual([]);
 }
 
