@@ -36,7 +36,12 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   wskaźnikowa edytowana `PATCH`-em, która nigdy się nie cofa. Polityka `decideSnapshot`:
   1 min ciszy / max 5 min, baza przy 20 % lub 7 dniach, tylko na łączu nielimitowanym.
   `restoreFromDiscord` + zestaw ratunkowy (`ddn-kit1:`) odtwarzają drzewo bez serwera.
-  Brakuje: retencji (7 dziennych + 4 tygodniowe) i harmonogramu w kliencie.
+  Retencja (`selectRetained`, `pruneSnapshots`): bieżąca baza + najnowsza z każdego z 7
+  ostatnich dni + najstarsza z każdego z 4 tygodni przed nimi (~30 dni), segmenty od
+  najstarszej trzymanej bazy; najpierw zapis wskaźnika, potem kasowanie wiadomości.
+  Przywracanie na dowolny moment w tym oknie (`restoreFromDiscord(..., atSeq)`).
+  `deletableUploadsWithRetention`: fragmenty kasowane dopiero, gdy żadna trzymana baza ich nie
+  wskazuje. `SnapshotScheduler.tick()` (tylko urządzenie główne; telefon tylko segmenty).
 - **Serwer** (§3.4, `node/server.ts`, `node:http` + `node:sqlite`, tylko 127.0.0.1): arbiter
   zaszyfrowanego logu (Sequencer per konto, duplikaty, wersja reguł, dzierżawy względem
   urządzenia z sesji), sejf (CAS), urządzenia (dodanie, odwołanie), long-poll

@@ -21,7 +21,7 @@
 // segments since the last base exceed 20 % of its size or it is 7 days old.
 
 import { fromBase64, toBase64 } from "@ddv4/processing";
-import { applyEntries, initIndex, loadSnapshot, takeSnapshot, type IndexSnapshot, type IndexStore, MemoryIndexStore } from "@ddv4/sync-core";
+import { deletableUploads, applyEntries, initIndex, loadSnapshot, takeSnapshot, type IndexSnapshot, type IndexStore, MemoryIndexStore } from "@ddv4/sync-core";
 import { seal, unseal, type AccountKey } from "./account-key.js";
 import type { DiscordPlacement, WebhookRef, WebhookTransport } from "./types.js";
 import { OpCodec, type EncryptedEntry, type EncryptedLogApi } from "./op-crypto.js";
@@ -52,6 +52,8 @@ export interface BaseRef {
   /** Sum of sealed part sizes (20 % rule). */
   size: number;
   createdAt: number;
+  /** Segment that ends at headSeq (written in the same run); start of the prune walk. */
+  segmentAtBase?: SegmentRef | null;
 }
 
 export interface Pointer {
@@ -63,6 +65,10 @@ export interface Pointer {
   /** Bytes of segments written after `base` (20 % rule). */
   segmentBytesSinceBase: number;
   writtenAt: number;
+  /** Older bases still kept (retention, §6.2), newest first. Optional: absent = none. */
+  history?: BaseRef[];
+  /** Segments with toSeq <= this were deleted from Discord (prune bookkeeping). */
+  prunedUpTo?: number;
 }
 
 export interface PointerLocation {
@@ -104,6 +110,8 @@ async function unsealObj<T>(key: AccountKey, data: Uint8Array, aad: string, what
 /** Discord access the snapshot code needs (MetadataClient provides it; restore builds a bare one). */
 export interface BlobIO {
   post(data: Uint8Array, filename: string): Promise<DiscordPlacement>;
+  /** Delete an object's message (retention). 404 = already gone, not an error. */
+  remove(ref: ObjRef): Promise<void>;
   fetch(p: DiscordPlacement): Promise<Uint8Array>;
   hook(id: string): WebhookRef;
   transport: WebhookTransport;
@@ -139,12 +147,27 @@ export async function readPointer(io: BlobIO, key: AccountKey, accountId: string
   return p;
 }
 
-/** Replace the pointer unless the current one already covers at least as much (§6.2). */
-export async function writePointer(io: BlobIO, key: AccountKey, accountId: string, loc: PointerLocation, next: Pointer): Promise<"written" | "kept_newer"> {
+/**
+ * Replace the pointer unless the current one already covers at least as much (§6.2).
+ * mode "same_coverage": bookkeeping update (retention) allowed only while the
+ * pointer still has exactly the coverage and base we computed it from.
+ */
+export async function writePointer(
+  io: BlobIO,
+  key: AccountKey,
+  accountId: string,
+  loc: PointerLocation,
+  next: Pointer,
+  mode: "advance" | "same_coverage" = "advance",
+): Promise<"written" | "kept_newer"> {
   const cur = await readPointer(io, key, accountId, loc);
-  // Never go back: more log covered wins; at equal coverage a newer base wins.
-  const newerBase = (next.base?.headSeq ?? -1) > (cur.base?.headSeq ?? -1);
-  if (cur.toSeq > next.toSeq || (cur.toSeq === next.toSeq && !newerBase)) return "kept_newer";
+  if (mode === "same_coverage") {
+    if (cur.toSeq !== next.toSeq || (cur.base?.headSeq ?? -1) !== (next.base?.headSeq ?? -1)) return "kept_newer";
+  } else {
+    // Never go back: more log covered wins; at equal coverage a newer base wins.
+    const newerBase = (next.base?.headSeq ?? -1) > (cur.base?.headSeq ?? -1);
+    if (cur.toSeq > next.toSeq || (cur.toSeq === next.toSeq && !newerBase)) return "kept_newer";
+  }
   await io.transport.editMessageFile(io.hook(loc.webhookId), loc.messageId, await sealObj(key, next, AAD.pointer(accountId)), "ddn-pointer.bin");
   return "written";
 }
@@ -243,13 +266,106 @@ export async function writeSnapshot(d: SnapshotDeps, kind: "segment" | "base"): 
       parts.push(toRef(p, sealed.byteLength));
       size += sealed.byteLength;
     }
-    next = { ...next, base: { headSeq, parts, size, createdAt: d.now() }, segmentBytesSinceBase: 0 };
+    const history = next.base ? [next.base, ...(next.history ?? [])] : (next.history ?? []);
+    next = { ...next, base: { headSeq, parts, size, createdAt: d.now(), segmentAtBase: next.lastSegment }, history, segmentBytesSinceBase: 0 };
   }
 
   if (posts === 0) return { kind: "none", pointer: cur, written: "nothing", posts };
   next.writtenAt = d.now();
   const written = await writePointer(d.io, d.key, d.accountId, d.pointer, next);
   return { kind: next.base && next.base !== cur.base ? "base" : "segment", pointer: next, written, posts };
+}
+
+// --- retention (§6.2): 7 daily + 4 weekly bases, segments from the oldest kept base
+
+export const DAILY_BASES = 7;
+export const WEEKLY_BASES = 4;
+const DAY = 24 * 3600_000;
+
+/**
+ * Which bases to keep (§6.2: 7 daily + 4 weekly, ~30 days back): the current
+ * base, the newest base of each of the 7 most recent days that have one, and
+ * the oldest base of each of the 4 most recent weeks BEFORE that daily window
+ * (UTC, weeks from Monday). Days and weeks count only those that HAVE bases,
+ * so a device closed for a month does not lose its whole history on the next run.
+ */
+export function selectRetained(bases: BaseRef[]): { keep: BaseRef[]; drop: BaseRef[] } {
+  const sorted = [...bases].sort((a, b) => b.headSeq - a.headSeq);
+  const keep = new Set<BaseRef>();
+  if (sorted[0]) keep.add(sorted[0]);
+  const dayOf = (b: BaseRef) => Math.floor(b.createdAt / DAY);
+  const weekOf = (b: BaseRef) => Math.floor((b.createdAt / DAY + 3) / 7); // 1970-01-01 was a Thursday
+  const days = new Set<number>();
+  for (const b of sorted) {
+    if (days.has(dayOf(b))) continue;
+    if (days.size >= DAILY_BASES) break;
+    days.add(dayOf(b));
+    keep.add(b);
+  }
+  const oldestDay = days.size ? Math.min(...days) : Infinity;
+  // Weekly: the OLDEST base of each of the 4 most recent weeks before the daily
+  // window. The oldest kept base sets how far back a restore can go (segments
+  // after it are all kept), so the oldest-of-week choice gives the ~30 days of §6.2.
+  const weekly = new Map<number, BaseRef>();
+  for (const b of sorted) {
+    if (dayOf(b) >= oldestDay) continue;
+    const w = weekOf(b);
+    if (!weekly.has(w) && weekly.size >= WEEKLY_BASES) break;
+    weekly.set(w, b); // sorted newest first, so the last write per week is its oldest base
+  }
+  for (const b of weekly.values()) keep.add(b);
+  return { keep: sorted.filter((b) => keep.has(b)), drop: sorted.filter((b) => !keep.has(b)) };
+}
+
+/**
+ * §6.2: fragments may be deleted from Discord only after 30 days AND when no
+ * kept base still points at them. A base points at a released upload iff it
+ * was taken before the release, so: released at seq <= oldest kept base.
+ */
+export function deletableUploadsWithRetention(store: IndexStore, pointer: Pointer, nowServerMs: number): string[] {
+  const bases = [pointer.base, ...(pointer.history ?? [])].filter((b): b is BaseRef => !!b);
+  const oldestBaseSeq = bases.length ? Math.min(...bases.map((b) => b.headSeq)) : Infinity;
+  return deletableUploads(store, nowServerMs).filter((id) => {
+    const u = store.getUpload(id)!;
+    return u.status === "aborted" || (u.ended !== null && u.ended.seq <= oldestBaseSeq);
+  });
+}
+
+export interface PruneResult {
+  written: "written" | "kept_newer" | "nothing";
+  basesDropped: number;
+  partsDeleted: number;
+  segmentsDeleted: number;
+}
+
+/**
+ * Apply retention. The pointer is written first (so it never references a
+ * deleted message), then the messages are deleted. Segments older than the
+ * oldest kept base are found by walking back from that base's segmentAtBase,
+ * stopping at prunedUpTo, so each run touches only what is new to delete.
+ */
+export async function pruneSnapshots(io: BlobIO, key: AccountKey, accountId: string, loc: PointerLocation, now: () => number): Promise<PruneResult> {
+  const cur = await readPointer(io, key, accountId, loc);
+  const all = [cur.base, ...(cur.history ?? [])].filter((b): b is BaseRef => !!b);
+  const { keep, drop } = selectRetained(all);
+  const oldestKept = keep.at(-1) ?? null;
+  const pruneTo = oldestKept?.headSeq ?? 0;
+  const segDrop: SegmentRef[] = [];
+  let ref = oldestKept?.segmentAtBase ?? null;
+  const done = cur.prunedUpTo ?? 0;
+  while (ref && ref.toSeq > done && ref.toSeq <= pruneTo) {
+    segDrop.push(ref);
+    const body = await unsealObj<SegmentBody>(key, await io.fetch(toPlacement(ref)), AAD.segment(accountId, ref.fromSeq, ref.toSeq), "segment");
+    ref = body.prev;
+  }
+  if (drop.length === 0 && segDrop.length === 0) return { written: "nothing", basesDropped: 0, partsDeleted: 0, segmentsDeleted: 0 };
+  const next: Pointer = { ...cur, history: keep.filter((b) => b !== cur.base), prunedUpTo: Math.max(done, segDrop.length ? pruneTo : done), writtenAt: now() };
+  const written = await writePointer(io, key, accountId, loc, next, "same_coverage");
+  if (written !== "written") return { written, basesDropped: 0, partsDeleted: 0, segmentsDeleted: 0 };
+  let partsDeleted = 0;
+  for (const b of drop) for (const p of b.parts) (await io.remove(p), partsDeleted++);
+  for (const sgm of segDrop) await io.remove(sgm);
+  return { written, basesDropped: drop.length, partsDeleted, segmentsDeleted: segDrop.length };
 }
 
 // --- restore (§3.5): no server needed
@@ -276,16 +392,27 @@ export async function loadBase(io: BlobIO, key: AccountKey, accountId: string, b
   return snap;
 }
 
+/**
+ * Rebuild the tree from Discord alone. `atSeq`: point-in-time restore (§6.2,
+ * „przywrócić stan z dowolnego momentu”): uses the newest kept base at or
+ * before it and replays the log only up to atSeq.
+ */
 export async function restoreFromDiscord(
   io: BlobIO,
   key: AccountKey,
   accountId: string,
   loc: PointerLocation,
   store: IndexStore = new MemoryIndexStore(),
+  atSeq?: number,
 ): Promise<RestoreResult> {
   const pointer = await readPointer(io, key, accountId, loc);
-  const baseHead = pointer.base?.headSeq ?? 0;
-  if (pointer.base) loadSnapshot(await loadBase(io, key, accountId, pointer.base), store);
+  const target = atSeq ?? pointer.toSeq;
+  if (target > pointer.toSeq || target < 0) throw new Error(`cannot restore seq ${target}: snapshots cover up to ${pointer.toSeq}`);
+  const bases = [pointer.base, ...(pointer.history ?? [])].filter((b): b is BaseRef => !!b).sort((a, b) => b.headSeq - a.headSeq);
+  const base = bases.find((b) => b.headSeq <= target) ?? null;
+  if (!base && (pointer.prunedUpTo ?? 0) > 0) throw new Error(`seq ${target} is older than the retained snapshots`);
+  const baseHead = base?.headSeq ?? 0;
+  if (base) loadSnapshot(await loadBase(io, key, accountId, base), store);
   else initIndex(store);
 
   // Walk the chain back to the base.
@@ -304,11 +431,11 @@ export async function restoreFromDiscord(
   }
   if (expectTo > baseHead) throw new Error(`segment chain does not reach the base (stops at ${expectTo}, base ${baseHead})`);
 
-  const tail = segs.flatMap((s) => s.entries).filter((e) => e.seq > baseHead);
+  const tail = segs.flatMap((s) => s.entries).filter((e) => e.seq > baseHead && e.seq <= target);
   for (let i = 0; i < tail.length; i++) if (tail[i]!.seq !== baseHead + i + 1) throw new Error("tail not contiguous");
   const codec = new OpCodec(key, accountId);
   applyEntries(store, await Promise.all(tail.map((e) => codec.decrypt(e))));
-  if (store.getMeta().headSeq !== pointer.toSeq) throw new Error("restored head does not match the pointer");
+  if (store.getMeta().headSeq !== target) throw new Error("restored head does not match the target");
   return { store, pointer, tail, baseHeadSeq: baseHead };
 }
 
@@ -347,7 +474,22 @@ export function clientBlobIO(
   transport: WebhookTransport,
   partSize = 10 * 1024 * 1024,
 ): BlobIO {
-  return { post: (d, f) => c.postBlob(d, f), fetch: (p) => c.fetchPlacement(p), hook: (id) => c.webhook(id), transport, partSize };
+  return {
+    post: (d, f) => c.postBlob(d, f),
+    fetch: (p) => c.fetchPlacement(p),
+    remove: (r) => removeQuietly(transport, c.webhook(r.webhookId), r.messageId),
+    hook: (id) => c.webhook(id),
+    transport,
+    partSize,
+  };
+}
+
+async function removeQuietly(t: WebhookTransport, hook: WebhookRef, messageId: string): Promise<void> {
+  try {
+    await t.deleteMessage(hook, messageId);
+  } catch (e) {
+    if (!/404|Unknown Message/.test(String((e as Error)?.message ?? e))) throw e;
+  }
 }
 
 /** Read-only BlobIO from a rescue kit: one webhook, no server, no index. */
@@ -358,6 +500,7 @@ export function rescueBlobIO(transport: WebhookTransport, hook: WebhookRef): Blo
   };
   return {
     post: () => Promise.reject(new Error("read-only")),
+    remove: () => Promise.reject(new Error("read-only")),
     fetch: async (p) => {
       const atts = await transport.getAttachments(get(p.locationId), p.messageId);
       const a = atts.find((x) => x.id === p.attachmentId);
@@ -368,4 +511,52 @@ export function rescueBlobIO(transport: WebhookTransport, hook: WebhookRef): Blo
     transport,
     partSize: 0,
   };
+}
+
+// --- scheduler (§6.2, §3.6: only while a client is open)
+
+export interface SchedulerDeps extends SnapshotDeps {
+  /** Device writes snapshots at all (main device / main tab). */
+  isPrimary: () => boolean;
+  /** Unmetered link: may write bases (§6.2); phones only write segments. */
+  unmetered: () => boolean;
+  /** Server time of a log entry by seq (from the local log tail / index). */
+  serverTimeOf: (seq: number) => number | undefined;
+}
+
+/**
+ * Call tick() periodically (e.g. every 15 s) and after every pull. It writes
+ * at most one snapshot per call, then applies retention after a new base.
+ */
+export class SnapshotScheduler {
+  private pointer: Pointer | null = null;
+  private running = false;
+  readonly history: SnapshotResult[] = [];
+  lastPrune: PruneResult | null = null;
+
+  constructor(private readonly d: SchedulerDeps) {}
+
+  async tick(force = false): Promise<SnapshotResult | null> {
+    if (this.running || !this.d.isPrimary()) return null;
+    this.running = true;
+    try {
+      this.pointer ??= await readPointer(this.d.io, this.d.key, this.d.accountId, this.d.pointer);
+      const head = this.d.store.getMeta().headSeq;
+      const lastAt = this.d.serverTimeOf(head) ?? this.d.now();
+      const firstAt = this.d.serverTimeOf(this.pointer.toSeq + 1) ?? lastAt;
+      const decision = decideSnapshot(this.d.now(), head, this.pointer, { lastEntryAt: lastAt, firstPendingAt: firstAt }, { unmetered: this.d.unmetered(), force });
+      if (decision === "none") return null;
+      const r = await writeSnapshot(this.d, decision);
+      this.history.push(r);
+      // Re-read after a refused write (another device was ahead), else trust what we wrote.
+      this.pointer = r.written === "written" ? r.pointer : await readPointer(this.d.io, this.d.key, this.d.accountId, this.d.pointer);
+      if (r.kind === "base" && r.written === "written") {
+        this.lastPrune = await pruneSnapshots(this.d.io, this.d.key, this.d.accountId, this.d.pointer, this.d.now);
+        this.pointer = await readPointer(this.d.io, this.d.key, this.d.accountId, this.d.pointer);
+      }
+      return r;
+    } finally {
+      this.running = false;
+    }
+  }
 }
