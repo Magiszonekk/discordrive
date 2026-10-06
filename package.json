@@ -18,14 +18,15 @@
     "db:push": "npm run db:push --workspace=@ddv4/database",
     "typecheck": "tsc --build",
     "build": "npm run build --workspaces --if-present",
-    "test": "npm run test --workspace=@ddv4/api && npm run test --workspace=@ddv4/processing && npm run test --workspace=@ddv4/telegram-client && npm run test --workspace=@ddv4/sync-core",
+    "test": "npm run test --workspace=@ddv4/api && npm run test --workspace=@ddv4/processing && npm run test --workspace=@ddv4/telegram-client && npm run test --workspace=@ddv4/sync-core && npm run test --workspace=@ddv4/metadata-client",
     "test:integration": "npm run test:integration --workspace=@ddv4/api",
     "test:e2e:download": "tsx scripts/e2e-download-smoke.ts",
     "benchmark": "tsx scripts/benchmark.ts",
     "benchmark:e2e": "tsx scripts/benchmark-e2e.ts",
     "infra:up": "docker compose -f infra/docker-compose.yml --env-file .env up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml --env-file .env down",
-    "test:sync-core": "npm run typecheck --workspace=@ddv4/sync-core && npm run test --workspace=@ddv4/sync-core"
+    "test:sync-core": "npm run typecheck --workspace=@ddv4/sync-core && npm run test --workspace=@ddv4/sync-core",
+    "test:metadata-client": "npm run typecheck --workspace=@ddv4/metadata-client && npm run test --workspace=@ddv4/metadata-client"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
