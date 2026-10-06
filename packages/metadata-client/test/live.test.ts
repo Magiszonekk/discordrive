@@ -82,3 +82,57 @@ describe.skipIf(!live)("live: snapshot + pointer message, restore from Discord o
     }
   });
 });
+
+describe.skipIf(!live)("live: CLI through the HTTP server (Ed25519 sign-in) + range read", () => {
+  it("init --server, webhook add, put, second device by pairing, get + range read, clean up", async () => {
+    const { DdnServer } = await import("../src/node/index.js");
+    const srv = new DdnServer();
+    const { url } = await srv.listen(0);
+    const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-live-srv-"));
+    const lines: string[] = [];
+    const envA = { stateDir: join(dir, "A"), webhookFiles: [] as string[], out: (l: string) => lines.push(l) };
+    const envB = { ...envA, stateDir: join(dir, "B") };
+    const t = new DiscordWebhookTransport();
+    const posted: string[] = [];
+    let hookRef: { id: string; url: string } | undefined;
+    try {
+      expect(await runCli(["init", "--server", url], envA)).toBe(0);
+      expect(await runCli(["webhook", "add", process.env.DDN_LIVE_WEBHOOK_FILE!], envA)).toBe(0);
+      const size = 12 * 1024 * 1024 + 12345;
+      const data = new Uint8Array(size);
+      for (let o = 0; o < size; o += 65536) crypto.getRandomValues(data.subarray(o, Math.min(size, o + 65536)));
+      const src = join(dir, "in.bin");
+      writeFileSync(src, data);
+      expect(await runCli(["put", src, "srv.bin"], envA)).toBe(0);
+      process.env.DDN_PAIR_WAIT_MS = "30000";
+      const offer = runCli(["pair-offer", "--server", url], envB);
+      let code: string | undefined;
+      for (let i = 0; i < 200 && !code; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+        code = lines.find((l) => l.startsWith("pairing code: "))?.slice(14);
+      }
+      expect(await runCli(["pair-accept", code!], envA)).toBe(0);
+      expect(await offer).toBe(0);
+      const dst = join(dir, "out.bin");
+      expect(await runCli(["get", "srv.bin", dst], envB)).toBe(0);
+      expect(await sha256Hex(readFileSync(dst))).toBe(await sha256Hex(data));
+      const stB = await openState(envB.stateDir);
+      const cB = await openClient(stB, t);
+      const node = cB.list().find((x) => x.name === "srv.bin")!;
+      const r = await cB.readRange(node.id, 10 * 1024 * 1024 - 100, 10 * 1024 * 1024 + 100);
+      expect(r.data).toEqual(data.subarray(10 * 1024 * 1024 - 100, 10 * 1024 * 1024 + 101));
+      const ref = cB.store.getNode(node.id)!.content!.manifestRef;
+      const { manifest } = await cB.loadManifest(ref);
+      posted.push(...manifest.chunks.map((ch) => ch.placements![0]!.messageId!), decodeManifestRef(ref).at.messageId);
+      hookRef = cB.webhooks[0];
+      console.log(`live server: ${size} B, ${manifest.chunks.length} fragments, paired + range read OK, devices ${(await stB.http!.listDevices()).length}`);
+    } finally {
+      delete process.env.DDN_PAIR_WAIT_MS;
+      for (const id of posted) {
+        await t.deleteMessage(hookRef!, id).catch(() => {});
+        await new Promise((res) => setTimeout(res, 400));
+      }
+      await srv.close();
+    }
+  });
+});
