@@ -81,7 +81,9 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   30 losowych logów etapu 1 w Chromium = ten sam stan co w Node, baza przetrwa przeładowanie.
   Pomiar: transakcja na wpis 14,3 ms/wpis, transakcja na partię 0,5 ms/wpis, więc
   `MetadataClient.pull` stosuje partię w jednej transakcji.
-  Brakuje: główna karta, service worker do streamingu, UI (profil `frontend`).
+  Główna karta (`browser/leader.ts`, Web Locks): dokładnie jedna karta profilu jest liderem,
+  po jej zamknięciu przejmuje kolejna (`leader-check.ts`).
+  Brakuje: service worker do streamingu, UI (profil `frontend`).
 
 ## Testy
 

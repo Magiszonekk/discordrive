@@ -20,7 +20,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "cli": "tsx src/cli.ts",
     "server": "tsx src/node/server-main.ts",
-    "check:browser": "tsx test/browser/browser-check.ts && tsx test/browser/opfs-check.ts"
+    "check:browser": "tsx test/browser/browser-check.ts && tsx test/browser/opfs-check.ts && tsx test/browser/leader-check.ts"
   },
   "dependencies": {
     "@ddv4/processing": "*",
