@@ -65,3 +65,12 @@ export {
   type VaultStore,
   type VaultWebhook,
 } from "./vault.js";
+export {
+  OpCodec,
+  EncryptedArbiter,
+  InProcessLogServer,
+  UNDECRYPTABLE_DEVICE,
+  type EncryptedEnvelope,
+  type EncryptedEntry,
+  type EncryptedLogApi,
+} from "./op-crypto.js";

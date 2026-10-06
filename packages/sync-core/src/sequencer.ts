@@ -6,18 +6,33 @@
 // server must implement, and the in-memory server used by tests.
 
 import { RULES_VERSION } from "./types.js";
-import type { LogEntry, OpEnvelope, UploadId } from "./types.js";
+import type { OpEnvelope, UploadId } from "./types.js";
 
-export type SubmitResult =
-  | { status: "accepted"; entry: LogEntry }
+/**
+ * The envelope fields the arbiter reads. In metadata-only mode everything
+ * else (device, clocks, the op) is an encrypted payload the server cannot
+ * read (koncept §3.3, DECISIONS Q6), so the Sequencer is generic over the
+ * envelope type; the default is the plaintext OpEnvelope used by tests.
+ */
+export interface SequencedEnvelope {
+  opId: string;
+  rulesVersion: number;
+  leaseGuard?: UploadId[];
+}
+
+/** An envelope with the position and server time the arbiter assigned. For OpEnvelope this is LogEntry. */
+export type Sequenced<E> = E & { seq: number; serverTime: number };
+
+export type SubmitResult<E extends SequencedEnvelope = OpEnvelope> =
+  | { status: "accepted"; entry: Sequenced<E> }
   /** Rule 9: known opId. Returns the original entry so a retrying client can confirm it. */
-  | { status: "duplicate"; entry: LogEntry }
+  | { status: "duplicate"; entry: Sequenced<E> }
   /** §5.4: client rules too old (or unknown to this server). Client must update before writing. */
   | { status: "rules_version_rejected"; minRulesVersion: number; maxRulesVersion: number }
   /** Rule 8: the device does not hold an unexpired lease on a guarded upload. */
   | { status: "lease_rejected"; uploadId: UploadId };
 
-export interface SequencerOptions {
+export interface SequencerOptions<E extends SequencedEnvelope = OpEnvelope> {
   /** Oldest rules version the server accepts for NEW operations. */
   minRulesVersion?: number;
   /** Newest rules version the server knows about. */
@@ -31,7 +46,7 @@ export interface SequencerOptions {
    * from seq 1 with unique opIds; leases are not persisted (they are short-lived
    * and an uploader simply renews).
    */
-  initialLog?: readonly LogEntry[];
+  initialLog?: readonly Sequenced<E>[];
 }
 
 export interface Lease {
@@ -40,16 +55,16 @@ export interface Lease {
   expiresAt: number;
 }
 
-export class Sequencer {
-  private readonly log: LogEntry[] = [];
-  private readonly byOpId = new Map<string, LogEntry>();
+export class Sequencer<E extends SequencedEnvelope = OpEnvelope> {
+  private readonly log: Sequenced<E>[] = [];
+  private readonly byOpId = new Map<string, Sequenced<E>>();
   private readonly leases = new Map<UploadId, Lease>();
   minRulesVersion: number;
   maxRulesVersion: number;
   private readonly now: () => number;
   readonly leaseMs: number;
 
-  constructor(opts: SequencerOptions = {}) {
+  constructor(opts: SequencerOptions<E> = {}) {
     this.minRulesVersion = opts.minRulesVersion ?? RULES_VERSION;
     this.maxRulesVersion = opts.maxRulesVersion ?? RULES_VERSION;
     this.now = opts.now ?? (() => Date.now());
@@ -67,7 +82,12 @@ export class Sequencer {
     return this.log.length;
   }
 
-  submit(env: OpEnvelope): SubmitResult {
+  /**
+   * `deviceId`: the device the request comes from, for the lease check. The
+   * real server takes it from the authenticated session (the envelope's
+   * device field is encrypted); default: the plaintext envelope's device.id.
+   */
+  submit(env: E, deviceId?: string): SubmitResult<E> {
     const dup = this.byOpId.get(env.opId);
     if (dup) return { status: "duplicate", entry: dup };
     if (env.rulesVersion < this.minRulesVersion || env.rulesVersion > this.maxRulesVersion) {
@@ -78,18 +98,19 @@ export class Sequencer {
       };
     }
     const now = this.now();
+    const dev = deviceId ?? (env as { device?: { id?: unknown } }).device?.id;
     for (const uploadId of env.leaseGuard ?? []) {
       const l = this.leases.get(uploadId);
-      if (!l || l.deviceId !== env.device.id || l.expiresAt <= now) return { status: "lease_rejected", uploadId };
+      if (!l || typeof dev !== "string" || l.deviceId !== dev || l.expiresAt <= now) return { status: "lease_rejected", uploadId };
     }
-    const entry: LogEntry = { ...structuredCloneSafe(env), seq: this.log.length + 1, serverTime: now };
+    const entry: Sequenced<E> = { ...structuredCloneSafe(env), seq: this.log.length + 1, serverTime: now };
     this.log.push(entry);
     this.byOpId.set(entry.opId, entry);
     return { status: "accepted", entry };
   }
 
   /** Entries with seq > afterSeq, in order. */
-  read(afterSeq: number, limit = Number.POSITIVE_INFINITY): LogEntry[] {
+  read(afterSeq: number, limit = Number.POSITIVE_INFINITY): Sequenced<E>[] {
     return this.log.slice(Math.max(0, afterSeq), Math.max(0, afterSeq) + limit);
   }
 

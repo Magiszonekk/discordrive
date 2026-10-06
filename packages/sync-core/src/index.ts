@@ -20,7 +20,7 @@ export {
   type Outcome,
 } from "./apply.js";
 export { MemoryIndexStore, OverlayStore, type IndexStore } from "./store.js";
-export { Sequencer, type Lease, type SequencerOptions, type SubmitResult } from "./sequencer.js";
+export { Sequencer, type Lease, type Sequenced, type SequencedEnvelope, type SequencerOptions, type SubmitResult } from "./sequencer.js";
 export {
   canonicalState,
   loadSnapshot,
