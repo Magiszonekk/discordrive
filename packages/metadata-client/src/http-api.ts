@@ -91,3 +91,30 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     await this.call("DELETE", `/v1/devices/${deviceId}`);
   }
 }
+
+/** Pairing mailbox over HTTP. `put` needs a signed-in device; `take` works without credentials. */
+export class HttpPairingMailbox {
+  private readonly f: typeof fetch;
+  constructor(
+    private readonly baseUrl: string,
+    private readonly token: string | null,
+    f?: typeof fetch,
+  ) {
+    this.f = f ?? fetch;
+  }
+  async put(pairingId: string, msg: { pub: string; sealed: string }): Promise<void> {
+    if (!this.token) throw new Error("pairing put needs a signed-in device");
+    const r = await this.f(`${this.baseUrl}/v1/pairing/${pairingId}`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
+      body: JSON.stringify(msg),
+    });
+    if (!r.ok) throw new ServerError(r.status, ((await r.json().catch(() => ({}))) as { error?: string }).error ?? "?");
+  }
+  async take(pairingId: string): Promise<{ pub: string; sealed: string } | null> {
+    const r = await this.f(`${this.baseUrl}/v1/pairing/${pairingId}`);
+    if (r.status === 404) return null;
+    if (!r.ok) throw new ServerError(r.status, "?");
+    return (await r.json()) as { pub: string; sealed: string };
+  }
+}

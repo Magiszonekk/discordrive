@@ -107,7 +107,7 @@ export {
   type SnapshotDeps,
   type SnapshotResult,
 } from "./snapshots.js";
-export { HttpApi, ServerError, createAccountHttp, type HttpSession } from "./http-api.js";
+export { HttpApi, HttpPairingMailbox, ServerError, createAccountHttp, type HttpSession } from "./http-api.js";
 export {
   LogObserver,
   decideTrashCleanup,
@@ -118,3 +118,13 @@ export {
   type TrashCleanupContext,
   type TrashCleanupDecision,
 } from "./policies.js";
+export {
+  startPairing,
+  acceptPairing,
+  parseOffer,
+  MemoryPairingMailbox,
+  PAIRING_TTL_MS,
+  type PairingBundle,
+  type PairingMailbox,
+  type PendingPairing,
+} from "./pairing.js";

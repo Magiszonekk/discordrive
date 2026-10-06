@@ -16,6 +16,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { DatabaseSync } from "node:sqlite";
 import { RULES_VERSION, Sequencer, isClientId } from "@ddv4/sync-core";
 import type { EncryptedEntry, EncryptedEnvelope } from "../op-crypto.js";
+import { PAIRING_TTL_MS } from "../pairing.js";
 
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 export const MAX_PAYLOAD_B64 = 1024 * 1024;
@@ -77,6 +78,7 @@ export class DdnServer {
         account_id TEXT NOT NULL, seq INTEGER NOT NULL, op_id TEXT NOT NULL, entry TEXT NOT NULL,
         PRIMARY KEY (account_id, seq), UNIQUE (account_id, op_id));
       CREATE TABLE IF NOT EXISTS vault (account_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, blob TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS pairing (id TEXT PRIMARY KEY, msg TEXT NOT NULL, created_at INTEGER NOT NULL);
     `);
     const db = this.db;
     this.auth = {
@@ -194,6 +196,27 @@ export class DdnServer {
     return out;
   }
 
+  // --- pairing mailbox (§3.8): one opaque message per pairingId, deleted on read, 10 min TTL.
+  // Writing needs a session (an existing device); reading does not (the new
+  // device has no credential yet; the pairingId is a 128-bit secret from the QR).
+
+  pairingPut(_s: Session, id: string, body: unknown): void {
+    const b = body as { pub?: unknown; sealed?: unknown };
+    if (typeof b?.pub !== "string" || typeof b?.sealed !== "string" || b.pub.length > 200 || b.sealed.length > 16_384) throw new HttpError(400, "bad_pairing");
+    this.db.prepare("DELETE FROM pairing WHERE created_at < ?").run(this.now() - PAIRING_TTL_MS);
+    try {
+      this.db.prepare("INSERT INTO pairing (id, msg, created_at) VALUES (?, ?, ?)").run(id, JSON.stringify({ pub: b.pub, sealed: b.sealed }), this.now());
+    } catch {
+      throw new HttpError(409, "pairing_slot_used");
+    }
+  }
+
+  pairingTake(id: string): { pub: string; sealed: string } | null {
+    const r = this.db.prepare("DELETE FROM pairing WHERE id = ? RETURNING msg, created_at").get(id) as { msg: string; created_at: number } | undefined;
+    if (!r || this.now() - r.created_at > PAIRING_TTL_MS) return null;
+    return JSON.parse(r.msg) as { pub: string; sealed: string };
+  }
+
   // --- HTTP
 
   async listen(port = 0, host = "127.0.0.1"): Promise<{ url: string; port: number }> {
@@ -227,6 +250,11 @@ export class DdnServer {
       return send(res, 201, this.createAccount());
     }
     if (method === "GET" && path === "/v1/health") return send(res, 200, { ok: true, rulesVersion: RULES_VERSION });
+    const pair = /^\/v1\/pairing\/([A-Za-z0-9_-]{22})$/.exec(path);
+    if (pair && method === "GET") {
+      const m = this.pairingTake(pair[1]!);
+      return m ? send(res, 200, m) : send(res, 404, { error: "no_pairing_message" });
+    }
 
     const s = this.auth.verify(req.headers.authorization);
     if (!s) throw new HttpError(401, "unauthorized");
@@ -254,6 +282,7 @@ export class DdnServer {
       }
     }
     if (method === "POST" && path === "/v1/devices") return send(res, 201, this.addDevice(s));
+    if (pair && method === "PUT") return (this.pairingPut(s, pair[1]!, await readJson(req)), send(res, 201, { ok: true }));
     const dev = /^\/v1\/devices\/([A-Za-z0-9_-]{4,80})$/.exec(path);
     if (dev && method === "DELETE") return (this.revokeDevice(s, dev[1]!), send(res, 200, { ok: true }));
     throw new HttpError(404, "not_found");

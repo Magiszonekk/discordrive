@@ -48,6 +48,11 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   łączu taryfowym; grupa purge, Q9), Q10 licznik `invalid_op` per urządzenie z jednym
   komunikatem po 5, Q5 ostrzeżenie o cudzej nazwie nie-NFC. `MetadataClient.observer`
   zasilany przy każdym `pull`.
+- **Parowanie urządzeń** (§3.8, `pairing.ts`): kod/QR `ddn-pair1:` z efemerycznym kluczem
+  ECDH P-256 nowego urządzenia; stare urządzenie szyfruje do niego klucz konta i
+  poświadczenie urządzenia, serwer przekazuje jedną nieczytelną wiadomość (skrzynka
+  jednorazowa, 10 min). Obie strony pokazują 6-cyfrowy kod (SAS): podmiana klucza przez
+  serwer daje różne kody, a klucza konta serwer nie zobaczy w żadnym wariancie.
 - **CLI** `ddn init | webhook add|ls|rm | put | get | ls`. Katalog stanu 0700, pliki 0600;
   `server/` to dokładnie to, co trzymałby serwer (zaszyfrowany log i sejf), do czasu
   serwera HTTP (krok 6 planu) obsługiwane w procesie.
