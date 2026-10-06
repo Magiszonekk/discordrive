@@ -59,7 +59,9 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   klucz swoim podpisem i szyfruje do nowego urządzenia klucz konta, serwer przekazuje jedną nieczytelną wiadomość (skrzynka
   jednorazowa, 10 min). Obie strony pokazują 6-cyfrowy kod (SAS): podmiana klucza przez
   serwer daje różne kody, a klucza konta serwer nie zobaczy w żadnym wariancie.
-- **CLI** `ddn init | webhook add|ls|rm | put | get | ls`. Katalog stanu 0700, pliki 0600;
+- **CLI** `ddn init [--server URL] | rescue | pair-offer | pair-accept | devices [revoke] | kit |
+  webhook add|ls|rm | put | get | ls`. Z `--server` (tylko 127.0.0.1 w etapie 2) działa przez
+  HTTP z kluczem Ed25519 urządzenia w `device.json` (0600); bez — tryb lokalny (testy). Katalog stanu 0700, pliki 0600;
   `server/` to dokładnie to, co trzymałby serwer (zaszyfrowany log i sejf), do czasu
   serwera HTTP (krok 6 planu) obsługiwane w procesie.
 

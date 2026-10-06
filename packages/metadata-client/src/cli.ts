@@ -1,7 +1,12 @@
 #!/usr/bin/env -S npx tsx
 // ddn: discordrive-next metadata-only CLI (stage 2, single device).
 //
-//   ddn [--state DIR] init
+//   ddn [--state DIR] init [--server URL]          # new account (local or on a server)
+//   ddn [--state DIR] rescue --server URL <kit-file>  # new device from the rescue kit
+//   ddn [--state DIR] pair-offer --server URL        # new device: print code, wait for it
+//   ddn [--state DIR] pair-accept <code>             # signed-in device: pair the new one
+//   ddn [--state DIR] kit                            # print the rescue kit text (secret)
+//   ddn [--state DIR] devices [revoke <id>]
 //   ddn [--state DIR] webhook add <url-file>     # URL read from a file, never printed
 //   ddn [--state DIR] webhook ls
 //   ddn [--state DIR] webhook rm <webhook-id>
@@ -10,11 +15,11 @@
 //   ddn [--state DIR] ls
 //
 // State dir (default ~/.local/share/ddn, 0700; files 0600):
-//   account.json  account ID + account key (the secret; becomes the rescue kit, §3.5)
-//   device.json   this device
-//   server/       what the SERVER would hold: log.jsonl (encrypted ops, koncept
-//                 §3.3) and vault.json (encrypted webhook vault, §3.2). Until the
-//                 HTTP server exists (plan step 6) the server runs in-process.
+//   account.json  account ID + account key (the secret; the rescue kit, §3.5),
+//                 server URL + instance (server mode)
+//   device.json   this device: ID + Ed25519 key (PKCS#8; decision #13)
+//   server/       local mode only: what a server would hold (encrypted log,
+//                 encrypted vault), served in-process. Server mode keeps nothing here.
 //   seen.json     highest vault revision seen (rollback guard)
 //   index.db      the device's own copy of the tree (SQLite, koncept §4.1); only
 //                 the log tail after its headSeq is fetched on start
@@ -30,7 +35,10 @@ import { ROOT_ID } from "@ddv4/sync-core";
 import { accountKeyFromB64, newAccountKey, type AccountKey } from "./account-key.js";
 import { MetadataClient, newId, type ByteSink, type ByteSource } from "./client.js";
 import { DiscordWebhookTransport, redactWebhookUrl } from "./discord-transport.js";
-import { EncryptedArbiter, InProcessLogServer, OpCodec, type EncryptedEntry } from "./op-crypto.js";
+import { EncryptedArbiter, InProcessLogServer, OpCodec, type EncryptedEntry, type EncryptedLogApi } from "./op-crypto.js";
+import { HttpApi, HttpPairingMailbox, createAccountHttp, rescueRegisterDevice } from "./http-api.js";
+import { exportDeviceKey, generateDeviceKey, importDeviceKey, type DeviceKey } from "./device-key.js";
+import { acceptPairing, startPairing } from "./pairing.js";
 import { SqliteIndexStore } from "./node/sqlite-store.js";
 import type { WebhookTransport } from "./types.js";
 import {
@@ -107,29 +115,80 @@ export interface CliState {
   accountId: string;
   key: AccountKey;
   device: { id: string; name: string };
-  server: InProcessLogServer;
+  /** Encrypted log API: in-process (local mode) or HTTP (server mode). */
+  log: EncryptedLogApi;
+  /** Server mode only. */
+  http: HttpApi | null;
+  /** Local mode only. */
+  server: InProcessLogServer | null;
   vault: WebhookVault;
   saveSeen(): void;
   stateDir: string;
 }
 
-export function initState(stateDir: string): boolean {
+interface AccountFile {
+  accountId: string;
+  key: string;
+  server?: { url: string; instanceId: string };
+}
+interface DeviceFile {
+  id: string;
+  name: string;
+  pkcs8?: string;
+  publicKey?: string;
+}
+
+function assertLocalUrl(url: string): string {
+  // Stage 2: no public domain. The CLI refuses anything but loopback unless explicitly allowed.
+  const u = new URL(url);
+  if (!["127.0.0.1", "localhost", "[::1]"].includes(u.hostname) && process.env.DDN_ALLOW_REMOTE !== "1") {
+    throw new Error("server must be on 127.0.0.1 in stage 2 (set DDN_ALLOW_REMOTE=1 to override)");
+  }
+  return u.origin;
+}
+
+async function newDeviceFile(stateDir: string, id: string, k: DeviceKey & { privateKey: CryptoKey }, name = "cli"): Promise<void> {
+  const ex = await exportDeviceKey(k);
+  writeJson(join(stateDir, "device.json"), { id, name, pkcs8: ex.pkcs8, publicKey: ex.publicKey } satisfies DeviceFile);
+}
+
+/** New account. Local mode (no server): IDs made here. Server mode: registered on the server (decision #13). */
+export async function initState(stateDir: string, serverUrl?: string): Promise<boolean> {
   ensureDir(stateDir);
   const accFile = join(stateDir, "account.json");
   if (existsSync(accFile)) return false;
-  writeJson(accFile, { accountId: `acct-${newId()}`, key: newAccountKey().rawB64 });
+  const key = newAccountKey();
+  const dk = await generateDeviceKey(true);
+  if (!serverUrl) {
+    await newDeviceFile(stateDir, `cli-${newId()}`, dk);
+    writeJson(accFile, { accountId: `acct-${newId()}`, key: key.rawB64 } satisfies AccountFile);
+    return true;
+  }
+  const url = assertLocalUrl(serverUrl);
+  const r = await createAccountHttp(url, dk, key);
+  await newDeviceFile(stateDir, r.deviceId, dk);
+  writeJson(accFile, { accountId: r.accountId, key: key.rawB64, server: { url, instanceId: r.instanceId } } satisfies AccountFile);
   return true;
 }
 
-export function openState(stateDir: string): CliState {
+export async function openState(stateDir: string): Promise<CliState> {
   ensureDir(stateDir);
   const accFile = join(stateDir, "account.json");
   if (!existsSync(accFile)) throw new Error("no account here: run `ddn init` first");
-  const acc = readJson<{ accountId: string; key: string }>(accFile);
+  const acc = readJson<AccountFile>(accFile);
   const key = accountKeyFromB64(acc.key);
   const devFile = join(stateDir, "device.json");
   if (!existsSync(devFile)) writeJson(devFile, { id: `cli-${newId()}`, name: "cli" });
-  const device = readJson<{ id: string; name: string }>(devFile);
+  const dev = readJson<DeviceFile>(devFile);
+  const device = { id: dev.id, name: dev.name };
+  const seenFile = join(stateDir, "seen.json");
+  const seen = existsSync(seenFile) ? readJson<{ vaultRevision: number }>(seenFile).vaultRevision : 0;
+  if (acc.server) {
+    if (!dev.pkcs8 || !dev.publicKey) throw new Error("device.json has no signing key");
+    const http = new HttpApi({ baseUrl: acc.server.url, accountId: acc.accountId, deviceId: dev.id, key: await importDeviceKey({ pkcs8: dev.pkcs8, publicKey: dev.publicKey }), instanceId: acc.server.instanceId });
+    const vault = new WebhookVault(http, key, acc.accountId, seen);
+    return { accountId: acc.accountId, key, device, log: http, http, server: null, vault, stateDir, saveSeen: () => writeJson(seenFile, { vaultRevision: vault.revision }) };
+  }
   const serverDir = join(stateDir, "server");
   ensureDir(serverDir);
   const logFile = join(serverDir, "log.jsonl");
@@ -143,10 +202,18 @@ export function openState(stateDir: string): CliState {
     initialLog,
     onAppend: (e) => appendFileSync(logFile, JSON.stringify(e) + "\n", { mode: 0o600 }),
   });
-  const seenFile = join(stateDir, "seen.json");
-  const seen = existsSync(seenFile) ? readJson<{ vaultRevision: number }>(seenFile).vaultRevision : 0;
   const vault = new WebhookVault(new FileVaultStore(join(serverDir, "vault.json")), key, acc.accountId, seen);
-  return { accountId: acc.accountId, key, device, server, vault, stateDir, saveSeen: () => writeJson(seenFile, { vaultRevision: vault.revision }) };
+  return {
+    accountId: acc.accountId,
+    key,
+    device,
+    log: server.session(device.id),
+    http: null,
+    server,
+    vault,
+    stateDir,
+    saveSeen: () => writeJson(seenFile, { vaultRevision: vault.revision }),
+  };
 }
 
 export async function openClient(st: CliState, transport: WebhookTransport): Promise<MetadataClient> {
@@ -155,7 +222,7 @@ export async function openClient(st: CliState, transport: WebhookTransport): Pro
   const hooks = toWebhookRefs(v);
   const client = new MetadataClient({
     device: st.device,
-    arbiter: new EncryptedArbiter(new OpCodec(st.key, st.accountId), st.server.session(st.device.id)),
+    arbiter: new EncryptedArbiter(new OpCodec(st.key, st.accountId), st.log),
     transport,
     // Listing works without webhooks; put/get check in runCli.
     webhooks: hooks.length ? hooks : [{ id: "0", url: "unset://" }],
@@ -190,12 +257,64 @@ async function addWebhookFile(st: CliState, transport: WebhookTransport, file: s
 export async function runCli(argv: string[], env: CliEnv): Promise<number> {
   const out = env.out ?? ((l: string) => console.log(l));
   const transport = env.transport ?? new DiscordWebhookTransport();
-  const [cmd, ...args] = argv;
+  const [cmd, ...rawArgs] = argv;
+  const flag = (name: string): string | undefined => {
+    const i = rawArgs.indexOf(name);
+    if (i < 0) return undefined;
+    const v = rawArgs[i + 1];
+    rawArgs.splice(i, 2);
+    return v;
+  };
+  const serverUrl = flag("--server");
+  const args = rawArgs;
   if (cmd === "init") {
-    out(initState(env.stateDir) ? "account created (keep account.json safe: it holds the account key)" : "account already exists");
+    out((await initState(env.stateDir, serverUrl)) ? "account created (keep account.json safe: it holds the account key)" : "account already exists");
     return 0;
   }
-  const st = openState(env.stateDir);
+  if (cmd === "rescue") {
+    // Rescue kit file: "ddn-kit1:..." (snapshots.encodeRescueKit). Registers THIS device with the rescue key.
+    const [kitFile] = args;
+    if (!serverUrl || !kitFile) throw new Error("usage: rescue --server URL <kit-file>");
+    if (existsSync(join(env.stateDir, "account.json"))) throw new Error("state dir already has an account");
+    const { decodeRescueKit } = await import("./snapshots.js");
+    const kit = decodeRescueKit(readFileSync(kitFile, "utf8"));
+    const url = assertLocalUrl(serverUrl);
+    ensureDir(env.stateDir);
+    const key = accountKeyFromB64(kit.key);
+    const dk = await generateDeviceKey(true);
+    const { deviceId } = await rescueRegisterDevice(url, key, kit.accountId, dk);
+    const { getChallenge } = await import("./http-api.js");
+    const instanceId = (await getChallenge(url)).instanceId;
+    await newDeviceFile(env.stateDir, deviceId, dk);
+    writeJson(join(env.stateDir, "account.json"), { accountId: kit.accountId, key: kit.key, server: { url, instanceId } } satisfies AccountFile);
+    out(`device ${deviceId} registered with the rescue key`);
+    return 0;
+  }
+  if (cmd === "pair-offer") {
+    if (!serverUrl) throw new Error("usage: pair-offer --server URL");
+    if (existsSync(join(env.stateDir, "account.json"))) throw new Error("state dir already has an account");
+    const url = assertLocalUrl(serverUrl);
+    ensureDir(env.stateDir);
+    const dk = await generateDeviceKey(true);
+    const pending = await startPairing(dk.publicKey);
+    out(`pairing code: ${pending.offer}`);
+    const deadline = Date.now() + Number(process.env.DDN_PAIR_WAIT_MS ?? 10 * 60_000);
+    const mb = new HttpPairingMailbox(url, null);
+    for (;;) {
+      const got = await pending.complete(mb);
+      if (got) {
+        const { getChallenge } = await import("./http-api.js");
+        const instanceId = (await getChallenge(url)).instanceId;
+        await newDeviceFile(env.stateDir, got.bundle.deviceCredential.deviceId, dk);
+        writeJson(join(env.stateDir, "account.json"), { accountId: got.bundle.accountId, key: got.bundle.accountKey, server: { url, instanceId } } satisfies AccountFile);
+        out(`paired by ${got.bundle.fromDevice}; check the code on both devices: ${got.sas}`);
+        return 0;
+      }
+      if (Date.now() > deadline) throw new Error("pairing timed out");
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  const st = await openState(env.stateDir);
   for (const f of env.webhookFiles) await addWebhookFile(st, transport, f);
 
   if (cmd === "webhook") {
@@ -219,6 +338,32 @@ export async function runCli(argv: string[], env: CliEnv): Promise<number> {
     }
     out("usage: webhook add <url-file> | ls | rm <id>");
     return 2;
+  }
+
+  if (cmd === "pair-accept") {
+    const [code] = args;
+    if (!code || !st.http) throw new Error("usage: pair-accept <code> (server mode)");
+    const http = st.http;
+    const { sas, deviceId } = await acceptPairing(code, { accountId: st.accountId, accountKey: st.key.rawB64, fromDevice: st.device.name }, (pub) => http.addDevice(pub), http.pairingMailbox());
+    out(`paired device ${deviceId}; check the code on both devices: ${sas}`);
+    return 0;
+  }
+  if (cmd === "devices") {
+    if (!st.http) throw new Error("devices: server mode only");
+    if (args[0] === "revoke" && args[1]) {
+      await st.http.revokeDevice(args[1]);
+      out(`revoked ${args[1]}`);
+      return 0;
+    }
+    for (const d of await st.http.listDevices()) out(`${d.deviceId}${d.deviceId === st.device.id ? " (this device)" : ""} ${d.publicKey}`);
+    return 0;
+  }
+  if (cmd === "kit") {
+    // Rescue kit without the pointer (snapshots not scheduled by the CLI yet): account ID + key.
+    const { encodeRescueKit } = await import("./snapshots.js");
+    const hook = (await st.vault.load()).webhooks[0];
+    out(encodeRescueKit({ v: 1, accountId: st.accountId, key: st.key.rawB64, webhookUrl: hook?.url ?? "-", pointerMessageId: "-" }));
+    return 0;
   }
 
   if ((cmd === "put" || cmd === "get") && (await st.vault.load()).webhooks.length === 0) {
@@ -258,7 +403,7 @@ export async function runCli(argv: string[], env: CliEnv): Promise<number> {
       return 0;
     }
     default:
-      out("usage: ddn [--state DIR] init | webhook add <url-file>|ls|rm <id> | put <file> [name] | get <name|id> <out> | ls");
+      out("usage: ddn [--state DIR] init [--server URL] | rescue --server URL <kit> | pair-offer --server URL | pair-accept <code> | devices [revoke <id>] | kit | webhook add <url-file>|ls|rm <id> | put <file> [name] | get <name|id> <out> | ls");
       return 2;
   }
 }

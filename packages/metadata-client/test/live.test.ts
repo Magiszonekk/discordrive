@@ -31,12 +31,12 @@ describe.skipIf(!live)("live: CLI put/get through a real test webhook", () => {
     expect(await sha256Hex(readFileSync(dst))).toBe(await sha256Hex(big));
 
     // Clean up: delete every message this upload made (fragments + manifest).
-    const c = await openClient(openState(env.stateDir), new DiscordWebhookTransport());
+    const c = await openClient((await openState(env.stateDir)), new DiscordWebhookTransport());
     const node = c.list().find((x) => x.name === "live.bin")!;
     const ref = c.store.getNode(node.id)!.content!.manifestRef;
     const { manifest } = await c.loadManifest(ref);
     const t = new DiscordWebhookTransport();
-    const [hook] = toWebhookRefs(await openState(env.stateDir).vault.load());
+    const [hook] = toWebhookRefs(await (await openState(env.stateDir)).vault.load());
     for (const id of [...manifest.chunks.map((ch) => ch.placements![0]!.messageId!), decodeManifestRef(ref).at.messageId]) {
       await t.deleteMessage(hook!, id);
       await new Promise((r) => setTimeout(r, 400));
@@ -53,7 +53,7 @@ describe.skipIf(!live)("live: snapshot + pointer message, restore from Discord o
     const env = { stateDir: join(dir, "state"), webhookFiles: [] as string[], out: () => {} };
     expect(await runCli(["init"], env)).toBe(0);
     expect(await runCli(["webhook", "add", process.env.DDN_LIVE_WEBHOOK_FILE!], env)).toBe(0);
-    const st = openState(env.stateDir);
+    const st = (await openState(env.stateDir));
     const t = new DiscordWebhookTransport();
     const c = await openClient(st, t);
     const [hook] = c.webhooks;
@@ -64,7 +64,7 @@ describe.skipIf(!live)("live: snapshot + pointer message, restore from Discord o
     posted.push(loc.messageId);
     try {
       for (let i = 0; i < 5; i++) await c.commitOp({ type: "create", kind: "folder", nodeId: `live-fold-${i}000`, parentId: ROOT_ID, name: `Folder ${i}` }, "mkdir");
-      const deps = { io: ioTracked, key: st.key, accountId: st.accountId, pointer: loc, log: st.server.session(st.device.id), store: c.store, now: () => Date.now() };
+      const deps = { io: ioTracked, key: st.key, accountId: st.accountId, pointer: loc, log: st.log, store: c.store, now: () => Date.now() };
       expect((await writeSnapshot(deps, "segment")).written).toBe("written");
       expect((await writeSnapshot(deps, "base")).kind).toBe("base");
       await c.commitOp({ type: "rename", nodeId: "live-fold-0000", name: "Po zmianie" }, "rename");
