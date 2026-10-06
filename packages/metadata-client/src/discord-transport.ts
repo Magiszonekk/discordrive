@@ -95,6 +95,13 @@ export class DiscordWebhookTransport implements WebhookTransport {
     return new Uint8Array(await res.arrayBuffer());
   }
 
+  async inspectWebhook(hook: WebhookRef): Promise<{ id: string; channelId: string; guildId: string | null; name: string }> {
+    const res = await this.req(hook.url, { method: "GET" }, "webhook get");
+    const j = (await res.json()) as { id: string; channel_id: string; guild_id?: string | null; name?: string };
+    if (j.id !== hook.id) throw new Error("webhook get: ID mismatch");
+    return { id: j.id, channelId: j.channel_id, guildId: j.guild_id ?? null, name: j.name ?? "" };
+  }
+
   async deleteMessage(hook: WebhookRef, messageId: string): Promise<void> {
     await this.req(`${hook.url}/messages/${messageId}`, { method: "DELETE" }, "webhook delete message");
   }

@@ -42,6 +42,8 @@ export interface WebhookTransport {
   getAttachments(hook: WebhookRef, messageId: string): Promise<MessageAttachment[]>;
   /** Download a CDN link. */
   fetchCdn(url: string): Promise<Uint8Array>;
+  /** GET the webhook itself: validates the URL and tells its channel/guild (no message is sent). */
+  inspectWebhook(hook: WebhookRef): Promise<{ id: string; channelId: string; guildId: string | null; name: string }>;
   /** DELETE a message sent by this webhook. */
   deleteMessage(hook: WebhookRef, messageId: string): Promise<void>;
 }

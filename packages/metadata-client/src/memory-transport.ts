@@ -58,6 +58,13 @@ export class MemoryTransport implements WebhookTransport {
     return new Uint8Array(b);
   }
 
+  async inspectWebhook(hook: WebhookRef): Promise<{ id: string; channelId: string; guildId: string | null; name: string }> {
+    if (this.deadHooks.has(hook.id)) throw new Error("webhook get: HTTP 404");
+    return { id: hook.id, channelId: this.channelOf(hook.id), guildId: "guild-mem", name: `hook-${hook.id}` };
+  }
+  /** Webhooks that answer 404 (deleted in Discord). */
+  readonly deadHooks = new Set<string>();
+
   async deleteMessage(hook: WebhookRef, messageId: string): Promise<void> {
     const m = this.messages.get(messageId);
     if (!m || m.webhookId !== hook.id) throw new Error("404 Unknown Message");
