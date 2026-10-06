@@ -45,6 +45,20 @@ export class MemoryTransport implements WebhookTransport {
     return { webhookId: hook.id, channelId, messageId, attachmentId, sizeBytes: copy.byteLength, url: this.link(attachmentId) };
   }
 
+  async editMessageFile(hook: WebhookRef, messageId: string, data: Uint8Array, filename: string): Promise<PostedAttachment> {
+    const m = this.messages.get(messageId);
+    if (!m || m.webhookId !== hook.id) throw new Error("404 Unknown Message");
+    if (data.byteLength > this.maxBytes) throw new Error("413 Payload Too Large");
+    for (const a of m.attachments) this.blobs.delete(a.id);
+    const attachmentId = this.snowflake();
+    const copy = new Uint8Array(data);
+    m.attachments = [{ id: attachmentId, data: copy, filename }];
+    this.blobs.set(attachmentId, copy);
+    this.edits++;
+    return { webhookId: hook.id, channelId: m.channelId, messageId, attachmentId, sizeBytes: copy.byteLength, url: this.link(attachmentId) };
+  }
+  edits = 0;
+
   async getAttachments(hook: WebhookRef, messageId: string): Promise<MessageAttachment[]> {
     const m = this.messages.get(messageId);
     if (!m || m.webhookId !== hook.id) throw new Error("404 Unknown Message");

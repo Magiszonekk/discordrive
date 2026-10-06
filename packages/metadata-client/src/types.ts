@@ -44,6 +44,11 @@ export interface WebhookTransport {
   fetchCdn(url: string): Promise<Uint8Array>;
   /** GET the webhook itself: validates the URL and tells its channel/guild (no message is sent). */
   inspectWebhook(hook: WebhookRef): Promise<{ id: string; channelId: string; guildId: string | null; name: string }>;
+  /**
+   * PATCH a message sent by this webhook, replacing its attachments with one
+   * new file (koncept §7: works through the webhook, also from a browser).
+   */
+  editMessageFile(hook: WebhookRef, messageId: string, data: Uint8Array, filename: string): Promise<PostedAttachment>;
   /** DELETE a message sent by this webhook. */
   deleteMessage(hook: WebhookRef, messageId: string): Promise<void>;
 }

@@ -209,6 +209,21 @@ export class MetadataClient {
     return h;
   }
 
+  /** Post one blob (any kind: fragment, manifest, snapshot part) with per-channel pacing and retries. */
+  async postBlob(data: Uint8Array, filename: string): Promise<DiscordPlacement> {
+    return placementOf(await this.post(data, filename, { posts: 0 }));
+  }
+
+  /** Webhook from the vault by ID (throws if unknown). */
+  webhook(id: string): WebhookRef {
+    return this.hookById(id);
+  }
+
+  /** The webhooks this client posts through. */
+  get webhooks(): WebhookRef[] {
+    return [...this.hooks.values()];
+  }
+
   /** Post one blob with pacing per channel and retries. */
   private async post(data: Uint8Array, filename: string, stats: { posts: number }): Promise<PostedAttachment> {
     let attempt = 0;
@@ -235,7 +250,7 @@ export class MetadataClient {
   }
 
   /** Fetch a stored attachment through its webhook (fresh signed CDN link, koncept §7). */
-  private async fetchPlacement(p: DiscordPlacement): Promise<Uint8Array> {
+  async fetchPlacement(p: DiscordPlacement): Promise<Uint8Array> {
     const hook = this.hookById(p.locationId);
     let attempt = 0;
     for (;;) {

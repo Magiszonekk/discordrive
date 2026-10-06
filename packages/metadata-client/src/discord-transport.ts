@@ -84,6 +84,18 @@ export class DiscordWebhookTransport implements WebhookTransport {
     return { webhookId: hook.id, channelId: j.channel_id, messageId: j.id, attachmentId: a.id, sizeBytes: a.size, url: a.url };
   }
 
+  async editMessageFile(hook: WebhookRef, messageId: string, data: Uint8Array, filename: string): Promise<PostedAttachment> {
+    const fd = new FormData();
+    // attachments: [] of the new upload only => old attachment is dropped.
+    fd.append("payload_json", JSON.stringify({ content: "", attachments: [{ id: 0, filename }] }));
+    fd.append("files[0]", new Blob([data as BlobPart], { type: "application/octet-stream" }), filename);
+    const res = await this.req(`${hook.url}/messages/${messageId}`, { method: "PATCH", body: fd }, "webhook edit message");
+    const j = (await res.json()) as { id: string; channel_id: string; attachments: { id: string; url: string; size: number }[] };
+    const a = j.attachments?.[0];
+    if (!a || j.attachments.length !== 1) throw new Error("webhook edit: unexpected attachments in response");
+    return { webhookId: hook.id, channelId: j.channel_id, messageId: j.id, attachmentId: a.id, sizeBytes: a.size, url: a.url };
+  }
+
   async getAttachments(hook: WebhookRef, messageId: string): Promise<MessageAttachment[]> {
     const res = await this.req(`${hook.url}/messages/${messageId}`, { method: "GET" }, "webhook get message");
     const j = (await res.json()) as { attachments: { id: string; url: string; size: number }[] };

@@ -43,3 +43,42 @@ describe.skipIf(!live)("live: CLI put/get through a real test webhook", () => {
     }
   });
 });
+
+describe.skipIf(!live)("live: snapshot + pointer message, restore from Discord only", () => {
+  it("writes segment + base, edits the pointer (PATCH), restores the same tree, cleans up", async () => {
+    const { accountKeyFromB64 } = await import("../src/account-key.js");
+    const { canonicalState, ROOT_ID } = await import("@ddv4/sync-core");
+    const { clientBlobIO, createPointerMessage, rescueBlobIO, restoreFromDiscord, writeSnapshot } = await import("../src/index.js");
+    const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-live-snap-"));
+    const env = { stateDir: join(dir, "state"), webhookFiles: [] as string[], out: () => {} };
+    expect(await runCli(["init"], env)).toBe(0);
+    expect(await runCli(["webhook", "add", process.env.DDN_LIVE_WEBHOOK_FILE!], env)).toBe(0);
+    const st = openState(env.stateDir);
+    const t = new DiscordWebhookTransport();
+    const c = await openClient(st, t);
+    const [hook] = c.webhooks;
+    const io = clientBlobIO(c, t, 64 * 1024);
+    const posted: string[] = [];
+    const ioTracked = { ...io, post: async (d: Uint8Array, f: string) => { const p = await io.post(d, f); posted.push(p.messageId); return p; } };
+    const loc = await createPointerMessage(io, st.key, st.accountId, hook!);
+    posted.push(loc.messageId);
+    try {
+      for (let i = 0; i < 5; i++) await c.commitOp({ type: "create", kind: "folder", nodeId: `live-fold-${i}000`, parentId: ROOT_ID, name: `Folder ${i}` }, "mkdir");
+      const deps = { io: ioTracked, key: st.key, accountId: st.accountId, pointer: loc, log: st.server.session(st.device.id), store: c.store, now: () => Date.now() };
+      expect((await writeSnapshot(deps, "segment")).written).toBe("written");
+      expect((await writeSnapshot(deps, "base")).kind).toBe("base");
+      await c.commitOp({ type: "rename", nodeId: "live-fold-0000", name: "Po zmianie" }, "rename");
+      expect((await writeSnapshot(deps, "segment")).written).toBe("written");
+
+      const key2 = accountKeyFromB64(st.key.rawB64);
+      const r = await restoreFromDiscord(rescueBlobIO(new DiscordWebhookTransport(), hook!), key2, st.accountId, loc);
+      expect(canonicalState(r.store)).toBe(canonicalState(c.store));
+      console.log(`live snapshot: toSeq ${r.pointer.toSeq}, base at ${r.baseHeadSeq}, tail ${r.tail.length}, objects ${posted.length}`);
+    } finally {
+      for (const id of posted) {
+        await t.deleteMessage(hook!, id).catch(() => {});
+        await new Promise((res) => setTimeout(res, 400));
+      }
+    }
+  });
+});

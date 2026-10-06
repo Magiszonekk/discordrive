@@ -27,6 +27,16 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   operacja z nazwami i kluczami plików) jest zaszyfrowana, a AAD wiąże ją z kontem i
   jawnymi polami. Wpis, którego nie da się odszyfrować, każda replika zamienia w ten sam
   `invalid_op`. Dzierżawy sprawdzane względem urządzenia sesji, nie zaszyfrowanej koperty.
+- **Drzewo na dysku** (§4.1, `node/sqlite-store.ts`, wbudowane `node:sqlite`): unikalność
+  nazw wymuszana indeksem częściowym, stronicowanie keyset po `(name_key, id)`. Ten sam stan
+  co `MemoryIndexStore` na losowych logach z symulacji etapu 1 (40 w `npm test`,
+  `SQLITE_RUNS=500` sprawdzone). CLI trzyma `index.db` i przy starcie pobiera tylko ogon logu.
+- **Snapshoty i wiadomość wskaźnikowa** (§6.2, `snapshots.ts`): segmenty (zaszyfrowane wpisy
+  logu, łańcuch od seq 1), baza (drzewo, gzip, dzielone na części), jedna wiadomość
+  wskaźnikowa edytowana `PATCH`-em, która nigdy się nie cofa. Polityka `decideSnapshot`:
+  1 min ciszy / max 5 min, baza przy 20 % lub 7 dniach, tylko na łączu nielimitowanym.
+  `restoreFromDiscord` + zestaw ratunkowy (`ddn-kit1:`) odtwarzają drzewo bez serwera.
+  Brakuje: retencji (7 dziennych + 4 tygodniowe) i harmonogramu w kliencie.
 - **CLI** `ddn init | webhook add|ls|rm | put | get | ls`. Katalog stanu 0700, pliki 0600;
   `server/` to dokładnie to, co trzymałby serwer (zaszyfrowany log i sejf), do czasu
   serwera HTTP (krok 6 planu) obsługiwane w procesie.
