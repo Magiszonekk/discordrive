@@ -76,7 +76,12 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   (części Node są w `src/node/`), a `npm run check:browser` w headless Chromium robi:
   konto przez HTTP (CORS tylko dla wskazanego originu), sejf, upload/download z kontrolą
   SHA-256, snapshot + odtworzenie i sparowanie urządzenia Node przez kartę (zgodny SAS).
-  Brakuje: SQLite na OPFS, główna karta, service worker do streamingu, UI (profil `frontend`).
+  Drzewo w przeglądarce (`browser/opfs-store.ts`): SQLite-WASM na OPFS (SAH pool, w
+  dedykowanym workerze), ten sam `SqlIndexStore` co w Node (`sql-store.ts`). `opfs-check.ts`:
+  30 losowych logów etapu 1 w Chromium = ten sam stan co w Node, baza przetrwa przeładowanie.
+  Pomiar: transakcja na wpis 14,3 ms/wpis, transakcja na partię 0,5 ms/wpis, więc
+  `MetadataClient.pull` stosuje partię w jednej transakcji.
+  Brakuje: główna karta, service worker do streamingu, UI (profil `frontend`).
 
 ## Testy
 

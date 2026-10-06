@@ -8,7 +8,8 @@
   "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./node": "./src/node/index.ts"
+    "./node": "./src/node/index.ts",
+    "./browser": "./src/browser/index.ts"
   },
   "bin": {
     "ddn": "./src/cli.ts"
@@ -19,11 +20,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "cli": "tsx src/cli.ts",
     "server": "tsx src/node/server-main.ts",
-    "check:browser": "tsx test/browser/browser-check.ts"
+    "check:browser": "tsx test/browser/browser-check.ts && tsx test/browser/opfs-check.ts"
   },
   "dependencies": {
     "@ddv4/processing": "*",
-    "@ddv4/sync-core": "*"
+    "@ddv4/sync-core": "*",
+    "@sqlite.org/sqlite-wasm": "3.53.4-build2"
   },
   "devDependencies": {
     "vitest": "^4.1.5"

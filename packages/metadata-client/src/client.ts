@@ -177,7 +177,11 @@ export class MetadataClient {
     for (;;) {
       const batch = await this.o.arbiter.read(this.replica.headSeq, 1000);
       if (batch.length === 0) return out;
-      const results = this.replica.receive(batch);
+      // One transaction per batch: on OPFS a transaction per entry measured
+      // 14.3 ms/entry vs 0.44 ms/entry batched (Chromium, opfs-check.ts).
+      // Per-entry atomicity is unchanged: apply() still commits each entry's
+      // overlay as a whole, nested inside this transaction.
+      const results = this.store.atomically(() => this.replica.receive(batch));
       const byOp = new Map(batch.map((e) => [e.opId, e]));
       for (const r of results) {
         const e = byOp.get(r.opId);
