@@ -37,6 +37,12 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   1 min ciszy / max 5 min, baza przy 20 % lub 7 dniach, tylko na łączu nielimitowanym.
   `restoreFromDiscord` + zestaw ratunkowy (`ddn-kit1:`) odtwarzają drzewo bez serwera.
   Brakuje: retencji (7 dziennych + 4 tygodniowe) i harmonogramu w kliencie.
+- **Serwer** (§3.4, `node/server.ts`, `node:http` + `node:sqlite`, tylko 127.0.0.1): arbiter
+  zaszyfrowanego logu (Sequencer per konto, duplikaty, wersja reguł, dzierżawy względem
+  urządzenia z sesji), sejf (CAS), urządzenia (dodanie, odwołanie), long-poll
+  `GET /v1/log?wait=`. Przyjmuje tylko jawne pola z §3.3 (inne pola koperty = 400).
+  Klient: `HttpApi` (fetch, Node + przeglądarka). Uwierzytelnianie za interfejsem; na razie
+  token per urządzenie (hash w bazie), docelowy wariant czeka na decyzję (#13).
 - **CLI** `ddn init | webhook add|ls|rm | put | get | ls`. Katalog stanu 0700, pliki 0600;
   `server/` to dokładnie to, co trzymałby serwer (zaszyfrowany log i sejf), do czasu
   serwera HTTP (krok 6 planu) obsługiwane w procesie.

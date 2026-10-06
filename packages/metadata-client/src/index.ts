@@ -107,3 +107,4 @@ export {
   type SnapshotDeps,
   type SnapshotResult,
 } from "./snapshots.js";
+export { HttpApi, ServerError, createAccountHttp, type HttpSession } from "./http-api.js";
