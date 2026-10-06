@@ -1,29 +1,48 @@
 #!/usr/bin/env -S npx tsx
 // ddn: discordrive-next metadata-only CLI (stage 2, single device).
 //
-//   ddn [--state DIR] [--webhook-file F]... put <file> [name]
-//   ddn [--state DIR] [--webhook-file F]... get <name|nodeId> <out>
+//   ddn [--state DIR] init
+//   ddn [--state DIR] webhook add <url-file>     # URL read from a file, never printed
+//   ddn [--state DIR] webhook ls
+//   ddn [--state DIR] webhook rm <webhook-id>
+//   ddn [--state DIR] put <file> [name]
+//   ddn [--state DIR] get <name|nodeId> <out>
 //   ddn [--state DIR] ls
 //
-// State dir (default ~/.local/share/ddn, mode 0700): device.json, log.jsonl.
-// Until op encryption and the server exist (PLAN-etap2 steps 3, 6), the
-// arbiter runs in-process and the log is a local file. The log holds file keys
-// (inside manifestRef), so it is written 0600 and must stay on this device.
-// Webhook URLs come from files (default: $DDN_WEBHOOK_FILES, ':'-separated) and
-// are never printed.
+// State dir (default ~/.local/share/ddn, 0700; files 0600):
+//   account.json  account ID + account key (the secret; becomes the rescue kit, §3.5)
+//   device.json   this device
+//   server/       what the SERVER would hold: log.jsonl (encrypted ops, koncept
+//                 §3.3) and vault.json (encrypted webhook vault, §3.2). Until the
+//                 HTTP server exists (plan step 6) the server runs in-process.
+//   seen.json     highest vault revision seen (rollback guard)
+// --webhook-file / DDN_WEBHOOK_FILES (':'-separated URL files) are added to the
+// vault on start (convenience for scripts and tests).
 
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { Sequencer, ROOT_ID, type LogEntry } from "@ddv4/sync-core";
-import { LocalArbiter } from "./arbiter.js";
+import { fromBase64, toBase64 } from "@ddv4/processing";
+import { ROOT_ID } from "@ddv4/sync-core";
+import { accountKeyFromB64, newAccountKey, type AccountKey } from "./account-key.js";
 import { MetadataClient, newId, type ByteSink, type ByteSource } from "./client.js";
-import { DiscordWebhookTransport, parseWebhookUrl, redactWebhookUrl } from "./discord-transport.js";
-import type { WebhookRef, WebhookTransport } from "./types.js";
+import { DiscordWebhookTransport, redactWebhookUrl } from "./discord-transport.js";
+import { EncryptedArbiter, InProcessLogServer, OpCodec, type EncryptedEntry } from "./op-crypto.js";
+import type { WebhookTransport } from "./types.js";
+import {
+  WebhookVault,
+  inspectForVault,
+  toWebhookRefs,
+  vaultAdvice,
+  type SealedVault,
+  type VaultPutResult,
+  type VaultStore,
+} from "./vault.js";
 
 export interface CliEnv {
   stateDir: string;
+  /** URL files to make sure are in the vault. */
   webhookFiles: string[];
   transport?: WebhookTransport;
   out?: (line: string) => void;
@@ -53,33 +72,89 @@ export async function fileSink(path: string): Promise<ByteSink & { close(): Prom
   return { write: async (d) => void (await fh.write(d)), close: () => fh.close() };
 }
 
-export function loadWebhooks(files: string[]): WebhookRef[] {
-  return files.map((f) => parseWebhookUrl(readFileSync(f, "utf8")));
+function writeJson(path: string, v: unknown): void {
+  writeFileSync(path, JSON.stringify(v) + "\n", { mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+function readJson<T>(path: string): T {
+  return JSON.parse(readFileSync(path, "utf8")) as T;
+}
+function ensureDir(d: string): void {
+  mkdirSync(d, { recursive: true, mode: 0o700 });
+  chmodSync(d, 0o700);
 }
 
-/** Open the local state (creates it on first use) and a client on top of it. */
-export async function openClient(env: CliEnv, needWebhooks = true): Promise<MetadataClient> {
-  mkdirSync(env.stateDir, { recursive: true, mode: 0o700 });
-  chmodSync(env.stateDir, 0o700);
-  const devFile = join(env.stateDir, "device.json");
-  if (!existsSync(devFile)) writeFileSync(devFile, JSON.stringify({ id: `cli-${newId()}`, name: "cli" }) + "\n", { mode: 0o600 });
-  const device = JSON.parse(readFileSync(devFile, "utf8")) as { id: string; name: string };
-  const logFile = join(env.stateDir, "log.jsonl");
-  const entries: LogEntry[] = existsSync(logFile)
+/** Vault blob kept in a file (the server's copy, in-process for now). */
+class FileVaultStore implements VaultStore {
+  constructor(private readonly path: string) {}
+  async get(): Promise<SealedVault | null> {
+    if (!existsSync(this.path)) return null;
+    const j = readJson<{ revision: number; blob: string }>(this.path);
+    return { revision: j.revision, blob: fromBase64(j.blob) };
+  }
+  async put(_acct: string, expected: number, next: SealedVault): Promise<VaultPutResult> {
+    const cur = await this.get();
+    if ((cur?.revision ?? 0) !== expected || next.revision !== expected + 1) return { status: "conflict", current: cur };
+    writeJson(this.path, { revision: next.revision, blob: toBase64(next.blob) });
+    return { status: "ok" };
+  }
+}
+
+export interface CliState {
+  accountId: string;
+  key: AccountKey;
+  device: { id: string; name: string };
+  server: InProcessLogServer;
+  vault: WebhookVault;
+  saveSeen(): void;
+}
+
+export function initState(stateDir: string): boolean {
+  ensureDir(stateDir);
+  const accFile = join(stateDir, "account.json");
+  if (existsSync(accFile)) return false;
+  writeJson(accFile, { accountId: `acct-${newId()}`, key: newAccountKey().rawB64 });
+  return true;
+}
+
+export function openState(stateDir: string): CliState {
+  ensureDir(stateDir);
+  const accFile = join(stateDir, "account.json");
+  if (!existsSync(accFile)) throw new Error("no account here: run `ddn init` first");
+  const acc = readJson<{ accountId: string; key: string }>(accFile);
+  const key = accountKeyFromB64(acc.key);
+  const devFile = join(stateDir, "device.json");
+  if (!existsSync(devFile)) writeJson(devFile, { id: `cli-${newId()}`, name: "cli" });
+  const device = readJson<{ id: string; name: string }>(devFile);
+  const serverDir = join(stateDir, "server");
+  ensureDir(serverDir);
+  const logFile = join(serverDir, "log.jsonl");
+  const initialLog: EncryptedEntry[] = existsSync(logFile)
     ? readFileSync(logFile, "utf8")
         .split("\n")
         .filter(Boolean)
-        .map((l) => JSON.parse(l) as LogEntry)
+        .map((l) => JSON.parse(l) as EncryptedEntry)
     : [];
-  const arbiter = new LocalArbiter(new Sequencer({ initialLog: entries }), (e) => {
-    appendFileSync(logFile, JSON.stringify(e) + "\n", { mode: 0o600 });
+  const server = new InProcessLogServer({
+    initialLog,
+    onAppend: (e) => appendFileSync(logFile, JSON.stringify(e) + "\n", { mode: 0o600 }),
   });
+  const seenFile = join(stateDir, "seen.json");
+  const seen = existsSync(seenFile) ? readJson<{ vaultRevision: number }>(seenFile).vaultRevision : 0;
+  const vault = new WebhookVault(new FileVaultStore(join(serverDir, "vault.json")), key, acc.accountId, seen);
+  return { accountId: acc.accountId, key, device, server, vault, saveSeen: () => writeJson(seenFile, { vaultRevision: vault.revision }) };
+}
+
+export async function openClient(st: CliState, transport: WebhookTransport): Promise<MetadataClient> {
+  const v = await st.vault.load();
+  st.saveSeen();
+  const hooks = toWebhookRefs(v);
   const client = new MetadataClient({
-    device,
-    arbiter,
-    transport: env.transport ?? new DiscordWebhookTransport(),
-    // Listing works offline from the local index; only put/get need the vault.
-    webhooks: needWebhooks ? loadWebhooks(env.webhookFiles) : [{ id: "0", url: "unset://" }],
+    device: st.device,
+    arbiter: new EncryptedArbiter(new OpCodec(st.key, st.accountId), st.server.session(st.device.id)),
+    transport,
+    // Listing works without webhooks; put/get check in runCli.
+    webhooks: hooks.length ? hooks : [{ id: "0", url: "unset://" }],
   });
   await client.pull();
   return client;
@@ -92,13 +167,52 @@ function resolveNode(client: MetadataClient, ref: string): string {
   return hits[0]!.id;
 }
 
+async function addWebhookFile(st: CliState, transport: WebhookTransport, file: string): Promise<string> {
+  const w = await inspectForVault(transport, readFileSync(file, "utf8"));
+  const v = await st.vault.load();
+  if (!v.webhooks.some((x) => x.id === w.id)) await st.vault.addWebhook(w);
+  st.saveSeen();
+  return w.id;
+}
+
 export async function runCli(argv: string[], env: CliEnv): Promise<number> {
   const out = env.out ?? ((l: string) => console.log(l));
+  const transport = env.transport ?? new DiscordWebhookTransport();
   const [cmd, ...args] = argv;
-  if (cmd === "put" || cmd === "get") {
-    if (env.webhookFiles.length === 0) throw new Error("no webhook files (--webhook-file or DDN_WEBHOOK_FILES)");
+  if (cmd === "init") {
+    out(initState(env.stateDir) ? "account created (keep account.json safe: it holds the account key)" : "account already exists");
+    return 0;
   }
-  const client = await openClient(env, cmd === "put" || cmd === "get");
+  const st = openState(env.stateDir);
+  for (const f of env.webhookFiles) await addWebhookFile(st, transport, f);
+
+  if (cmd === "webhook") {
+    const [sub, arg] = args;
+    if (sub === "add" && arg) {
+      out(`added webhook ${await addWebhookFile(st, transport, arg)}`);
+      out(vaultAdvice(await st.vault.load()).message);
+      return 0;
+    }
+    if (sub === "rm" && arg) {
+      await st.vault.removeWebhook(arg);
+      st.saveSeen();
+      out(`removed webhook ${arg}`);
+      return 0;
+    }
+    if (sub === "ls") {
+      const v = await st.vault.load();
+      for (const w of v.webhooks) out(`${w.id} channel ${w.channelId} ${w.label}`);
+      out(vaultAdvice(v).message);
+      return 0;
+    }
+    out("usage: webhook add <url-file> | ls | rm <id>");
+    return 2;
+  }
+
+  if ((cmd === "put" || cmd === "get") && (await st.vault.load()).webhooks.length === 0) {
+    throw new Error("vault has no webhooks: `ddn webhook add <url-file>`");
+  }
+  const client = await openClient(st, transport);
   switch (cmd) {
     case "put": {
       const [path, name] = args;
@@ -132,7 +246,7 @@ export async function runCli(argv: string[], env: CliEnv): Promise<number> {
       return 0;
     }
     default:
-      out("usage: ddn [--state DIR] [--webhook-file F]... put <file> [name] | get <name|id> <out> | ls");
+      out("usage: ddn [--state DIR] init | webhook add <url-file>|ls|rm <id> | put <file> [name] | get <name|id> <out> | ls");
       return 2;
   }
 }

@@ -17,7 +17,11 @@ describe("ddn CLI (single device, state persisted between runs)", () => {
     writeFileSync(hookFile, `https://discord.com/api/webhooks/123456789012345678/${"x".repeat(68)}\n`, { mode: 0o600 });
     const transport = new MemoryTransport();
     const lines: string[] = [];
-    const env = { stateDir: join(dir, "state"), webhookFiles: [hookFile], transport, out: (l: string) => lines.push(l) };
+    const env = { stateDir: join(dir, "state"), webhookFiles: [] as string[], transport, out: (l: string) => lines.push(l) };
+    expect(await runCli(["init"], env)).toBe(0);
+    await expect(runCli(["put", hookFile], env)).rejects.toThrow(/no webhooks/);
+    expect(await runCli(["webhook", "add", hookFile], env)).toBe(0);
+    expect(lines.at(-1)).toMatch(/3–4 kanały/);
 
     const src = join(dir, "in.bin");
     const data = rand(65_000);
@@ -33,7 +37,11 @@ describe("ddn CLI (single device, state persisted between runs)", () => {
     expect(await sha256Hex(readFileSync(dst))).toBe(await sha256Hex(data));
 
     expect(statSync(join(dir, "state")).mode & 0o777).toBe(0o700);
-    expect(statSync(join(dir, "state", "log.jsonl")).mode & 0o777).toBe(0o600);
-    expect(readFileSync(join(dir, "state", "log.jsonl"), "utf8")).not.toContain("x".repeat(68));
+    for (const f of ["account.json", "device.json", "seen.json", "server/log.jsonl", "server/vault.json"]) {
+      expect(statSync(join(dir, "state", f)).mode & 0o777).toBe(0o600);
+    }
+    // What the server would hold: no names, no webhook token, no file keys.
+    const serverFiles = readFileSync(join(dir, "state", "server", "log.jsonl"), "utf8") + readFileSync(join(dir, "state", "server", "vault.json"), "utf8");
+    for (const secret of ["x".repeat(68), "dane.bin", "123456789012345678", "manifest", "ddn1:"]) expect(serverFiles).not.toContain(secret);
   });
 });

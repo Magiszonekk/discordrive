@@ -15,11 +15,21 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
 - **Limiter** (`ChannelPacer`): jeden kubełek na **kanał** (limit Discorda jest per kanał, ~30
   wiadomości/min; pomiar w koncepcie §7), start 30/min, po 429 `shared` blokada na
   `retry_after` i spadek tempa ×0,8, powolny powrót do 36/min.
-- **CLI** `ddn put|get|ls` (jedno urządzenie, arbiter w procesie, log w `log.jsonl` 0600).
-
-**Uwaga:** do kroku 3 planu (szyfrowanie operacji) `manifestRef` w logu zawiera klucz pliku
-jawnie. Log zostaje lokalnie (0600) i nie może trafić na serwer, zanim operacje nie będą
-szyfrowane.
+- **Klucz konta** (`account-key.ts`): losowe 256 bitów, podklucze HKDF `ddn-vault-v1`,
+  `ddn-op-v1`, `ddn-snapshot-v1`; AES-256-GCM z AAD wiążącym szyfrogram z kontekstem.
+- **Sejf webhooków** (§3.2, `vault.ts`): jeden zaszyfrowany blob na konto, serwer trzyma
+  tylko `{revision, blob}`. Zapis compare-and-swap (dwa urządzenia naraz: oba wpisy
+  zostają), ochrona przed cofnięciem rewizji przez serwer, AAD = konto + rewizja.
+  Dodanie webhooka sprawdza URL przez `GET` webhooka (bez wysyłania wiadomości) i zapisuje
+  ID kanału. Kreator (decyzja #12): wymagany 1 kanał, zachęta do 3–4.
+- **Zaszyfrowany log operacji** (§3.3, `op-crypto.ts`): serwer widzi tylko `opId`,
+  `rulesVersion`, `baseSeq`, `leaseGuard` i rozmiar `payload`; reszta (urządzenie, czasy,
+  operacja z nazwami i kluczami plików) jest zaszyfrowana, a AAD wiąże ją z kontem i
+  jawnymi polami. Wpis, którego nie da się odszyfrować, każda replika zamienia w ten sam
+  `invalid_op`. Dzierżawy sprawdzane względem urządzenia sesji, nie zaszyfrowanej koperty.
+- **CLI** `ddn init | webhook add|ls|rm | put | get | ls`. Katalog stanu 0700, pliki 0600;
+  `server/` to dokładnie to, co trzymałby serwer (zaszyfrowany log i sejf), do czasu
+  serwera HTTP (krok 6 planu) obsługiwane w procesie.
 
 ## Testy
 
@@ -30,4 +40,4 @@ DDN_LIVE=1 DDN_LIVE_WEBHOOK_FILE=~/.config/discordrive-next/webhooks/<nazwa>.url
 node scripts/webhook-ratelimit.mjs run ... # pomiar limitów (koncept §7)
 ```
 
-CLI: `DDN_STATE=<katalog> DDN_WEBHOOK_FILES=<plik.url> npx tsx src/cli.ts put <plik>`.
+CLI: `DDN_STATE=<katalog> npx tsx src/cli.ts init`, potem `webhook add <plik.url>`, `put <plik>`.

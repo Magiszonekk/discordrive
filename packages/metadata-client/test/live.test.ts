@@ -5,8 +5,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadWebhooks, openClient, runCli } from "../src/cli.js";
-import { DiscordWebhookTransport, decodeManifestRef, sha256Hex } from "../src/index.js";
+import { openClient, openState, runCli } from "../src/cli.js";
+import { DiscordWebhookTransport, decodeManifestRef, sha256Hex, toWebhookRefs } from "../src/index.js";
 
 const live = process.env.DDN_LIVE === "1" && !!process.env.DDN_LIVE_WEBHOOK_FILE;
 
@@ -22,19 +22,21 @@ describe.skipIf(!live)("live: CLI put/get through a real test webhook", () => {
     const src = join(dir, "in.bin");
     writeFileSync(src, big);
     const lines: string[] = [];
-    const env = { stateDir: join(dir, "state"), webhookFiles: [hookFile], out: (l: string) => (lines.push(l), console.log(l)) };
+    const env = { stateDir: join(dir, "state"), webhookFiles: [] as string[], out: (l: string) => (lines.push(l), console.log(l)) };
+    expect(await runCli(["init"], env)).toBe(0);
+    expect(await runCli(["webhook", "add", hookFile], env)).toBe(0); // GET webhook on Discord, then sealed vault
     expect(await runCli(["put", src, "live.bin"], env)).toBe(0);
     const dst = join(dir, "out.bin");
     expect(await runCli(["get", "live.bin", dst], env)).toBe(0);
     expect(await sha256Hex(readFileSync(dst))).toBe(await sha256Hex(big));
 
     // Clean up: delete every message this upload made (fragments + manifest).
-    const c = await openClient(env);
+    const c = await openClient(openState(env.stateDir), new DiscordWebhookTransport());
     const node = c.list().find((x) => x.name === "live.bin")!;
     const ref = c.store.getNode(node.id)!.content!.manifestRef;
     const { manifest } = await c.loadManifest(ref);
     const t = new DiscordWebhookTransport();
-    const [hook] = loadWebhooks([hookFile]);
+    const [hook] = toWebhookRefs(await openState(env.stateDir).vault.load());
     for (const id of [...manifest.chunks.map((ch) => ch.placements![0]!.messageId!), decodeManifestRef(ref).at.messageId]) {
       await t.deleteMessage(hook!, id);
       await new Promise((r) => setTimeout(r, 400));
