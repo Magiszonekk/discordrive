@@ -81,6 +81,16 @@ try {
       const loc = await D.createPointerMessage(io, key, acct.accountId, c.webhook(hook.id));
       await D.writeSnapshot({ io, key, accountId: acct.accountId, pointer: loc, log: http, store: c.store, now: () => Date.now() }, "base");
       const restored = await D.restoreFromDiscord(io, key, acct.accountId, loc);
+      const headAtSnapshot = c.store.getMeta().headSeq;
+
+      // Push notifications in the browser: subscribe, then a new op must announce its seq.
+      const heads: number[] = [];
+      const sub = http.subscribe((seq) => heads.push(seq));
+      for (let i = 0; i < 100 && !sub.connected; i++) await new Promise((r) => setTimeout(r, 20));
+      await c.commitOp({ type: "create", kind: "folder", nodeId: "fold-browser01", parentId: "root", name: "Z przeglądarki" }, "mkdir");
+      for (let i = 0; i < 100 && !heads.includes(c.store.getMeta().headSeq); i++) await new Promise((r) => setTimeout(r, 20));
+      const wsOk = heads.includes(c.store.getMeta().headSeq);
+      sub.close();
 
       // Pair a Node device that showed `offer`: register its public key with our signature.
       const { sas } = await D.acceptPairing(offer, { accountId: acct.accountId, accountKey: key.rawB64, fromDevice: "Chromium" }, (pub) => http.addDevice(pub), http.pairingMailbox());
@@ -96,12 +106,14 @@ try {
         same,
         sha: up.version.plaintextSha256,
         restoredHead: restored.store.getMeta().headSeq,
+        headAtSnapshot,
         head: c.store.getMeta().headSeq,
         sas,
         hookId: hook.id,
         extractable,
         logins: http.logins,
         devicesAfter,
+        wsOk,
       };
     },
     { api, offer: pending.offer },
@@ -122,7 +134,7 @@ try {
     engine: r.ua.replace(/^.*(HeadlessChrome\/[\d.]+).*$/, "$1"),
     uploadChunks: r.chunks,
     downloadHashOk: r.same,
-    snapshotRestoreOk: r.restoredHead === r.head,
+    snapshotRestoreOk: r.restoredHead === r.headAtSnapshot && r.headAtSnapshot > 0,
     pairingSasMatch: paired!.sas === r.sas,
     nodeSeesFile: nodeFile?.content?.plaintextSha256 === r.sha,
     nodeHead: b.replica.headSeq,
@@ -131,6 +143,7 @@ try {
     browserLogins: r.logins,
     nodeLogins: httpB.logins,
     devicesAfterRevoke: r.devicesAfter,
+    websocketPush: r.wsOk,
   };
   console.log(JSON.stringify(result));
   failed = !(
@@ -141,7 +154,8 @@ try {
     result.nodeHead === result.browserHead &&
     result.browserKeyExtractable === false &&
     result.nodeLogins === 1 &&
-    result.devicesAfterRevoke === 2
+    result.devicesAfterRevoke === 2 &&
+    result.websocketPush
   );
 } finally {
   await browser.close();

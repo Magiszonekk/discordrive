@@ -40,7 +40,9 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
 - **Serwer** (§3.4, `node/server.ts`, `node:http` + `node:sqlite`, tylko 127.0.0.1): arbiter
   zaszyfrowanego logu (Sequencer per konto, duplikaty, wersja reguł, dzierżawy względem
   urządzenia z sesji), sejf (CAS), urządzenia (dodanie, odwołanie), long-poll
-  `GET /v1/log?wait=`. Przyjmuje tylko jawne pola z §3.3 (inne pola koperty = 400).
+  `GET /v1/log?wait=` oraz WebSocket `/v1/notify` (bez zależności, RFC 6455; wysyła tylko
+  „head = N”, dane idą zwykłym API; wejście jednorazowym biletem z `POST /v1/notify-ticket`,
+  więc token sesji nie trafia do URL-a). `HttpApi.subscribe` łączy się ponownie z backoffem. Przyjmuje tylko jawne pola z §3.3 (inne pola koperty = 400).
   Klient: `HttpApi` (fetch, Node + przeglądarka).
 - **Logowanie urządzeń** (decyzja #13, `device-key.ts`, `node/auth.ts`): para Ed25519 na
   urządzenie, serwer zna tylko klucze publiczne. Logowanie = podpis jednorazowego wyzwania

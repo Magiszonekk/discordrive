@@ -212,6 +212,59 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     });
   }
 
+  /**
+   * Push notifications (§3.4 role 4): a WebSocket that says "the log head is
+   * now N". Needs a global WebSocket (browsers, Node 22+). Reconnects with
+   * backoff until `close()`. `onHead` is also called once after every
+   * (re)connect with -1, so the caller pulls whatever it missed.
+   */
+  subscribe(onHead: (seq: number) => void, opts: { maxBackoffMs?: number } = {}): { close(): void; readonly connected: boolean } {
+    let closed = false;
+    let ws: WebSocket | null = null;
+    let backoff = 500;
+    let connected = false;
+    const open = async () => {
+      if (closed) return;
+      try {
+        const t = await this.call<{ ticket: string }>("POST", "/v1/notify-ticket", {});
+        const u = new URL(this.s.baseUrl);
+        u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+        u.pathname = "/v1/notify";
+        u.search = `ticket=${encodeURIComponent(t.body.ticket)}`;
+        ws = new WebSocket(u.toString());
+        ws.onopen = () => {
+          connected = true;
+          backoff = 500;
+          onHead(-1);
+        };
+        ws.onmessage = (ev) => {
+          try {
+            const m = JSON.parse(String(ev.data)) as { type?: string; seq?: number };
+            if (m.type === "head" && Number.isInteger(m.seq)) onHead(m.seq!);
+          } catch {
+            /* ignore */
+          }
+        };
+        ws.onclose = () => {
+          connected = false;
+          if (!closed) setTimeout(open, (backoff = Math.min(backoff * 2, opts.maxBackoffMs ?? 30_000)));
+        };
+      } catch {
+        if (!closed) setTimeout(open, (backoff = Math.min(backoff * 2, opts.maxBackoffMs ?? 30_000)));
+      }
+    };
+    void open();
+    return {
+      close: () => {
+        closed = true;
+        ws?.close();
+      },
+      get connected() {
+        return connected;
+      },
+    };
+  }
+
   /** Pairing mailbox bound to this device's session. */
   pairingMailbox(): HttpPairingMailbox {
     return new HttpPairingMailbox(this.s.baseUrl, () => this.session(), this.f);

@@ -17,6 +17,7 @@ import { RULES_VERSION, Sequencer, isClientId } from "@ddv4/sync-core";
 import type { EncryptedEntry, EncryptedEnvelope } from "../op-crypto.js";
 import { PAIRING_TTL_MS } from "../pairing.js";
 import { AuthError, Ed25519Authenticator, type Authenticator, type Session } from "./auth.js";
+import { NotifyHub } from "./notify.js";
 
 export type { Authenticator, Session };
 
@@ -56,6 +57,7 @@ export class DdnServer {
   private readonly now: () => number;
   readonly auth: Ed25519Authenticator;
   private http: Server | null = null;
+  readonly notify: NotifyHub;
 
   constructor(private readonly opts: ServerOptions = {}) {
     this.now = opts.now ?? (() => Date.now());
@@ -69,6 +71,7 @@ export class DdnServer {
       CREATE TABLE IF NOT EXISTS pairing (id TEXT PRIMARY KEY, msg TEXT NOT NULL, created_at INTEGER NOT NULL);
     `);
     this.auth = new Ed25519Authenticator(this.db, this.now, opts.sessionTtlMs);
+    this.notify = new NotifyHub(this.now);
   }
 
   private seq(accountId: string): Sequencer<EncryptedEnvelope> {
@@ -96,6 +99,7 @@ export class DdnServer {
     if (r.status === "accepted") {
       this.db.prepare("INSERT INTO log (account_id, seq, op_id, entry) VALUES (?, ?, ?, ?)").run(s.accountId, r.entry.seq, r.entry.opId, JSON.stringify(r.entry));
       for (const w of this.waiters.get(s.accountId) ?? []) w();
+      this.notify.publish(s.accountId, r.entry.seq);
     }
     return r;
   }
@@ -183,6 +187,10 @@ export class DdnServer {
         send(res, he.status, { error: he.code });
       });
     });
+    this.http.on("upgrade", (req, socket) => {
+      // Non-browser clients send no Origin; browsers must be on the allow-list.
+      if (!this.notify.handleUpgrade(req, socket, (origin) => origin === undefined || !!this.opts.corsOrigins?.includes(origin ?? ""))) socket.destroy();
+    });
     await new Promise<void>((r) => this.http!.listen(port, host, r));
     const addr = this.http.address();
     const p = typeof addr === "object" && addr ? addr.port : port;
@@ -191,6 +199,7 @@ export class DdnServer {
 
   async close(): Promise<void> {
     for (const set of this.waiters.values()) for (const w of [...set]) w();
+    this.notify.closeAll();
     if (this.http) await new Promise<void>((r) => this.http!.close(() => r()));
     this.http = null;
     this.db.close();
@@ -230,6 +239,7 @@ export class DdnServer {
     const s = this.auth.verify(req.headers.authorization);
     if (!s) throw new HttpError(401, "unauthorized");
 
+    if (method === "POST" && path === "/v1/notify-ticket") return send(res, 200, this.notify.issueTicket(s.accountId, s.deviceId));
     if (method === "POST" && path === "/v1/log") return send(res, 200, this.submit(s, await readJson(req)));
     if (method === "GET" && path === "/v1/log") {
       const after = intParam(url, "after", 0);
