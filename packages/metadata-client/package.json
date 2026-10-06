@@ -18,7 +18,8 @@
     "test:live": "DDN_LIVE=1 vitest run test/live.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "cli": "tsx src/cli.ts",
-    "server": "tsx src/node/server-main.ts"
+    "server": "tsx src/node/server-main.ts",
+    "check:browser": "tsx test/browser/browser-check.ts"
   },
   "dependencies": {
     "@ddv4/processing": "*",

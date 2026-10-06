@@ -31,6 +31,8 @@ export interface ServerOptions {
   maxRulesVersion?: number;
   /** Allow POST /v1/accounts (account creation). Default true; a real instance gates it. */
   openSignup?: boolean;
+  /** Browser origins allowed via CORS (exact match). Default: none. */
+  corsOrigins?: string[];
 }
 
 export interface Session {
@@ -241,6 +243,18 @@ export class DdnServer {
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const origin = req.headers.origin;
+    if (origin && this.opts.corsOrigins?.includes(origin)) {
+      res.setHeader("access-control-allow-origin", origin);
+      res.setHeader("vary", "origin");
+      res.setHeader("access-control-allow-headers", "authorization, content-type");
+      res.setHeader("access-control-allow-methods", "GET, POST, PUT, DELETE");
+      res.setHeader("access-control-max-age", "600");
+    }
+    if (req.method === "OPTIONS") {
+      res.writeHead(origin && this.opts.corsOrigins?.includes(origin) ? 204 : 403);
+      return void res.end();
+    }
     const url = new URL(req.url ?? "/", "http://x");
     const path = url.pathname;
     const method = req.method ?? "GET";

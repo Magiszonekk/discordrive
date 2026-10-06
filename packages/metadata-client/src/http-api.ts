@@ -33,7 +33,7 @@ export async function createAccountHttp(baseUrl: string, f: typeof fetch = fetch
 export class HttpApi implements EncryptedLogApi, VaultStore {
   private readonly f: typeof fetch;
   constructor(private readonly s: HttpSession) {
-    this.f = s.fetch ?? fetch;
+    this.f = s.fetch ?? ((...a) => fetch(...a));
   }
 
   private async call<T>(method: string, path: string, body?: unknown, okStatuses: number[] = []): Promise<{ status: number; body: T }> {
@@ -100,7 +100,7 @@ export class HttpPairingMailbox {
     private readonly token: string | null,
     f?: typeof fetch,
   ) {
-    this.f = f ?? fetch;
+    this.f = f ?? ((...a) => fetch(...a));
   }
   async put(pairingId: string, msg: { pub: string; sealed: string }): Promise<void> {
     if (!this.token) throw new Error("pairing put needs a signed-in device");

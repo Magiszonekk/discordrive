@@ -57,6 +57,12 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   `server/` to dokładnie to, co trzymałby serwer (zaszyfrowany log i sejf), do czasu
   serwera HTTP (krok 6 planu) obsługiwane w procesie.
 
+- **Przeglądarka** (logika, bez UI): `src/index.ts` buduje się na `platform: browser`
+  (części Node są w `src/node/`), a `npm run check:browser` w headless Chromium robi:
+  konto przez HTTP (CORS tylko dla wskazanego originu), sejf, upload/download z kontrolą
+  SHA-256, snapshot + odtworzenie i sparowanie urządzenia Node przez kartę (zgodny SAS).
+  Brakuje: SQLite na OPFS, główna karta, service worker do streamingu, UI (profil `frontend`).
+
 ## Testy
 
 ```
@@ -64,6 +70,8 @@ npm test -w @ddv4/metadata-client          # w pamięci (MemoryTransport), bez s
 DDN_LIVE=1 DDN_LIVE_WEBHOOK_FILE=~/.config/discordrive-next/webhooks/<nazwa>.url \
   npx vitest run test/live.test.ts         # na żywo, TYLKO webhook z serwera a test Discord server; sprząta po sobie
 node scripts/webhook-ratelimit.mjs run ... # pomiar limitów (koncept §7)
+CHROMIUM_PATH=... npm run check:browser    # klient w headless Chromium + serwer HTTP na 127.0.0.1
+npm run server                             # serwer: DDN_DB, DDN_PORT; tylko 127.0.0.1
 ```
 
 CLI: `DDN_STATE=<katalog> npx tsx src/cli.ts init`, potem `webhook add <plik.url>`, `put <plik>`.

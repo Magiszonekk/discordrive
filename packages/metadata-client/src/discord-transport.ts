@@ -54,7 +54,7 @@ export class DiscordWebhookTransport implements WebhookTransport {
   private readonly f: typeof fetch;
   private readonly timeoutMs: number;
   constructor(opts: FetchTransportOptions = {}) {
-    this.f = opts.fetch ?? fetch;
+    this.f = opts.fetch ?? ((...a) => fetch(...a));
     this.timeoutMs = opts.timeoutMs ?? 120_000;
   }
 
