@@ -119,6 +119,7 @@ export {
 export { HttpApi, HttpPairingMailbox, ServerError, createAccountHttp, getChallenge, rescueRegisterDevice, type HttpSession } from "./http-api.js";
 export {
   generateDeviceKey,
+  deviceKeyFromCryptoKey,
   exportDeviceKey,
   importDeviceKey,
   rescueKey,

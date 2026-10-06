@@ -26,7 +26,8 @@
     "infra:up": "docker compose -f infra/docker-compose.yml --env-file .env up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml --env-file .env down",
     "test:sync-core": "npm run typecheck --workspace=@ddv4/sync-core && npm run test --workspace=@ddv4/sync-core",
-    "test:metadata-client": "npm run typecheck --workspace=@ddv4/metadata-client && npm run test --workspace=@ddv4/metadata-client"
+    "test:metadata-client": "npm run typecheck --workspace=@ddv4/metadata-client && npm run test --workspace=@ddv4/metadata-client",
+    "check:web-mo": "npm run check --workspace=@ddv4/web-mo"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

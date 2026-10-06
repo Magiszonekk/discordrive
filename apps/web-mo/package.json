@@ -1,0 +1,15 @@
+{
+  "name": "@ddv4/web-mo",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "discordrive-next metadata-only browser client (stage 2). Logic and wiring only; the look comes from the frontend profile.",
+  "scripts": {
+    "build": "tsx build.ts",
+    "check": "tsx check.ts"
+  },
+  "dependencies": {
+    "@ddv4/metadata-client": "*",
+    "@ddv4/sync-core": "*"
+  }
+}

@@ -43,6 +43,13 @@ async function fromPrivate(priv: CryptoKey, publicRaw: Uint8Array): Promise<Devi
   };
 }
 
+/** Rebuild a DeviceKey from a stored (non-extractable) CryptoKey, e.g. from IndexedDB. */
+export async function deviceKeyFromCryptoKey(privateKey: CryptoKey, publicKey: string): Promise<DeviceKey> {
+  const k = await fromPrivate(privateKey, unb64u(publicKey));
+  if (!(await verifySignature(publicKey, "ddn-selftest", await k.sign("ddn-selftest")))) throw new Error("device key: public key does not match");
+  return k;
+}
+
 /**
  * New device key. `extractable: false` (browser: keep the CryptoKey in
  * IndexedDB, the private bytes never reach JS); CLI uses true to store PKCS#8 in a 0600 file.

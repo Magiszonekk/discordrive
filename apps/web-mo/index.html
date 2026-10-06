@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>discordrive-next (metadata only)</title>
+</head>
+<body>
+<p data-ddn="status"></p>
+<section data-ddn="signed-out">
+  <h1>Nowe konto</h1>
+  <label>Serwer <input data-ddn="server"></label>
+  <label>Nazwa urządzenia <input data-ddn="device-name" placeholder="laptop"></label>
+  <button data-ddn="create">Załóż konto</button>
+</section>
+<section data-ddn="signed-in" hidden>
+  <h2>Webhooki</h2>
+  <p data-ddn="advice"></p>
+  <input data-ddn="webhook-url" placeholder="URL webhooka" autocomplete="off">
+  <button data-ddn="add-webhook">Dodaj webhook</button>
+  <h2>Pliki</h2>
+  <input data-ddn="folder-name" placeholder="nazwa folderu"> <button data-ddn="mkdir">Nowy folder</button>
+  <input type="file" multiple data-ddn="file">
+  <p data-ddn="count"></p>
+  <ul data-ddn="list"></ul>
+  <button data-ddn="prev">‹</button> <button data-ddn="next">›</button>
+  <video data-ddn="player" controls muted></video>
+  <h2>Nowe urządzenie</h2>
+  <input data-ddn="pair-code" placeholder="kod ddn-pair1:…"> <button data-ddn="pair">Sparuj</button>
+  <p data-ddn="pair-sas"></p>
+</section>
+<script type="module" src="./ui.js"></script>
+</body>
+</html>
