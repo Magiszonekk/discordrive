@@ -269,3 +269,19 @@ describe("sequencer restart from a persisted log", () => {
     expect(() => new Sequencer({ initialLog: s1.read(1) })).toThrow(/contiguous/);
   });
 });
+
+describe("replica with an async arbiter", () => {
+  it("pushOneAsync acks like pushOne and the entry arrives through receive()", async () => {
+    const server = new Sequencer();
+    let n = 0;
+    const r = new Replica({ device: A, newOpId: () => `op-async${String(++n).padStart(4, "0")}` });
+    r.enqueue({ type: "create", kind: "folder", nodeId: "fold-async1", parentId: ROOT_ID, name: "x" });
+    const res = await r.pushOneAsync({ submit: async (env) => server.submit(env) });
+    expect(res?.status).toBe("accepted");
+    expect(r.unsent).toBe(0);
+    expect(r.outbox.length).toBe(1);
+    r.receive(server.read(r.headSeq));
+    expect(r.outbox.length).toBe(0);
+    expect(r.store.getNode("fold-async1")?.name).toBe("x");
+  });
+});

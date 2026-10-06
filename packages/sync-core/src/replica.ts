@@ -118,6 +118,19 @@ export class Replica {
     return r;
   }
 
+  /**
+   * pushOne() for a remote arbiter (HTTP in metadata-only mode). Same
+   * semantics; concurrent calls may send the same op twice, which the server
+   * answers with "duplicate" (rule 9).
+   */
+  async pushOneAsync(server: { submit(env: OpEnvelope): Promise<SubmitResult> }): Promise<SubmitResult | null> {
+    const env = this.nextToSend();
+    if (!env) return null;
+    const r = await server.submit(env);
+    if (r.status === "accepted" || r.status === "duplicate") this.acked.add(env.opId);
+    return r;
+  }
+
   /** The envelope pushOne() would send next (oldest not yet acknowledged). */
   nextToSend(): OpEnvelope | undefined {
     return this.outbox.find((o) => !this.acked.has(o.opId));
