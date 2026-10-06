@@ -41,16 +41,22 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   zaszyfrowanego logu (Sequencer per konto, duplikaty, wersja reguł, dzierżawy względem
   urządzenia z sesji), sejf (CAS), urządzenia (dodanie, odwołanie), long-poll
   `GET /v1/log?wait=`. Przyjmuje tylko jawne pola z §3.3 (inne pola koperty = 400).
-  Klient: `HttpApi` (fetch, Node + przeglądarka). Uwierzytelnianie za interfejsem; na razie
-  token per urządzenie (hash w bazie), docelowy wariant czeka na decyzję (#13).
+  Klient: `HttpApi` (fetch, Node + przeglądarka).
+- **Logowanie urządzeń** (decyzja #13, `device-key.ts`, `node/auth.ts`): para Ed25519 na
+  urządzenie, serwer zna tylko klucze publiczne. Logowanie = podpis jednorazowego wyzwania
+  (2 min, kasowane przy pierwszym użyciu, związane z instancją serwera) → token sesji (1 h,
+  w bazie tylko SHA-256). Parowanie dopisuje klucz nowego urządzenia podpisem zalogowanego
+  urządzenia; zestaw ratunkowy rejestruje urządzenie kluczem ratunkowym Ed25519 wyprowadzonym
+  z klucza konta (HKDF `ddn-rescue-ed25519-v1`); odwołanie (podpisane) kasuje klucz i sesje.
+  W przeglądarce klucz prywatny jest nieeksportowalny.
 - **Polityki klienta** (`policies.ts`, README sync-core „etap 2”): Q4 `decideTrashCleanup`
   (główne urządzenie; inne po 7 dniach bez czyszczenia; tylko zsynchronizowane, nie na
   łączu taryfowym; grupa purge, Q9), Q10 licznik `invalid_op` per urządzenie z jednym
   komunikatem po 5, Q5 ostrzeżenie o cudzej nazwie nie-NFC. `MetadataClient.observer`
   zasilany przy każdym `pull`.
 - **Parowanie urządzeń** (§3.8, `pairing.ts`): kod/QR `ddn-pair1:` z efemerycznym kluczem
-  ECDH P-256 nowego urządzenia; stare urządzenie szyfruje do niego klucz konta i
-  poświadczenie urządzenia, serwer przekazuje jedną nieczytelną wiadomość (skrzynka
+  ECDH P-256 i kluczem publicznym Ed25519 nowego urządzenia; stare urządzenie rejestruje ten
+  klucz swoim podpisem i szyfruje do nowego urządzenia klucz konta, serwer przekazuje jedną nieczytelną wiadomość (skrzynka
   jednorazowa, 10 min). Obie strony pokazują 6-cyfrowy kod (SAS): podmiana klucza przez
   serwer daje różne kody, a klucza konta serwer nie zobaczy w żadnym wariancie.
 - **CLI** `ddn init | webhook add|ls|rm | put | get | ls`. Katalog stanu 0700, pliki 0600;

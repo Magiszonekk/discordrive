@@ -8,15 +8,17 @@
 // GET /v1/log?wait=<s> (a websocket can replace it without touching clients'
 // EncryptedLogApi).
 //
-// Auth is behind `Authenticator`. Until the owner decides §8.4 (ask-owner #13)
-// it is a random bearer token per device, stored as SHA-256.
+// Auth is behind `Authenticator` (auth.ts): Ed25519 key per device, sign-in by
+// signing a one-shot challenge, short session tokens (decision #13).
 
-import { createHash, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { RULES_VERSION, Sequencer, isClientId } from "@ddv4/sync-core";
 import type { EncryptedEntry, EncryptedEnvelope } from "../op-crypto.js";
 import { PAIRING_TTL_MS } from "../pairing.js";
+import { AuthError, Ed25519Authenticator, type Authenticator, type Session } from "./auth.js";
+
+export type { Authenticator, Session };
 
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 export const MAX_PAYLOAD_B64 = 1024 * 1024;
@@ -33,18 +35,8 @@ export interface ServerOptions {
   openSignup?: boolean;
   /** Browser origins allowed via CORS (exact match). Default: none. */
   corsOrigins?: string[];
-}
-
-export interface Session {
-  accountId: string;
-  deviceId: string;
-}
-
-/** Pluggable authentication (§8.4 pending). */
-export interface Authenticator {
-  /** Credential for a new device. */
-  issue(accountId: string, deviceId: string): string;
-  verify(header: string | undefined): Session | null;
+  /** Session token lifetime (default 1 h). */
+  sessionTtlMs?: number;
 }
 
 class HttpError extends Error {
@@ -56,15 +48,13 @@ class HttpError extends Error {
   }
 }
 
-const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
-const rid = (prefix: string) => `${prefix}-${randomBytes(16).toString("base64url")}`;
 
 export class DdnServer {
   readonly db: DatabaseSync;
   private readonly seqs = new Map<string, Sequencer<EncryptedEnvelope>>();
   private readonly waiters = new Map<string, Set<() => void>>();
   private readonly now: () => number;
-  readonly auth: Authenticator;
+  readonly auth: Ed25519Authenticator;
   private http: Server | null = null;
 
   constructor(private readonly opts: ServerOptions = {}) {
@@ -72,32 +62,13 @@ export class DdnServer {
     this.db = new DatabaseSync(opts.dbPath ?? ":memory:");
     this.db.exec(`
       PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS devices (
-        id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id),
-        token_hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS log (
         account_id TEXT NOT NULL, seq INTEGER NOT NULL, op_id TEXT NOT NULL, entry TEXT NOT NULL,
         PRIMARY KEY (account_id, seq), UNIQUE (account_id, op_id));
       CREATE TABLE IF NOT EXISTS vault (account_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, blob TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS pairing (id TEXT PRIMARY KEY, msg TEXT NOT NULL, created_at INTEGER NOT NULL);
     `);
-    const db = this.db;
-    this.auth = {
-      issue(accountId, deviceId) {
-        const token = `ddt_${randomBytes(32).toString("base64url")}`;
-        db.prepare("INSERT INTO devices (id, account_id, token_hash, created_at) VALUES (?, ?, ?, ?)").run(deviceId, accountId, sha256(token), Date.now());
-        return token;
-      },
-      verify(header) {
-        const m = /^Bearer (ddt_[A-Za-z0-9_-]{20,})$/.exec(header ?? "");
-        if (!m) return null;
-        const r = db.prepare("SELECT id, account_id FROM devices WHERE token_hash = ? AND revoked = 0").get(sha256(m[1]!)) as
-          | { id: string; account_id: string }
-          | undefined;
-        return r ? { accountId: r.account_id, deviceId: r.id } : null;
-      },
-    };
+    this.auth = new Ed25519Authenticator(this.db, this.now, opts.sessionTtlMs);
   }
 
   private seq(accountId: string): Sequencer<EncryptedEnvelope> {
@@ -117,23 +88,6 @@ export class DdnServer {
   }
 
   // --- API (also callable in-process)
-
-  createAccount(): { accountId: string; deviceId: string; token: string } {
-    const accountId = rid("acct");
-    const deviceId = rid("dev");
-    this.db.prepare("INSERT INTO accounts (id, created_at) VALUES (?, ?)").run(accountId, this.now());
-    return { accountId, deviceId, token: this.auth.issue(accountId, deviceId) };
-  }
-
-  /** Register another device of the same account (pairing, §3.8, will authorise this). */
-  addDevice(s: Session): { deviceId: string; token: string } {
-    const deviceId = rid("dev");
-    return { deviceId, token: this.auth.issue(s.accountId, deviceId) };
-  }
-
-  revokeDevice(s: Session, deviceId: string): void {
-    this.db.prepare("UPDATE devices SET revoked = 1 WHERE id = ? AND account_id = ?").run(deviceId, s.accountId);
-  }
 
   submit(s: Session, body: unknown) {
     const env = validateEnvelope(body);
@@ -224,8 +178,8 @@ export class DdnServer {
   async listen(port = 0, host = "127.0.0.1"): Promise<{ url: string; port: number }> {
     this.http = createServer((req, res) => {
       this.handle(req, res).catch((e: unknown) => {
-        const he = e instanceof HttpError ? e : new HttpError(500, "internal");
-        if (!(e instanceof HttpError)) console.error("ddn-server:", (e as Error)?.message);
+        const he = e instanceof HttpError ? e : e instanceof AuthError ? new HttpError(e.status, e.code) : new HttpError(500, "internal");
+        if (!(e instanceof HttpError) && !(e instanceof AuthError)) console.error("ddn-server:", (e as Error)?.message);
         send(res, he.status, { error: he.code });
       });
     });
@@ -259,9 +213,12 @@ export class DdnServer {
     const path = url.pathname;
     const method = req.method ?? "GET";
 
+    if (method === "POST" && path === "/v1/auth/challenge") return send(res, 200, this.auth.challenge());
+    if (method === "POST" && path === "/v1/auth/login") return send(res, 200, await this.auth.login(await readJson(req)));
+    if (method === "POST" && path === "/v1/auth/rescue-device") return send(res, 201, await this.auth.rescueAddDevice(await readJson(req)));
     if (method === "POST" && path === "/v1/accounts") {
       if (this.opts.openSignup === false) throw new HttpError(403, "signup_closed");
-      return send(res, 201, this.createAccount());
+      return send(res, 201, await this.auth.createAccount(await readJson(req)));
     }
     if (method === "GET" && path === "/v1/health") return send(res, 200, { ok: true, rulesVersion: RULES_VERSION });
     const pair = /^\/v1\/pairing\/([A-Za-z0-9_-]{22})$/.exec(path);
@@ -295,10 +252,14 @@ export class DdnServer {
         return send(res, r.status === "ok" ? 200 : 409, r);
       }
     }
-    if (method === "POST" && path === "/v1/devices") return send(res, 201, this.addDevice(s));
+    if (method === "POST" && path === "/v1/devices") return send(res, 201, await this.auth.addDevice(s, await readJson(req)));
+    if (method === "GET" && path === "/v1/devices") return send(res, 200, { devices: this.auth.listDevices(s) });
     if (pair && method === "PUT") return (this.pairingPut(s, pair[1]!, await readJson(req)), send(res, 201, { ok: true }));
     const dev = /^\/v1\/devices\/([A-Za-z0-9_-]{4,80})$/.exec(path);
-    if (dev && method === "DELETE") return (this.revokeDevice(s, dev[1]!), send(res, 200, { ok: true }));
+    if (dev && method === "POST" && url.searchParams.get("action") === "revoke") {
+      await this.auth.revokeDevice(s, dev[1]!, await readJson(req));
+      return send(res, 200, { ok: true });
+    }
     throw new HttpError(404, "not_found");
   }
 }

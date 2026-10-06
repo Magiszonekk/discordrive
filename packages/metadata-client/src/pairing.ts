@@ -14,12 +14,14 @@
 //     codes would differ. It can never obtain the account key: that is sealed
 //     to pubN, which only travelled through the QR code.
 //
-// Device credential: whatever the server's Authenticator issues for the new
-// device (token now; with per-device signing keys, ask-owner #13, N would put
-// its public key into the offer and E registers it instead).
+// Device credential (decision #13): N puts its Ed25519 public key into the
+// offer; E registers it on the server with its own signature (HttpApi.addDevice)
+// and sends back the resulting deviceId. N's private key never leaves N. The
+// key is covered by the SAS too (it is part of the HKDF transcript).
 
 import { fromBase64, toBase64 } from "@ddv4/processing";
 import { accountKeyFromB64, type AccountKey } from "./account-key.js";
+import { isPublicKey } from "./device-key.js";
 
 export const PAIRING_TTL_MS = 10 * 60_000;
 const OFFER_PREFIX = "ddn-pair1:";
@@ -37,8 +39,8 @@ export interface PairingBundle {
   accountId: string;
   /** Account key, base64. Secret. */
   accountKey: string;
-  /** Credential for the new device (server auth). Secret. */
-  deviceCredential: { deviceId: string; token: string };
+  /** Server identity of the new device (its public key was registered by the sender). */
+  deviceCredential: { deviceId: string };
   /** Display name of the device that paired it. */
   fromDevice: string;
 }
@@ -74,10 +76,10 @@ async function importPub(raw: Uint8Array): Promise<CryptoKey> {
   return crypto.subtle.importKey("raw", raw as BufferSource, ECDH, false, []);
 }
 
-async function deriveKeys(priv: CryptoKey, peer: CryptoKey, pairingId: string, pubN: Uint8Array, pubE: Uint8Array): Promise<{ aes: CryptoKey; sas: string }> {
+async function deriveKeys(priv: CryptoKey, peer: CryptoKey, pairingId: string, pubN: Uint8Array, pubE: Uint8Array, signPub: string): Promise<{ aes: CryptoKey; sas: string }> {
   const bits = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: peer }, priv, 256));
   const base = await crypto.subtle.importKey("raw", bits, "HKDF", false, ["deriveKey", "deriveBits"]);
-  const info = (label: string) => enc.encode(`ddn-pair-v1|${label}|${pairingId}|${b64u(pubN)}|${b64u(pubE)}`);
+  const info = (label: string) => enc.encode(`ddn-pair-v2|${label}|${pairingId}|${b64u(pubN)}|${b64u(pubE)}|${signPub}`);
   const aes = await crypto.subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: new Uint8Array(), info: info("key") }, base, { name: "AES-GCM", length: 256 }, false, [
     "encrypt",
     "decrypt",
@@ -95,19 +97,20 @@ export interface PendingPairing {
   complete(mailbox: PairingMailbox): Promise<{ bundle: PairingBundle; key: AccountKey; sas: string } | null>;
 }
 
-/** Step 1 (new device). */
-export async function startPairing(): Promise<PendingPairing> {
+/** Step 1 (new device). `devicePublicKey`: the new device's Ed25519 public key (DeviceKey.publicKey). */
+export async function startPairing(devicePublicKey: string): Promise<PendingPairing> {
+  if (!isPublicKey(devicePublicKey)) throw new Error("bad device public key");
   const kp = (await crypto.subtle.generateKey(ECDH, false, ["deriveBits"])) as CryptoKeyPair;
   const pubN = await exportPub(kp.publicKey);
   const pairingId = b64u(crypto.getRandomValues(new Uint8Array(16)));
   return {
     pairingId,
-    offer: `${OFFER_PREFIX}${pairingId}.${b64u(pubN)}`,
+    offer: `${OFFER_PREFIX}${pairingId}.${b64u(pubN)}.${devicePublicKey}`,
     async complete(mailbox) {
       const msg = await mailbox.take(pairingId);
       if (!msg) return null;
       const pubE = unb64u(msg.pub);
-      const { aes, sas } = await deriveKeys(kp.privateKey, await importPub(pubE), pairingId, pubN, pubE);
+      const { aes, sas } = await deriveKeys(kp.privateKey, await importPub(pubE), pairingId, pubN, pubE, devicePublicKey);
       const sealed = unb64u(msg.sealed);
       let plain: Uint8Array;
       try {
@@ -116,32 +119,43 @@ export async function startPairing(): Promise<PendingPairing> {
         throw new Error("pairing message does not decrypt (wrong offer or tampered)");
       }
       const bundle = JSON.parse(new TextDecoder().decode(plain)) as PairingBundle;
-      if (bundle.v !== 1 || !bundle.accountId || !bundle.accountKey || !bundle.deviceCredential?.token) throw new Error("bad pairing bundle");
+      if (bundle.v !== 1 || !bundle.accountId || !bundle.accountKey || !bundle.deviceCredential?.deviceId) throw new Error("bad pairing bundle");
       return { bundle, key: accountKeyFromB64(bundle.accountKey), sas };
     },
   };
 }
 
-export function parseOffer(offer: string): { pairingId: string; pubN: Uint8Array } {
+export function parseOffer(offer: string): { pairingId: string; pubN: Uint8Array; devicePublicKey: string } {
   const t = offer.trim();
   if (!t.startsWith(OFFER_PREFIX)) throw new Error("not a pairing code");
-  const [pairingId, pub] = t.slice(OFFER_PREFIX.length).split(".");
-  if (!pairingId || !/^[A-Za-z0-9_-]{22}$/.test(pairingId) || !pub) throw new Error("bad pairing code");
-  return { pairingId, pubN: unb64u(pub) };
+  const [pairingId, pub, signPub, ...rest] = t.slice(OFFER_PREFIX.length).split(".");
+  if (!pairingId || !/^[A-Za-z0-9_-]{22}$/.test(pairingId) || !pub || !isPublicKey(signPub) || rest.length) throw new Error("bad pairing code");
+  return { pairingId, pubN: unb64u(pub), devicePublicKey: signPub };
 }
 
-/** Step 2 (existing device). Returns the SAS code to show next to the new device's. */
-export async function acceptPairing(offer: string, bundle: Omit<PairingBundle, "v">, mailbox: PairingMailbox): Promise<{ sas: string }> {
-  const { pairingId, pubN } = parseOffer(offer);
+/**
+ * Step 2 (existing device). `register` adds the new device's public key on
+ * the server (HttpApi.addDevice, signed by this device) and returns its ID.
+ * Returns the SAS code to show next to the new device's.
+ */
+export async function acceptPairing(
+  offer: string,
+  bundle: Omit<PairingBundle, "v" | "deviceCredential">,
+  register: (devicePublicKey: string) => Promise<{ deviceId: string }>,
+  mailbox: PairingMailbox,
+): Promise<{ sas: string; deviceId: string }> {
+  const { pairingId, pubN, devicePublicKey } = parseOffer(offer);
   const peer = await importPub(pubN);
   const kp = (await crypto.subtle.generateKey(ECDH, false, ["deriveBits"])) as CryptoKeyPair;
   const pubE = await exportPub(kp.publicKey);
-  const { aes, sas } = await deriveKeys(kp.privateKey, peer, pairingId, pubN, pubE);
+  const { aes, sas } = await deriveKeys(kp.privateKey, peer, pairingId, pubN, pubE, devicePublicKey);
+  const { deviceId } = await register(devicePublicKey);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aes, enc.encode(JSON.stringify({ v: 1, ...bundle }))));
+  const full: PairingBundle = { v: 1, ...bundle, deviceCredential: { deviceId } };
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aes, enc.encode(JSON.stringify(full))));
   const sealed = new Uint8Array(12 + ct.byteLength);
   sealed.set(iv);
   sealed.set(ct, 12);
   await mailbox.put(pairingId, { pub: b64u(pubE), sealed: b64u(sealed) });
-  return { sas };
+  return { sas, deviceId };
 }

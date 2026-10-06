@@ -107,7 +107,19 @@ export {
   type SnapshotDeps,
   type SnapshotResult,
 } from "./snapshots.js";
-export { HttpApi, HttpPairingMailbox, ServerError, createAccountHttp, type HttpSession } from "./http-api.js";
+export { HttpApi, HttpPairingMailbox, ServerError, createAccountHttp, getChallenge, rescueRegisterDevice, type HttpSession } from "./http-api.js";
+export {
+  generateDeviceKey,
+  exportDeviceKey,
+  importDeviceKey,
+  rescueKey,
+  verifySignature,
+  authMessage,
+  isPublicKey,
+  isSignature,
+  type Challenge,
+  type DeviceKey,
+} from "./device-key.js";
 export {
   LogObserver,
   decideTrashCleanup,

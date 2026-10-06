@@ -1,9 +1,15 @@
 // HTTP client for the metadata-only server (fetch; Node + browser).
 // Implements the client-side interfaces, so MetadataClient / WebhookVault do
 // not know whether the server is in-process or remote.
+//
+// Sign-in (decision #13): the device key signs a one-shot server challenge
+// and gets a short session token. HttpApi signs in lazily and once more when
+// the session has expired (401), so callers never handle tokens.
 
 import { fromBase64, toBase64 } from "@ddv4/processing";
 import type { SubmitResult } from "@ddv4/sync-core";
+import type { AccountKey } from "./account-key.js";
+import { authMessage, rescueKey, type Challenge, type DeviceKey } from "./device-key.js";
 import type { EncryptedEntry, EncryptedEnvelope, EncryptedLogApi } from "./op-crypto.js";
 import type { SealedVault, VaultPutResult, VaultStore } from "./vault.js";
 
@@ -17,34 +23,131 @@ export class ServerError extends Error {
   }
 }
 
-export interface HttpSession {
-  baseUrl: string;
-  /** Device credential. Secret. */
-  token: string;
-  fetch?: typeof fetch;
+const defaultFetch: typeof fetch = (...a) => fetch(...a);
+
+async function post<T>(f: typeof fetch, url: string, body: unknown, token?: string): Promise<T> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (token) headers.authorization = "Bearer " + token;
+  const r = await f(url, { method: "POST", headers, body: JSON.stringify(body) });
+  const j = (await r.json().catch(() => ({}))) as T & { error?: string };
+  if (!r.ok) throw new ServerError(r.status, j.error ?? "?");
+  return j;
 }
 
-export async function createAccountHttp(baseUrl: string, f: typeof fetch = fetch): Promise<{ accountId: string; deviceId: string; token: string }> {
-  const r = await f(`${baseUrl}/v1/accounts`, { method: "POST" });
-  if (!r.ok) throw new ServerError(r.status, ((await r.json().catch(() => ({}))) as { error?: string }).error ?? "?");
-  return (await r.json()) as { accountId: string; deviceId: string; token: string };
+/** Ask for a challenge and check it is for the expected server instance (if pinned). */
+export async function getChallenge(baseUrl: string, f: typeof fetch = defaultFetch, instanceId?: string): Promise<Challenge> {
+  const c = await post<Challenge>(f, `${baseUrl}/v1/auth/challenge`, {});
+  if (instanceId && c.instanceId !== instanceId) throw new Error("challenge from another server instance");
+  return c;
+}
+
+/**
+ * New account: registers this device's public key and the rescue public key
+ * (derived from the account key), both proving possession by signing.
+ */
+export async function createAccountHttp(
+  baseUrl: string,
+  device: DeviceKey,
+  account: AccountKey,
+  f: typeof fetch = defaultFetch,
+): Promise<{ accountId: string; deviceId: string; instanceId: string }> {
+  const c = await getChallenge(baseUrl, f);
+  const rk = await rescueKey(account);
+  const msg = authMessage.createAccount(c, device.publicKey, rk.publicKey);
+  const r = await post<{ accountId: string; deviceId: string }>(f, `${baseUrl}/v1/accounts`, {
+    challengeId: c.challengeId,
+    devicePublicKey: device.publicKey,
+    rescuePublicKey: rk.publicKey,
+    deviceSignature: await device.sign(msg),
+    rescueSignature: await rk.sign(msg),
+  });
+  return { ...r, instanceId: c.instanceId };
+}
+
+/** Rescue kit (§3.5): register a new device with the rescue key, no other device needed. */
+export async function rescueRegisterDevice(
+  baseUrl: string,
+  account: AccountKey,
+  accountId: string,
+  device: DeviceKey,
+  f: typeof fetch = defaultFetch,
+): Promise<{ deviceId: string }> {
+  const c = await getChallenge(baseUrl, f);
+  const rk = await rescueKey(account);
+  return post<{ deviceId: string }>(f, `${baseUrl}/v1/auth/rescue-device`, {
+    challengeId: c.challengeId,
+    accountId,
+    devicePublicKey: device.publicKey,
+    signature: await rk.sign(authMessage.rescueAddDevice(c, accountId, device.publicKey)),
+  });
+}
+
+export interface HttpSession {
+  baseUrl: string;
+  accountId: string;
+  deviceId: string;
+  /** This device's signing key (secret part stays inside). */
+  key: DeviceKey;
+  /** Pin the server instance (refuse challenges of another one). */
+  instanceId?: string;
+  fetch?: typeof fetch;
 }
 
 export class HttpApi implements EncryptedLogApi, VaultStore {
   private readonly f: typeof fetch;
-  constructor(private readonly s: HttpSession) {
-    this.f = s.fetch ?? ((...a) => fetch(...a));
+  private token: string | null = null;
+  private tokenExpiresAt = 0;
+  private signingIn: Promise<string> | null = null;
+  /** Number of successful sign-ins (tests, diagnostics). */
+  logins = 0;
+
+  constructor(readonly s: HttpSession) {
+    this.f = s.fetch ?? defaultFetch;
+  }
+
+  get baseUrl(): string {
+    return this.s.baseUrl;
+  }
+
+  private challenge(): Promise<Challenge> {
+    return getChallenge(this.s.baseUrl, this.f, this.s.instanceId);
+  }
+
+  /** Sign in (or reuse a valid session). Concurrent callers share one sign-in. */
+  async session(force = false): Promise<string> {
+    if (!force && this.token && Date.now() < this.tokenExpiresAt - 30_000) return this.token;
+    if (!this.signingIn) {
+      this.signingIn = (async () => {
+        const c = await this.challenge();
+        const t0 = Date.now();
+        const r = await post<{ token: string; expiresAt: number; ttlMs: number }>(this.f, `${this.s.baseUrl}/v1/auth/login`, {
+          challengeId: c.challengeId,
+          accountId: this.s.accountId,
+          deviceId: this.s.deviceId,
+          signature: await this.s.key.sign(authMessage.login(c, this.s.accountId, this.s.deviceId)),
+        });
+        this.token = r.token;
+        // Own clock + server TTL: a skewed device clock must not make sessions look expired or eternal.
+        this.tokenExpiresAt = t0 + r.ttlMs;
+        this.logins++;
+        return r.token;
+      })().finally(() => (this.signingIn = null));
+    }
+    return this.signingIn;
   }
 
   private async call<T>(method: string, path: string, body?: unknown, okStatuses: number[] = []): Promise<{ status: number; body: T }> {
-    const r = await this.f(`${this.s.baseUrl}${path}`, {
-      method,
-      headers: { authorization: `Bearer ${this.s.token}`, ...(body !== undefined ? { "content-type": "application/json" } : {}) },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    });
-    const j = (await r.json().catch(() => ({}))) as T & { error?: string };
-    if (!r.ok && !okStatuses.includes(r.status)) throw new ServerError(r.status, j.error ?? "?");
-    return { status: r.status, body: j };
+    for (let attempt = 0; ; attempt++) {
+      const token = await this.session(attempt > 0);
+      const headers: Record<string, string> = { authorization: "Bearer " + token };
+      if (body !== undefined) headers["content-type"] = "application/json";
+      const r = await this.f(`${this.s.baseUrl}${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+      const j = (await r.json().catch(() => ({}))) as T & { error?: string };
+      // Expired/unknown session: sign in again once.
+      if (r.status === 401 && j.error === "unauthorized" && attempt === 0) continue;
+      if (!r.ok && !okStatuses.includes(r.status)) throw new ServerError(r.status, j.error ?? "?");
+      return { status: r.status, body: j };
+    }
   }
 
   async submit(env: EncryptedEnvelope): Promise<SubmitResult<EncryptedEnvelope>> {
@@ -84,11 +187,34 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     return { status: "conflict", current: c ? { revision: c.revision, blob: fromBase64(c.blob) } : null };
   }
 
-  async addDevice(): Promise<{ deviceId: string; token: string }> {
-    return (await this.call<{ deviceId: string; token: string }>("POST", "/v1/devices")).body;
+  /** Pairing (§3.8): this signed-in device vouches for the new device's public key. */
+  async addDevice(newDevicePublicKey: string): Promise<{ deviceId: string }> {
+    const c = await this.challenge();
+    return (
+      await this.call<{ deviceId: string }>("POST", "/v1/devices", {
+        challengeId: c.challengeId,
+        devicePublicKey: newDevicePublicKey,
+        signature: await this.s.key.sign(authMessage.addDevice(c, this.s.accountId, newDevicePublicKey)),
+      })
+    ).body;
   }
+
+  async listDevices(): Promise<{ deviceId: string; publicKey: string; createdAt: number }[]> {
+    return (await this.call<{ devices: { deviceId: string; publicKey: string; createdAt: number }[] }>("GET", "/v1/devices")).body.devices;
+  }
+
+  /** Revoke = delete its public key and sessions (signed by this device). */
   async revokeDevice(deviceId: string): Promise<void> {
-    await this.call("DELETE", `/v1/devices/${deviceId}`);
+    const c = await this.challenge();
+    await this.call("POST", `/v1/devices/${deviceId}?action=revoke`, {
+      challengeId: c.challengeId,
+      signature: await this.s.key.sign(authMessage.revokeDevice(c, this.s.accountId, deviceId)),
+    });
+  }
+
+  /** Pairing mailbox bound to this device's session. */
+  pairingMailbox(): HttpPairingMailbox {
+    return new HttpPairingMailbox(this.s.baseUrl, () => this.session(), this.f);
   }
 }
 
@@ -97,16 +223,16 @@ export class HttpPairingMailbox {
   private readonly f: typeof fetch;
   constructor(
     private readonly baseUrl: string,
-    private readonly token: string | null,
+    private readonly token: (() => Promise<string>) | null,
     f?: typeof fetch,
   ) {
-    this.f = f ?? ((...a) => fetch(...a));
+    this.f = f ?? defaultFetch;
   }
   async put(pairingId: string, msg: { pub: string; sealed: string }): Promise<void> {
     if (!this.token) throw new Error("pairing put needs a signed-in device");
     const r = await this.f(`${this.baseUrl}/v1/pairing/${pairingId}`, {
       method: "PUT",
-      headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
+      headers: { authorization: "Bearer " + (await this.token()), "content-type": "application/json" },
       body: JSON.stringify(msg),
     });
     if (!r.ok) throw new ServerError(r.status, ((await r.json().catch(() => ({}))) as { error?: string }).error ?? "?");

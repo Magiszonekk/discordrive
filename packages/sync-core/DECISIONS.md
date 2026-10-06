@@ -142,3 +142,21 @@ Deterministyczne no-op z `invalid_op`, nie blokuje logu. Etap 2 (klient): liczni
 
 ## Q11
 Nieaktualne (poprawione w koncepcie wcześniej).
+
+## Etap 2 (metadata only, `@ddv4/metadata-client`)
+
+### #12 (2026-10-06): kanały z webhookami przy zakładaniu konta
+Limit zapytań Discorda jest na kanał (~30 wiadomości/min, koncept §7). Kreator wymaga
+1 kanału z webhookiem i zachęca do 3–4. Klient rozkłada fragmenty po kanałach z sejfu, z
+osobnym limiterem na kanał (`ChannelPacer`, `vaultAdvice`).
+
+### #13 (2026-10-06): logowanie urządzeń
+Para Ed25519 na urządzenie; serwer trzyma tylko klucze publiczne. Logowanie = podpis
+losowego, jednorazowego wyzwania → krótki token sesji. Parowanie dopisuje klucz publiczny
+nowego urządzenia podpisem już zalogowanego. Zestaw ratunkowy rejestruje nowe urządzenie
+kluczem ratunkowym wyprowadzonym z klucza konta (część publiczna znana serwerowi od
+założenia konta). Odwołanie = usunięcie klucza publicznego (i sesji). Szczegóły
+wykonawcze (rozstrzygnięte samodzielnie): wyzwanie 2 min, sesja 1 h, każda wiadomość do
+podpisu zawiera cel, ID instancji serwera i wyzwanie; odwołanie i dodanie urządzenia
+wymagają świeżego podpisu, sama sesja nie wystarcza.
+

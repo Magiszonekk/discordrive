@@ -1,7 +1,9 @@
 // The metadata-only client in a real browser engine (koncept §4.1: browser +
 // CLI are the MVP clients). Bundles src/index.ts for the browser (fails if
 // anything Node-only leaks in), then in headless Chromium:
-//   account over HTTP (Node server on 127.0.0.1, CORS for this origin only),
+//   Ed25519 device key generated in the page (non-extractable), account
+//   creation + sign-in by signed challenge over HTTP (Node server on
+//   127.0.0.1, CORS for this origin only),
 //   sealed vault, upload (WebCrypto, hash-wasm) to an in-page fake Discord,
 //   encrypted log over HTTP, download + SHA-256 check, snapshot + restore,
 //   and pairing of a Node device by the browser device (SAS must match).
@@ -11,7 +13,7 @@ import { chromium } from "playwright";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { EncryptedArbiter, HttpApi, HttpPairingMailbox, MemoryTransport, MetadataClient, OpCodec, startPairing } from "../../src/index.js";
+import { EncryptedArbiter, HttpApi, HttpPairingMailbox, MemoryTransport, MetadataClient, OpCodec, generateDeviceKey, startPairing } from "../../src/index.js";
 import { DdnServer } from "../../src/node/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -43,14 +45,17 @@ try {
   // serialized as text and needs that helper in the page too.
   await p.addScriptTag({ content: "window.__name = (f) => f;" });
   await p.addScriptTag({ content: code });
-  const pending = await startPairing();
+  const nodeKey = await generateDeviceKey();
+  const pending = await startPairing(nodeKey.publicKey);
 
   const r = await p.evaluate(
     async ({ api, offer }) => {
       const D = (globalThis as unknown as { DDN: typeof import("../../src/index.js") }).DDN;
-      const acct = await D.createAccountHttp(api);
-      const http = new D.HttpApi({ baseUrl: api, token: acct.token });
       const key = D.newAccountKey();
+      const dk = await D.generateDeviceKey(false);
+      const extractable = dk.privateKey.extractable;
+      const acct = await D.createAccountHttp(api, dk, key);
+      const http = new D.HttpApi({ baseUrl: api, accountId: acct.accountId, deviceId: acct.deviceId, key: dk, instanceId: acct.instanceId });
       const vault = new D.WebhookVault(http, key, acct.accountId);
       const hook = { id: "666666666666666666", url: "https://discord.com/api/webhooks/666666666666666666/" + "B".repeat(68) };
       await vault.addWebhook({ ...hook, channelId: "chan-b", guildId: null, label: "b", addedAt: 1 });
@@ -77,9 +82,13 @@ try {
       await D.writeSnapshot({ io, key, accountId: acct.accountId, pointer: loc, log: http, store: c.store, now: () => Date.now() }, "base");
       const restored = await D.restoreFromDiscord(io, key, acct.accountId, loc);
 
-      // Pair a Node device that showed `offer`.
-      const cred = await http.addDevice();
-      const { sas } = await D.acceptPairing(offer, { accountId: acct.accountId, accountKey: key.rawB64, deviceCredential: cred, fromDevice: "Chromium" }, new D.HttpPairingMailbox(api, acct.token));
+      // Pair a Node device that showed `offer`: register its public key with our signature.
+      const { sas } = await D.acceptPairing(offer, { accountId: acct.accountId, accountKey: key.rawB64, fromDevice: "Chromium" }, (pub) => http.addDevice(pub), http.pairingMailbox());
+      // Revocation from the browser: add and revoke a throwaway device.
+      const tmp = await D.generateDeviceKey();
+      const t = await http.addDevice(tmp.publicKey);
+      await http.revokeDevice(t.deviceId);
+      const devicesAfter = (await http.listDevices()).length;
 
       return {
         ua: navigator.userAgent,
@@ -90,6 +99,9 @@ try {
         head: c.store.getMeta().headSeq,
         sas,
         hookId: hook.id,
+        extractable,
+        logins: http.logins,
+        devicesAfter,
       };
     },
     { api, offer: pending.offer },
@@ -97,7 +109,7 @@ try {
 
   // Node side: finish pairing, read the same encrypted log, compare state.
   const paired = await pending.complete(new HttpPairingMailbox(api, null));
-  const httpB = new HttpApi({ baseUrl: api, token: paired!.bundle.deviceCredential.token });
+  const httpB = new HttpApi({ baseUrl: api, accountId: paired!.bundle.accountId, deviceId: paired!.bundle.deviceCredential.deviceId, key: nodeKey });
   const b = new MetadataClient({
     device: { id: paired!.bundle.deviceCredential.deviceId, name: "node" },
     arbiter: new EncryptedArbiter(new OpCodec(paired!.key, paired!.bundle.accountId), httpB),
@@ -115,9 +127,22 @@ try {
     nodeSeesFile: nodeFile?.content?.plaintextSha256 === r.sha,
     nodeHead: b.replica.headSeq,
     browserHead: r.head,
+    browserKeyExtractable: r.extractable,
+    browserLogins: r.logins,
+    nodeLogins: httpB.logins,
+    devicesAfterRevoke: r.devicesAfter,
   };
   console.log(JSON.stringify(result));
-  failed = !(result.downloadHashOk && result.snapshotRestoreOk && result.pairingSasMatch && result.nodeSeesFile && result.nodeHead === result.browserHead);
+  failed = !(
+    result.downloadHashOk &&
+    result.snapshotRestoreOk &&
+    result.pairingSasMatch &&
+    result.nodeSeesFile &&
+    result.nodeHead === result.browserHead &&
+    result.browserKeyExtractable === false &&
+    result.nodeLogins === 1 &&
+    result.devicesAfterRevoke === 2
+  );
 } finally {
   await browser.close();
   await srv.close();
