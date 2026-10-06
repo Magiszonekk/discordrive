@@ -48,17 +48,25 @@ async function rateLimitFrom(res: Response): Promise<RateLimitedError> {
 export interface FetchTransportOptions {
   fetch?: typeof fetch;
   timeoutMs?: number;
+  /**
+   * Tests only: send requests for https://discord.com/api/... to this origin
+   * instead (local fake, src/node/fake-discord.ts). Never set in production.
+   */
+  apiOrigin?: string;
 }
 
 export class DiscordWebhookTransport implements WebhookTransport {
   private readonly f: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly apiOrigin?: string;
   constructor(opts: FetchTransportOptions = {}) {
+    this.apiOrigin = opts.apiOrigin;
     this.f = opts.fetch ?? ((...a) => fetch(...a));
     this.timeoutMs = opts.timeoutMs ?? 120_000;
   }
 
   private async req(url: string, init: RequestInit, what: string): Promise<Response> {
+    if (this.apiOrigin) url = url.replace(/^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com/, this.apiOrigin);
     let res: Response;
     try {
       res = await this.f(url, { ...init, signal: AbortSignal.timeout(this.timeoutMs) });
