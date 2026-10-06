@@ -43,6 +43,11 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   `GET /v1/log?wait=`. Przyjmuje tylko jawne pola z §3.3 (inne pola koperty = 400).
   Klient: `HttpApi` (fetch, Node + przeglądarka). Uwierzytelnianie za interfejsem; na razie
   token per urządzenie (hash w bazie), docelowy wariant czeka na decyzję (#13).
+- **Polityki klienta** (`policies.ts`, README sync-core „etap 2”): Q4 `decideTrashCleanup`
+  (główne urządzenie; inne po 7 dniach bez czyszczenia; tylko zsynchronizowane, nie na
+  łączu taryfowym; grupa purge, Q9), Q10 licznik `invalid_op` per urządzenie z jednym
+  komunikatem po 5, Q5 ostrzeżenie o cudzej nazwie nie-NFC. `MetadataClient.observer`
+  zasilany przy każdym `pull`.
 - **CLI** `ddn init | webhook add|ls|rm | put | get | ls`. Katalog stanu 0700, pliki 0600;
   `server/` to dokładnie to, co trzymałby serwer (zaszyfrowany log i sejf), do czasu
   serwera HTTP (krok 6 planu) obsługiwane w procesie.

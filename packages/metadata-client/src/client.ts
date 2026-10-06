@@ -42,6 +42,7 @@ import {
   type FileKey,
 } from "./file-crypto.js";
 import { ChannelPacer } from "./rate-limit.js";
+import { LogObserver, type InvalidOpAlert } from "./policies.js";
 import type { DiscordPlacement, PostedAttachment, WebhookRef, WebhookTransport } from "./types.js";
 
 /** Plaintext fragment size; same as discordrive (10 MiB on the wire incl. 28 B of IV + tag). */
@@ -127,6 +128,8 @@ export interface MetadataClientOptions {
   leaseRenewMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** Q10: called once per device that reached INVALID_OP_WARN_AFTER invalid ops. */
+  onInvalidOps?: (a: InvalidOpAlert) => void;
 }
 
 export interface UploadResult {
@@ -140,6 +143,8 @@ export interface UploadResult {
 export class MetadataClient {
   readonly replica: Replica;
   readonly pacer: ChannelPacer;
+  /** Log-derived facts for client policies (Q4 last purge, Q5 non-NFC names, Q10 invalid ops). */
+  readonly observer = new LogObserver();
   private readonly hooks: Map<string, WebhookRef>;
   private rr = 0;
   private readonly chunkSize: number;
@@ -172,7 +177,14 @@ export class MetadataClient {
     for (;;) {
       const batch = await this.o.arbiter.read(this.replica.headSeq, 1000);
       if (batch.length === 0) return out;
-      out.push(...this.replica.receive(batch));
+      const results = this.replica.receive(batch);
+      const byOp = new Map(batch.map((e) => [e.opId, e]));
+      for (const r of results) {
+        const e = byOp.get(r.opId);
+        const alert = e ? this.observer.observe(e, r) : null;
+        if (alert) this.o.onInvalidOps?.(alert);
+      }
+      out.push(...results);
     }
   }
 

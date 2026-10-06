@@ -108,3 +108,13 @@ export {
   type SnapshotResult,
 } from "./snapshots.js";
 export { HttpApi, ServerError, createAccountHttp, type HttpSession } from "./http-api.js";
+export {
+  LogObserver,
+  decideTrashCleanup,
+  trashCleanupOp,
+  ANY_DEVICE_CLEANS_AFTER_MS,
+  INVALID_OP_WARN_AFTER,
+  type InvalidOpAlert,
+  type TrashCleanupContext,
+  type TrashCleanupDecision,
+} from "./policies.js";
