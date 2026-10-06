@@ -26,6 +26,12 @@ export interface SequencerOptions {
   now?: () => number;
   /** Lease duration for uploads (rule 8), ms. */
   leaseMs?: number;
+  /**
+   * Restore a persisted log (server or local-file restart). Must be contiguous
+   * from seq 1 with unique opIds; leases are not persisted (they are short-lived
+   * and an uploader simply renews).
+   */
+  initialLog?: readonly LogEntry[];
 }
 
 export interface Lease {
@@ -48,6 +54,13 @@ export class Sequencer {
     this.maxRulesVersion = opts.maxRulesVersion ?? RULES_VERSION;
     this.now = opts.now ?? (() => Date.now());
     this.leaseMs = opts.leaseMs ?? 10 * 60_000;
+    for (const e of opts.initialLog ?? []) {
+      if (e.seq !== this.log.length + 1) throw new Error(`initialLog not contiguous at seq ${e.seq}`);
+      if (this.byOpId.has(e.opId)) throw new Error(`initialLog has duplicate opId at seq ${e.seq}`);
+      const entry = structuredCloneSafe(e);
+      this.log.push(entry);
+      this.byOpId.set(entry.opId, entry);
+    }
   }
 
   get headSeq(): number {

@@ -247,3 +247,25 @@ describe("manifest layer (§4.1)", () => {
     expect(loads).toBe(2);
   });
 });
+
+describe("sequencer restart from a persisted log", () => {
+  it("keeps seq numbering and duplicate detection, refuses a gapped log", () => {
+    const s1 = new Sequencer();
+    const env = (opId: string, name: string) => ({
+      opId,
+      rulesVersion: RULES_VERSION,
+      baseSeq: 0,
+      device: A,
+      createdAt: 0,
+      op: { type: "create" as const, kind: "folder" as const, nodeId: `n-${opId}`, parentId: ROOT_ID, name },
+    });
+    s1.submit(env("op-aaaa0001", "a"));
+    s1.submit(env("op-aaaa0002", "b"));
+    const s2 = new Sequencer({ initialLog: s1.read(0) });
+    expect(s2.headSeq).toBe(2);
+    expect(s2.submit(env("op-aaaa0001", "a")).status).toBe("duplicate");
+    const r = s2.submit(env("op-aaaa0003", "c"));
+    expect(r.status === "accepted" && r.entry.seq).toBe(3);
+    expect(() => new Sequencer({ initialLog: s1.read(1) })).toThrow(/contiguous/);
+  });
+});
