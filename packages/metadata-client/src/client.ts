@@ -380,8 +380,28 @@ export class MetadataClient {
     }
   }
 
-  /** Load and decrypt the manifest of a version (koncept §4.1: manifests on demand). */
+  /** Manifests are immutable per version: small LRU (koncept §4.1, manifest layer on demand). */
+  private readonly manifests = new Map<string, Promise<{ manifest: ChunkManifest; key: FileKey }>>();
+  /** Manifest fetches from Discord (diagnostics/tests). */
+  manifestLoads = 0;
+
+  /** Load and decrypt the manifest of a version (koncept §4.1: manifests on demand, cached). */
   async loadManifest(manifestRef: string): Promise<{ manifest: ChunkManifest; key: FileKey }> {
+    const hit = this.manifests.get(manifestRef);
+    if (hit) {
+      this.manifests.delete(manifestRef);
+      this.manifests.set(manifestRef, hit);
+      return hit;
+    }
+    const p = this.fetchManifest(manifestRef);
+    this.manifests.set(manifestRef, p);
+    p.catch(() => this.manifests.delete(manifestRef));
+    while (this.manifests.size > 256) this.manifests.delete(this.manifests.keys().next().value!);
+    return p;
+  }
+
+  private async fetchManifest(manifestRef: string): Promise<{ manifest: ChunkManifest; key: FileKey }> {
+    this.manifestLoads++;
     const loc = decodeManifestRef(manifestRef);
     if (loc.f !== FRAGMENT_FORMAT_VERSION) throw new Error(`unsupported fragment format ${loc.f}`);
     const key = await importFileKey(loc.k);
@@ -416,6 +436,49 @@ export class MetadataClient {
     const h = hasher.digest("hex");
     if (v.plaintextSha256 && h !== v.plaintextSha256) throw new Error("plaintext SHA-256 mismatch");
     return v;
+  }
+
+  /**
+   * Bytes [start, end] (inclusive, like HTTP Range) of a file's current
+   * version, fetching only the fragments that overlap (koncept §3.1: video
+   * streaming via service worker + Range). Every fetched fragment is checked
+   * against its ciphertext hash; the whole-file SHA-256 cannot be checked on
+   * a partial read, AES-GCM still authenticates every fragment.
+   * `cache` lets a caller (service worker) keep decrypted fragments between requests.
+   */
+  async readRange(
+    nodeId: NodeId,
+    start: number,
+    end: number,
+    cache?: Map<string, Uint8Array>,
+  ): Promise<{ data: Uint8Array; size: number; start: number; end: number }> {
+    const node = this.store.getNode(nodeId);
+    if (!node || node.kind !== "file" || !node.content) throw new Error("not a file");
+    const size = node.content.sizeBytes;
+    if (size === 0) return { data: new Uint8Array(0), size, start: 0, end: -1 };
+    if (!(start >= 0 && start < size)) throw new RangeError(`range start ${start} outside 0..${size - 1}`);
+    end = Math.min(end, size - 1);
+    if (end < start) throw new RangeError("empty range");
+    const { manifest, key } = await this.loadManifest(node.content.manifestRef);
+    const cs = manifest.chunkSizeBytes;
+    const out = new Uint8Array(end - start + 1);
+    const chunks = [...manifest.chunks].sort((a, b) => a.index - b.index);
+    for (let i = Math.floor(start / cs); i <= Math.floor(end / cs); i++) {
+      const c = chunks[i];
+      if (!c || c.index !== i) throw new Error(`manifest has no chunk ${i}`);
+      const ck = `${node.content.versionId}:${i}`;
+      let pt = cache?.get(ck);
+      if (!pt) {
+        const ct = await this.fetchPlacement(c.placements![0] as DiscordPlacement);
+        if (c.ciphertextHash && (await sha256Hex(ct)) !== c.ciphertextHash) throw new Error(`chunk ${i}: ciphertext hash mismatch`);
+        pt = await decryptFragment(key, ct);
+        cache?.set(ck, pt);
+      }
+      const from = Math.max(start, i * cs) - i * cs;
+      const to = Math.min(end, i * cs + pt.byteLength - 1) - i * cs;
+      out.set(pt.subarray(from, to + 1), Math.max(start, i * cs) - start);
+    }
+    return { data: out, size, start, end };
   }
 
   /** Children of a folder (non-trashed), sorted by name. */

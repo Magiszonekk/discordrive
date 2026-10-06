@@ -83,7 +83,11 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   `MetadataClient.pull` stosuje partię w jednej transakcji.
   Główna karta (`browser/leader.ts`, Web Locks): dokładnie jedna karta profilu jest liderem,
   po jej zamknięciu przejmuje kolejna (`leader-check.ts`).
-  Brakuje: service worker do streamingu, UI (profil `frontend`).
+  Streaming (`stream.ts`, `MetadataClient.readRange`): service worker odpowiada na `Range`
+  z `/ddn/file/<id>`, pobiera i odszyfrowuje tylko potrzebne fragmenty (cache manifestów i
+  fragmentów). `stream-check.ts`: prawdziwy WebM 20 s w Chromium — metadane po 3 pobraniach z
+  12 fragmentów, odtwarzanie i przewinięcie na koniec działają.
+  Brakuje: aplikacja (ekrany) i jej wygląd (profil `frontend`, `--no-deploy`).
 
 ## Testy
 
