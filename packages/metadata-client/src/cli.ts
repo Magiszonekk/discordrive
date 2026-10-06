@@ -16,6 +16,8 @@
 //                 §3.3) and vault.json (encrypted webhook vault, §3.2). Until the
 //                 HTTP server exists (plan step 6) the server runs in-process.
 //   seen.json     highest vault revision seen (rollback guard)
+//   index.db      the device's own copy of the tree (SQLite, koncept §4.1); only
+//                 the log tail after its headSeq is fetched on start
 // --webhook-file / DDN_WEBHOOK_FILES (':'-separated URL files) are added to the
 // vault on start (convenience for scripts and tests).
 
@@ -29,6 +31,7 @@ import { accountKeyFromB64, newAccountKey, type AccountKey } from "./account-key
 import { MetadataClient, newId, type ByteSink, type ByteSource } from "./client.js";
 import { DiscordWebhookTransport, redactWebhookUrl } from "./discord-transport.js";
 import { EncryptedArbiter, InProcessLogServer, OpCodec, type EncryptedEntry } from "./op-crypto.js";
+import { SqliteIndexStore } from "./node/sqlite-store.js";
 import type { WebhookTransport } from "./types.js";
 import {
   WebhookVault,
@@ -107,6 +110,7 @@ export interface CliState {
   server: InProcessLogServer;
   vault: WebhookVault;
   saveSeen(): void;
+  stateDir: string;
 }
 
 export function initState(stateDir: string): boolean {
@@ -142,7 +146,7 @@ export function openState(stateDir: string): CliState {
   const seenFile = join(stateDir, "seen.json");
   const seen = existsSync(seenFile) ? readJson<{ vaultRevision: number }>(seenFile).vaultRevision : 0;
   const vault = new WebhookVault(new FileVaultStore(join(serverDir, "vault.json")), key, acc.accountId, seen);
-  return { accountId: acc.accountId, key, device, server, vault, saveSeen: () => writeJson(seenFile, { vaultRevision: vault.revision }) };
+  return { accountId: acc.accountId, key, device, server, vault, stateDir, saveSeen: () => writeJson(seenFile, { vaultRevision: vault.revision }) };
 }
 
 export async function openClient(st: CliState, transport: WebhookTransport): Promise<MetadataClient> {
@@ -155,9 +159,17 @@ export async function openClient(st: CliState, transport: WebhookTransport): Pro
     transport,
     // Listing works without webhooks; put/get check in runCli.
     webhooks: hooks.length ? hooks : [{ id: "0", url: "unset://" }],
+    store: openIndex(st.stateDir),
   });
   await client.pull();
   return client;
+}
+
+function openIndex(stateDir: string): SqliteIndexStore {
+  const path = join(stateDir, "index.db");
+  const s = new SqliteIndexStore(path);
+  for (const f of [path, `${path}-wal`, `${path}-shm`]) if (existsSync(f)) chmodSync(f, 0o600);
+  return s;
 }
 
 function resolveNode(client: MetadataClient, ref: string): string {

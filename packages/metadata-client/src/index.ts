@@ -74,3 +74,4 @@ export {
   type EncryptedEntry,
   type EncryptedLogApi,
 } from "./op-crypto.js";
+// Node-only (node:sqlite): import from "@ddv4/metadata-client/node".

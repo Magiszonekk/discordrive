@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { runCli } from "../src/cli.js";
+import { openClient, openState, runCli } from "../src/cli.js";
 import { MemoryTransport, sha256Hex } from "../src/index.js";
 
 function rand(n: number): Uint8Array {
@@ -37,7 +37,13 @@ describe("ddn CLI (single device, state persisted between runs)", () => {
     expect(await sha256Hex(readFileSync(dst))).toBe(await sha256Hex(data));
 
     expect(statSync(join(dir, "state")).mode & 0o777).toBe(0o700);
-    for (const f of ["account.json", "device.json", "seen.json", "server/log.jsonl", "server/vault.json"]) {
+    // Next start: the SQLite index already has the whole log, nothing to replay.
+    const st = openState(join(dir, "state"));
+    const c = await openClient(st, transport);
+    expect(c.replica.headSeq).toBe(st.server.log.headSeq);
+    expect(c.replica.results.length).toBe(0);
+
+    for (const f of ["account.json", "device.json", "seen.json", "server/log.jsonl", "server/vault.json", "index.db"]) {
       expect(statSync(join(dir, "state", f)).mode & 0o777).toBe(0o600);
     }
     // What the server would hold: no names, no webhook token, no file keys.
