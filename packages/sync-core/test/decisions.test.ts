@@ -19,6 +19,7 @@ import {
   type LogEntry,
 } from "../src/index.js";
 import { A, B, C, H1, H2, Scenario, codes, visibleCodes } from "./helpers.js";
+import { checkNoSilentLoss, checkTrashSawContent } from "./oracles.js";
 
 describe("rules version (§5.4)", () => {
   it("decisions bumped the rules version; v1 logs are no longer replayable", () => {
@@ -176,6 +177,83 @@ describe("Q1: trashing a folder takes unseen nodes along, with a notice", () => 
       expect(s.inTrash("file0001")).toBe(false);
       s.expectValid();
     }
+  });
+});
+
+describe("#11: Q1 literally, the whole folder goes (koncept §5.2.3 exception)", () => {
+  /** Laptop (A) and phone (B) see Raporty/q3.xlsx; B edits q3 and adds q4 offline; A trashes Raporty. */
+  function raporty() {
+    const s = new Scenario();
+    s.folder(A, "fold0001", ROOT_ID, "Raporty");
+    s.file(A, "file0003", "fold0001", "q3.xlsx");
+    const base = s.seq;
+    s.edit(B, "file0003", s.version("file0003"), { baseSeq: base });
+    s.file(B, "file0004", "fold0001", "q4.xlsx", { baseSeq: base });
+    const newQ3 = s.version("file0003");
+    const r = s.op(A, { type: "trash", nodeId: "fold0001" }, { baseSeq: base });
+    return { s, base, newQ3, r };
+  }
+
+  it("new content and new file both go to the trash with the folder; the phone is told about each", () => {
+    const { s, newQ3, r } = raporty();
+    expect(r.outcome).toBe("applied");
+    expect(r.notices.map((n) => [n.code, n.nodeId, n.notifyDeviceId, n.reason, n.silent])).toEqual([
+      ["unseen_trashed_with_folder", "file0003", B.id, "content", undefined],
+      ["unseen_trashed_with_folder", "file0004", B.id, "placed", undefined],
+    ]);
+    expect(s.inTrash("file0003")).toBe(true);
+    expect(s.inTrash("file0004")).toBe(true);
+    expect(s.version("file0003")).toBe(newQ3);
+    expect(s.recovered()).toEqual([]);
+    s.expectValid();
+    // I4 in its amended form accepts it, and nothing was lost.
+    expect(checkTrashSawContent(s.entries, s.store, s.results)).toEqual([]);
+    expect(checkNoSilentLoss(s.entries, s.store)).toEqual([]);
+  });
+
+  it("restorable: restoring the folder brings back the new version and the new file", () => {
+    const { s, newQ3 } = raporty();
+    s.op(B, { type: "restore", nodeId: "fold0001" });
+    expect(s.names("fold0001")).toEqual(["q3.xlsx", "q4.xlsx"]);
+    expect(s.version("file0003")).toBe(newQ3);
+  });
+
+  it("not purged by the laptop that never saw it (Q3)", () => {
+    const { s, base } = raporty();
+    const r = s.op(A, { type: "purge", nodeId: "fold0001" }, { baseSeq: base });
+    expect(r.notices[0]).toMatchObject({ code: "purge_kept_unseen", items: ["file0003", "file0004"] });
+    expect(s.inTrash("file0003")).toBe(true);
+    expect(s.store.getUpload(s.node("file0003").content!.uploadId)!.status).toBe("bound");
+  });
+
+  it("Q2 unchanged: trashing q3 alone is skipped silently, the file stays visible", () => {
+    const s = new Scenario();
+    s.folder(A, "fold0001", ROOT_ID, "Raporty");
+    s.file(A, "file0003", "fold0001", "q3.xlsx");
+    const base = s.seq;
+    s.edit(B, "file0003", s.version("file0003"), { baseSeq: base });
+    const r = s.op(A, { type: "trash", nodeId: "file0003" }, { baseSeq: base });
+    expect(r.outcome).toBe("skipped");
+    expect(visibleCodes(r)).toEqual([]);
+    expect(s.inTrash("file0003")).toBe(false);
+  });
+
+  it("the I4 oracle still catches unseen content in the trash without a notice, or trashed directly", () => {
+    const { s } = raporty();
+    const muted = s.results.map((r) => ({ ...r, notices: r.notices.filter((n) => n.code !== "unseen_trashed_with_folder") }));
+    // Both q3 (new version) and q4 (new file: its content is unseen too).
+    expect(checkTrashSawContent(s.entries, s.store, muted).sort()).toEqual([
+      expect.stringContaining("file0003"),
+      expect.stringContaining("file0004"),
+    ]);
+    // A file with unseen content trashed on its own (what Q2 forbids), forged into the state.
+    const s2 = new Scenario();
+    s2.file(A, "file0001", ROOT_ID, "a.txt");
+    const base = s2.seq;
+    s2.edit(B, "file0001", s2.version("file0001"), { baseSeq: base });
+    s2.op(A, { type: "rename", nodeId: "file0001", name: "b.txt" }, { baseSeq: base });
+    s2.store.putNode({ ...s2.node("file0001"), trashed: { seq: s2.seq, at: 0 } });
+    expect(checkTrashSawContent(s2.entries, s2.store, s2.results)).toEqual([expect.stringContaining("trashed directly")]);
   });
 });
 

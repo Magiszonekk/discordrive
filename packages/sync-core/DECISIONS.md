@@ -3,7 +3,8 @@
 Wcześniej był tu plik `QUESTIONS.md` z pytaniami Q1–Q11 i zachowaniem tymczasowym
 (`PROVISIONAL`). Właściciel odpowiedział 2026-10-05. Pełna treść decyzji:
 `~/Desktop/discordrive-next/decyzje-sync-core-2026-10-05.md` (poza repo, obok
-`koncept.md`; wpis w dzienniku konceptu z 2026-10-05).
+`koncept.md`; wpis w dzienniku konceptu z 2026-10-05). Konflikt Q1 z §5.2.3
+rozstrzygnięty 2026-10-06 (owner inbox #11, niżej przy Q1).
 
 Decyzje Q1–Q3, Q6, Q7 i Q9 zmieniają reguły deterministyczne, dlatego
 **`RULES_VERSION = 2`** (`src/types.ts`). Testy jednostkowe każdej zmienionej reguły
@@ -20,7 +21,8 @@ zmiana reguł musi zostawić stare wersje odtwarzalne (rozgałęzienie w `applyE
 po `entry.rulesVersion`). Format snapshotu podbity do 2 (nowe pola w `FileVersion`).
 
 ## Q1. Usunięcie folderu po niewidzianej zmianie w nim: folder idzie do kosza RAZEM z nią
-Decyzja: wariant 2 (zmiana względem tymczasowego „Odzyskane”).
+Decyzja: wariant 2 (zmiana względem tymczasowego „Odzyskane”), potwierdzona w #11:
+usunięcie folderu usuwa **cały** folder.
 - `trash` folderu nie przenosi już niczego do „Odzyskane”. Węzły dodane, przeniesione
   lub przywrócone do poddrzewa po `baseSeq` autora usunięcia oraz pliki z niewidzianą
   nową treścią trafiają do kosza razem z folderem.
@@ -34,10 +36,28 @@ Decyzja: wariant 2 (zmiana względem tymczasowego „Odzyskane”).
   jest deterministyczny. Jawne przeniesienie pliku wygrywa w obu kolejnościach.
 - Wyrzucenie do kosza jest odwracalne przez 30 dni, a Q3 chroni takie węzły przed
   natychmiastowym purge przez autora, który ich nie widział.
-- Test losowy: wyrocznia I4 („plik w koszu ⇒ autor kosza widział jego treść”) została
-  złagodzona do „…albo autor treści dostał `unseen_trashed_with_folder`”. Zgłoszone
-  właścicielowi do potwierdzenia (ask-owner), bo osłabia zasadę §5.2.3 („nowa treść
-  zawsze ląduje w widocznym miejscu”).
+
+### Rozstrzygnięcie #11 (2026-10-06): Q1 dosłownie, wyjątek w §5.2.3
+Pytanie: Q1 kłóciło się z §5.2.3 konceptu („nowa treść zawsze ląduje w widocznym
+miejscu”) i z niezmiennikiem I4 testu losowego, a do tego było niespójne z Q2 (kosz
+samego pliku z niewidzianą treścią jest pomijany, kosz folderu z tym plikiem nie).
+Właściciel wybrał opcję 1: zostaje jak jest. Uzasadnienie: prostota. Kto usuwa folder,
+usuwa całość, jak w galerii na telefonie; zwykle jedno konto = jedna osoba, a urządzenia
+są zsynchronizowane, więc to przypadek rzadki. Odrzucone: opcja 2 (niewidziana nowa
+treść do „Odzyskane”) i opcja 3 (Q2 dostosowane do Q1).
+- **Koncept §5.2.3** dostał wyjątek: niewidziana treść nie znika po cichu. Albo zostaje
+  na miejscu, albo trafia do kosza razem z usuwanym folderem, a jej autor dostaje
+  powiadomienie; z kosza da się ją przywrócić.
+- **Niezmiennik I4** (`checkTrashSawContent` w `test/oracles.ts`): plik z bieżącą treścią
+  leży w koszu tylko wtedy, gdy (a) wyrzucający widział tę treść, albo (b) plik trafił do
+  kosza razem z folderem (wyrzucony węzeł to folder nad plikiem, nigdy sam plik) i autor
+  treści dostał `unseen_trashed_with_folder` z tego wpisu. Treść dopisana po wyrzuceniu
+  nie może zostać w koszu (reguła 3). „Da się przywrócić” pilnuje
+  `checkNoSilentLoss`: wersja znika tylko przez purge autora, który ją widział (Q3).
+- **Q2 bez zmian:** wyrzucenie samego pliku z niewidzianą treścią jest pomijane,
+  zdarzenie ciche.
+- Kod reguł się nie zmienił (wersja reguł zostaje 2). Doszły testy scenariusza z #11
+  (`test/decisions.test.ts`) i mutacja „opcja 2” w `scripts/mutation-check.py`.
 
 ## Q2. Kosz pliku, który w międzyczasie dostał nową treść: pomijany, po cichu
 Decyzja: wariant 1 bez powiadomienia. `trash` jest pomijany, plik zostaje z nową

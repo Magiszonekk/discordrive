@@ -63,8 +63,9 @@ logu, pracę offline, uploady z dzierżawami, porzucone uploady, sprzątanie, GC
 urządzenia ze snapshotu i błędne operacje. Sprawdza:
 identyczny stan wszystkich replik (także przy odwróconej kolejności iteracji magazynu),
 niezmienniki drzewa po **każdym** prefiksie logu, brak utraty treści bez operacji
-usunięcia (albo zamiany na identyczną treść, Q7), plik w koszu tylko wtedy, gdy autor
-kosza widział jego treść albo autor treści dostał powiadomienie (Q1), brak odwołań do
+usunięcia (albo zamiany na identyczną treść, Q7), to, że niewidziana treść nie znika po
+cichu (zostaje albo trafia do kosza razem z folderem i jej autor dostaje powiadomienie,
+koncept §5.2.3, Q1 + #11), brak odwołań do
 skasowanych fragmentów, to, że wpis pominięty lub odrzucony nie zmienia stanu, oraz to,
 że snapshot plus ogon logu daje ten sam stan co pełny log. Urządzenia w symulacji mają
 różne strefy czasowe (Q6), a część treści ma ten sam hash (Q7).

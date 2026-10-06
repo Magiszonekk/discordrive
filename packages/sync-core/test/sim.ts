@@ -16,9 +16,9 @@
 //     of the log, not only the final state),
 //  I3 names unique per folder (case-folded), every prefix,
 //  I4 no content lost without a delete operation whose author had seen it
-//     (or an identical-content replacement, Q7), no file in the trash with
-//     content its trasher had not seen unless the content's author was
-//     notified (Q1),
+//     (or an identical-content replacement, Q7); unseen content never
+//     disappears silently: it stays visible, or it went to the trash together
+//     with a folder and its author was notified (§5.2.3 exception, Q1 + #11),
 //  I5 no file points at physically deleted fragments,
 //  I6 snapshot + log tail == full log (also through JSON serialization).
 //

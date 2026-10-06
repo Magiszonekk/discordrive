@@ -18,6 +18,8 @@ MUTATIONS = [
     ("r3b drop content", "    placeRecovered(ctx, rec, null, \"content_for_purged_file\");", "    return \"skipped\";"),
     ("r4 create into trash stays", "  } else if (inTrash(ctx.s, op.parentId)) {\n    // Rule 4: added to a deleted folder.\n    placeRecovered(ctx, rec, op.parentId, \"parent_in_trash\");", "  } else if (inTrash(ctx.s, op.parentId)) {\n    placeLive(ctx, rec, op.parentId, op.name);"),
     ("Q1 no unseen notice", "  if (node.kind === \"folder\") notifyUnseenTrashed(ctx, node.id);", ""),
+    ("Q1 no notice for unseen content", "      if (rec.content && ctx.unseen(contentMark(rec.content))) devices.add(rec.content.device.id);", ""),
+    ("Q1 unseen content rescued (option 2 of #11)", "  if (node.kind === \"folder\") notifyUnseenTrashed(ctx, node.id);", "  if (node.kind === \"folder\") {\n    notifyUnseenTrashed(ctx, node.id);\n    for (const n of ctx.notices) if (n.code === \"unseen_trashed_with_folder\" && n.reason === \"content\") placeRecovered(ctx, ctx.s.getNode(n.nodeId!)!, ctx.s.getNode(n.nodeId!)!.parentId, \"x\");\n  }"),
     ("Q1 notify own device", "      if (ctx.unseen(rec.placed)) devices.add(rec.placed.deviceId);", "      devices.add(rec.placed.deviceId);"),
     ("r5 move into trash allowed", "  if (inTrash(ctx.s, op.parentId)) {\n    // Rule 5.", "  if (false) {\n    // Rule 5."),
     ("r6 no cycle check", "  if (isSelfOrAncestor(ctx.s, node.id, op.parentId)) {", "  if (node.id === op.parentId) {"),

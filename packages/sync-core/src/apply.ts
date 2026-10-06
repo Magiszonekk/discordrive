@@ -681,11 +681,13 @@ function contentMark(c: FileVersion): ChangeMark {
 }
 
 /**
- * Rule 4 in the other order, owner decision Q1: the folder goes to the trash
- * together with nodes the trashing author had not seen (added, moved in or
- * restored after its baseSeq, or with new content). Nothing is rescued to
+ * Rule 4 in the other order, owner decisions Q1 and #11 (koncept §5.2.3
+ * exception): trashing a folder trashes the WHOLE folder, including nodes the
+ * trashing author had not seen (added, moved in or restored after its
+ * baseSeq) and files with unseen new content. Nothing is rescued to
  * „Odzyskane”; instead every device whose unseen change went to the trash
  * gets a notice (the trash keeps it for 30 days, so it is reversible).
+ * Trashing such a file on its own is still skipped (Q2, opTrash).
  *
  * One notice per (device, topmost node with that device's unseen change):
  * a device that uploaded a folder with 1000 files gets one notice, not 1001.

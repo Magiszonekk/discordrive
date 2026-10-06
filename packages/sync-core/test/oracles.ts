@@ -70,15 +70,19 @@ export function checkNoSilentLoss(log: LogEntry[], store: IndexStore): string[] 
 }
 
 /**
- * „Praca nie ginie po cichu” (§5.2.3) as amended by owner decision Q1
- * (DECISIONS.md): a file that sits in the trash was put there (itself or
- * through an ancestor) by someone who had seen its current content, OR the
- * content's author was told: the trash entry produced an
- * `unseen_trashed_with_folder` notice addressed to that device, about the
- * file or one of its ancestors below (or at) the trashed node.
- *
- * Before Q1 this oracle demanded the first condition only (unseen content
- * never ended up in the trash). The weakening is reported to the owner.
+ * I4b, „niewidziana treść nie znika po cichu” (koncept §5.2.3 with the
+ * folder exception, owner decisions Q1 + #11, DECISIONS.md). A file that sits
+ * in the trash with its current content is fine if:
+ *  - whoever trashed it (itself or through an ancestor) had seen that
+ *    content, or
+ *  - it went to the trash TOGETHER WITH A FOLDER (the trashed node is a
+ *    proper ancestor, never the file itself: trashing the file alone is
+ *    skipped, Q2) and the content's author got an
+ *    `unseen_trashed_with_folder` notice from that trash entry, about the
+ *    file or one of its ancestors up to the trashed folder.
+ * Content can never land in the trash after the trash op (rule 3 brings it
+ * back). That it stays restorable (no purge without seeing it) is checked
+ * by checkNoSilentLoss.
  */
 export function checkTrashSawContent(log: LogEntry[], store: IndexStore, results: ApplyResult[]): string[] {
   const errs: string[] = [];
@@ -110,6 +114,10 @@ export function checkTrashSawContent(log: LogEntry[], store: IndexStore, results
     }
     const seen = e.device.id === n.content.device.id || e.baseSeq >= n.content.seq;
     if (seen) continue;
+    if (t === n || t.kind !== "folder") {
+      errs.push(`file ${n.id} with unseen content (seq ${n.content.seq}) was trashed directly at ${t.trashed.seq} (Q2 says skip)`);
+      continue;
+    }
     // Chain file .. t (inclusive): did the content author get a notice for any of them?
     let notified = false;
     for (let c: NodeRecord | undefined = n; c; c = c === t || c.parentId === null ? undefined : store.getNode(c.parentId)) {
