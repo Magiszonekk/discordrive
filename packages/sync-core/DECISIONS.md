@@ -219,3 +219,30 @@ Decyzje wykonawcze, których koncept i zlecenie nie przesądzały. Żadna nie zm
   dopiero po potwierdzeniu „ten sam kod”.
 - **Stronicowanie**: 50 pozycji na stronę, kursor keyset `(name_key, id)` w obu rodzajach kart
   (OPFS i kopia w pamięci), bez cięcia po stronie UI.
+
+### Rozstrzygnięte samodzielnie 2026-10-09, dopisek (test właściciela „jak zwykły użytkownik”)
+- **Domyślny scenariusz `setup` = „tylko ten komputer”**: `http://localhost:<port>`, bind
+  127.0.0.1, rejestracja otwarta (nikt spoza komputera nie dosięgnie serwera). Scenariusz
+  „serwer z domeną” (adres https) dalej domyślnie z kodem zaproszenia. Zmiana scenariusza przy
+  ponownym `setup` przestawia rejestrację na bezpieczną domyślną dla nowego scenariusza.
+  Sprawdzone: na localhost `isSecureContext = true`, service worker steruje stroną i odtwarza
+  wideo bez TLS.
+- **Instalacja = pierwsze uruchomienie.** `npm run setup` w świeżym klonie (bez `npm install`)
+  sam wykonuje `npm ci --workspace @ddv4/ddn-server` (ok. 85 pakietów, 3 s w sieci domowej),
+  czyli tylko to, czego potrzebuje dysk, bez Prismy, argon2 i reszty starego ddv4 (pełne
+  `npm install` monorepo nie jest potrzebne). Launcher (`bin/discordrive.mjs`) jest w czystym
+  JS, żeby sprawdzić wersję Node (≥ 22.13: `node:sqlite` bez flagi) zanim cokolwiek się załaduje.
+- **Polecenia dla użytkownika przez npm** (`npm run setup`, `npm start`, `npm run doctor`,
+  `npm run invite`): działają tak samo w PowerShellu i powłokach POSIX, bez globalnej
+  instalacji. Stary `npm start` monorepo (API + frontend ddv4) przeniesiony na `start:legacy`,
+  stary `setup` na `setup:legacy`.
+- **Katalog danych wg platformy**: XDG (`~/.local/share`), macOS `~/Library/Application
+  Support`, Windows `%LOCALAPPDATA%`; nadpisanie `DISCORDRIVE_DATA_DIR`. Uprawnienia 0600/0700 i
+  umask tylko poza Windows (tam domyślne ACL profilu użytkownika). systemd tylko na Linuksie;
+  gdzie indziej `setup` proponuje start w tym oknie (Ctrl+C zatrzymuje).
+- **Bot do udostępniania w `setup`**: wybór „Pomiń na razie” domyślny, z wyjaśnieniem, co się
+  traci (tylko linki do plików), i instrukcją Developer Portal przy „Skonfiguruj teraz” oraz w
+  podpowiedzi „włączysz w npm run setup”.
+- **Instrukcja Discorda w aplikacji** (kreator kanałów): 5 kroków od konta przez własny
+  serwer, kanał i webhook (gdzie kliknąć), że URL webhooka to sekret, czemu 3–4 kanały, oraz
+  uwaga o regulaminie Discorda (koncept §6.5 „Ryzyko”: informować przy zakładaniu konta).

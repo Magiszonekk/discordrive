@@ -37,7 +37,7 @@ export function ttyPrompter(input: NodeJS.ReadableStream = process.stdin, output
   const line = async (prompt: string): Promise<string> => {
     write(prompt);
     const l = await next();
-    if (l === null) throw new Error("Koniec wejścia: kreator przerwany.");
+    if (l === null) throw new Error("przerwano (Ctrl+C albo koniec wejścia). Uruchom ponownie: npm run setup");
     if (!terminal) write("\n");
     return l.trim();
   };
@@ -53,7 +53,7 @@ export function ttyPrompter(input: NodeJS.ReadableStream = process.stdin, output
       muted = terminal;
       try {
         const l = await next();
-        if (l === null) throw new Error("Koniec wejścia: kreator przerwany.");
+        if (l === null) throw new Error("przerwano (Ctrl+C albo koniec wejścia). Uruchom ponownie: npm run setup");
         return l.trim();
       } finally {
         muted = false;
