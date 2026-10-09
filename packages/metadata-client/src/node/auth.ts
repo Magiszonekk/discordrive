@@ -37,7 +37,7 @@ export interface Authenticator {
   addDevice(s: Session, body: unknown): Promise<{ deviceId: string }>;
   rescueAddDevice(body: unknown): Promise<{ deviceId: string }>;
   revokeDevice(s: Session, deviceId: string, body: unknown): Promise<void>;
-  listDevices(s: Session): { deviceId: string; publicKey: string; createdAt: number }[];
+  listDevices(s: Session): { deviceId: string; publicKey: string; createdAt: number; addedBy: string; nameSealed: string | null }[];
   verify(authorization: string | undefined): Session | null;
 }
 
@@ -82,6 +82,9 @@ export class Ed25519Authenticator implements Authenticator {
         token_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, device_id TEXT NOT NULL, expires_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS sessions_device ON sessions(device_id);
     `);
+    // Device display name, sealed with the account key (zlecenie 2026-10-09 A): opaque here.
+    const cols = (db.prepare("PRAGMA table_info(devices)").all() as { name: string }[]).map((c) => c.name);
+    if (!cols.includes("name_sealed")) db.exec("ALTER TABLE devices ADD COLUMN name_sealed TEXT");
     const row = db.prepare("SELECT v FROM server_meta WHERE k = 'instance'").get() as { v: string } | undefined;
     this.instanceId = row?.v ?? rid("inst");
     if (!row) db.prepare("INSERT INTO server_meta (k, v) VALUES ('instance', ?)").run(this.instanceId);
@@ -187,11 +190,20 @@ export class Ed25519Authenticator implements Authenticator {
   }
 
   listDevices(s: Session) {
-    return (this.db.prepare("SELECT id, public_key, created_at FROM devices WHERE account_id = ? ORDER BY created_at, id").all(s.accountId) as {
+    return (this.db.prepare("SELECT id, public_key, created_at, added_by, name_sealed FROM devices WHERE account_id = ? ORDER BY created_at, id").all(s.accountId) as {
       id: string;
       public_key: string;
       created_at: number;
-    }[]).map((d) => ({ deviceId: d.id, publicKey: d.public_key, createdAt: d.created_at }));
+      added_by: string;
+      name_sealed: string | null;
+    }[]).map((d) => ({ deviceId: d.id, publicKey: d.public_key, createdAt: d.created_at, addedBy: d.added_by, nameSealed: d.name_sealed }));
+  }
+
+  /** Any device of the account may (re)name any device of the same account. */
+  setDeviceName(s: Session, deviceId: string, nameSealed: string): void {
+    this.devicePub(s);
+    const r = this.db.prepare("UPDATE devices SET name_sealed = ? WHERE id = ? AND account_id = ?").run(nameSealed, deviceId, s.accountId);
+    if (r.changes === 0) throw new AuthError(404, "no_such_device");
   }
 
   verify(authorization: string | undefined): Session | null {

@@ -14,7 +14,7 @@
 import { fromBase64, toBase64 } from "@ddv4/processing";
 
 export const ACCOUNT_KEY_BYTES = 32;
-export type SubkeyLabel = "vault" | "op" | "snapshot";
+export type SubkeyLabel = "vault" | "op" | "snapshot" | "device-name";
 
 export interface AccountKey {
   /** Raw key, base64. Secret: never log. */

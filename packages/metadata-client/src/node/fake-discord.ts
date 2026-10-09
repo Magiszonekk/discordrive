@@ -57,10 +57,17 @@ export class FakeDiscord {
     res.end(data);
   }
 
+  /** Discord-shaped CDN path: /attachments/<channel>/<attachment>/<filename>. */
   private link(aid: string): string {
     const ex = Math.floor(Date.now() / 1000 + 86400).toString(16);
-    return `${this.origin}/cdn/${aid}?ex=${ex}&is=0&hm=${randomBytes(8).toString("hex")}`;
+    const meta = this.attMeta.get(aid);
+    const path = meta ? `/attachments/${meta.channelId}/${aid}/${meta.filename}` : `/cdn/${aid}`;
+    return `${this.origin}${path}?ex=${ex}&is=0&hm=${randomBytes(8).toString("hex")}`;
   }
+  private readonly attMeta = new Map<string, { channelId: string; filename: string }>();
+  /** Bot token accepted by POST /api/v10/attachments/refresh-urls (null = refresh off). */
+  botToken: string | null = null;
+  refreshCalls = 0;
 
   private msgJson(mid: string, m: Msg) {
     return {
@@ -91,7 +98,23 @@ export class FakeDiscord {
       return void res.end();
     }
     const url = new URL(req.url ?? "/", this.origin);
-    const cdn = /^\/cdn\/(\d+)$/.exec(url.pathname);
+    if (url.pathname === "/api/v10/attachments/refresh-urls" && req.method === "POST") {
+      if (!this.botToken || req.headers.authorization !== `Bot ${this.botToken}`) return this.send(res, 401, { message: "401: Unauthorized", code: 0 });
+      const chunks: Buffer[] = [];
+      for await (const c of req) chunks.push(c as Buffer);
+      const j = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { attachment_urls: string[] };
+      this.refreshCalls++;
+      const out = j.attachment_urls.map((u) => {
+        const m = /\/attachments\/([^/]+)\/(\d+)\/([^/?]+)/.exec(new URL(u).pathname);
+        return { original: u, refreshed: m && this.blobs.has(m[2]!) ? this.link(m[2]!) : u };
+      });
+      return this.send(res, 200, { refreshed_urls: out });
+    }
+    if (url.pathname === "/api/v10/users/@me" && req.method === "GET") {
+      if (!this.botToken || req.headers.authorization !== `Bot ${this.botToken}`) return this.send(res, 401, { message: "401: Unauthorized", code: 0 });
+      return this.send(res, 200, { id: "1550000000000000001", username: "fake-bot", bot: true });
+    }
+    const cdn = /^\/cdn\/(\d+)$/.exec(url.pathname) ?? /^\/attachments\/[^/]+\/(\d+)\/[^/]+$/.exec(url.pathname);
     if (cdn && req.method === "GET") {
       const b = this.blobs.get(cdn[1]!);
       if (!b || !url.searchParams.get("hm")) return this.send(res, 404, { message: "Not Found" });
@@ -129,6 +152,7 @@ export class FakeDiscord {
       const id = this.id();
       const aid = this.id();
       this.blobs.set(aid, f.data);
+      this.attMeta.set(aid, { channelId: hook.channelId, filename: f.filename });
       const msg: Msg = { webhookId, channelId: hook.channelId, attachments: [{ id: aid, ...f }] };
       this.messages.set(id, msg);
       this.posts++;
@@ -149,6 +173,7 @@ export class FakeDiscord {
       for (const a of msg.attachments) this.blobs.delete(a.id);
       const aid = this.id();
       this.blobs.set(aid, f.data);
+      this.attMeta.set(aid, { channelId: msg.channelId, filename: f.filename });
       msg.attachments = [{ id: aid, ...f }];
       return this.send(res, 200, this.msgJson(mid!, msg), cors);
     }

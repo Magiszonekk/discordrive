@@ -50,6 +50,7 @@ export async function createAccountHttp(
   device: DeviceKey,
   account: AccountKey,
   f: typeof fetch = defaultFetch,
+  invite?: string,
 ): Promise<{ accountId: string; deviceId: string; instanceId: string }> {
   const c = await getChallenge(baseUrl, f);
   const rk = await rescueKey(account);
@@ -60,6 +61,7 @@ export async function createAccountHttp(
     rescuePublicKey: rk.publicKey,
     deviceSignature: await device.sign(msg),
     rescueSignature: await rk.sign(msg),
+    ...(invite ? { invite } : {}),
   });
   return { ...r, instanceId: c.instanceId };
 }
@@ -80,6 +82,23 @@ export async function rescueRegisterDevice(
     devicePublicKey: device.publicKey,
     signature: await rk.sign(authMessage.rescueAddDevice(c, accountId, device.publicKey)),
   });
+}
+
+export interface ServerDevice {
+  deviceId: string;
+  publicKey: string;
+  createdAt: number;
+  /** "create", "rescue" or the ID of the device that paired it. */
+  addedBy?: string;
+  /** Display name sealed with the account key, or null. */
+  nameSealed?: string | null;
+}
+
+/** Server health (GET /v1/health, no auth). */
+export async function getHealth(baseUrl: string, f: typeof fetch = defaultFetch): Promise<{ ok: boolean; version: string; mode: string; rulesVersion: number; uptimeS: number; signup: string; shares: boolean }> {
+  const r = await f(`${baseUrl}/v1/health`);
+  if (!r.ok) throw new ServerError(r.status, "health");
+  return r.json() as never;
 }
 
 export interface HttpSession {
@@ -199,8 +218,24 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     ).body;
   }
 
-  async listDevices(): Promise<{ deviceId: string; publicKey: string; createdAt: number }[]> {
-    return (await this.call<{ devices: { deviceId: string; publicKey: string; createdAt: number }[] }>("GET", "/v1/devices")).body.devices;
+  async listDevices(): Promise<ServerDevice[]> {
+    return (await this.call<{ devices: ServerDevice[] }>("GET", "/v1/devices")).body.devices;
+  }
+
+  /** Store a device's display name, sealed with the account key (see device-names.ts). */
+  async setDeviceName(deviceId: string, nameSealed: string): Promise<void> {
+    await this.call("PUT", `/v1/devices/${deviceId}/name`, { nameSealed });
+  }
+
+  // --- shares (§3.7)
+  async createShare(body: { attachments: { channelId: string; attachmentId: string; filename: string }[]; meta: string; ownerNote: string }): Promise<{ shareId: string }> {
+    return (await this.call<{ shareId: string }>("POST", "/v1/shares", body)).body;
+  }
+  async listShares(): Promise<{ shareId: string; createdAt: number; ownerNote: string; revoked: boolean }[]> {
+    return (await this.call<{ shares: { shareId: string; createdAt: number; ownerNote: string; revoked: boolean }[] }>("GET", "/v1/shares")).body.shares;
+  }
+  async revokeShare(shareId: string): Promise<void> {
+    await this.call("DELETE", `/v1/shares/${shareId}`);
   }
 
   /** Revoke = delete its public key and sessions (signed by this device). */

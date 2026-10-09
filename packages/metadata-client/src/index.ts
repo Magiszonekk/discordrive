@@ -116,7 +116,9 @@ export {
   type SnapshotDeps,
   type SnapshotResult,
 } from "./snapshots.js";
-export { HttpApi, HttpPairingMailbox, ServerError, createAccountHttp, getChallenge, rescueRegisterDevice, type HttpSession } from "./http-api.js";
+export { HttpApi, HttpPairingMailbox, ServerError, createAccountHttp, getChallenge, getHealth, rescueRegisterDevice, type HttpSession, type ServerDevice } from "./http-api.js";
+export { sealDeviceName, openDeviceName, cleanDeviceName, MAX_DEVICE_NAME } from "./device-names.js";
+export { prepareShare, shareLink, parseShareLink, openShare, attachmentFilename, type ShareMeta, type ShareAttachment, type OpenedShare } from "./share.js";
 export {
   generateDeviceKey,
   deviceKeyFromCryptoKey,

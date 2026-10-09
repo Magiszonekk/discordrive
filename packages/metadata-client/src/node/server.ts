@@ -17,13 +17,37 @@ import { RULES_VERSION, Sequencer, isClientId } from "@ddv4/sync-core";
 import type { EncryptedEntry, EncryptedEnvelope } from "../op-crypto.js";
 import { PAIRING_TTL_MS } from "../pairing.js";
 import { AuthError, Ed25519Authenticator, type Authenticator, type Session } from "./auth.js";
+import { InviteStore } from "./invites.js";
+import { IpLimiter, clientIp, type BucketSpec } from "./ip-limit.js";
 import { NotifyHub } from "./notify.js";
+import { ShareStore, type BotRefresher } from "./shares.js";
+import { StaticSite, type StaticOptions } from "./static.js";
 
 export type { Authenticator, Session };
 
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 export const MAX_PAYLOAD_B64 = 1024 * 1024;
 export const MAX_VAULT_B64 = 512 * 1024;
+export const MAX_DEVICE_NAME_B64 = 1024;
+export const SERVER_VERSION = "0.2.0";
+
+export interface ServerLimits {
+  /** Any JSON request body (bytes). */
+  bodyBytes: number;
+  /** Encrypted operation payload (base64 chars). */
+  opPayloadB64: number;
+  /** Encrypted webhook vault (base64 chars). */
+  vaultB64: number;
+}
+export const DEFAULT_LIMITS: ServerLimits = { bodyBytes: MAX_BODY_BYTES, opPayloadB64: MAX_PAYLOAD_B64, vaultB64: MAX_VAULT_B64 };
+
+/** Per-IP buckets for unauthenticated endpoints. */
+export const DEFAULT_RATE_LIMITS: Record<"auth" | "signup" | "mailbox" | "share", BucketSpec> = {
+  auth: { burst: 30, perMin: 30 },
+  signup: { burst: 5, perMin: 2 },
+  mailbox: { burst: 60, perMin: 90 },
+  share: { burst: 60, perMin: 120 },
+};
 const MAX_WAIT_S = 30;
 
 export interface ServerOptions {
@@ -32,8 +56,25 @@ export interface ServerOptions {
   leaseMs?: number;
   minRulesVersion?: number;
   maxRulesVersion?: number;
-  /** Allow POST /v1/accounts (account creation). Default true; a real instance gates it. */
+  /**
+   * Account creation: "open" (anyone), "invite" (one-shot code from
+   * `discordrive invite`), "closed". Default "open" (tests); `discordrive
+   * setup` writes "invite" for public instances. `openSignup: false` = "closed".
+   */
+  signup?: "open" | "invite" | "closed";
   openSignup?: boolean;
+  /** Peers whose X-Forwarded-For is trusted for the client IP (reverse proxy). */
+  trustProxy?: string[];
+  limits?: Partial<ServerLimits>;
+  /** Per-IP limits; `false` turns them off (tests). */
+  rateLimits?: Partial<typeof DEFAULT_RATE_LIMITS> | false;
+  /** Serve the built web app from the same origin. */
+  web?: StaticOptions;
+  /** Instance bot for share links (§3.7). Without it shares answer 503. */
+  bot?: BotRefresher;
+  /** Allowed CDN origin of shared attachments (tests: the fake Discord). */
+  cdnOrigins?: string[];
+  mode?: string;
   /** Browser origins allowed via CORS (exact match). Default: none. */
   corsOrigins?: string[];
   /** Session token lifetime (default 1 h). */
@@ -44,6 +85,7 @@ class HttpError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
+    readonly headers: Record<string, string> = {},
   ) {
     super(code);
   }
@@ -58,6 +100,13 @@ export class DdnServer {
   readonly auth: Ed25519Authenticator;
   private http: Server | null = null;
   readonly notify: NotifyHub;
+  readonly invites: InviteStore;
+  readonly shares: ShareStore;
+  private readonly limits: ServerLimits;
+  private readonly signup: "open" | "invite" | "closed";
+  private readonly ipLimits: Partial<Record<keyof typeof DEFAULT_RATE_LIMITS, IpLimiter>> = {};
+  private readonly web: StaticSite | null;
+  private readonly startedAt: number;
 
   constructor(private readonly opts: ServerOptions = {}) {
     this.now = opts.now ?? (() => Date.now());
@@ -72,6 +121,36 @@ export class DdnServer {
     `);
     this.auth = new Ed25519Authenticator(this.db, this.now, opts.sessionTtlMs);
     this.notify = new NotifyHub(this.now);
+    this.invites = new InviteStore(this.db, this.now);
+    this.shares = new ShareStore(this.db, this.now, opts.bot ?? null, opts.cdnOrigins);
+    this.limits = { ...DEFAULT_LIMITS, ...opts.limits };
+    this.signup = opts.signup ?? (opts.openSignup === false ? "closed" : "open");
+    if (opts.rateLimits !== false) {
+      const spec = { ...DEFAULT_RATE_LIMITS, ...opts.rateLimits };
+      for (const k of Object.keys(spec) as (keyof typeof spec)[]) this.ipLimits[k] = new IpLimiter(spec[k], this.now);
+    }
+    this.web = opts.web ? new StaticSite(opts.web) : null;
+    this.startedAt = this.now();
+  }
+
+  health() {
+    return {
+      ok: true,
+      service: "discordrive-next",
+      version: SERVER_VERSION,
+      mode: this.opts.mode ?? "metadata-only",
+      rulesVersion: RULES_VERSION,
+      uptimeS: Math.round((this.now() - this.startedAt) / 1000),
+      signup: this.signup,
+      shares: this.shares.available,
+    };
+  }
+
+  private limit(kind: keyof typeof DEFAULT_RATE_LIMITS, req: IncomingMessage): void {
+    const l = this.ipLimits[kind];
+    if (!l) return;
+    const wait = l.take(`${kind}|${clientIp(req, this.opts.trustProxy ?? [])}`);
+    if (wait > 0) throw new HttpError(429, "rate_limited", { "retry-after": String(wait) });
   }
 
   private seq(accountId: string): Sequencer<EncryptedEnvelope> {
@@ -93,7 +172,7 @@ export class DdnServer {
   // --- API (also callable in-process)
 
   submit(s: Session, body: unknown) {
-    const env = validateEnvelope(body);
+    const env = validateEnvelope(body, this.limits.opPayloadB64);
     const sq = this.seq(s.accountId);
     const r = sq.submit(env, s.deviceId);
     if (r.status === "accepted") {
@@ -136,7 +215,7 @@ export class DdnServer {
   putVault(s: Session, body: unknown): { status: "ok" } | { status: "conflict"; current: { revision: number; blob: string } | null } {
     const b = body as { expectedRevision?: unknown; revision?: unknown; blob?: unknown };
     if (!Number.isInteger(b?.expectedRevision) || !Number.isInteger(b?.revision) || typeof b?.blob !== "string") throw new HttpError(400, "bad_vault");
-    if ((b.blob as string).length > MAX_VAULT_B64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(b.blob as string)) throw new HttpError(400, "bad_vault_blob");
+    if ((b.blob as string).length > this.limits.vaultB64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(b.blob as string)) throw new HttpError(400, "bad_vault_blob");
     const exp = b.expectedRevision as number;
     const rev = b.revision as number;
     let out: { status: "ok" } | { status: "conflict"; current: { revision: number; blob: string } | null } = { status: "ok" };
@@ -184,7 +263,7 @@ export class DdnServer {
       this.handle(req, res).catch((e: unknown) => {
         const he = e instanceof HttpError ? e : e instanceof AuthError ? new HttpError(e.status, e.code) : new HttpError(500, "internal");
         if (!(e instanceof HttpError) && !(e instanceof AuthError)) console.error("ddn-server:", (e as Error)?.message);
-        send(res, he.status, { error: he.code });
+        send(res, he.status, { error: he.code }, he.headers);
       });
     });
     this.http.on("upgrade", (req, socket) => {
@@ -222,25 +301,50 @@ export class DdnServer {
     const path = url.pathname;
     const method = req.method ?? "GET";
 
-    if (method === "POST" && path === "/v1/auth/challenge") return send(res, 200, this.auth.challenge());
-    if (method === "POST" && path === "/v1/auth/login") return send(res, 200, await this.auth.login(await readJson(req)));
-    if (method === "POST" && path === "/v1/auth/rescue-device") return send(res, 201, await this.auth.rescueAddDevice(await readJson(req)));
-    if (method === "POST" && path === "/v1/accounts") {
-      if (this.opts.openSignup === false) throw new HttpError(403, "signup_closed");
-      return send(res, 201, await this.auth.createAccount(await readJson(req)));
+    if (!path.startsWith("/v1/")) {
+      if (this.web?.handle(req, res, path)) return;
+      throw new HttpError(404, "not_found");
     }
-    if (method === "GET" && path === "/v1/health") return send(res, 200, { ok: true, rulesVersion: RULES_VERSION });
+    const json = () => readJson(req, this.limits.bodyBytes);
+
+    if (method === "GET" && path === "/v1/health") return send(res, 200, this.health());
+    if (method === "POST" && path === "/v1/auth/challenge") return (this.limit("auth", req), send(res, 200, this.auth.challenge()));
+    if (method === "POST" && path === "/v1/auth/login") return (this.limit("auth", req), send(res, 200, await this.auth.login(await json())));
+    if (method === "POST" && path === "/v1/auth/rescue-device") return (this.limit("signup", req), send(res, 201, await this.auth.rescueAddDevice(await json())));
+    if (method === "POST" && path === "/v1/accounts") {
+      this.limit("signup", req);
+      if (this.signup === "closed") throw new HttpError(403, "signup_closed");
+      const body = await json();
+      if (this.signup === "open") return send(res, 201, await this.auth.createAccount(body));
+      const code = this.invites.claim((body as { invite?: unknown } | null)?.invite);
+      if (!code) throw new HttpError(403, "invite_required");
+      try {
+        const r = await this.auth.createAccount(body);
+        this.invites.markUsedBy(code, r.accountId);
+        return send(res, 201, r);
+      } catch (e) {
+        this.invites.release(code);
+        throw e;
+      }
+    }
     const pair = /^\/v1\/pairing\/([A-Za-z0-9_-]{22})$/.exec(path);
     if (pair && method === "GET") {
+      this.limit("mailbox", req);
       const m = this.pairingTake(pair[1]!);
       return m ? send(res, 200, m) : send(res, 404, { error: "no_pairing_message" });
+    }
+    const share = /^\/v1\/shares\/([A-Za-z0-9_-]{22})(\/urls)?$/.exec(path);
+    if (share && method === "GET") {
+      this.limit("share", req);
+      if (!share[2]) return send(res, 200, this.shares.get(share[1]!));
+      return send(res, 200, await this.shares.urls(share[1]!, intParam(url, "from", 0), Math.min(intParam(url, "n", 50), 50)));
     }
 
     const s = this.auth.verify(req.headers.authorization);
     if (!s) throw new HttpError(401, "unauthorized");
 
     if (method === "POST" && path === "/v1/notify-ticket") return send(res, 200, this.notify.issueTicket(s.accountId, s.deviceId));
-    if (method === "POST" && path === "/v1/log") return send(res, 200, this.submit(s, await readJson(req)));
+    if (method === "POST" && path === "/v1/log") return send(res, 200, this.submit(s, await json()));
     if (method === "GET" && path === "/v1/log") {
       const after = intParam(url, "after", 0);
       const limit = Math.min(intParam(url, "limit", 1000), 5000);
@@ -258,18 +362,27 @@ export class DdnServer {
         return v ? send(res, 200, v) : send(res, 404, { error: "no_vault" });
       }
       if (method === "PUT") {
-        const r = this.putVault(s, await readJson(req));
+        const r = this.putVault(s, await json());
         return send(res, r.status === "ok" ? 200 : 409, r);
       }
     }
-    if (method === "POST" && path === "/v1/devices") return send(res, 201, await this.auth.addDevice(s, await readJson(req)));
+    if (method === "POST" && path === "/v1/devices") return send(res, 201, await this.auth.addDevice(s, await json()));
     if (method === "GET" && path === "/v1/devices") return send(res, 200, { devices: this.auth.listDevices(s) });
-    if (pair && method === "PUT") return (this.pairingPut(s, pair[1]!, await readJson(req)), send(res, 201, { ok: true }));
-    const dev = /^\/v1\/devices\/([A-Za-z0-9_-]{4,80})$/.exec(path);
-    if (dev && method === "POST" && url.searchParams.get("action") === "revoke") {
-      await this.auth.revokeDevice(s, dev[1]!, await readJson(req));
+    if (pair && method === "PUT") return (this.pairingPut(s, pair[1]!, await json()), send(res, 201, { ok: true }));
+    const dev = /^\/v1\/devices\/([A-Za-z0-9_-]{4,80})(\/name)?$/.exec(path);
+    if (dev && dev[2] && method === "PUT") {
+      const b = (await json()) as { nameSealed?: unknown };
+      if (typeof b?.nameSealed !== "string" || b.nameSealed.length > MAX_DEVICE_NAME_B64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b.nameSealed)) throw new HttpError(400, "bad_device_name");
+      this.auth.setDeviceName(s, dev[1]!, b.nameSealed);
       return send(res, 200, { ok: true });
     }
+    if (dev && !dev[2] && method === "POST" && url.searchParams.get("action") === "revoke") {
+      await this.auth.revokeDevice(s, dev[1]!, await json());
+      return send(res, 200, { ok: true });
+    }
+    if (method === "POST" && path === "/v1/shares") return send(res, 201, this.shares.create(s, await json()));
+    if (method === "GET" && path === "/v1/shares") return send(res, 200, { shares: this.shares.list(s) });
+    if (share && !share[2] && method === "DELETE") return (this.shares.revoke(s, share[1]!), send(res, 200, { ok: true }));
     throw new HttpError(404, "not_found");
   }
 }
@@ -282,7 +395,7 @@ function intParam(url: URL, name: string, dflt: number): number {
   return n;
 }
 
-function send(res: ServerResponse, status: number, body: unknown): void {
+function send(res: ServerResponse, status: number, body: unknown, extra: Record<string, string> = {}): void {
   const data = JSON.stringify(body);
   const req = (res as ServerResponse & { req?: IncomingMessage }).req;
   // A body we did not read (413): close the connection after answering, and
@@ -292,21 +405,23 @@ function send(res: ServerResponse, status: number, body: unknown): void {
     "content-type": "application/json",
     "content-length": Buffer.byteLength(data),
     "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+    ...extra,
     ...(unread ? { connection: "close" } : {}),
   });
   res.end(data);
   if (unread) req.resume();
 }
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
+async function readJson(req: IncomingMessage, max = MAX_BODY_BYTES): Promise<unknown> {
   // Refuse early by declared length, without reading the body at all.
   const declared = Number(req.headers["content-length"] ?? NaN);
-  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) throw new HttpError(413, "body_too_large");
+  if (Number.isFinite(declared) && declared > max) throw new HttpError(413, "body_too_large");
   const chunks: Buffer[] = [];
   let n = 0;
   for await (const c of req) {
     n += (c as Buffer).length;
-    if (n > MAX_BODY_BYTES) throw new HttpError(413, "body_too_large");
+    if (n > max) throw new HttpError(413, "body_too_large");
     chunks.push(c as Buffer);
   }
   try {
@@ -317,7 +432,7 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 }
 
 /** Only the plaintext fields the server may see, with strict shapes (§3.3). */
-function validateEnvelope(b: unknown): EncryptedEnvelope {
+function validateEnvelope(b: unknown, maxPayload = MAX_PAYLOAD_B64): EncryptedEnvelope {
   const e = b as Record<string, unknown>;
   if (!e || typeof e !== "object") throw new HttpError(400, "bad_envelope");
   const keys = Object.keys(e).sort().join(",");
@@ -328,7 +443,7 @@ function validateEnvelope(b: unknown): EncryptedEnvelope {
   if (e.leaseGuard !== undefined && (!Array.isArray(e.leaseGuard) || e.leaseGuard.length > 1000 || !e.leaseGuard.every(isClientId))) {
     throw new HttpError(400, "bad_lease_guard");
   }
-  if (typeof e.payload !== "string" || e.payload.length > MAX_PAYLOAD_B64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(e.payload)) throw new HttpError(400, "bad_payload");
+  if (typeof e.payload !== "string" || e.payload.length > maxPayload || !/^[A-Za-z0-9+/]+={0,2}$/.test(e.payload)) throw new HttpError(400, "bad_payload");
   return {
     opId: e.opId as string,
     rulesVersion: e.rulesVersion as number,
@@ -337,3 +452,5 @@ function validateEnvelope(b: unknown): EncryptedEnvelope {
     payload: e.payload,
   };
 }
+
+export { HttpError };

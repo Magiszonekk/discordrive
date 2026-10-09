@@ -1,0 +1,26 @@
+{
+  "name": "@ddv4/ddn-server",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "discordrive-next instance (metadata-only): one process serving the API, the notify websocket and the built web app; `discordrive setup|serve|doctor|invite`.",
+  "bin": {
+    "discordrive": "./bin/discordrive.mjs"
+  },
+  "scripts": {
+    "setup": "node bin/discordrive.mjs setup",
+    "start": "node bin/discordrive.mjs serve",
+    "doctor": "node bin/discordrive.mjs doctor",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@ddv4/metadata-client": "*",
+    "@ddv4/sync-core": "*",
+    "@ddv4/web-mo": "*",
+    "tsx": "^4.19.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.5"
+  }
+}
