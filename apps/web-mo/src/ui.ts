@@ -135,7 +135,7 @@ function renderStatus(st: Awaited<ReturnType<typeof core.status>>) {
     chip(st.persistent ? "ok" : "", st.persistent ? "pamięć trwała" : "pamięć podręczna", st.persistent
       ? "Przeglądarka obiecała nie czyścić danych tej witryny. Mimo to to tylko kopia: pliki są na Discordzie."
       : "Przeglądarka może wyczyścić lokalną kopię spisu. Pliki są na Discordzie, spis odtworzy się z serwera."),
-    h("span", { class: "chip", title: `Identyfikator urządzenia: ${st.deviceId ?? "-"}` }, icon("phone"), h("b", {}, short(st.deviceId))),
+    h("span", { class: "chip", title: `Identyfikator urządzenia: ${st.deviceId ?? "-"}` }, icon("phone"), h("b", {}, st.deviceName || short(st.deviceId))),
   );
 }
 

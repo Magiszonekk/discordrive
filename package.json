@@ -7,7 +7,7 @@
     "plugins/*"
   ],
   "scripts": {
-    "setup": "tsx scripts/setup.ts",
+    "setup": "node apps/ddn-server/bin/discordrive.mjs setup",
     "dev": "concurrently --kill-others-on-fail \"npm run dev:api\" \"npm run dev:frontend\"",
     "dev:api": "npm run dev --workspace=@ddv4/api",
     "dev:frontend": "npm run dev --workspace=@ddv4/frontend",
@@ -27,7 +27,10 @@
     "infra:down": "docker compose -f infra/docker-compose.yml --env-file .env down",
     "test:sync-core": "npm run typecheck --workspace=@ddv4/sync-core && npm run test --workspace=@ddv4/sync-core",
     "test:metadata-client": "npm run typecheck --workspace=@ddv4/metadata-client && npm run test --workspace=@ddv4/metadata-client",
-    "check:web-mo": "npm run check --workspace=@ddv4/web-mo"
+    "check:web-mo": "npm run check --workspace=@ddv4/web-mo",
+    "setup:legacy": "tsx scripts/setup.ts",
+    "discordrive": "node apps/ddn-server/bin/discordrive.mjs",
+    "test:ddn-server": "npm run typecheck --workspace=@ddv4/ddn-server && npm run test --workspace=@ddv4/ddn-server"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

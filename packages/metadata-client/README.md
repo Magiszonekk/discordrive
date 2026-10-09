@@ -87,7 +87,23 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   z `/ddn/file/<id>`, pobiera i odszyfrowuje tylko potrzebne fragmenty (cache manifestów i
   fragmentów). `stream-check.ts`: prawdziwy WebM 20 s w Chromium — metadane po 3 pobraniach z
   12 fragmentów, odtwarzanie i przewinięcie na koniec działają.
-  Brakuje: aplikacja (ekrany) i jej wygląd (profil `frontend`, `--no-deploy`).
+  Aplikacja: `apps/web-mo` (wygląd od profilu `frontend`), instancja: `apps/ddn-server`.
+
+## Dodane 2026-10-09 (preview + setup)
+
+- **Serwer instancji** (`node/server.ts`): rejestracja `open|invite|closed` (`node/invites.ts`,
+  jednorazowe kody, w bazie SHA-256), limity per IP z zaufanym proxy (`node/ip-limit.ts`),
+  limity rozmiarów z konfiguracji, `GET /v1/health` (wersja, tryb, rulesVersion, uptime,
+  rejestracja, udostępnianie), aplikacja z tego samego originu z CSP (`node/static.ts`),
+  websocket przyjmuje ten sam origin.
+- **Nazwy urządzeń** (`device-names.ts`): zaszyfrowane kluczem konta, `PUT /v1/devices/<id>/name`.
+- **Postęp uploadu**: `MetadataClient.upload(src, name, parent, { onProgress })`.
+- **Udostępnianie** (§3.7, `share.ts` + `node/shares.ts`): `prepareShare` → `POST /v1/shares`,
+  link `/s/<id>#<klucz pliku>`; odbiorca `openShare` → `GET /v1/shares/<id>/urls` (serwer
+  odświeża linki botem instancji, `DiscordBotRefresher`), pobranie z CDN, SHA-256.
+- **Nazwy załączników `.txt`** (`BLOB_EXT`): CDN Discorda daje CORS tylko dla części
+  rozszerzeń (pomiar 2026-10-09, DECISIONS.md). `FakeDiscord` naśladuje to zachowanie
+  (`cdnCorsAll = false`), plus `refresh-urls` i `users/@me` dla testów bota.
 
 ## Testy
 
@@ -97,7 +113,8 @@ DDN_LIVE=1 DDN_LIVE_WEBHOOK_FILE=~/.config/discordrive-next/webhooks/<nazwa>.url
   npx vitest run test/live.test.ts         # na żywo, TYLKO webhook z serwera a test Discord server; sprząta po sobie
 node scripts/webhook-ratelimit.mjs run ... # pomiar limitów (koncept §7)
 CHROMIUM_PATH=... npm run check:browser    # klient w headless Chromium + serwer HTTP na 127.0.0.1
-npm run server                             # serwer: DDN_DB, DDN_PORT; tylko 127.0.0.1
+npm run server                             # goły serwer testowy: DDN_DB, DDN_PORT; tylko 127.0.0.1
+                                           # instancja z aplikacją: apps/ddn-server (`discordrive setup`)
 ```
 
 CLI: `DDN_STATE=<katalog> npx tsx src/cli.ts init`, potem `webhook add <plik.url>`, `put <plik>`.

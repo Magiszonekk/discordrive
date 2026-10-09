@@ -20,6 +20,7 @@ export {
   MetadataClient,
   OpFailedError,
   DEFAULT_CHUNK_SIZE,
+  BLOB_EXT,
   MANIFEST_SCHEMA_VERSION,
   decodeManifestRef,
   encodeManifestRef,

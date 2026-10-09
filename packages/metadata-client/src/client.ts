@@ -47,6 +47,14 @@ import type { DiscordPlacement, PostedAttachment, WebhookRef, WebhookTransport }
 
 /** Plaintext fragment size; same as discordrive (10 MiB on the wire incl. 28 B of IV + tag). */
 export const DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024 - 28;
+/**
+ * Attachment file extension for everything we post (fragments, manifests,
+ * snapshots). Measured 2026-10-09: Discord's CDN sends CORS headers only for
+ * some content types, chosen by extension (.txt/.json/.webm/.png yes;
+ * .bin/.dat/none no), so a browser can read only those. The bytes are the
+ * same ciphertext as before (format §6.2 unchanged); only the name differs.
+ */
+export const BLOB_EXT = ".txt";
 export const MANIFEST_SCHEMA_VERSION = 1;
 const MANIFEST_REF_PREFIX = "ddn1:";
 
@@ -341,7 +349,7 @@ export class MetadataClient {
         const data = await src.read(i * this.chunkSize, this.chunkSize);
         const ct = await encryptFragment(key, data);
         const blobId = newId();
-        const posted = await this.post(ct, `${blobId}.bin`, stats);
+        const posted = await this.post(ct, `${blobId}${BLOB_EXT}`, stats);
         chunks[i] = {
           index: i,
           blobId,
@@ -363,7 +371,7 @@ export class MetadataClient {
       const manifest: ChunkManifest = { schemaVersion: MANIFEST_SCHEMA_VERSION, chunkSizeBytes: this.chunkSize, chunks };
       const mct = await encryptManifest(key, manifest);
       await renew();
-      const mposted = await this.post(mct, `${newId()}.bin`, stats);
+      const mposted = await this.post(mct, `${newId()}${BLOB_EXT}`, stats);
       const version: ContentRef = {
         versionId: newId(),
         uploadId,

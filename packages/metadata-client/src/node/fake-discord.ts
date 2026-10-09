@@ -14,7 +14,12 @@ interface Msg {
   attachments: { id: string; filename: string; data: Uint8Array }[];
 }
 
+/** Extensions the real CDN serves with Access-Control-Allow-Origin (subset, measured 2026-10-09). */
+export const CDN_CORS_EXT = new Set(["txt", "log", "json", "csv", "webm", "mp4", "png", "jpg", "gif", "webp"]);
+
 export class FakeDiscord {
+  /** Old behaviour (CORS for everything); off = like Discord today. */
+  cdnCorsAll = false;
   private server: Server | null = null;
   readonly hooks = new Map<string, { token: string; channelId: string; name: string }>();
   readonly messages = new Map<string, Msg>();
@@ -119,7 +124,10 @@ export class FakeDiscord {
       const b = this.blobs.get(cdn[1]!);
       if (!b || !url.searchParams.get("hm")) return this.send(res, 404, { message: "Not Found" });
       this.cdnGets++;
-      res.writeHead(200, { "content-type": "application/octet-stream", "access-control-allow-origin": "*", "content-length": b.byteLength });
+      // Like the real CDN (measured 2026-10-09): CORS only for some types, by file extension.
+      const ext = /\.([A-Za-z0-9]+)$/.exec(url.pathname)?.[1]?.toLowerCase() ?? "";
+      const cors = this.cdnCorsAll || CDN_CORS_EXT.has(ext) ? { "access-control-allow-origin": "*" } : {};
+      res.writeHead(200, { "content-type": "application/octet-stream", ...cors, "content-length": b.byteLength });
       return void res.end(b);
     }
     const m = /^\/api(?:\/v\d+)?\/webhooks\/(\d+)\/([A-Za-z0-9_.-]+)(?:\/messages\/(\d+))?$/.exec(url.pathname);

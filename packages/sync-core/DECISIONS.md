@@ -160,3 +160,62 @@ wykonawcze (rozstrzygnięte samodzielnie): wyzwanie 2 min, sesja 1 h, każda wia
 podpisu zawiera cel, ID instancji serwera i wyzwanie; odwołanie i dodanie urządzenia
 wymagają świeżego podpisu, sama sesja nie wystarcza.
 
+
+### Rozstrzygnięte samodzielnie 2026-10-09 (zlecenie: preview + setup)
+Decyzje wykonawcze, których koncept i zlecenie nie przesądzały. Żadna nie zmienia kontraktu §3.3.
+
+- **Nazwy urządzeń: zaszyfrowane kluczem konta** (podklucz HKDF `ddn-device-name-v1`, AAD =
+  konto + ID urządzenia). Serwer trzyma nieczytelny blob (`devices.name_sealed`), więc §3.3
+  bez zmian. Nazwę ustawia samo urządzenie po pierwszym zalogowaniu; każde urządzenie konta
+  może zmienić nazwę dowolnego urządzenia tego konta.
+- **Rozszerzenie nazw załączników na Discordzie: `.txt` zamiast `.bin`.** Pomiar na żywo
+  2026-10-09 (a test Discord server): CDN Discorda wysyła `Access-Control-Allow-Origin` tylko dla
+  części typów, wybieranych po rozszerzeniu (`.txt/.log/.json/.csv/.webm/.mp4/.png` tak;
+  `.bin/.dat/.zip`/bez rozszerzenia nie), niezależnie od nagłówków żądania i `Content-Type`
+  podanego przy wysyłce. Przeglądarka nie odczyta więc fragmentu `.bin` (koncept §3.1 z
+  2026-09-23 zakładał `ACAO: *` dla wszystkiego). Bajty bez zmian (ten sam szyfrogram, format
+  §6.2/discordrive zgodny), zmienia się tylko nazwa pliku. `.txt` sprawdzony do 10 MiB i
+  z `Range` (206 + ACAO). Uwaga: przy `Accept-Encoding: br` CDN kompresuje `.txt` w locie;
+  przeglądarka i `fetch` w Node dekompresują przezroczyście, więc treść jest ta sama.
+  Ryzyko: Discord może zmienić listę typów z CORS; wtedy rezerwą jest pobieranie przez
+  serwer instancji (jak w e2ee) albo inna lista rozszerzeń. Do wpisania w koncept §7
+  (propozycja dla właściciela). Stare `.bin` (testy sprzed zmiany) są dalej czytelne z
+  Node/CLI, ale nie z przeglądarki.
+- **Rejestracja na instancji publicznej: jednorazowe kody zaproszenia** (`ddn-inv-XXXX-…`,
+  16 znaków Crockford base32 = 80 bitów, ważne 7 dni, w bazie tylko SHA-256, wpisywanie
+  odporne na wielkość liter/myślniki/O↔0). Kod jest zużywany atomowo przed założeniem konta
+  i oddawany, gdy założenie się nie uda. Polityki: `invite` (domyślna w `setup`), `open`
+  (z ostrzeżeniem), `closed`. Testy w pamięci dalej mają `open`.
+- **Limity zapytań per IP** (kubełki w pamięci): wyzwania/logowanie 60 na start + 60/min,
+  zakładanie konta i zestaw ratunkowy 5 + 2/min, skrzynka parowania 60 + 90/min, linki
+  udostępniania 60 + 120/min. IP klienta z `X-Forwarded-For` (skrajnie prawy wpis) tylko od
+  adresów z `trustProxy` (preview: 192.0.2.1), w przeciwnym razie adres gniazda.
+- **Jeden proces, jeden origin**: `/v1/...` = API, reszta = zbudowane `apps/web-mo/dist`
+  (`/s/<id>` i ścieżki bez rozszerzenia → `index.html`). CSP: `connect-src 'self'` + Discord
+  (API i CDN), `script-src 'self' 'wasm-unsafe-eval'`, `frame-ancestors 'none'`. Konfiguracja
+  dla strony przez `/config.js` (bez sekretów). Websocket przyjmuje ten sam origin (Origin
+  host = Host) albo allow-listę CORS (`publicUrl`).
+- **Konfiguracja instancji: jeden plik `<katalog danych>/config.json` (0600, katalog 0700)**,
+  domyślnie `~/.local/share/discordrive-next/`. Serwer czyta tylko jego; token bota tylko
+  tam (podawany interaktywnie bez echa albo plikiem `--bot-token-file`, nigdy w linii
+  poleceń; `--bot-token` jest odrzucany). Baza `ddn.db` 0600 (umask 077).
+- **Zestaw ratunkowy wymuszony raz na konto** zaraz po pierwszym kanale (nie da się zamknąć
+  Esc, „Dalej” dopiero po zaznaczeniu potwierdzenia). Wtedy powstaje wiadomość wskaźnikowa
+  (ID w sejfie webhooków, pole `pointer`), a główna karta zaczyna snapshoty wg §6.2
+  (telefon = tylko segmenty). Urządzenia dołączone parowaniem albo zestawem nie są pytane
+  ponownie; zestaw da się zawsze pokazać z panelu Urządzenia.
+- **Udostępnianie (§3.7)**: klient wysyła adresy załączników jednego pliku (manifest +
+  fragmenty) i `meta` zaszyfrowane kluczem tego pliku (nazwa, rozmiar, SHA-256), plus
+  notatkę dla właściciela zaszyfrowaną kluczem konta (podklucz `share-note`). Link
+  `/s/<22 znaki>#<klucz pliku base64url>`. Serwer odświeża linki botem (`refresh-urls`, po 50),
+  trzyma odświeżone linki w pamięci do 1 h przed ich wygaśnięciem, przyjmuje tylko odpowiedzi
+  z `cdn.discordapp.com`/`media.discordapp.net`. Wyłączenie linku = 404 dla nowych
+  odbiorców (ograniczenia cofnięcia opisane w UI). Bez tokenu bota udostępnianie jest
+  wyłączone (503, przycisk ukryty).
+- **Nowe urządzenie przez QR**: kod QR na nowym urządzeniu zawiera link
+  `https://<instancja>/#pair=ddn-pair1:…` (aparat telefonu otwiera aplikację na zalogowanym
+  urządzeniu i wypełnia pole), obok tekst do wklejenia. Nowe urządzenie odpytuje skrzynkę co
+  2 s, kod ważny 10 min, potem oba ekrany pokazują 6 cyfr i nowe urządzenie zapisuje konto
+  dopiero po potwierdzeniu „ten sam kod”.
+- **Stronicowanie**: 50 pozycji na stronę, kursor keyset `(name_key, id)` w obu rodzajach kart
+  (OPFS i kopia w pamięci), bez cięcia po stronie UI.

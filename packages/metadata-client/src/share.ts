@@ -13,7 +13,7 @@
 import { fromBase64, toBase64 } from "@ddv4/processing";
 import { createSHA256 } from "hash-wasm";
 import type { ChunkManifest } from "@ddv4/sync-core";
-import { decodeManifestRef, type ByteSink } from "./client.js";
+import { BLOB_EXT, decodeManifestRef, type ByteSink } from "./client.js";
 import { decryptFragment, decryptManifest, encryptManifest, importFileKey, sha256Hex } from "./file-crypto.js";
 import type { DiscordPlacement, WebhookRef, WebhookTransport } from "./types.js";
 
@@ -47,7 +47,7 @@ export function attachmentFilename(url: string): string {
 
 /**
  * Everything the server needs for one file version. Fragments were posted as
- * `<blobId>.bin`; the manifest name is not recorded, so it is read from the
+ * `<blobId>` + BLOB_EXT; the manifest name is not recorded, so it is read from the
  * manifest message once (one webhook GET).
  */
 export async function prepareShare(
@@ -68,7 +68,7 @@ export async function prepareShare(
   for (const c of manifest.chunks) {
     const p = c.placements?.[0] as DiscordPlacement | undefined;
     if (!p?.attachmentId || !p.channelId) throw new Error(`chunk ${c.index}: no placement`);
-    out.push({ channelId: p.channelId, attachmentId: p.attachmentId, filename: `${c.blobId}.bin` });
+    out.push({ channelId: p.channelId, attachmentId: p.attachmentId, filename: `${c.blobId}${BLOB_EXT}` });
   }
   const key = await importFileKey(loc.k);
   const sealed = await encryptManifest(key, { v: 1, ...meta } as unknown as ChunkManifest);

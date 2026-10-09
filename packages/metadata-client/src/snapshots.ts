@@ -135,7 +135,7 @@ export function emptyPointer(): Pointer {
 // --- pointer message
 
 export async function createPointerMessage(io: BlobIO, key: AccountKey, accountId: string, hook: WebhookRef): Promise<PointerLocation> {
-  const r = await io.transport.postFile(hook, await sealObj(key, emptyPointer(), AAD.pointer(accountId)), "ddn-pointer.bin");
+  const r = await io.transport.postFile(hook, await sealObj(key, emptyPointer(), AAD.pointer(accountId)), "ddn-pointer.txt");
   return { webhookId: hook.id, messageId: r.messageId };
 }
 
@@ -168,7 +168,7 @@ export async function writePointer(
     const newerBase = (next.base?.headSeq ?? -1) > (cur.base?.headSeq ?? -1);
     if (cur.toSeq > next.toSeq || (cur.toSeq === next.toSeq && !newerBase)) return "kept_newer";
   }
-  await io.transport.editMessageFile(io.hook(loc.webhookId), loc.messageId, await sealObj(key, next, AAD.pointer(accountId)), "ddn-pointer.bin");
+  await io.transport.editMessageFile(io.hook(loc.webhookId), loc.messageId, await sealObj(key, next, AAD.pointer(accountId)), "ddn-pointer.txt");
   return "written";
 }
 
@@ -246,7 +246,7 @@ export async function writeSnapshot(d: SnapshotDeps, kind: "segment" | "base"): 
     if (entries.length !== headSeq - cur.toSeq) throw new Error("server log shorter than local index");
     const body: SegmentBody = { v: 1, fromSeq: cur.toSeq + 1, toSeq: headSeq, prev: cur.lastSegment, entries };
     const sealed = await sealObj(d.key, body, AAD.segment(d.accountId, body.fromSeq, body.toSeq));
-    const p = await d.io.post(sealed, "ddn-segment.bin");
+    const p = await d.io.post(sealed, "ddn-segment.txt");
     posts++;
     const seg: SegmentRef = { ...toRef(p, sealed.byteLength), fromSeq: body.fromSeq, toSeq: body.toSeq };
     next = { ...next, toSeq: headSeq, lastSegment: seg, segmentBytesSinceBase: next.segmentBytesSinceBase + sealed.byteLength };
@@ -261,7 +261,7 @@ export async function writeSnapshot(d: SnapshotDeps, kind: "segment" | "base"): 
     let size = 0;
     for (let i = 0; i < n; i++) {
       const sealed = await seal(await d.key.subkey("snapshot"), whole.subarray(i * partLen, (i + 1) * partLen), AAD.base(d.accountId, headSeq, i, n));
-      const p = await d.io.post(sealed, "ddn-base.bin");
+      const p = await d.io.post(sealed, "ddn-base.txt");
       posts++;
       parts.push(toRef(p, sealed.byteLength));
       size += sealed.byteLength;
