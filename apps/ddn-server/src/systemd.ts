@@ -23,7 +23,7 @@ Type=simple
 WorkingDirectory=${REPO_DIR}
 ExecStart=${nodePath} --disable-warning=ExperimentalWarning ${join(PACKAGE_DIR, "bin", "discordrive.mjs")} serve --data-dir ${dataDir}
 Restart=on-failure
-# The bind address may not exist yet at boot (VPN interface): retry.
+# The bind address may not exist yet at boot (e.g. a VPN interface): retry.
 RestartSec=5
 UMask=0077
 NoNewPrivileges=yes
@@ -39,6 +39,7 @@ function sc(...args: string[]): string {
 }
 
 export function systemdAvailable(): boolean {
+  if (process.platform !== "linux") return false;
   try {
     sc("--version");
     return true;
@@ -73,6 +74,7 @@ export function installAndStart(dataDir: string): { written: boolean; restarted:
 }
 
 export function lingerEnabled(): boolean | null {
+  if (process.platform !== "linux") return null;
   try {
     const user = process.env.USER ?? execFileSync("id", ["-un"], { encoding: "utf8" }).trim();
     return execFileSync("loginctl", ["show-user", user, "-p", "Linger"], { encoding: "utf8" }).trim() === "Linger=yes";

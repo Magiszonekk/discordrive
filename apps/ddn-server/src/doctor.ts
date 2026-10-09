@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { InviteStore } from "@ddv4/metadata-client/node";
 import { health, hostUrl, isLocalAddress, portState, validateBotToken } from "./checks.js";
-import { configPath, dbPath, fileMode, loadConfig, webDir, type InstanceConfig } from "./config.js";
+import { POSIX_MODES, checkWritable, configPath, dbPath, fileMode, loadConfig, webDir, type InstanceConfig } from "./config.js";
+import { COMMANDS } from "./setup.js";
 import { lingerEnabled, systemdAvailable, unitState } from "./systemd.js";
 
 type Level = "ok" | "warn" | "fail";
@@ -29,21 +30,26 @@ export async function doctor(dataDir: string, out: (s: string) => void = console
     add("fail", "konfiguracja", (e as Error).message);
     return { checks, ok: false };
   }
-  const m = fileMode(configPath(dataDir));
-  add(m === 0o600 ? "ok" : "fail", "uprawnienia config.json", m === null ? "brak" : `0${m.toString(8)}${m === 0o600 ? "" : " (powinno być 0600: chmod 600)"}`);
-  const dm = fileMode(dataDir);
-  add(dm === 0o700 ? "ok" : "warn", "uprawnienia katalogu danych", dm === null ? "brak" : `0${dm.toString(8)}${dm === 0o700 ? "" : " (zalecane 0700)"}`);
-  for (const f of [dbPath(c), `${dbPath(c)}-wal`]) {
-    const fm = fileMode(f);
-    if (fm !== null && fm & 0o077) add("warn", `uprawnienia ${f}`, `0${fm.toString(8)} (inni użytkownicy mogą czytać)`);
+  add(process.versions.node.split(".").map(Number)[0]! >= 22 ? "ok" : "fail", "Node.js", process.version);
+  const wr = checkWritable(dataDir);
+  add(wr ? "fail" : "ok", "zapis w katalogu danych", wr ?? dataDir);
+  if (POSIX_MODES) {
+    const m = fileMode(configPath(dataDir));
+    add(m === 0o600 ? "ok" : "fail", "uprawnienia config.json", m === null ? "brak" : `0${m.toString(8)}${m === 0o600 ? "" : " (powinno być 0600: chmod 600)"}`);
+    const dm = fileMode(dataDir);
+    add(dm === 0o700 ? "ok" : "warn", "uprawnienia katalogu danych", dm === null ? "brak" : `0${dm.toString(8)}${dm === 0o700 ? "" : " (zalecane 0700)"}`);
+    for (const f of [dbPath(c), `${dbPath(c)}-wal`]) {
+      const fm = fileMode(f);
+      if (fm !== null && fm & 0o077) add("warn", `uprawnienia ${f}`, `0${fm.toString(8)} (inni użytkownicy mogą czytać)`);
+    }
   }
   add(existsSync(join(webDir(c), "index.html")) ? "ok" : "warn", "aplikacja przeglądarkowa", existsSync(join(webDir(c), "index.html")) ? webDir(c) : `${webDir(c)}: nie zbudowana (zbuduje się przy starcie)`);
 
-  add(isLocalAddress(c.bind.host) ? "ok" : "fail", "adres nasłuchu", `${c.bind.host}${isLocalAddress(c.bind.host) ? "" : " nie jest adresem tej maszyny (VPN nie działa?)"}`);
+  add(isLocalAddress(c.bind.host) ? "ok" : "fail", "adres nasłuchu", `${c.bind.host}${isLocalAddress(c.bind.host) ? "" : " nie jest adresem tej maszyny (sieć/VPN nie działa?)"}`);
   if (c.bind.host === "0.0.0.0" || c.bind.host === "::") add("warn", "adres nasłuchu", "nasłuch na wszystkich interfejsach; za proxy lepiej konkretny adres");
   const st = await portState(c.bind.host, c.bind.port);
   if (st.state === "ours") add("ok", "port", `${c.bind.port}: działa discordrive-next ${st.version}`);
-  else if (st.state === "free") add("warn", "port", `${c.bind.port}: wolny, serwer nie działa`);
+  else if (st.state === "free") add("warn", "port", `${c.bind.port}: serwer nie działa (uruchom: ${COMMANDS.start})`);
   else add("fail", "port", `${c.bind.port}: zajęty przez inną usługę (${st.code})`);
 
   if (systemdAvailable()) {
@@ -53,9 +59,9 @@ export async function doctor(dataDir: string, out: (s: string) => void = console
   }
 
   const local = await health(hostUrl(c.bind.host, c.bind.port));
-  add(local.ok ? "ok" : "fail", "health lokalnie", local.ok ? `wersja ${local.body.version}, tryb ${local.body.mode}, reguły ${local.body.rulesVersion}, uptime ${local.body.uptimeS} s` : local.error);
+  add(local.ok ? "ok" : st.state === "free" ? "warn" : "fail", "health lokalnie", local.ok ? `wersja ${local.body.version}, tryb ${local.body.mode}, reguły ${local.body.rulesVersion}, uptime ${local.body.uptimeS} s` : local.error);
   const pub = new URL(c.publicUrl);
-  if (pub.hostname !== "127.0.0.1" && pub.hostname !== "localhost") {
+  if (pub.hostname !== "127.0.0.1" && pub.hostname !== "localhost" && pub.hostname !== "[::1]") {
     const r = await health(c.publicUrl, 8000);
     add(r.ok ? "ok" : "fail", "health pod adresem publicznym", r.ok ? `${c.publicUrl}/v1/health odpowiada` : `${c.publicUrl}: ${r.error}`);
     if (pub.protocol !== "https:") add("warn", "HTTPS", "adres publiczny bez https: przeglądarka nie uruchomi aplikacji");

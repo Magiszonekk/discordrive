@@ -37,18 +37,51 @@ afterEach(async () => {
 });
 
 describe("discordrive setup (non-interactive)", () => {
-  it("writes one 0600 config in a 0700 dir, makes an invite, passes its own health self-test", async () => {
+  it("default = this computer only: localhost, bind 127.0.0.1, open sign-up, 0600 config in a 0700 dir, health self-test", async () => {
     const dir = tmp();
     const port = await freePort();
     const { p, out } = quiet();
-    const r = await setup({ yes: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, systemd: false }, p);
+    const r = await setup({ yes: true, dataDir: dir, port, systemd: false }, p);
     expect(r.selfTest).toMatchObject({ ok: true });
-    expect(r.invite?.code).toMatch(/^ddn-inv-[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$/);
+    expect(r.invite).toBeNull();
     expect(statSync(configPath(dir)).mode & 0o777).toBe(0o600);
     expect(statSync(dir).mode & 0o777).toBe(0o700);
     const c = loadConfig(dir);
-    expect(c).toMatchObject({ mode: "metadata-only", signup: "invite", bind: { host: "127.0.0.1", port }, botToken: null });
-    expect(out.join("\n")).toContain("Kod zaproszenia");
+    expect(c).toMatchObject({ mode: "metadata-only", signup: "open", publicUrl: `http://localhost:${port}`, bind: { host: "127.0.0.1", port }, botToken: null });
+    const text = out.join("\n");
+    expect(text).toContain(`Otwórz w przeglądarce:  http://localhost:${port}`.replace("Otwórz w przeglądarce", "Uruchom dysk (npm start) i otwórz"));
+    expect(text).toContain("npm run doctor");
+  });
+
+  it("public instance (https URL): sign-up by invite by default, invite printed", async () => {
+    const dir = tmp();
+    const port = await freePort();
+    const { p, out } = quiet();
+    const r = await setup({ yes: true, dataDir: dir, port, publicUrl: "https://dysk.example.com", systemd: false }, p);
+    expect(r.invite?.code).toMatch(/^ddn-inv-[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$/);
+    expect(loadConfig(dir)).toMatchObject({ signup: "invite", publicUrl: "https://dysk.example.com" });
+    expect(out.join("\n")).toContain("kod zaproszenia: ddn-inv-");
+    expect(out.join("\n")).toContain("proxy_pass http://127.0.0.1:");
+  });
+
+  it("platform data directories (no POSIX paths baked in)", async () => {
+    const { defaultDataDir } = await import("../src/config.js");
+    const { join } = await import("node:path");
+    expect(defaultDataDir("linux", {}, "/h")).toBe(join("/h", ".local", "share", "discordrive-next"));
+    expect(defaultDataDir("linux", { XDG_DATA_HOME: "/x" }, "/h")).toBe(join("/x", "discordrive-next"));
+    expect(defaultDataDir("darwin", {}, "/Users/a")).toBe(join("/Users/a", "Library", "Application Support", "discordrive-next"));
+    expect(defaultDataDir("win32", { LOCALAPPDATA: "C:\\Users\\a\\AppData\\Local" }, "C:\\Users\\a")).toBe(join("C:\\Users\\a\\AppData\\Local", "discordrive-next"));
+    expect(defaultDataDir("win32", {}, "C:\\Users\\a")).toBe(join("C:\\Users\\a", "AppData", "Local", "discordrive-next"));
+    expect(defaultDataDir("linux", { DISCORDRIVE_DATA_DIR: "/d" }, "/h")).toBe("/d");
+  });
+
+  it("refuses a data dir it cannot write, with a human message", async () => {
+    const { chmodSync, mkdirSync } = await import("node:fs");
+    const ro = join(tmp(), "ro");
+    mkdirSync(ro);
+    chmodSync(ro, 0o500);
+    cleanups.push(() => chmodSync(ro, 0o700));
+    await expect(setup({ yes: true, dataDir: join(ro, "data"), port: await freePort(), systemd: false }, quiet().p)).rejects.toThrow(/brak uprawnień do zapisu/);
   });
 
   it("validates the bot token against Discord (GET /users/@me), stores it 0600 and never prints it", async () => {
@@ -107,25 +140,59 @@ describe("discordrive setup (non-interactive)", () => {
 });
 
 describe("discordrive setup (interactive, scripted stdin)", () => {
-  it("walks the six steps with Enter for defaults, and the result serves", async () => {
+  it("Enter everywhere = local instance; the bot step explains what skipping loses and how to add it later", async () => {
     const dir = tmp();
     const port = await freePort();
     const input = new PassThrough();
     const output = new PassThrough();
     let text = "";
     output.on("data", (d) => (text += String(d)));
-    // dataDir, mode (Enter), URL, host (Enter), port, bot (Enter = skip), signup (Enter = invite), save (Enter), invite (Enter), systemd (n)
-    input.write([dir, "", `http://127.0.0.1:${port}`, "", String(port), "", "", "", "", "n", ""].join("\n"));
+    // scenario (Enter = local), port, mode (Enter), bot (Enter = skip), data dir, save (Enter), [systemd: Enter = no], start now (n)
+    const { systemdAvailable } = await import("../src/systemd.js");
+    input.write(["", String(port), "", "", dir, "", ...(systemdAvailable() ? [""] : []), "n", ""].join("\n"));
     const p = ttyPrompter(input, output);
+    // The default data dir comes from DISCORDRIVE_DATA_DIR (never the real user's one in tests).
+    process.env.DISCORDRIVE_DATA_DIR = join(tmp(), "default");
+    cleanups.push(() => void delete process.env.DISCORDRIVE_DATA_DIR);
     const r = await setup({}, p);
     p.close();
-    expect(text).toContain("1/6 Tryb instancji");
+    expect(text).toContain("Sprawdzam wymagania");
+    expect(text).toContain("Tylko na tym komputerze");
     expect(text).toContain("e2ee: wkrótce");
-    expect(text).toContain("5/6 Bot instancji");
-    expect(text).toContain("6/6 Kto może zakładać konta");
+    expect(text).toContain("Pomiń na razie");
+    expect(text).toContain("Bez bota: nie ma udostępniania linkiem");
+    expect(text).toContain("Żeby włączyć je później: npm run setup");
+    expect(text).toContain("Konta: zakładanie kont jest otwarte");
+    expect(text).toContain("Podłącz kanał Discorda");
     expect(r.selfTest?.ok).toBe(true);
-    expect(r.invite).not.toBeNull();
-    expect(loadConfig(dir).bind.port).toBe(port);
+    expect(r.invite).toBeNull();
+    expect(loadConfig(dir)).toMatchObject({ publicUrl: `http://localhost:${port}`, signup: "open", bind: { port } });
+  });
+
+  it("bot step 'configure now' shows the developer-portal guide and validates the pasted token", async () => {
+    const fake = new FakeDiscord();
+    await fake.listen();
+    cleanups.push(() => fake.close());
+    fake.botToken = "fake-bot-token-interactive-000000000000000000.x";
+    const dir = tmp();
+    const port = await freePort();
+    const input = new PassThrough();
+    const output = new PassThrough();
+    let text = "";
+    output.on("data", (d) => (text += String(d)));
+    const { systemdAvailable } = await import("../src/systemd.js");
+    // scenario, port, mode, bot: 2 = now, wrong token, right token, data dir, save, [systemd], start now: n
+    input.write(["", String(port), "", "2", "wrong", fake.botToken, dir, "", ...(systemdAvailable() ? [""] : []), "n", ""].join("\n"));
+    const p = ttyPrompter(input, output);
+    process.env.DISCORDRIVE_DATA_DIR = join(tmp(), "default");
+    cleanups.push(() => void delete process.env.DISCORDRIVE_DATA_DIR);
+    const r = await setup({ discordApiOrigin: fake.origin }, p);
+    p.close();
+    expect(text).toContain("discord.com/developers/applications");
+    expect(text).toContain("Reset Token");
+    expect(text).toContain("Token nie działa");
+    expect(text).not.toContain(fake.botToken);
+    expect(r.config.bot?.username).toBe("fake-bot");
   });
 });
 
@@ -133,7 +200,7 @@ describe("instance server: invites, limits, health, web app", () => {
   it("invite-only sign-up: no code / bad code 403, good code once, then used", async () => {
     const dir = tmp();
     const port = await freePort();
-    await setup({ yes: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, systemd: false, selfTest: false, invite: false }, quiet().p);
+    await setup({ yes: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, signup: "invite", systemd: false, selfTest: false, invite: false }, quiet().p);
     const srv = await serve(loadConfig(dir), () => {});
     cleanups.push(() => srv.close());
     const url = `http://127.0.0.1:${port}`;

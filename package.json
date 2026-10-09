@@ -11,7 +11,7 @@
     "dev": "concurrently --kill-others-on-fail \"npm run dev:api\" \"npm run dev:frontend\"",
     "dev:api": "npm run dev --workspace=@ddv4/api",
     "dev:frontend": "npm run dev --workspace=@ddv4/frontend",
-    "start": "concurrently --kill-others-on-fail \"npm run start:api\" \"npm run start:frontend\"",
+    "start": "node apps/ddn-server/bin/discordrive.mjs start",
     "start:api": "npm run start --workspace=@ddv4/api",
     "start:frontend": "npm run preview --workspace=@ddv4/frontend",
     "db:generate": "npm run generate --workspace=@ddv4/database",
@@ -30,7 +30,10 @@
     "check:web-mo": "npm run check --workspace=@ddv4/web-mo",
     "setup:legacy": "tsx scripts/setup.ts",
     "discordrive": "node apps/ddn-server/bin/discordrive.mjs",
-    "test:ddn-server": "npm run typecheck --workspace=@ddv4/ddn-server && npm run test --workspace=@ddv4/ddn-server"
+    "test:ddn-server": "npm run typecheck --workspace=@ddv4/ddn-server && npm run test --workspace=@ddv4/ddn-server",
+    "start:legacy": "concurrently --kill-others-on-fail \"npm run start:api\" \"npm run start:frontend\"",
+    "doctor": "node apps/ddn-server/bin/discordrive.mjs doctor",
+    "invite": "node apps/ddn-server/bin/discordrive.mjs invite"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -39,5 +42,8 @@
     "playwright": "^1.59.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

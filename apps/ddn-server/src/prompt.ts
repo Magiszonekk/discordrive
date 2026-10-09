@@ -70,7 +70,7 @@ export function ttyPrompter(input: NodeJS.ReadableStream = process.stdin, output
       }
     },
     async choose(q, options, dflt) {
-      p.say(q);
+      if (q) p.say(q);
       options.forEach((o, i) => p.say(`  ${i + 1}) ${o.label}${o.value === dflt ? "  (domyślnie)" : ""}`));
       for (;;) {
         const di = options.findIndex((o) => o.value === dflt) + 1;

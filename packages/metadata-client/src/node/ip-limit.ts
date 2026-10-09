@@ -3,7 +3,7 @@
 // resets them, which is fine for abuse damping.
 //
 // Client IP: the socket peer, unless the peer is a trusted reverse proxy
-// (e.g. nginx on 192.0.2.1); then the right-most X-Forwarded-For entry (the
+// (e.g. nginx on another host); then the right-most X-Forwarded-For entry (the
 // address nginx itself saw), falling back to X-Real-IP.
 
 import type { IncomingMessage } from "node:http";

@@ -371,6 +371,7 @@ dialog.sheet::backdrop { background: rgba(5, 10, 8, .5); }
     <label class="field" data-ddn-ui="server-field"><span>Serwer</span><input data-ddn="server" inputmode="url" autocomplete="off" spellcheck="false"></label>
     <label class="field" data-ddn-ui="invite-field"><span>Kod zaproszenia</span><input data-ddn="invite" placeholder="ddn-inv-XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false"><span class="hint">Ta instancja przyjmuje nowe konta tylko z kodem od jej administratora.</span></label>
     <label class="field"><span>Nazwa tego urządzenia</span><input data-ddn="device-name" placeholder="laptop" autocomplete="off"><span class="hint">Pokaże się na liście urządzeń, np. „laptop w salonie”.</span></label>
+    <p class="hint" data-ddn-ui="local-note" hidden>Ten dysk działa tylko na tym komputerze (localhost). Inne urządzenia dołączysz, gdy postawisz go na serwerze z adresem https.</p>
     <div class="note warm"><svg class="i"><use href="#i-lock"/></svg><p><strong>Zestaw ratunkowy.</strong> Klucz konta istnieje tylko na Twoich urządzeniach, serwer go nie zna. Bez żadnego urządzenia i bez zestawu ratunkowego plików nie da się odczytać. Po podłączeniu pierwszego kanału pokażemy zestaw do zapisania lub wydrukowania; bez potwierdzenia nie przejdziesz dalej.</p></div>
     <button class="btn primary block" data-ddn="create">Załóż konto</button>
     <div class="join">
@@ -424,11 +425,14 @@ dialog.sheet::backdrop { background: rgba(5, 10, 8, .5); }
           <div class="steps"><span class="done">1 · Konto</span><span class="cur">2 · Kanały</span><span>3 · Pliki</span></div>
           <h1>Podłącz kanał na Discordzie</h1>
           <p class="muted">Pliki trafiają jako zaszyfrowane fragmenty na kanały Twojego serwera Discord. Do startu wystarczy jeden kanał z webhookiem.</p>
-          <ol class="howto">
-            <li>Na swoim serwerze Discord utwórz kanał tekstowy, np. <b>#dysk-1</b>.</li>
-            <li>Ustawienia kanału → <b>Integracje</b> → <b>Webhooki</b> → Nowy webhook → <b>Kopiuj URL webhooka</b>.</li>
-            <li>Wklej adres poniżej. Każdy kolejny kanał dodajesz osobnym webhookiem.</li>
+          <ol class="howto" data-ddn="discord-guide">
+            <li><b>Konto Discord.</b> Wystarczy zwykłe, darmowe konto (aplikacja albo <b>discord.com/app</b> w przeglądarce).</li>
+            <li><b>Własny serwer.</b> Na liście serwerów po lewej kliknij <b>+</b> („Dodaj serwer”) → <b>Utwórz własny</b> → <b>Dla mnie i znajomych</b> → wpisz nazwę, np. „Mój dysk” → <b>Utwórz</b>. Serwer jest prywatny: nikt go nie widzi, dopóki kogoś nie zaprosisz.</li>
+            <li><b>Kanał.</b> Przy „Kanały tekstowe” kliknij <b>+</b> → nazwa np. <b>dysk-1</b> → <b>Utwórz kanał</b>. Na tym kanale będą zaszyfrowane fragmenty plików; nie pisz tam niczego.</li>
+            <li><b>Webhook.</b> Najedź na kanał → ikona zębatki (<b>Edytuj kanał</b>) → <b>Integracje</b> → <b>Webhooki</b> → <b>Nowy webhook</b> → kliknij go → <b>Kopiuj URL webhooka</b>.</li>
+            <li><b>Wklej adres poniżej</b> i kliknij <b>Dodaj</b>. Szybciej: powtórz kroki 3–5 dla kanałów <b>dysk-2</b>, <b>dysk-3</b> (i <b>dysk-4</b>). Discord ogranicza wysyłanie na każdy kanał osobno, więc 3–4 kanały to 3–4 razy szybsze wysyłanie. Kanały możesz dodać też później.</li>
           </ol>
+          <p class="hint">Telefon: w aplikacji Discord zrobisz to samo (serwer → nazwa kanału → Ustawienia → Integracje → Webhooki), ale najwygodniej na komputerze.</p>
         </div>
         <div class="panel-h"><h2 id="hooks-h">Kanały</h2><span class="count-badge" data-ddn-ui="hook-count"></span></div>
         <div class="slots" aria-hidden="true" data-ddn-ui="slots"><i></i><i></i><i></i><i></i></div>
@@ -439,7 +443,8 @@ dialog.sheet::backdrop { background: rgba(5, 10, 8, .5); }
           <label class="field"><span>URL webhooka</span><input data-ddn="webhook-url" type="password" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" spellcheck="false"></label>
           <button class="btn primary" data-ddn="add-webhook">Dodaj</button>
         </div>
-        <div class="note"><svg class="i"><use href="#i-lock"/></svg><p><strong>Webhook to sekret.</strong> Kto zna jego adres, może pisać na ten kanał. Adres zapisujemy zaszyfrowany i nie pokazujemy go później. Nie wklejaj go na czatach ani w zrzutach ekranu.</p></div>
+        <div class="note"><svg class="i"><use href="#i-lock"/></svg><p><strong>Adres webhooka to sekret, jak hasło.</strong> Kto go zna, może pisać na ten kanał i kasować wiadomości z niego. Zapisujemy go zaszyfrowany (serwer go nie widzi) i nie pokazujemy później. Nie wklejaj go na czatach ani w zrzutach ekranu.</p></div>
+        <div class="note warm"><svg class="i"><use href="#i-info"/></svg><p><strong>Dobrze wiedzieć.</strong> Przechowywanie plików na Discordzie jest niezgodne z jego regulaminem; Discord może usunąć wiadomości albo zablokować webhook lub konto. Trzymaj kopię ważnych plików gdzie indziej.</p></div>
       </section>
 
       <!-- 4. Urządzenia i parowanie -->

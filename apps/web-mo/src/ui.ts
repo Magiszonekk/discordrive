@@ -600,6 +600,7 @@ async function main() {
   $<HTMLInputElement>("server").value = serverUrl;
   // Same-origin instance: the server field is noise; keep it only for a dev setup with a separate API.
   ui("server-field").hidden = serverUrl === location.origin;
+  ui("local-note").hidden = !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
   const server = () => $<HTMLInputElement>("server").value.trim().replace(/\/$/, "");
   const info = await core.instance(serverUrl).catch(() => null);
   sharesOn = !!info?.shares;
