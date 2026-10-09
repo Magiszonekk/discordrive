@@ -417,10 +417,22 @@ function qr(el: HTMLElement, text: string) {
 }
 
 // ── zestaw ratunkowy ───────────────────────────────────────────────
+let kitOpening = false;
+let kitConfirmed = false;
 async function openKit(forced: boolean) {
   const d = $<HTMLDialogElement>("kit-dialog");
+  // Renders come in bursts (upload progress, websocket): open the forced kit once.
+  if (d.open || kitOpening || (forced && kitConfirmed)) return;
+  kitOpening = true;
+  let got: { kit: string; accountId: string };
+  try {
+    got = await core.rescueKit();
+    if (forced && (kitConfirmed || (await core.status()).kitSaved)) return;
+  } finally {
+    kitOpening = false;
+  }
   if (d.open) return;
-  const { kit, accountId } = await core.rescueKit();
+  const { kit, accountId } = got;
   $<HTMLTextAreaElement>("kit-text").value = kit;
   qr($("kit-qr"), kit);
   const ack = $<HTMLInputElement>("kit-ack");
@@ -460,7 +472,10 @@ function wireKit() {
   $("kit-print").onclick = () => window.print();
   $("kit-done").onclick = (e) =>
     act(e.currentTarget as HTMLElement, async () => {
-      if (d.dataset.forced) await core.confirmKitSaved();
+      if (d.dataset.forced) {
+        kitConfirmed = true;
+        await core.confirmKitSaved();
+      }
       d.close();
       await render();
     });
