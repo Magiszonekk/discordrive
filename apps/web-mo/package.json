@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@ddv4/metadata-client": "*",
-    "@ddv4/sync-core": "*"
+    "@ddv4/sync-core": "*",
+    "uqr": "^0.1.3"
   }
 }

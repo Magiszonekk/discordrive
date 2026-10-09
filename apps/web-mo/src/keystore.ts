@@ -41,6 +41,8 @@ export interface StoredAccount {
   devicePublicKey: string;
   devicePrivateKey: CryptoKey;
   pointer?: { webhookId: string; messageId: string };
+  /** When the user confirmed the rescue kit is saved (forced once per account, zlecenie 2026-10-09 A). */
+  kitSavedAt?: number;
 }
 
 export const keystore = {

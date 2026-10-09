@@ -43,7 +43,7 @@ export const DEFAULT_LIMITS: ServerLimits = { bodyBytes: MAX_BODY_BYTES, opPaylo
 
 /** Per-IP buckets for unauthenticated endpoints. */
 export const DEFAULT_RATE_LIMITS: Record<"auth" | "signup" | "mailbox" | "share", BucketSpec> = {
-  auth: { burst: 30, perMin: 30 },
+  auth: { burst: 60, perMin: 60 },
   signup: { burst: 5, perMin: 2 },
   mailbox: { burst: 60, perMin: 90 },
   share: { burst: 60, perMin: 120 },
@@ -268,7 +268,9 @@ export class DdnServer {
     });
     this.http.on("upgrade", (req, socket) => {
       // Non-browser clients send no Origin; browsers must be on the allow-list.
-      if (!this.notify.handleUpgrade(req, socket, (origin) => origin === undefined || !!this.opts.corsOrigins?.includes(origin ?? ""))) socket.destroy();
+      // Non-browser clients send no Origin; browsers must be same-origin or on the allow-list.
+      const allowed = (origin: string | undefined) => origin === undefined || !!this.opts.corsOrigins?.includes(origin) || sameOrigin(origin, req.headers.host);
+      if (!this.notify.handleUpgrade(req, socket, allowed)) socket.destroy();
     });
     await new Promise<void>((r) => this.http!.listen(port, host, r));
     const addr = this.http.address();
@@ -384,6 +386,15 @@ export class DdnServer {
     if (method === "GET" && path === "/v1/shares") return send(res, 200, { shares: this.shares.list(s) });
     if (share && !share[2] && method === "DELETE") return (this.shares.revoke(s, share[1]!), send(res, 200, { ok: true }));
     throw new HttpError(404, "not_found");
+  }
+}
+
+/** The page was served by this server (Origin host = Host header). */
+function sameOrigin(origin: string, host: string | undefined): boolean {
+  try {
+    return !!host && new URL(origin).host === host;
+  } catch {
+    return false;
   }
 }
 

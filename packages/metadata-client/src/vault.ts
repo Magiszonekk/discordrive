@@ -43,6 +43,8 @@ export interface VaultContent {
   format: typeof VAULT_FORMAT;
   version: number;
   webhooks: VaultWebhook[];
+  /** The account's snapshot pointer message (§6.2), once created. Part of the rescue kit. */
+  pointer?: { webhookId: string; messageId: string };
 }
 
 /** What the server stores. `revision` 0 = no vault yet. */

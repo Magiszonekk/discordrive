@@ -60,6 +60,13 @@ const urlOk = (s: string) => {
   }
 };
 
+/** Token file: the bare token, or an env file line `NAME=token` (first such line). */
+export function tokenFromFile(path: string): string {
+  const text = readFileSync(path, "utf8");
+  const env = /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*["']?([^"'\s]+)["']?\s*$/m.exec(text);
+  return (env ? env[1]! : text).trim();
+}
+
 export function nginxSnippet(c: InstanceConfig): string {
   const host = new URL(c.publicUrl).hostname;
   const up = hostUrl(c.bind.host, c.bind.port);
@@ -216,7 +223,7 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
   } else if (f.botTokenFile) {
     if (c.botToken && !f.replaceBot && !yes && !(await p.confirm("Zastąpić zapisany token bota tokenem z pliku?", false))) {
       p.say("  Zostaje obecny token.");
-    } else if (!(await setToken(readFileSync(f.botTokenFile, "utf8").trim()))) throw new Error("token bota z pliku nie działa");
+    } else if (!(await setToken(tokenFromFile(f.botTokenFile)))) throw new Error("token bota z pliku nie działa");
   } else if (!yes) {
     p.say("5/6 Bot instancji (opcjonalny) odświeża linki do udostępnionych plików (Discord unieważnia je po ~24 h).");
     p.say("    Bot nie musi być na niczyim serwerze i nie dostaje dostępu do plików. Bez bota udostępnianie jest wyłączone.");

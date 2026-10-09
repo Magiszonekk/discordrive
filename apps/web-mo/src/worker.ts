@@ -10,11 +10,12 @@ self.onmessage = async (ev: MessageEvent<{ id: number; method: string; args: unk
   try {
     if (method === "init") {
       core = new AppCore(args[0] as CoreConfig);
+      core.onEvent = (event) => postMessage({ event });
       return postMessage({ id, ok: true, result: null });
     }
     if (!core) throw new Error("not initialised");
     const fn = (core as unknown as Record<string, (...a: unknown[]) => unknown>)[method];
-    if (typeof fn !== "function" || method.startsWith("_") || method === "constructor") throw new Error(`no method ${method}`);
+    if (typeof fn !== "function" || method.startsWith("_") || method === "constructor" || method === "onEvent") throw new Error(`no method ${method}`);
     const result = await fn.apply(core, args);
     postMessage({ id, ok: true, result });
   } catch (e) {

@@ -132,6 +132,11 @@ export interface MetadataClientOptions {
   onInvalidOps?: (a: InvalidOpAlert) => void;
 }
 
+export interface UploadOptions {
+  /** Plaintext bytes whose fragments are on Discord so far (called after each fragment). */
+  onProgress?: (doneBytes: number, totalBytes: number) => void;
+}
+
 export interface UploadResult {
   nodeId: NodeId;
   uploadId: string;
@@ -290,7 +295,7 @@ export class MetadataClient {
    * Upload a file into `parentId` under `name` (NFC-normalized, Q5).
    * Returns once the create is applied in the local replica.
    */
-  async upload(src: ByteSource, name: string, parentId: NodeId = ROOT_ID): Promise<UploadResult> {
+  async upload(src: ByteSource, name: string, parentId: NodeId = ROOT_ID, opts: UploadOptions = {}): Promise<UploadResult> {
     const nfc = normalizeName(name);
     const bad = validateName(nfc);
     if (bad) throw new Error(`invalid name: ${bad}`);
@@ -326,6 +331,8 @@ export class MetadataClient {
     };
 
     let next = 0;
+    let sentBytes = 0;
+    opts.onProgress?.(0, src.size);
     const worker = async () => {
       for (;;) {
         const i = next++;
@@ -344,6 +351,8 @@ export class MetadataClient {
         };
         plain.set(i, data);
         feedHash();
+        sentBytes += data.byteLength;
+        opts.onProgress?.(sentBytes, src.size);
       }
     };
     try {

@@ -29,6 +29,7 @@ export {
   type ByteSource,
   type ManifestLocator,
   type MetadataClientOptions,
+  type UploadOptions,
   type UploadResult,
 } from "./client.js";
 export {

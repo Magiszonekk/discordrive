@@ -2,6 +2,7 @@
 <html lang="pl">
 <head>
 <meta charset="utf-8">
+<base href="/">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>Dysk · discordrive-next</title>
@@ -227,7 +228,7 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .devlist li { display: flex; gap: 10px; align-items: center; padding: 6px 0; }
 .devlist svg { color: var(--muted); }
 .devlist .when { color: var(--muted); margin-left: auto; white-space: nowrap; }
-.devlist .me { color: var(--accent); font-weight: 600; }
+.devlist .me { color: var(--accent); font-weight: 600; white-space: nowrap; }
 .sas { display: grid; gap: 8px; padding: 16px; border-radius: var(--radius); background: var(--accent-soft); text-align: center; }
 .sas-code { font: 500 2.1rem/1 var(--font-mono); letter-spacing: .16em; }
 .limits { margin: 0; padding: 0; list-style: none; display: grid; gap: 12px; font-size: var(--text-xs); color: var(--muted); }
@@ -247,6 +248,27 @@ dialog.player::backdrop { background: rgba(5, 10, 8, .66); }
 .toast.err svg { color: var(--danger); }
 
 .tabs { display: none; }
+
+/* ── dodatki logiki (2026-10-09): te same tokeny i klasy co reszta ── */
+dialog.sheet { width: min(560px, 94vw); max-height: 92vh; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--fg); box-shadow: var(--shadow-pop); }
+dialog.sheet::backdrop { background: rgba(5, 10, 8, .5); }
+.sheet-b { padding: clamp(18px, 3vw, 26px); display: grid; gap: 14px; overflow: auto; }
+.sheet-b h2 { font-size: var(--text-lg); }
+.qr { display: grid; place-items: center; padding: 12px; border-radius: var(--radius); background: #fff; justify-self: center; }
+.qr svg { display: block; width: min(240px, 62vw); height: auto; }
+.codebox { width: 100%; min-height: 84px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--fg); font: 400 var(--text-xs)/1.45 var(--font-mono); word-break: break-all; resize: vertical; }
+.row-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.check { display: flex; gap: 10px; align-items: start; font-size: var(--text-xs); }
+.check input { margin-top: 2px; width: 18px; height: 18px; accent-color: var(--accent); }
+.qitem-bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
+.qitem-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width var(--dur) var(--ease); }
+.devlist .dname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.share-page { max-width: 620px; margin: 0 auto; padding: clamp(28px, 6vw, 72px) clamp(16px, 4vw, 32px); }
+@media print {
+  body > *:not(dialog[open]) { display: none !important; }
+  dialog.sheet[open] { position: static; border: 0; box-shadow: none; width: auto; max-height: none; }
+  dialog.sheet .no-print { display: none !important; }
+}
 
 /* ── tablet / telefon ──────────────────────── */
 @media (max-width: 1000px) {
@@ -281,6 +303,27 @@ dialog.player::backdrop { background: rgba(5, 10, 8, .66); }
   .app:not(.setup)[data-tab="hooks"] .files, .app:not(.setup)[data-tab="hooks"] .devices-panel, .app:not(.setup)[data-tab="hooks"] .limits-panel { display: none; }
   .app:not(.setup)[data-tab="devices"] .files, .app:not(.setup)[data-tab="devices"] .hooks-panel { display: none; }
   .app.setup + .tabs { display: none; }
+
+/* ── dodatki logiki (2026-10-09): te same tokeny i klasy co reszta ── */
+dialog.sheet { width: min(560px, 94vw); max-height: 92vh; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--fg); box-shadow: var(--shadow-pop); }
+dialog.sheet::backdrop { background: rgba(5, 10, 8, .5); }
+.sheet-b { padding: clamp(18px, 3vw, 26px); display: grid; gap: 14px; overflow: auto; }
+.sheet-b h2 { font-size: var(--text-lg); }
+.qr { display: grid; place-items: center; padding: 12px; border-radius: var(--radius); background: #fff; justify-self: center; }
+.qr svg { display: block; width: min(240px, 62vw); height: auto; }
+.codebox { width: 100%; min-height: 84px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--fg); font: 400 var(--text-xs)/1.45 var(--font-mono); word-break: break-all; resize: vertical; }
+.row-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.check { display: flex; gap: 10px; align-items: start; font-size: var(--text-xs); }
+.check input { margin-top: 2px; width: 18px; height: 18px; accent-color: var(--accent); }
+.qitem-bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
+.qitem-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width var(--dur) var(--ease); }
+.devlist .dname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.share-page { max-width: 620px; margin: 0 auto; padding: clamp(28px, 6vw, 72px) clamp(16px, 4vw, 32px); }
+@media print {
+  body > *:not(dialog[open]) { display: none !important; }
+  dialog.sheet[open] { position: static; border: 0; box-shadow: none; width: auto; max-height: none; }
+  dialog.sheet .no-print { display: none !important; }
+}
   .app.setup { padding-bottom: 32px; }
   .toasts { bottom: calc(80px + env(safe-area-inset-bottom)); }
 }
@@ -297,6 +340,7 @@ dialog.player::backdrop { background: rgba(5, 10, 8, .66); }
   <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 20V9m-5 5 5-5 5 5M5 4h14"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><circle cx="17.5" cy="6" r="2.5"/><circle cx="6.5" cy="12" r="2.5"/><circle cx="17.5" cy="18" r="2.5"/><path d="m8.7 10.8 6.6-3.6M8.7 13.2l6.6 3.6"/></symbol>
   <symbol id="i-hook" viewBox="0 0 24 24"><path d="M5 12h4l2-5 3 10 2-5h3"/></symbol>
   <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 18h2"/></symbol>
   <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3"/></symbol>
@@ -324,11 +368,16 @@ dialog.player::backdrop { background: rgba(5, 10, 8, .66); }
   </div>
   <section class="card create" aria-labelledby="create-h">
     <h2 id="create-h">Nowe konto</h2>
-    <label class="field"><span>Serwer</span><input data-ddn="server" inputmode="url" autocomplete="off" spellcheck="false"></label>
+    <label class="field" data-ddn-ui="server-field"><span>Serwer</span><input data-ddn="server" inputmode="url" autocomplete="off" spellcheck="false"></label>
+    <label class="field" data-ddn-ui="invite-field"><span>Kod zaproszenia</span><input data-ddn="invite" placeholder="ddn-inv-XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false"><span class="hint">Ta instancja przyjmuje nowe konta tylko z kodem od jej administratora.</span></label>
     <label class="field"><span>Nazwa tego urządzenia</span><input data-ddn="device-name" placeholder="laptop" autocomplete="off"><span class="hint">Pokaże się na liście urządzeń, np. „laptop w salonie”.</span></label>
-    <div class="note warm"><svg class="i"><use href="#i-lock"/></svg><p><strong>Zestaw ratunkowy.</strong> Klucz konta istnieje tylko na Twoich urządzeniach, serwer go nie zna. Bez żadnego urządzenia i bez zestawu ratunkowego plików nie da się odczytać. Ta wersja w przeglądarce nie zapisuje jeszcze zestawu, więc zaraz po założeniu konta sparuj drugie urządzenie: to Twoja kopia klucza.</p></div>
+    <div class="note warm"><svg class="i"><use href="#i-lock"/></svg><p><strong>Zestaw ratunkowy.</strong> Klucz konta istnieje tylko na Twoich urządzeniach, serwer go nie zna. Bez żadnego urządzenia i bez zestawu ratunkowego plików nie da się odczytać. Po podłączeniu pierwszego kanału pokażemy zestaw do zapisania lub wydrukowania; bez potwierdzenia nie przejdziesz dalej.</p></div>
     <button class="btn primary block" data-ddn="create">Załóż konto</button>
-    <div class="join"><b>Masz już konto na innym urządzeniu?</b>Dołączanie tej przeglądarki do istniejącego konta (kod i QR na nowym urządzeniu) będzie w kolejnej wersji. Na razie parujesz z urządzenia, które jest już zalogowane.</div>
+    <div class="join">
+      <b>Masz już konto na innym urządzeniu?</b>
+      <span>Ta przeglądarka pokaże kod QR. Zeskanuj go albo wklej na zalogowanym urządzeniu (Urządzenia → Sparuj), potem porównaj 6 cyfr.</span>
+      <div class="row-btns"><button class="btn" data-ddn="join-pair" type="button"><svg class="i"><use href="#i-phone"/></svg>Dołącz to urządzenie</button><button class="btn" data-ddn="join-kit-open" type="button"><svg class="i"><use href="#i-lock"/></svg>Mam zestaw ratunkowy</button></div>
+    </div>
   </section>
 </main>
 
@@ -397,7 +446,7 @@ dialog.player::backdrop { background: rgba(5, 10, 8, .66); }
       <section class="card panel devices-panel" aria-labelledby="dev-h">
         <div class="panel-h"><h2 id="dev-h">Urządzenia</h2><span class="count-badge" data-ddn-ui="dev-count"></span></div>
         <ul class="devlist" data-ddn-ui="devices"></ul>
-        <p class="hint">Nowe urządzenie pokaże kod <span class="mono">ddn-pair1:…</span> (i QR). Wklej go tutaj, a potem porównaj 6 cyfr na obu ekranach.</p>
+        <p class="hint">Na nowym urządzeniu otwórz ten adres i wybierz „Dołącz to urządzenie”. Pokaże kod QR: zeskanuj go aparatem tego telefonu albo wklej tutaj tekst <span class="mono">ddn-pair1:…</span>, a potem porównaj 6 cyfr na obu ekranach.</p>
         <div class="inline">
           <label class="field"><span>Kod z nowego urządzenia</span><input data-ddn="pair-code" placeholder="ddn-pair1:…" autocomplete="off" spellcheck="false"></label>
           <button class="btn" data-ddn="pair">Sparuj</button>
@@ -407,6 +456,14 @@ dialog.player::backdrop { background: rgba(5, 10, 8, .66); }
           <span class="sas-code" data-ddn="pair-sas"></span>
           <span class="hint">Na nowym urządzeniu musi być dokładnie ten sam kod. Jeśli jest inny, ktoś się podszywa: odwołaj to urządzenie.</span>
         </div>
+        <div class="note warm"><svg class="i"><use href="#i-lock"/></svg><p><strong>Zestaw ratunkowy</strong> odtworzy konto, gdy stracisz wszystkie urządzenia. <button class="btn" data-ddn="kit-show" type="button" style="margin-top:8px">Pokaż zestaw ratunkowy</button></p></div>
+      </section>
+
+      <!-- 4b. Udostępnione pliki -->
+      <section class="card panel shares-panel" aria-labelledby="sh-h" data-ddn-ui="shares-panel" hidden>
+        <div class="panel-h"><h2 id="sh-h">Udostępnione</h2><span class="count-badge" data-ddn-ui="share-count"></span></div>
+        <ul class="devlist" data-ddn="shares"></ul>
+        <p class="hint">Wyłączenie linku zatrzymuje nowych odbiorców. Kto już pobrał plik albo zna adresy fragmentów i klucz, zachowa dostęp, dopóki fragmenty istnieją.</p>
       </section>
 
       <!-- 5. Uczciwie o ograniczeniach -->
@@ -433,7 +490,79 @@ dialog.player::backdrop { background: rgba(5, 10, 8, .66); }
   <video data-ddn="player" controls muted playsinline></video>
 </dialog>
 
+<!-- Zestaw ratunkowy -->
+<dialog class="sheet" data-ddn="kit-dialog" aria-labelledby="kit-h">
+  <div class="sheet-b">
+    <h2 id="kit-h">Zestaw ratunkowy</h2>
+    <p class="muted">To jedyna droga do plików, gdy stracisz wszystkie urządzenia. Zawiera klucz konta i dostęp do kanału ze spisem. Trzymaj go jak hasło: na papierze albo w menedżerze haseł, nie na czacie.</p>
+    <div class="qr" data-ddn="kit-qr"></div>
+    <label class="field"><span>Kod (do skopiowania)</span><textarea class="codebox" data-ddn="kit-text" readonly rows="4" spellcheck="false"></textarea></label>
+    <div class="row-btns no-print">
+      <button class="btn" data-ddn="kit-copy" type="button">Kopiuj</button>
+      <button class="btn" data-ddn="kit-download" type="button"><svg class="i"><use href="#i-down"/></svg>Pobierz plik</button>
+      <button class="btn" data-ddn="kit-print" type="button">Drukuj</button>
+    </div>
+    <label class="check no-print"><input type="checkbox" data-ddn="kit-ack"><span>Zapisałem zestaw ratunkowy w bezpiecznym miejscu. Rozumiem, że bez niego i bez urządzeń plików nie da się odczytać.</span></label>
+    <div class="row-btns no-print"><button class="btn primary" data-ddn="kit-done" type="button" disabled>Gotowe</button></div>
+  </div>
+</dialog>
+
+<!-- Dołączanie tego urządzenia: kod QR + 6 cyfr -->
+<dialog class="sheet" data-ddn="join-dialog" aria-labelledby="join-h">
+  <div class="sheet-b">
+    <h2 id="join-h">Dołącz to urządzenie</h2>
+    <label class="field" data-ddn-ui="join-name-field"><span>Nazwa tego urządzenia</span><input data-ddn="join-name" placeholder="telefon" autocomplete="off"></label>
+    <div data-ddn-ui="join-offer" hidden>
+      <p class="muted">Na zalogowanym urządzeniu: Urządzenia → zeskanuj kod albo wklej tekst poniżej → Sparuj.</p>
+      <div class="qr" data-ddn="join-qr"></div>
+      <label class="field"><span>Kod parowania</span><textarea class="codebox" data-ddn="join-offer" readonly rows="3" spellcheck="false"></textarea></label>
+      <p class="hint">Czekam na drugie urządzenie… Kod jest ważny 10 minut.</p>
+    </div>
+    <div class="sas" data-ddn-ui="join-sas-box" hidden>
+      <span class="hint">Kod do porównania</span>
+      <span class="sas-code" data-ddn="join-sas"></span>
+      <span class="hint">Czy na drugim urządzeniu jest dokładnie ten sam kod?</span>
+      <div class="row-btns" style="justify-content:center"><button class="btn primary" data-ddn="join-confirm" type="button">Tak, ten sam</button><button class="btn" data-ddn="join-reject" type="button">Nie, inny</button></div>
+    </div>
+    <div class="row-btns" data-ddn-ui="join-actions"><button class="btn primary" data-ddn="join-start" type="button">Pokaż kod</button><button class="btn" data-ddn="join-cancel" type="button">Anuluj</button></div>
+  </div>
+</dialog>
+
+<!-- Dołączanie z zestawu ratunkowego -->
+<dialog class="sheet" data-ddn="rescue-dialog" aria-labelledby="rescue-h">
+  <div class="sheet-b">
+    <h2 id="rescue-h">Odtwórz z zestawu ratunkowego</h2>
+    <label class="field"><span>Kod zestawu (<span class="mono">ddn-kit1:…</span>)</span><textarea class="codebox" data-ddn="rescue-text" rows="4" spellcheck="false"></textarea></label>
+    <label class="field"><span>Nazwa tego urządzenia</span><input data-ddn="rescue-name" placeholder="laptop" autocomplete="off"></label>
+    <div class="row-btns"><button class="btn primary" data-ddn="rescue-go" type="button">Dołącz</button><button class="btn" data-ddn="rescue-cancel" type="button">Anuluj</button></div>
+  </div>
+</dialog>
+
+<!-- Link do udostępnienia -->
+<dialog class="sheet" data-ddn="share-dialog" aria-labelledby="share-h">
+  <div class="sheet-b">
+    <h2 id="share-h">Link do pliku</h2>
+    <p class="muted" data-ddn-ui="share-name"></p>
+    <label class="field"><span>Link (zawiera klucz tego jednego pliku, po znaku #)</span><textarea class="codebox" data-ddn="share-link" readonly rows="3" spellcheck="false"></textarea></label>
+    <div class="note"><svg class="i"><use href="#i-info"/></svg><p>Kto ma link, pobierze i odszyfruje ten plik. Serwer nie zna klucza ani nazwy. Wyłączenie linku zatrzyma nowych odbiorców, ale nie cofnie dostępu komuś, kto już ma adresy i klucz.</p></div>
+    <div class="row-btns"><button class="btn primary" data-ddn="share-copy" type="button">Kopiuj link</button><button class="btn" data-ddn="share-close" type="button">Zamknij</button></div>
+  </div>
+</dialog>
+
+<!-- Odbiorca udostępnionego pliku -->
+<main class="share-page" data-ddn="share-view" hidden>
+  <section class="card create">
+    <h2>Udostępniony plik</h2>
+    <p class="muted">Plik jest zaszyfrowany. Odszyfrowanie dzieje się w tej przeglądarce kluczem z linku, serwer go nie zna.</p>
+    <ul class="devlist"><li><svg class="i"><use href="#i-file"/></svg><span class="dname" data-ddn="share-file-name">…</span><span class="when" data-ddn="share-file-size"></span></li></ul>
+    <div class="bar"><i data-ddn-ui="share-bar"></i></div>
+    <button class="btn primary block" data-ddn="share-get" type="button" disabled><svg class="i"><use href="#i-down"/></svg>Pobierz</button>
+    <p class="hint" data-ddn="share-state"></p>
+  </section>
+</main>
+
 <div class="toasts" data-ddn-ui="toasts" aria-live="assertive"></div>
+<script src="./config.js"></script>
 <script type="module" src="./ui.js"></script>
 </body>
 </html>
