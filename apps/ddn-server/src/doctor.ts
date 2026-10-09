@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { InviteStore } from "@ddv4/metadata-client/node";
 import { health, hostUrl, isLocalAddress, portState, validateBotToken } from "./checks.js";
-import { POSIX_MODES, checkWritable, configPath, dbPath, fileMode, loadConfig, webDir, type InstanceConfig } from "./config.js";
+import { POSIX_MODES, checkWritable, configPath, dbPath, fileMode, isLocalUrl, loadConfig, webDir, type InstanceConfig } from "./config.js";
 import { COMMANDS } from "./setup.js";
 import { lingerEnabled, systemdAvailable, unitState } from "./systemd.js";
 
@@ -52,14 +52,16 @@ export async function doctor(dataDir: string, out: (s: string) => void = console
   else if (st.state === "free") add("warn", "port", `${c.bind.port}: serwer nie działa (uruchom: ${COMMANDS.start})`);
   else add("fail", "port", `${c.bind.port}: zajęty przez inną usługę (${st.code})`);
 
+  const local = isLocalUrl(c.publicUrl);
   if (systemdAvailable()) {
     const u = unitState();
-    add(u.installed ? (u.active === "active" ? "ok" : "warn") : "warn", "systemd --user", u.installed ? `${u.active}, ${u.enabled}` : "unit nie zainstalowany (discordrive setup)");
+    if (u.installed) add(u.active === "active" ? "ok" : "warn", "usługa systemd --user", `${u.active}, ${u.enabled}`);
+    else add(local ? "ok" : "warn", "usługa systemd --user", local ? `nie używana (start ręczny: ${COMMANDS.start})` : `nie zainstalowana (${COMMANDS.setup} → uruchamianie w tle)`);
     if (u.installed && lingerEnabled() === false) add("warn", "linger", "wyłączony: usługa zatrzyma się po wylogowaniu (loginctl enable-linger)");
   }
 
-  const local = await health(hostUrl(c.bind.host, c.bind.port));
-  add(local.ok ? "ok" : st.state === "free" ? "warn" : "fail", "health lokalnie", local.ok ? `wersja ${local.body.version}, tryb ${local.body.mode}, reguły ${local.body.rulesVersion}, uptime ${local.body.uptimeS} s` : local.error);
+  const h = await health(hostUrl(c.bind.host, c.bind.port));
+  add(h.ok ? "ok" : st.state === "free" ? "warn" : "fail", "health lokalnie", h.ok ? `wersja ${h.body.version}, tryb ${h.body.mode}, reguły ${h.body.rulesVersion}, uptime ${h.body.uptimeS} s` : h.error);
   const pub = new URL(c.publicUrl);
   if (pub.hostname !== "127.0.0.1" && pub.hostname !== "localhost" && pub.hostname !== "[::1]") {
     const r = await health(c.publicUrl, 8000);
@@ -69,8 +71,8 @@ export async function doctor(dataDir: string, out: (s: string) => void = console
   if (c.botToken) {
     const b = await validateBotToken(c.botToken, c.testing?.discordApiOrigin);
     add(b.ok ? "ok" : "fail", "token bota", b.ok ? `działa (${b.username}, ${b.id})` : b.why);
-  } else add("warn", "token bota", "brak: udostępnianie wyłączone");
-  add(c.signup === "open" ? "warn" : "ok", "rejestracja", c.signup === "open" ? "otwarta dla każdego" : c.signup === "invite" ? "z kodem zaproszenia" : "zamknięta");
+  } else add(local ? "ok" : "warn", "udostępnianie linkiem", `wyłączone (brak bota; włączysz w ${COMMANDS.setup})`);
+  add(c.signup === "open" && !local ? "warn" : "ok", "rejestracja", c.signup === "open" ? (local ? "otwarta (tylko z tego komputera)" : "otwarta dla każdego z internetu") : c.signup === "invite" ? "z kodem zaproszenia" : "zamknięta");
   if (c.testing) add("warn", "tryb testowy", "testing.discordApiOrigin ustawiony: to nie jest prawdziwy Discord");
   const ok = !checks.some((x) => x.level === "fail");
   out(ok ? "\nWszystko w porządku." : "\nSą błędy (BŁĄD) do poprawienia.");

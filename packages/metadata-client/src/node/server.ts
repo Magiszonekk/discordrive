@@ -272,7 +272,18 @@ export class DdnServer {
       const allowed = (origin: string | undefined) => origin === undefined || !!this.opts.corsOrigins?.includes(origin) || sameOrigin(origin, req.headers.host);
       if (!this.notify.handleUpgrade(req, socket, allowed)) socket.destroy();
     });
-    await new Promise<void>((r) => this.http!.listen(port, host, r));
+    // Reject (EADDRINUSE, EADDRNOTAVAIL, EACCES) instead of an unhandled 'error' event.
+    await new Promise<void>((resolve, reject) => {
+      const onError = (e: Error) => {
+        this.http = null;
+        reject(e);
+      };
+      this.http!.once("error", onError);
+      this.http!.listen(port, host, () => {
+        this.http!.off("error", onError);
+        resolve();
+      });
+    });
     const addr = this.http.address();
     const p = typeof addr === "object" && addr ? addr.port : port;
     return { url: `http://${host}:${p}`, port: p };

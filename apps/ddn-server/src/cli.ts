@@ -87,7 +87,7 @@ function holdOpen(srv: DdnServer, c: InstanceConfig): void {
 
 function human(e: unknown): string {
   const err = e as NodeJS.ErrnoException;
-  if (err.code === "EADDRINUSE") return "port jest zajęty przez inny program (albo dysk już działa w innym oknie). Zmień port: npm run setup";
+  if (err.code === "EADDRINUSE") return `port${(err as { port?: number }).port ? ` ${(err as { port?: number }).port}` : ""} jest zajęty przez inny program. Zamknij go albo wybierz inny port: npm run setup`;
   if (err.code === "EADDRNOTAVAIL") return "adres nasłuchu nie istnieje na tej maszynie (sieć/VPN wyłączone?). Zmień go: npm run setup";
   if (err.code === "EACCES" || err.code === "EPERM") return `brak uprawnień${err.path ? ` do ${err.path}` : ""}. Wybierz inny katalog danych albo port powyżej 1024: npm run setup`;
   return err.message ?? String(e);
@@ -116,6 +116,12 @@ export async function main(argv: string[]): Promise<number | "running"> {
       case "start":
       case "serve": {
         const c = loadConfig(dataDir);
+        const { portState } = await import("./checks.js");
+        const st = await portState(c.bind.host, c.bind.port);
+        if (st.state === "ours") {
+          console.error(`Dysk już działa (w innym oknie albo jako usługa): otwórz ${c.publicUrl}`);
+          return 1;
+        }
         const srv = await serve(c, () => {});
         console.log(`Dysk działa: otwórz ${c.publicUrl}\nZatrzymanie: Ctrl+C. Problemy: npm run doctor`);
         holdOpen(srv, c);

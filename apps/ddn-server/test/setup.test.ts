@@ -121,6 +121,27 @@ describe("discordrive setup (non-interactive)", () => {
   });
 
   it("refuses a busy port in --yes mode and a bind address that is not on this machine", async () => {
+    const net = await import("node:net");
+    const s0 = net.createServer().listen(0, "127.0.0.1");
+    await new Promise((r) => s0.once("listening", r));
+    cleanups.push(() => void s0.close());
+    const busy = (s0.address() as { port: number }).port;
+    // `discordrive start` on a busy port: a human message, not an unhandled 'error' event.
+    const { main } = await import("../src/cli.js");
+    const dir0 = tmp();
+    await setup({ yes: true, dataDir: dir0, port: await freePort(), systemd: false, selfTest: false }, quiet().p);
+    const cfg = JSON.parse(readFileSync(configPath(dir0), "utf8"));
+    cfg.bind.port = busy;
+    writeFileSync(configPath(dir0), JSON.stringify(cfg));
+    const errs: string[] = [];
+    const orig = console.error;
+    console.error = (m: string) => void errs.push(m);
+    try {
+      expect(await main(["start", "--data-dir", dir0])).toBe(1);
+    } finally {
+      console.error = orig;
+    }
+    expect(errs.join("\n")).toMatch(new RegExp(`port ${busy} jest zajęty przez inny program`));
     const { createServer } = await import("node:net");
     const s = createServer().listen(0, "127.0.0.1");
     await new Promise((r) => s.once("listening", r));
