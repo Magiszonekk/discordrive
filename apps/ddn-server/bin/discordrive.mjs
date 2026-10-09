@@ -39,7 +39,7 @@ if (older) {
   process.exit(1);
 }
 
-const NEEDED = ["tsx/esm/api", "@ddv4/metadata-client/package.json", "@ddv4/web-mo/package.json", "@sqlite.org/sqlite-wasm/package.json", "uqr", "esbuild", "hash-wasm"];
+const NEEDED = ["tsx/esm/api", "@ddv4/metadata-client", "@ddv4/web-mo/package.json", "@sqlite.org/sqlite-wasm/package.json", "uqr", "esbuild", "hash-wasm"];
 /** First missing module, or null. */
 function missingDep() {
   const req = createRequire(join(pkgDir, "package.json"));
