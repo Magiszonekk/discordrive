@@ -9,7 +9,7 @@ worker do odtwarzania wideo wymaga tego samego originu i HTTPS).
 Patrz „Szybki start” w głównym [README](../../README.md): `git clone` → `npm run setup`.
 `bin/discordrive.mjs` jest w czystym JS: sprawdza wersję Node (≥ 22.13, czytelny komunikat),
 przy pierwszym uruchomieniu doinstalowuje tylko zależności tej aplikacji
-(`npm ci --workspace @ddv4/ddn-server --omit=dev`, ok. 50 pakietów, bez Prismy/Postgresa
+(`npm ci --workspace @ddv4/ddn-server`, ok. 55 pakietów / 75 MB, bez Prismy/Postgresa
 starego ddv4), potem ładuje źródła TS przez tsx.
 
 Kreator (po polsku, Enter = wartość w nawiasie):

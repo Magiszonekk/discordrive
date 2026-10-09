@@ -39,15 +39,20 @@ if (older) {
   process.exit(1);
 }
 
-function hasDeps() {
-  try {
-    const req = createRequire(join(pkgDir, "package.json"));
-    for (const m of ["tsx/esm/api", "@ddv4/metadata-client/package.json", "@ddv4/web-mo/package.json", "@sqlite.org/sqlite-wasm/package.json", "uqr", "esbuild", "hash-wasm"]) req.resolve(m);
-    return true;
-  } catch {
-    return false;
+const NEEDED = ["tsx/esm/api", "@ddv4/metadata-client/package.json", "@ddv4/web-mo/package.json", "@sqlite.org/sqlite-wasm/package.json", "uqr", "esbuild", "hash-wasm"];
+/** First missing module, or null. */
+function missingDep() {
+  const req = createRequire(join(pkgDir, "package.json"));
+  for (const m of NEEDED) {
+    try {
+      req.resolve(m);
+    } catch {
+      return m;
+    }
   }
+  return null;
 }
+const hasDeps = () => missingDep() === null;
 
 if (!hasDeps()) {
   if (!existsSync(join(repoDir, "package-lock.json"))) {
@@ -55,7 +60,8 @@ if (!hasDeps()) {
     process.exit(1);
   }
   console.log("Pierwsze uruchomienie: instaluję zależności aplikacji (jednorazowo, zwykle kilkanaście sekund)…");
-  const args = ["ci", "--workspace", "@ddv4/ddn-server", "--omit=dev", "--no-audit", "--no-fund", "--loglevel=error"];
+  // Not --omit=dev: tsx (runs the TypeScript sources) is a root devDependency.
+  const args = ["ci", "--workspace", "@ddv4/ddn-server", "--no-audit", "--no-fund", "--loglevel=error", "--update-notifier=false"];
   // Inside `npm run`, npm tells us where its CLI is (works the same on Windows).
   const npmCli = process.env.npm_execpath && /npm-cli\.js$/.test(process.env.npm_execpath) ? process.env.npm_execpath : null;
   const r = npmCli
@@ -65,9 +71,9 @@ if (!hasDeps()) {
     console.error(
       [
         "",
-        "Instalacja zależności nie powiodła się.",
+        `Instalacja zależności nie powiodła się${r.status === 0 ? ` (brakuje: ${missingDep()})` : ""}.`,
         "Sprawdź połączenie z internetem i spróbuj ponownie. Ręcznie (w katalogu repo):",
-        "  npm ci --workspace @ddv4/ddn-server --omit=dev",
+        "  npm ci --workspace @ddv4/ddn-server",
       ].join("\n"),
     );
     process.exit(1);
