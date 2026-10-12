@@ -8,7 +8,7 @@
 //     workspace and what it needs, not the whole monorepo), then continues.
 //  3. Hands over to src/cli.ts.
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { createRequire } from "node:module";
@@ -103,7 +103,7 @@ if (older) {
   process.exit(1);
 }
 
-const NEEDED = ["tsx/esm/api", "@ddv4/metadata-client", "@ddv4/web-mo/package.json", "@sqlite.org/sqlite-wasm/package.json", "uqr", "esbuild", "hash-wasm"];
+const NEEDED = ["tsx/esm/api", "@ddv4/metadata-client", "@ddv4/web-mo/package.json", "@sqlite.org/sqlite-wasm/package.json", "uqr", "esbuild", "hash-wasm", "@clack/core", "@clack/prompts"];
 /** First missing module, or null. */
 function missingDep() {
   const req = createRequire(join(pkgDir, "package.json"));
@@ -123,15 +123,33 @@ if (!hasDeps()) {
     console.error(M.notRepo);
     process.exit(1);
   }
-  console.log(M.installing);
+  // A small spinner on a terminal (the TUI library is not installed yet); npm output only on error.
+  const tty = process.stdout.isTTY && process.env.TERM !== "dumb";
+  const frames = ["◒", "◐", "◓", "◑"];
+  let fi = 0;
+  const spin = tty ? setInterval(() => process.stdout.write(`\r${frames[fi++ % 4]}  ${M.installing}`), 100) : null;
+  if (tty) process.stdout.write("\x1b[?25l");
+  else console.log(M.installing);
   // Not --omit=dev: tsx (runs the TypeScript sources) is a root devDependency.
   const args = ["ci", "--workspace", "@ddv4/ddn-server", "--no-audit", "--no-fund", "--loglevel=error", "--update-notifier=false"];
   // Inside `npm run`, npm tells us where its CLI is (works the same on Windows).
   const npmCli = process.env.npm_execpath && /npm-cli\.js$/.test(process.env.npm_execpath) ? process.env.npm_execpath : null;
-  const r = npmCli
-    ? spawnSync(process.execPath, [npmCli, ...args], { cwd: repoDir, stdio: "inherit" })
-    : spawnSync(process.platform === "win32" ? "npm.cmd" : "npm", args, { cwd: repoDir, stdio: "inherit", shell: process.platform === "win32" });
+  const child = npmCli
+    ? spawn(process.execPath, [npmCli, ...args], { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"] })
+    : spawn(process.platform === "win32" ? "npm.cmd" : "npm", args, { cwd: repoDir, stdio: ["ignore", "pipe", "pipe"], shell: process.platform === "win32" });
+  let log = "";
+  child.stdout.on("data", (d) => (log += d));
+  child.stderr.on("data", (d) => (log += d));
+  const r = await new Promise((done) => {
+    child.on("error", (error) => done({ error, status: null }));
+    child.on("close", (status) => done({ error: null, status }));
+  });
+  if (spin) {
+    clearInterval(spin);
+    process.stdout.write(`\r\x1b[2K${r.status === 0 ? "✔" : "✖"}  ${M.installing.replace(/…$/, "")}\n\x1b[?25h`);
+  }
   if (r.error || r.status !== 0 || !hasDeps()) {
+    if (log.trim()) console.error(log.trim());
     console.error(M.installFail(r.status === 0 ? missingDep() : null).join("\n"));
     process.exit(1);
   }
