@@ -16,7 +16,7 @@ const repo = join(here, "..", "..");
 export const SERVER_DIST = join(here, "dist");
 const STAMP = "build-stamp.json";
 /** Shared by every mode: never bundled into a mode file. */
-const SHARED = ["@ddv4/metadata-client", "@ddv4/metadata-client/node", "@ddv4/sync-core", "@ddv4/processing", "@ddv4/config"];
+const SHARED = ["@ddv4/metadata-client", "@ddv4/metadata-client/node", "@ddv4/metadata-client/server-blobs", "@ddv4/metadata-client/plain-ops", "@ddv4/sync-core", "@ddv4/processing", "@ddv4/config"];
 
 const INPUTS = ["apps/ddn-server/src/modes", "apps/ddn-server/build-server.ts", "packages/server-discord/src", "package-lock.json"];
 

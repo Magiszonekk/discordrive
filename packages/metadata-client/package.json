@@ -10,7 +10,8 @@
     ".": "./src/index.ts",
     "./node": "./src/node/index.ts",
     "./browser": "./src/browser/index.ts",
-    "./server-blobs": "./src/server-blobs.ts"
+    "./server-blobs": "./src/server-blobs.ts",
+    "./plain-ops": "./src/plain-ops.ts"
   },
   "bin": {
     "ddn": "./src/cli.ts"

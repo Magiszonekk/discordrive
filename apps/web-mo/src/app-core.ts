@@ -309,6 +309,27 @@ export class AppCore {
     return { nodeId: r.nodeId, chunks: r.chunks, sha256: r.version.plaintextSha256 };
   }
 
+  /** What the instance does with plaintext (plain mode): the UI shows thumbnails/search only then. */
+  features() {
+    return mode.serverFeatures ?? { thumbnails: false, search: false, streaming: false };
+  }
+
+  /** plain: thumbnail of a file (JPEG), null when there is none (yet) or the mode has none. */
+  async thumbnail(nodeId: string): Promise<Blob | null> {
+    return mode.thumbnail ? mode.thumbnail(this.ctx!, nodeId) : null;
+  }
+
+  /** plain: search by name on the server. */
+  async search(q: string) {
+    if (!mode.search) throw new Error("not supported in this mode");
+    return mode.search(this.ctx!, q);
+  }
+
+  /** plain: a URL the <video> element can play straight from the server (Range, ticket in the URL). */
+  async streamUrl(nodeId: string): Promise<string | null> {
+    return mode.streamUrl ? mode.streamUrl(this.ctx!, nodeId) : null;
+  }
+
   /** Stop an upload in progress (the fragment in flight is aborted; e2ee/plain: the server deletes what was sent). */
   cancelUpload(token: string): boolean {
     const ac = this.uploads.get(token);

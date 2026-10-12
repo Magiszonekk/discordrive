@@ -25,6 +25,7 @@ import { DdnServer, DISCORD_ORIGINS, FakeDiscord, type BotRefresher } from "@ddv
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MODE = (process.env.DDN_E2E_MODE ?? "metadata-only") as "metadata-only" | "e2ee" | "plain";
+// plain: the server's names are readable on purpose (that is the mode); the "server blind" check applies to the others.
 const SERVER_SIDE = MODE !== "metadata-only";
 execFileSync(process.execPath, [join(here, "..", "..", "node_modules", "tsx", "dist", "cli.mjs"), join(here, "build.ts"), MODE], { stdio: "ignore" });
 const dist = join(here, "dist", MODE);
@@ -73,8 +74,13 @@ if (remote) {
     // e2ee/plain: instance pool of 2 channels; the browser's two hooks become the "own channel" test.
     const { serverBlobsMode, POOL } = await import("@ddv4/server-discord");
     const { DiscordWebhookTransport } = await import("@ddv4/metadata-client");
-    const m = serverBlobsMode({ dataDir: mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-inst-")), discordApiOrigin: discordOrigin, cleanupTickMs: 0, snapshotTickMs: 0 });
+    const instDir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-inst-"));
+    const m = serverBlobsMode({ dataDir: instDir, discordApiOrigin: discordOrigin, cleanupTickMs: 0, snapshotTickMs: 0 });
     extensions = m.extensions;
+    if (MODE === "plain") {
+      const { PlainExtension } = await import("@ddv4/server-discord/plain");
+      extensions = [...m.extensions, new PlainExtension({ dataDir: instDir, blobs: m.blobs })];
+    }
     shareBot = m.shareRefresher; // no bot: share links refreshed through the instance webhooks
     const pool = [fake.addWebhook("1550000000000000201").url, fake.addWebhook("1550000000000000202").url];
     poolInit = async () => {
@@ -337,6 +343,25 @@ try {
   r.docSize = await p.locator("[data-ddn=row]", { hasText: "notatki.txt" }).locator(".size").textContent();
   const bigSteps = [...new Set(progress.filter((x) => x.startsWith("duzy.bin:") && /%$/.test(x)))];
   r.progressBigFile = bigSteps;
+  if (MODE === "plain") {
+    // Thumbnail of the video (made on the server in the background) replaces the type badge.
+    // Without a reload: the list asks again until the server has made it.
+    const tThumb = Date.now();
+    await p.waitForSelector("[data-ddn=row]:has-text('klip.webm') img[data-ddn=thumb]", { timeout: 60_000 }).catch(() => {});
+    r.thumbnailAfterMs = Date.now() - tThumb;
+    r.thumbnail = await p.evaluate(() => {
+      const img = document.querySelector<HTMLImageElement>("[data-ddn=row] img[data-ddn=thumb]");
+      return img ? { w: img.naturalWidth, h: img.naturalHeight, ok: img.complete && img.naturalWidth > 0 } : null;
+    });
+    // Server search (by name, the server knows them in plain mode).
+    await typeInto(p, "[data-ddn=search]", "NOTATKI");
+    await p.waitForFunction(() => document.querySelectorAll("[data-ddn=row]").length === 1 && /notatki\.txt/.test(document.querySelector("[data-ddn=row]")?.textContent ?? ""), null, { timeout: 15_000 }).catch(() => {});
+    r.search = { rows: await p.$$eval("[data-ddn=row]", (e) => e.map((x) => x.querySelector("[title]")?.getAttribute("title"))), meta: await p.textContent("[data-ddn-ui=folder-meta]") };
+    await shot(p, "04b-search");
+    await typeInto(p, "[data-ddn=search]", "");
+    await p.keyboard.press("Enter");
+    await count(p, L.four);
+  }
   await shot(p, "04-uploaded");
 
   // 4. download through the UI and compare SHA-256
@@ -369,6 +394,7 @@ try {
         setTimeout(done, 30_000);
       }),
   );
+  r.videoSource = await p.getAttribute("[data-ddn=player]", "data-source");
   await shot(p, "05-video");
   await p.click("[data-ddn-ui=player-close]");
 
@@ -566,6 +592,13 @@ try {
   const checks: Record<string, boolean> = {
     noFalseReturningHandlers: lint.length === 0,
     keyboard: r.typedInvite === true && r.pastedWebhook === true && r.typedFolder === true && (SERVER_SIDE || !hookUrls[1] || r.typedWebhook === true) && r.pastedPairCode === true,
+    ...(MODE === "plain"
+      ? {
+          plainThumbnail: !!(r.thumbnail as { ok: boolean } | null)?.ok && Math.max((r.thumbnail as { w: number }).w, (r.thumbnail as { h: number }).h) <= 320 && (r.thumbnailAfterMs as number) < 30_000,
+          plainSearch: JSON.stringify((r.search as { rows: string[] }).rows) === JSON.stringify(["notatki.txt"]),
+          plainServerStreaming: r.videoSource === "server",
+        }
+      : {}),
     ...(SERVER_SIDE
       ? { modeChannels: r.noChannelStepWithPool === true && /\d+ (shared|wspóln)/.test(String(r.poolShown)) && (!hookUrls[0] || ((r.ownChannel as { poolHidden: boolean; backToPool: boolean }).poolHidden && (r.ownChannel as { backToPool: boolean }).backToPool)) }
       : {}),
@@ -589,7 +622,7 @@ try {
     names: JSON.stringify(r.deviceNamesOnLaptop) === JSON.stringify(["Laptop testowy", "Telefon testowy"]),
     mobile: r.phoneFilesHiddenOnDevicesTab === true && r.phoneNoHorizontalScroll === true && r.phoneSidebarHiddenUntilMenu === true && r.phoneDrawerClosedAfterNav === true,
     rescue: L.of(65).test(String(r.rescueCount)),
-    serverBlind: r.serverSeesNoNames !== false,
+    serverBlind: MODE === "plain" ? true : r.serverSeesNoNames !== false,
     noPageErrors: errors.length === 0,
   };
   r.mode = MODE;

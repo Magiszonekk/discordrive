@@ -5,3 +5,5 @@ export { InstanceHooks, POOL, INSTANCE_KEY_FILE, MAX_ACCOUNT_CHANNELS, loadInsta
 export { BlobsExtension, ByteBudget, MAX_BLOB_BYTES, DEFAULT_INFLIGHT_BYTES, FRAGMENT_RETENTION_MS, type BlobsExtensionOptions, type BlobRow } from "./blobs-ext.js";
 export { SnapshotsExtension, serverSnapshotKey, serverBlobIO, rebuildAccountLog, type SnapshotsExtensionOptions } from "./snapshots-ext.js";
 export { serverBlobsMode, type ServerBlobsMode, type ServerBlobsModeOptions } from "./mode.js";
+// plain mode only (kept out of this index so an e2ee bundle never contains it):
+//   import { PlainExtension } from "@ddv4/server-discord/plain"

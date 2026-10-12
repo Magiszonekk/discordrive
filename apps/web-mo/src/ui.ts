@@ -15,6 +15,10 @@ import { connect } from "./rpc.js";
 
 /** Mode this bundle was built for (build.ts define). */
 declare const __DDN_MODE__: string;
+/** Server-side features of this mode (plain: thumbnails, search, streaming). */
+let features = { thumbnails: false, search: false, streaming: false };
+/** plain: current server search ("" = none). */
+let searchQ = "";
 
 const cfg = (window as unknown as { DDN_CONFIG?: { discordApiOrigin?: string; serverUrl?: string; language?: string } }).DDN_CONFIG ?? {};
 // Language before the first paint: this browser's choice, else the instance default, else English.
@@ -262,11 +266,13 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
     acts.append(go);
   } else {
     const [, label, tone] = typeOf(r.name);
-    name.append(h("span", { class: "nm" }, h("span", { class: `badge ${tone}` }, label), h("span", { title: r.name }, r.name)), h("span", { class: "sub" }, [fmt(r.size), r.modifiedAt ? fmtDate(r.modifiedAt) : ""].filter(Boolean).join(" · ")));
+    const badge = h("span", { class: `badge ${tone}` }, label);
+    if (features.thumbnails && tone === "media") void showThumb(badge, r.id);
+    name.append(h("span", { class: "nm" }, badge, h("span", { title: r.name }, r.name)), h("span", { class: "sub" }, [fmt(r.size), r.modifiedAt ? fmtDate(r.modifiedAt) : ""].filter(Boolean).join(" · ")));
     if (VIDEO.test(r.name)) {
       const play = iconBtn("play", t("files.play.aria", { name: r.name }), t("files.play"));
       play.dataset.ddn = "play";
-      play.onclick = () => openPlayer(r.id, r.name, r.size ?? 0);
+      play.onclick = () => void openPlayer(r.id, r.name, r.size ?? 0);
       acts.append(play);
     }
     const dl = iconBtn("download", t("files.download.aria", { name: r.name }), t("files.download"), "accent");
@@ -299,11 +305,39 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
   return tr;
 }
 
-function openPlayer(id: string, name: string, size: number) {
+/** plain: replace the type badge with the server's thumbnail once it exists (cached per file). */
+const thumbs = new Map<string, Promise<string | null>>();
+const thumbTries = new Map<string, number>();
+async function showThumb(badge: HTMLElement, id: string) {
+  let p = thumbs.get(id);
+  if (!p) {
+    p = core.thumbnail(id).then((b) => (b ? URL.createObjectURL(b) : null)).catch(() => null);
+    thumbs.set(id, p);
+    // Not ready yet (made in the background after the upload): forget the miss and render again soon.
+    void p.then((u) => {
+      if (u) return;
+      const tries = (thumbTries.get(id) ?? 0) + 1;
+      thumbTries.set(id, tries);
+      if (tries <= 10)
+        setTimeout(() => {
+          thumbs.delete(id);
+          shownList = ""; // no row animation on this refresh
+          void render();
+        }, 2000 * tries);
+    });
+  }
+  const url = await p;
+  if (url && badge.isConnected) badge.replaceWith(Object.assign(h("img", { class: "thumb", alt: "", "data-ddn": "thumb" }), { src: url }));
+}
+
+async function openPlayer(id: string, name: string, size: number) {
   const d = ui<HTMLDialogElement>("player-dialog");
   const v = $<HTMLVideoElement>("player");
   ui("player-title").textContent = name;
-  v.src = `./ddn/file/${encodeURIComponent(id)}?size=${size}`;
+  // plain: straight from the server (Range on the plaintext); other modes: the service worker decrypts here.
+  const direct = features.streaming ? await core.streamUrl(id).catch(() => null) : null;
+  v.src = direct ?? `./ddn/file/${encodeURIComponent(id)}?size=${size}`;
+  v.dataset.source = direct ? "server" : "sw";
   if (!d.open) d.showModal();
   void v.play().catch(() => {});
 }
@@ -530,6 +564,7 @@ async function renderNow() {
   }
   renderCrumbs(path);
   ui("folder-title").textContent = path.length ? path.at(-1)!.name : t("files.root");
+  if (searchQ) return renderSearch();
   const [stats, pg] = await Promise.all([core.folderStats(folder), core.list(folder, cursorStack.at(-1), PAGE)]);
   ui("folder-meta").textContent = [tn("files.meta.folders", stats.folders), tn("files.meta.files", stats.files), stats.bytes > 0 ? fmt(stats.bytes) : ""].filter(Boolean).join(" · ");
   ui("need-channel").hidden = channelsOk;
@@ -562,6 +597,37 @@ async function renderNow() {
   prev.onclick = () => {
     if (cursorStack.length > 1) cursorStack.pop();
     void render().then(toTop);
+  };
+}
+
+/** plain: results of a server search in the file table (one page, up to 200). */
+async function renderSearch() {
+  const hits = await core.search(searchQ);
+  ui("folder-meta").textContent = tn("search.results", hits.length, { q: searchQ });
+  $("list").replaceChildren(...hits.map((x, i) => fileRow({ ...x, cursor: "" } as never, i, false)));
+  ui("empty").hidden = hits.length > 0;
+  $("count").textContent = tn("files.count", hits.length);
+  ui("pager-btns").hidden = true;
+}
+
+function wireSearch() {
+  const box = ui<HTMLFormElement>("search");
+  box.hidden = !features.search;
+  if (!features.search) return;
+  const input = $<HTMLInputElement>("search");
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const go = () => {
+    searchQ = input.value.trim();
+    shownList = "";
+    void render();
+  };
+  box.onsubmit = (e) => {
+    e.preventDefault();
+    go();
+  };
+  input.oninput = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(go, 300);
   };
 }
 
@@ -1071,6 +1137,8 @@ async function main() {
   }
   const pre = new URLSearchParams(location.search).get("invite");
   if (pre) $<HTMLInputElement>("invite").value = pre;
+  features = await core.features();
+  wireSearch();
   wireSignedOut(server);
   wireKit();
   wireHooks();

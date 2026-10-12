@@ -13,6 +13,7 @@
 // Interface: arrow keys (tui.ts) on an interactive terminal, plain numbered
 // questions otherwise (prompt.ts); the wizard logic below is the same for both.
 
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { InviteStore } from "@ddv4/metadata-client/node";
@@ -331,6 +332,20 @@ export async function setup(f: SetupFlags, p0?: Prompter): Promise<SetupResult> 
   }
 
   // 2b. e2ee/plain: the instance's own channels (pool); URLs go to the encrypted table, not the config.
+  if (c.mode === "plain") {
+    // Optional dependency: thumbnails/previews. Missing = a clear warning, not a failure.
+    const which = (b: string) => {
+      try {
+        return spawnSync(b, ["-version"], { stdio: "ignore", timeout: 10_000, windowsHide: true }).status === 0;
+      } catch {
+        return false;
+      }
+    };
+    const ff = process.env.DDN_FFMPEG || "ffmpeg";
+    const fp = process.env.DDN_FFPROBE || "ffprobe";
+    if (which(ff) && which(fp)) p.ok(t("s.ffmpegOk"));
+    else p.warn(t(process.platform === "win32" ? "d.ffmpegMissingWin" : process.platform === "darwin" ? "d.ffmpegMissingMac" : "d.ffmpegMissingLinux"));
+  }
   if (c.mode !== "metadata-only") {
     if (f.webhooksFile) {
       try {

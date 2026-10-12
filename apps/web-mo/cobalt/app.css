@@ -362,3 +362,7 @@ dialog.player { width: min(1000px, 96vw); padding: 0; border: 1px solid var(--co
   dialog.modal[open] { position: static; border: 0; box-shadow: none; width: auto; max-height: none; }
   .no-print { display: none !important; }
 }
+
+/* stage 3, plain mode (functional placeholders; the look is the frontend profile's job) */
+.thumb { flex: none; width: 28px; height: 28px; border-radius: var(--radius-chip); object-fit: cover; background: var(--color-paper-2, transparent); }
+.search .input { width: 14rem; max-width: 40vw; }

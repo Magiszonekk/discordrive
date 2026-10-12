@@ -310,4 +310,8 @@ export const en: Record<string, string> = {
   "mode.e2ee": "e2ee: files encrypted in your browser, the server uploads them",
   "mode.metadata-only": "metadata only: the browser sends straight to Discord",
   "mode.plain": "plain: no encryption, thumbnails and preview on the server",
+  "search.ph": "Search by name",
+  "search.results_one": "{n} result for “{q}”",
+  "search.results_other": "{n} results for “{q}”",
+  "search.clear": "Clear search",
 };

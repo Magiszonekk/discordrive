@@ -58,10 +58,16 @@ export interface ModeImpl {
   decodeKit(text: string): { accountId: string; key: string };
   /** Whether this mode needs the main tab to write snapshots (metadata only). */
   readonly clientSnapshots: boolean;
+  /** What the instance does with plaintext (plain only): thumbnails, server search, server Range streaming. */
+  readonly serverFeatures?: { thumbnails: boolean; search: boolean; streaming: boolean };
   /** One snapshot tick (metadata only); null when nothing to do. */
   snapshotTick?(ctx: ModeCtx, client: DriveClient, force: boolean): Promise<{ kind: string; written: string; toSeq: number } | null>;
   /** Attachment addresses of one file version, manifest first (share links, §3.7). */
   shareAttachments(ctx: ModeCtx, client: DriveClient, manifestRef: string): Promise<ShareAttachment[]>;
+  /** plain only: server thumbnail, server search, server Range stream URL. */
+  thumbnail?(ctx: ModeCtx, nodeId: string): Promise<Blob | null>;
+  search?(ctx: ModeCtx, q: string): Promise<{ id: string; name: string; kind: "file" | "folder"; parentId: string | null; size: number | null }[]>;
+  streamUrl?(ctx: ModeCtx, nodeId: string): Promise<string | null>;
   /** Codec of the operation log (encrypted, or plain JSON in plain mode). */
   arbiter(ctx: ModeCtx): ArbiterApi;
 }

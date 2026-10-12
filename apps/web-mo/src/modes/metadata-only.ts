@@ -52,6 +52,7 @@ export const mode: ModeImpl = {
   mode: "metadata-only",
   marker: MODE_MARKER,
   clientSnapshots: true,
+  serverFeatures: { thumbnails: false, search: false, streaming: false },
 
   arbiter(ctx) {
     return ctx.timed(new EncryptedArbiter(new OpCodec(ctx.key, ctx.acct.accountId), ctx.http));

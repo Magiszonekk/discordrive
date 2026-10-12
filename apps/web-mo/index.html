@@ -163,6 +163,8 @@
           </div>
         </div>
         <div class="acts">
+          <!-- plain mode only (server-side search); hidden in the other modes -->
+          <form class="search" data-ddn-ui="search" role="search" hidden><input class="input" type="search" data-ddn="search" autocomplete="off" spellcheck="false" data-i18n-attr="placeholder=search.ph, aria-label=search.ph"></form>
           <button class="btn" type="button" data-ddn="new-folder"><svg class="i"><use href="#i-folder-plus"/></svg><span class="lbl-md" data-i18n="files.newFolder">New folder</span></button>
           <label class="btn primary upload-btn" data-ddn-ui="upload-btn"><span data-i18n="files.upload">Upload files</span><input type="file" multiple data-ddn="file" data-i18n-attr="aria-label=files.upload.aria"></label>
         </div>

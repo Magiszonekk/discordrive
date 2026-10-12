@@ -318,4 +318,10 @@ export const pl: Record<string, string> = {
   "mode.e2ee": "e2ee: pliki szyfrowane w przeglądarce, wysyła je serwer",
   "mode.metadata-only": "metadata only: przeglądarka wysyła prosto na Discorda",
   "mode.plain": "plain: bez szyfrowania, miniatury i podgląd na serwerze",
+  "search.ph": "Szukaj po nazwie",
+  "search.results_one": "{n} wynik dla „{q}”",
+  "search.results_few": "{n} wyniki dla „{q}”",
+  "search.results_many": "{n} wyników dla „{q}”",
+  "search.results_other": "{n} wyniku dla „{q}”",
+  "search.clear": "Wyczyść wyszukiwanie",
 };
