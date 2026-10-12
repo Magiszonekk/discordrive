@@ -439,6 +439,30 @@ export async function restoreFromDiscord(
   return { store, pointer, tail, baseHeadSeq: baseHead };
 }
 
+/**
+ * The encrypted log entries the segment chain holds, seq 1..pointer.toSeq (or from the first
+ * kept segment after pruning). For a server that cannot decrypt operations (e2ee): rebuilding
+ * an account's log after losing its database needs only this, the pointer location and the
+ * key the chain was sealed with.
+ */
+export async function readLogChain(io: BlobIO, key: AccountKey, accountId: string, loc: PointerLocation): Promise<{ pointer: Pointer; entries: EncryptedEntry[] }> {
+  const pointer = await readPointer(io, key, accountId, loc);
+  const segs: SegmentBody[] = [];
+  let ref = pointer.lastSegment;
+  let expectTo = pointer.toSeq;
+  while (ref) {
+    if (ref.toSeq !== expectTo) throw new Error(`segment chain gap: expected to=${expectTo}, got ${ref.toSeq}`);
+    const body = await unsealObj<SegmentBody>(key, await io.fetch(toPlacement(ref)), AAD.segment(accountId, ref.fromSeq, ref.toSeq), "segment");
+    if (body.fromSeq !== ref.fromSeq || body.toSeq !== ref.toSeq || body.entries.length !== body.toSeq - body.fromSeq + 1) throw new Error("segment does not match its reference");
+    segs.unshift(body);
+    expectTo = ref.fromSeq - 1;
+    ref = body.prev;
+  }
+  const entries = segs.flatMap((s) => s.entries);
+  for (let i = 1; i < entries.length; i++) if (entries[i]!.seq !== entries[i - 1]!.seq + 1) throw new Error("log chain not contiguous");
+  return { pointer, entries };
+}
+
 // --- rescue kit (§3.5)
 
 export interface RescueKit {
@@ -451,6 +475,32 @@ export interface RescueKit {
   pointerMessageId: string;
 }
 
+/**
+ * Rescue kit of the e2ee and plain modes (docs/stage3-modes.md §3): the webhooks belong to the
+ * instance, so the kit carries the account key and the instance address only. Registers a new
+ * device with the rescue key, like kit 1.
+ */
+export interface ServerRescueKit {
+  v: 2;
+  accountId: string;
+  key: string;
+  server: string;
+}
+
+export function encodeServerRescueKit(k: ServerRescueKit): string {
+  return "ddn-kit2:" + toBase64(enc.encode(JSON.stringify(k))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+export function decodeServerRescueKit(s: string): ServerRescueKit {
+  const t = s.trim();
+  if (!t.startsWith("ddn-kit2:")) throw new Error(t.startsWith("ddn-kit1:") ? "kit of a metadata-only instance" : "not a rescue kit");
+  let b = t.slice(9).replace(/-/g, "+").replace(/_/g, "/");
+  while (b.length % 4) b += "=";
+  const k = JSON.parse(dec.decode(fromBase64(b))) as ServerRescueKit;
+  if (k.v !== 2 || !k.accountId || !k.key || !k.server) throw new Error("bad rescue kit");
+  return k;
+}
+
 /** Compact text form for printing/QR: "ddn-kit1:" + base64url(JSON). Secret. */
 export function encodeRescueKit(k: RescueKit): string {
   return "ddn-kit1:" + toBase64(enc.encode(JSON.stringify(k))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -458,7 +508,7 @@ export function encodeRescueKit(k: RescueKit): string {
 
 export function decodeRescueKit(s: string): RescueKit {
   const t = s.trim();
-  if (!t.startsWith("ddn-kit1:")) throw new Error("not a rescue kit");
+  if (!t.startsWith("ddn-kit1:")) throw new Error(t.startsWith("ddn-kit2:") ? "kit of an e2ee/plain instance" : "not a rescue kit");
   let b = t.slice(9).replace(/-/g, "+").replace(/_/g, "/");
   while (b.length % 4) b += "=";
   const k = JSON.parse(dec.decode(fromBase64(b))) as RescueKit;
