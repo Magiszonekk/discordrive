@@ -350,3 +350,33 @@ Decyzje wykonawcze, których koncept i zlecenie nie przesądzały. Żadna nie zm
   typecheck, testy sync-core/metadata-client/ddn-server, `setup --yes` bez/z `--accept-risk`,
   `start` + drugi `start` + `doctor`, i prawdziwa rejestracja startu w tle
   (`DDN_CI_REAL_AUTOSTART=1`, `test/autostart-real.test.ts`).
+
+## Etap 3 (tryby e2ee i plain, `docs/stage3-modes.md`)
+
+Wariant B (decyzja właściciela 2026-10-12): tryby nowego rdzenia, nie stare `apps/api` +
+`apps/frontend`. Pełny projekt: `docs/stage3-modes.md`. Rozstrzygnięte samodzielnie:
+- **Reguły bez zmian** (`RULES_VERSION` jak w etapie 2): tryby różnią się transportem, szyfrowaniem
+  operacji i pracą w tle, nie regułami. Ten sam log daje ten sam stan w każdym trybie.
+- **Tryb przy budowaniu:** wirtualny moduł `ddn:mode` rozwiązywany przez esbuild na plik jednego
+  trybu (`modes/<tryb>.ts` w web-mo i ddn-server), osobne `dist/<tryb>/`; kod innych trybów nie
+  jest nawet parsowany. Test grepem po znacznikach (`ddn-mode-marker:*`, `ddn-plain-op-codec`,
+  `ddn-webhook-vault`, `ddn-server-blobs`). Serwer odmawia startu, gdy tryb w konfiguracji ≠ tryb
+  bundla ≠ tryb zapisany w bazie. Zmiana trybu = nowa instancja (nowy katalog danych).
+- **Webhooki w e2ee/plain:** pula instancji z setupu + opcjonalne kanały konta z Settings
+  (konto z własnymi kanałami używa tylko ich). URL-e zaszyfrowane kluczem instancji
+  (`instance.key`, osobny plik 0600), API nigdy ich nie zwraca.
+- **Wysyłacz serwerowy** `packages/server-discord`: limiter per kanał (pomiar §7), wybór kanału
+  z najwcześniej wolnym kubełkiem, Cloudflare fail-fast (ddrive 0d098ca), budżet żądań na
+  IP (discord-client c143f82), health-check webhooków. Bez Prismy/Redisa.
+- **Upload przez serwer** fragment po fragmencie (`PUT /v1/uploads/<U>/blobs/<i>`, hash
+  szyfrogramu), budżet pamięci w locie 192 MiB z backpressure (lekcja fix/upload-cancel-and-oom),
+  idempotentne wznawianie, anulowanie = skasowanie fragmentów + tombstone U.
+- **Pobieranie z CDN** po odświeżeniu linków przez serwer (bot albo webhook), nie proxy: preview
+  stoi za a VPS przez a VPN, proxy podwajałoby ruch tunelu. Proxy z Range jako zapas i dla plain.
+- **Praca w tle bez otwartej karty:** łańcuch segmentów logu (§6.2, ≤ 5 min straty) pisany przez
+  serwer kluczem HKDF(klucz instancji, konto); w e2ee bez baz (serwer nie zna drzewa, łańcuch od
+  seq 1 jest pełny). Sprzątanie: porzucone uploady (lease wygasł, bez finalizacji) od razu,
+  zwolnione (zgłoszone przez klienta z indeksu) po 30 dniach.
+- **Plain** = e2ee + jawne operacje (`PlainOpCodec`): serwer stosuje log do własnej repliki
+  (sync-core), stąd nazwy, miniatury (ffmpeg opcjonalny), streaming Range i wyszukiwanie po stronie
+  serwera. Fragmenty na Discordzie nadal szyfrowane kluczem pliku (jak ddrive: at-rest).
