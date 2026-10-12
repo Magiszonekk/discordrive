@@ -57,6 +57,19 @@ browser app has an EN/PL switch in the header (remembered in the browser).
 it before starting (a few seconds). A running drive (or the background start: systemd, Task Scheduler, LaunchAgent) keeps serving the
 old page until it is restarted.
 
+**Modes** (chosen in `npm run setup`, fixed for the life of the instance; another mode = a new
+instance in another data directory). The app and the server are built for that one mode only.
+
+| Mode | The server sees | Who uploads to Discord | Background work without an open tab |
+|---|---|---|---|
+| **metadata only** (default) | nothing readable, not even your webhooks | your browser, straight to your channels | no |
+| **e2ee** | nothing readable (files and names encrypted in the browser), but it holds the webhooks | the server, with the instance's channels (or yours, added in Settings) | yes: snapshots, cleanup, link refreshing |
+| plain | everything (thumbnails, preview, search on the server) | the server | yes (coming after e2ee) |
+
+e2ee without questions: `npm run setup -- --yes --accept-risk --mode e2ee --webhooks-file hooks.txt`
+(one webhook URL per line; they are stored encrypted with `instance.key` in the data directory,
+never in `config.json`). Design: [docs/stage3-modes.md](docs/stage3-modes.md).
+
 Server data (configuration and the encrypted file list) is in `~/.local/share/discordrive-next`
 (Linux), `~/Library/Application Support/discordrive-next` (macOS) or
 `%LOCALAPPDATA%\discordrive-next` (Windows). The files themselves are on your Discord channels.

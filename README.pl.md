@@ -55,6 +55,19 @@ Sam `git pull` też wystarczy: `npm start` zauważy, że źródła aplikacji prz
 zmieniły, i przed startem ją przebuduje (kilka sekund). Działający dysk (albo start w tle: systemd, Harmonogram zadań, LaunchAgent)
 pokazuje starą stronę, dopóki się go nie uruchomi ponownie.
 
+**Tryby** (wybierane w `npm run setup`, na zawsze dla danej instancji; inny tryb = nowa instancja
+w innym katalogu danych). Aplikacja i serwer są budowane tylko dla tego jednego trybu.
+
+| Tryb | Serwer widzi | Kto wysyła na Discorda | Praca w tle bez otwartej karty |
+|---|---|---|---|
+| **metadata only** (domyślny) | nic czytelnego, nawet Twoich webhooków | Twoja przeglądarka, prosto na Twoje kanały | nie |
+| **e2ee** | nic czytelnego (pliki i nazwy szyfrowane w przeglądarce), ale zna webhooki | serwer, przez kanały instancji (albo Twoje, dodane w Ustawieniach) | tak: snapshoty, sprzątanie, odświeżanie linków |
+| plain | wszystko (miniatury, podgląd, wyszukiwanie na serwerze) | serwer | tak (po e2ee) |
+
+e2ee bez pytań: `npm run setup -- --yes --accept-risk --mode e2ee --webhooks-file hooki.txt`
+(jeden URL webhooka w linii; zapisywane zaszyfrowane kluczem `instance.key` w katalogu danych,
+nigdy w `config.json`). Projekt: [docs/stage3-modes.md](docs/stage3-modes.md).
+
 Dane serwera (konfiguracja i zaszyfrowany spis) są w `~/.local/share/discordrive-next`
 (Linux), `~/Library/Application Support/discordrive-next` (macOS) albo
 `%LOCALAPPDATA%\discordrive-next` (Windows). Same pliki są na Twoich kanałach Discorda.
