@@ -8,6 +8,10 @@
 // saves screenshots. DDN_E2E_LANG=en|pl (default en): the UI language the run
 // switches to (English is the default; pl is picked with the header switch).
 // DDN_E2E_SCHEME=light|dark: emulated prefers-color-scheme (default light).
+// DDN_E2E_MODE=metadata-only|e2ee (default metadata-only): which build-time mode is checked; in
+// e2ee the local server runs the e2ee extensions (instance pool on the fake Discord, blobs through
+// the instance, no bot: share links refreshed through the webhooks) and the run checks the e2ee
+// differences (no channel step with a pool, ddn-kit2, own channel add/remove, cancel).
 // Text fields are filled with the REAL keyboard (keyboard.type, Control+V from the clipboard), never
 // fill(): fill() sets the value directly and did not notice an onkeydown that cancelled every key.
 import { chromium, type BrowserContext, type Page } from "playwright";
@@ -20,8 +24,10 @@ import { fileURLToPath } from "node:url";
 import { DdnServer, DISCORD_ORIGINS, FakeDiscord, type BotRefresher } from "@ddv4/metadata-client/node";
 
 const here = dirname(fileURLToPath(import.meta.url));
-execFileSync(process.execPath, [join(here, "..", "..", "node_modules", "tsx", "dist", "cli.mjs"), join(here, "build.ts")], { stdio: "ignore" });
-const dist = join(here, "dist");
+const MODE = (process.env.DDN_E2E_MODE ?? "metadata-only") as "metadata-only" | "e2ee" | "plain";
+const SERVER_SIDE = MODE !== "metadata-only";
+execFileSync(process.execPath, [join(here, "..", "..", "node_modules", "tsx", "dist", "cli.mjs"), join(here, "build.ts"), MODE], { stdio: "ignore" });
+const dist = join(here, "dist", MODE);
 const remote = process.env.DDN_E2E_URL?.replace(/\/$/, "");
 const shotDir = process.env.DDN_E2E_SHOTS;
 const LANG = process.env.DDN_E2E_LANG === "pl" ? "pl" : "en";
@@ -42,7 +48,8 @@ if (remote) {
   base = remote;
   invite = process.env.DDN_E2E_INVITE ?? "";
   hookUrls = (process.env.DDN_E2E_WEBHOOK_FILES ?? "").split(":").filter(Boolean).map((f) => readFileSync(f, "utf8").trim());
-  if (!invite || !hookUrls.length) throw new Error("DDN_E2E_INVITE and DDN_E2E_WEBHOOK_FILES are required with DDN_E2E_URL");
+  // e2ee: the pool is on the instance; DDN_E2E_WEBHOOK_FILES (optional) = one own channel to add and remove.
+  if (!invite || (!hookUrls.length && !SERVER_SIDE)) throw new Error("DDN_E2E_INVITE and DDN_E2E_WEBHOOK_FILES are required with DDN_E2E_URL");
 } else {
   fake = new FakeDiscord();
   const discordOrigin = await fake.listen();
@@ -59,13 +66,31 @@ if (remote) {
     },
   };
   hookUrls = [fake.addWebhook("1550000000000000101").url, fake.addWebhook("1550000000000000102").url];
+  let extensions: ConstructorParameters<typeof DdnServer>[0] extends infer O ? (O extends { extensions?: infer X } ? X : never) : never = [];
+  let shareBot: BotRefresher = refresher;
+  let poolInit: (() => Promise<void>) | null = null;
+  if (SERVER_SIDE) {
+    // e2ee/plain: instance pool of 2 channels; the browser's two hooks become the "own channel" test.
+    const { serverBlobsMode, POOL } = await import("@ddv4/server-discord");
+    const { DiscordWebhookTransport } = await import("@ddv4/metadata-client");
+    const m = serverBlobsMode({ dataDir: mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-inst-")), discordApiOrigin: discordOrigin, cleanupTickMs: 0, snapshotTickMs: 0 });
+    extensions = m.extensions;
+    shareBot = m.shareRefresher; // no bot: share links refreshed through the instance webhooks
+    const pool = [fake.addWebhook("1550000000000000201").url, fake.addWebhook("1550000000000000202").url];
+    poolInit = async () => {
+      for (const u of pool) await m.hooks().add(POOL, u, new DiscordWebhookTransport({ apiOrigin: discordOrigin }));
+    };
+  }
   const s = new DdnServer({
     signup: "invite",
     rateLimits: false,
-    web: { dir: dist, connectSrc: [...DISCORD_ORIGINS, discordOrigin], config: { discordApiOrigin: discordOrigin } },
-    bot: refresher,
+    mode: MODE,
+    extensions,
+    web: { dir: dist, connectSrc: [...DISCORD_ORIGINS, discordOrigin], config: { discordApiOrigin: discordOrigin, mode: MODE } },
+    bot: shareBot,
     cdnOrigins: [discordOrigin],
   });
+  await poolInit?.();
   srv = s;
   base = (await s.listen(0)).url;
   invite = s.invites.create().code;
@@ -92,6 +117,51 @@ const big = join(dir, "duzy.bin");
 writeFileSync(big, (await import("node:crypto")).randomBytes(12 * 1024 * 1024));
 const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 
+// A preview on a plain-http VPN address (no domain yet) is not a secure context (no WebCrypto, no
+// service worker), and Chromium's headless shell ignores --unsafely-treat-insecure-origin-as-secure.
+// DDN_E2E_TUNNEL=1: reach it through a local proxy (localhost:<free port> -> the instance) that
+// rewrites /config.js so the app uses the proxy origin; every request still lands on the real
+// preview instance (API, websocket, web app), Discord is real.
+let tunnel: import("node:http").Server | null = null;
+if (remote && process.env.DDN_E2E_TUNNEL === "1") {
+  const http = await import("node:http");
+  const net = await import("node:net");
+  const target = new URL(remote);
+  let local = "";
+  tunnel = http.createServer((req, res) => {
+    const up = http.request({ host: target.hostname, port: target.port || 80, method: req.method, path: req.url, headers: { ...req.headers, host: target.host, ...(req.headers.origin ? { origin: remote } : {}) } }, (r) => {
+      if (req.url === "/config.js") {
+        let b = "";
+        r.on("data", (d) => (b += d));
+        r.on("end", () => {
+          b = b.split(remote).join(local);
+          const h = { ...r.headers, "content-length": String(Buffer.byteLength(b)) };
+          res.writeHead(r.statusCode ?? 200, h);
+          res.end(b);
+        });
+        return;
+      }
+      res.writeHead(r.statusCode ?? 502, r.headers);
+      r.pipe(res);
+    });
+    up.on("error", () => res.destroy());
+    req.pipe(up);
+  });
+  tunnel.on("upgrade", (req, sock, head) => {
+    const u = net.connect(Number(target.port || 80), target.hostname, () => {
+      const lines = [`${req.method} ${req.url} HTTP/1.1`, ...Object.entries({ ...req.headers, host: target.host, origin: remote }).map(([k, v]) => `${k}: ${v}`), "", ""];
+      u.write(lines.join("\r\n"));
+      if (head.length) u.write(head);
+      sock.pipe(u).pipe(sock);
+    });
+    const end = () => (sock.destroy(), u.destroy());
+    u.on("error", end);
+    sock.on("error", end);
+  });
+  await new Promise<void>((ok) => tunnel!.listen(0, "127.0.0.1", ok));
+  local = `http://localhost:${(tunnel.address() as { port: number }).port}`;
+  base = local;
+}
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const errors: string[] = [];
 async function newPage(ctx: BrowserContext): Promise<Page> {
@@ -171,19 +241,25 @@ try {
   await p.click("[data-ddn=create]");
   // First run: onboarding (channel, then the rescue kit), not the file list.
   await p.waitForURL((u) => u.pathname === "/welcome", { timeout: 30_000 });
-  await p.waitForSelector("[data-ddn-ui=onboarding]:not([hidden]) [data-ddn=webhook-url]");
+  // e2ee with an instance pool: the onboarding starts at the rescue kit (no channel to connect).
+  await p.waitForSelector(SERVER_SIDE ? "[data-ddn=kit-dialog][open]" : "[data-ddn-ui=onboarding]:not([hidden]) [data-ddn=webhook-url]", { timeout: 30_000 });
 
   // 2. channel wizard; the rescue kit is forced right after the first channel
   step("channels");
   await shot(p, "02-wizard");
-  // Paste with Control+V (the bug of 533bf9d: onkeydown returned false and cancelled every key but Enter).
-  await pasteInto(p, "[data-ddn=webhook-url]", hookUrls[0]!);
-  r.pastedWebhook = (await p.inputValue("[data-ddn=webhook-url]")) === hookUrls[0];
-  await p.keyboard.press("Enter");
+  if (!SERVER_SIDE) {
+    // Paste with Control+V (the bug of 533bf9d: onkeydown returned false and cancelled every key but Enter).
+    await pasteInto(p, "[data-ddn=webhook-url]", hookUrls[0]!);
+    r.pastedWebhook = (await p.inputValue("[data-ddn=webhook-url]")) === hookUrls[0];
+    await p.keyboard.press("Enter");
+  } else {
+    // e2ee with an instance pool: no channel step, the kit comes right away.
+    r.noChannelStepWithPool = true;
+  }
   await p.waitForSelector("[data-ddn=kit-dialog][open]", { timeout: 30_000 });
   await p.waitForFunction(() => (document.querySelector<HTMLTextAreaElement>("[data-ddn=kit-text]")?.value ?? "").length > 20);
   const kit = await p.inputValue("[data-ddn=kit-text]");
-  r.kitFormat = kit.startsWith("ddn-kit1:");
+  r.kitFormat = kit.startsWith(SERVER_SIDE ? "ddn-kit2:" : "ddn-kit1:");
   r.kitQr = (await p.$$eval("[data-ddn=kit-qr] svg", (e) => e.length)) === 1;
   r.kitDoneDisabledBeforeAck = await p.isDisabled("[data-ddn=kit-done]");
   await p.keyboard.press("Escape");
@@ -209,12 +285,28 @@ try {
   await p.reload();
   await p.waitForSelector("body[data-ready='1']");
   r.settingsSurvivesReload = new URL(p.url()).pathname === "/settings" && (await p.isVisible("[data-page=settings] [data-ddn=webhook-url]"));
-  if (hookUrls[1]) {
+  if (!SERVER_SIDE && hookUrls[1]) {
     // Type the second one key by key (not paste) and add with the button.
     await typeInto(p, "[data-ddn=webhook-url]", hookUrls[1]);
     r.typedWebhook = (await p.inputValue("[data-ddn=webhook-url]")) === hookUrls[1];
     await p.click("[data-ddn=add-webhook]");
     await p.waitForFunction(() => document.querySelector("[data-ddn-ui=hook-count]")?.textContent?.startsWith("2"), null, { timeout: 30_000 });
+  }
+  if (SERVER_SIDE) {
+    // The instance pool is listed (count only), an own channel replaces it and can be removed again.
+    await p.waitForSelector("[data-ddn=pool]");
+    r.poolShown = await p.textContent("[data-ddn=pool]");
+    const poolCount = await p.textContent("[data-ddn-ui=hook-count]");
+    if (hookUrls[0]) {
+      await pasteInto(p, "[data-ddn=webhook-url]", hookUrls[0]);
+      r.pastedWebhook = (await p.inputValue("[data-ddn=webhook-url]")) === hookUrls[0];
+      await p.click("[data-ddn=add-webhook]");
+      await p.waitForSelector("[data-ddn=remove-webhook]", { timeout: 30_000 });
+      r.ownChannel = { poolHidden: await p.isHidden("[data-ddn=pool]"), count: await p.textContent("[data-ddn-ui=hook-count]") };
+      await p.click("[data-ddn=remove-webhook]");
+      await p.waitForSelector("[data-ddn=pool]", { timeout: 30_000 });
+      (r.ownChannel as Record<string, unknown>).backToPool = (await p.textContent("[data-ddn-ui=hook-count]")) === poolCount;
+    } else r.pastedWebhook = true;
   }
   r.advice = await p.textContent("[data-ddn=advice]");
   await shot(p, "03b-settings");
@@ -456,7 +548,9 @@ try {
 
   // 11. what the server stores: no names in clear
   if (srv) {
-    const rows = [srv.db.prepare("SELECT * FROM devices").all(), srv.db.prepare("SELECT entry FROM log").all(), srv.db.prepare("SELECT * FROM shares").all(), srv.db.prepare("SELECT * FROM vault").all()];
+    const tables = ["devices", "log", "shares", "vault", "s_blobs", "s_uploads", "inst_hooks", "s_snapshots"].filter((t) => srv!.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t));
+    const rows = tables.map((t) => srv!.db.prepare(`SELECT * FROM ${t}`).all());
+    r.serverTables = tables;
     r.serverSeesNoNames = !/Telefon testowy|Laptop testowy|notatki|Wakacje|duzy\.bin|discord\.com\/api\/webhooks/.test(JSON.stringify(rows));
   }
   await phone.close();
@@ -471,7 +565,10 @@ try {
   const lg = r.lang as { html: string; h1: string; pressed: string; title: string };
   const checks: Record<string, boolean> = {
     noFalseReturningHandlers: lint.length === 0,
-    keyboard: r.typedInvite === true && r.pastedWebhook === true && r.typedFolder === true && (!hookUrls[1] || r.typedWebhook === true) && r.pastedPairCode === true,
+    keyboard: r.typedInvite === true && r.pastedWebhook === true && r.typedFolder === true && (SERVER_SIDE || !hookUrls[1] || r.typedWebhook === true) && r.pastedPairCode === true,
+    ...(SERVER_SIDE
+      ? { modeChannels: r.noChannelStepWithPool === true && /\d+ (shared|wspóln)/.test(String(r.poolShown)) && (!hookUrls[0] || ((r.ownChannel as { poolHidden: boolean; backToPool: boolean }).poolHidden && (r.ownChannel as { backToPool: boolean }).backToPool)) }
+      : {}),
     layout: r.filesPageClean === true && r.settingsSurvivesReload === true && r.devicesSurvivesReload === true && (r.folderRoute as { path: boolean; crumb: string }).path && (r.folderRoute as { crumb: string }).crumb === "Wakacje",
     fonts: JSON.stringify(r.fontsLoaded) === JSON.stringify(["Inter", "JetBrains Mono", "Space Grotesk"]),
     theme: (r.theme as { resolved: string }).resolved === SCHEME && (r.themeToggled as { resolved: string; bg: string }).resolved !== SCHEME && (r.themeToggled as { bg: string }).bg !== (r.theme as { bg: string }).bg,
@@ -495,7 +592,8 @@ try {
     serverBlind: r.serverSeesNoNames !== false,
     noPageErrors: errors.length === 0,
   };
-  console.log(JSON.stringify(checks));
+  r.mode = MODE;
+  console.log(JSON.stringify({ mode: MODE, ...checks }));
   ok = Object.values(checks).every(Boolean);
 } catch (e) {
   r.pageErrors = errors;
@@ -503,6 +601,7 @@ try {
   throw e;
 } finally {
   await browser.close();
+  tunnel?.close();
   await srv?.close();
   await fake?.close();
 }
