@@ -713,8 +713,14 @@ async function main() {
       i.value = "";
       await render();
     });
-  $<HTMLInputElement>("folder-name").onkeydown = (e) => e.key === "Enter" && $("mkdir").click();
-  $<HTMLInputElement>("webhook-url").onkeydown = (e) => e.key === "Enter" && $("add-webhook").click();
+  // Block body on purpose: an on* handler that returns false cancels the key, so an
+  // `e.key === "Enter" && ...` arrow blocked typing and Ctrl+V in these fields.
+  $<HTMLInputElement>("folder-name").onkeydown = (e) => {
+    if (e.key === "Enter") $("mkdir").click();
+  };
+  $<HTMLInputElement>("webhook-url").onkeydown = (e) => {
+    if (e.key === "Enter") $("add-webhook").click();
+  };
   $<HTMLInputElement>("file").onchange = async (e) => {
     const input = e.target as HTMLInputElement;
     const files = [...(input.files ?? [])];
