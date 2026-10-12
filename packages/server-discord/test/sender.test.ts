@@ -12,7 +12,7 @@ import { DiscordSender, DiscordUnavailableError, InstanceHooks, NoChannelError, 
 let fake: FakeDiscord;
 afterEach(async () => fake?.close());
 
-async function setup(channels: string[], o: { perMin?: number; burst?: number } = {}) {
+async function setup(channels: string[], o: { perMin?: number; burst?: number; maxWaitMs?: number } = {}) {
   fake = new FakeDiscord();
   const origin = await fake.listen();
   const transport = new DiscordWebhookTransport({ apiOrigin: origin });
@@ -22,7 +22,7 @@ async function setup(channels: string[], o: { perMin?: number; burst?: number } 
   });
   // Fast pacer for tests (real default 30/min): the SHAPE of the behaviour is what is checked.
   const pacer = new ChannelPacer({ perMin: o.perMin ?? 600, maxPerMin: o.perMin ?? 600, minPerMin: 60, burst: o.burst ?? 2 });
-  const sender = new DiscordSender({ transport, pacer, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 50))) });
+  const sender = new DiscordSender({ transport, pacer, maxWaitMs: o.maxWaitMs, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 50))) });
   return { origin, transport, hooks, sender };
 }
 
@@ -51,7 +51,8 @@ describe("DiscordSender", () => {
   });
 
   it("429 shared is reported per channel and lowers only that channel's rate", async () => {
-    const { hooks, sender } = await setup(["1550000000000000021", "1550000000000000022"], { perMin: 600 });
+    // maxWaitMs 1 s: the 7th post meets a ~60 s retry_after and fails at once instead of waiting it out.
+    const { hooks, sender } = await setup(["1550000000000000021", "1550000000000000022"], { perMin: 600, maxWaitMs: 1000 });
     fake.perChannelPerMin = 3;
     const data = new Uint8Array(10);
     const run = Promise.all(Array.from({ length: 7 }, (_, i) => sender.post(hooks, data, `y${i}.txt`).catch((e) => e)));
@@ -60,12 +61,12 @@ describe("DiscordSender", () => {
     while (sender.stats.shared429 === 0 && Date.now() - t0 < 10_000) await new Promise((r) => setTimeout(r, 20));
     expect(sender.stats.shared429).toBeGreaterThan(0);
     expect(fake.rejectedByChannel.size).toBeGreaterThan(0);
+    // The fake counts a 429 before the sender has read it, so check the channel(s) already handled.
     const slowed = [...fake.rejectedByChannel.keys()].map((c) => sender.pacer.rate(c));
-    expect(Math.max(...slowed)).toBeLessThan(600);
-    fake.perChannelPerMin = 0;
-    // the fake keeps its window; clear it by allowing posts again
-    await run;
-    expect(fake.posts).toBeGreaterThanOrEqual(6);
+    expect(Math.min(...slowed)).toBeLessThan(600);
+    const res = await run;
+    expect(fake.posts).toBe(6);
+    expect(res.filter((x) => x instanceof DiscordUnavailableError).length).toBe(1);
   });
 
   it("Cloudflare block (HTML 429, no x-ratelimit headers): fails at once with retry-after, then refuses locally without asking Discord", async () => {

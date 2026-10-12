@@ -169,6 +169,27 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     }
   }
 
+  /**
+   * Authenticated request with any body (binary blob uploads in e2ee/plain, stage 3).
+   * Signs in again once on an expired session. The caller reads the response.
+   */
+  async request(method: string, path: string, init: { body?: BodyInit; headers?: Record<string, string>; signal?: AbortSignal } = {}): Promise<Response> {
+    for (let attempt = 0; ; attempt++) {
+      const token = await this.session(attempt > 0);
+      const r = await this.f(`${this.s.baseUrl}${path}`, { method, body: init.body, signal: init.signal, headers: { ...init.headers, authorization: "Bearer " + token } });
+      if (r.status === 401 && attempt === 0) {
+        const j = (await r.clone().json().catch(() => ({}))) as { error?: string };
+        if (j.error === "unauthorized") continue;
+      }
+      return r;
+    }
+  }
+
+  /** JSON call for mode-specific endpoints (stage 3). Throws ServerError unless 2xx or in `ok`. */
+  async json<T>(method: string, path: string, body?: unknown, ok: number[] = []): Promise<{ status: number; body: T }> {
+    return this.call<T>(method, path, body, ok);
+  }
+
   async submit(env: EncryptedEnvelope): Promise<SubmitResult<EncryptedEnvelope>> {
     return (await this.call<SubmitResult<EncryptedEnvelope>>("POST", "/v1/log", env)).body;
   }

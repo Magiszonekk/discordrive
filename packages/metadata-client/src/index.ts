@@ -2,7 +2,7 @@
 
 export * from "./types.js";
 export { MemoryTransport } from "./memory-transport.js";
-export { DiscordWebhookTransport, DiscordHttpError, RateLimitedError, parseWebhookUrl, redactWebhookUrl } from "./discord-transport.js";
+export { DiscordWebhookTransport, DiscordHttpError, RateLimitedError, parseWebhookUrl, redactWebhookUrl, isCloudflareBlock } from "./discord-transport.js";
 export { ChannelPacer, type PacerOptions } from "./rate-limit.js";
 export { LocalArbiter, type ArbiterApi } from "./arbiter.js";
 export {
@@ -18,6 +18,7 @@ export {
 } from "./file-crypto.js";
 export { type BlobStore, type BlobPutContext, AbortedError, throwIfAborted } from "./blob-store.js";
 export { DriveClient, readVersionRange, type DriveClientOptions } from "./drive-client.js";
+export { ServerBlobStore, InstanceBusyError, SERVER_BLOB_STORE_MARKER, type ServerBlobStoreOptions } from "./server-blobs.js";
 export {
   MetadataClient,
   WebhookBlobStore,

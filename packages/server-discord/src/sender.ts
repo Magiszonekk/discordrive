@@ -82,6 +82,7 @@ export class DiscordSender {
   private readonly egressWindowMs: number;
   private readonly maxWaitMs: number;
   private readonly rrInChannel = new Map<string, number>();
+  private rrChannel = 0;
   private egress: number[] = [];
   /** Cloudflare block of this IP on the webhook route, until (ms). */
   blockedUntil = 0;
@@ -142,7 +143,11 @@ export class DiscordSender {
     for (const h of live) byChan.set(h.channelId, [...(byChan.get(h.channelId) ?? []), h]);
     let best: string | null = null;
     let bestIn = Infinity;
-    for (const ch of [...byChan.keys()].sort()) {
+    // Ties (e.g. every bucket still has tokens) rotate, so a burst spreads over all channels.
+    const chans = [...byChan.keys()].sort();
+    const off = this.rrChannel++ % chans.length;
+    for (let k = 0; k < chans.length; k++) {
+      const ch = chans[(off + k) % chans.length]!;
       const t = this.pacer.readyIn(ch);
       if (t < bestIn) ((best = ch), (bestIn = t));
     }
