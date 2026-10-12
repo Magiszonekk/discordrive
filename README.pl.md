@@ -24,7 +24,8 @@ npm run setup
 ```
 
 Za pierwszym razem `npm run setup` sam doinstaluje potrzebne biblioteki (kilkanaście sekund,
-potrzebny internet), a potem zada kilka pytań. **Na każde możesz odpowiedzieć Enterem**:
+potrzebny internet), a potem zada kilka pytań: wybierasz strzałkami, zatwierdzasz Enterem. **Na każde możesz
+odpowiedzieć Enterem**:
 domyślnie dysk działa tylko na tym komputerze, pod adresem `http://localhost:3020`.
 Udostępnianie linkiem (wymaga własnego bota Discord) możesz pominąć i włączyć później.
 

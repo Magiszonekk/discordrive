@@ -18,8 +18,10 @@ import { setupFlags } from "../src/cli.js";
 const tmp = () => mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-setup-"));
 const quiet = () => {
   const out: string[] = [];
-  const p = ttyPrompter(new PassThrough(), new PassThrough());
-  return { out, p: { ...p, say: (s = "") => void out.push(s) } };
+  const o = new PassThrough();
+  o.on("data", (d) => out.push(...String(d).replace(/\n$/, "").split("\n")));
+  const p = ttyPrompter(new PassThrough(), o);
+  return { out, p };
 };
 async function freePort(): Promise<number> {
   const { createServer } = await import("node:net");
@@ -33,6 +35,7 @@ async function freePort(): Promise<number> {
 
 // Tests must never touch the real instance's data directory (default when unset).
 process.env.XDG_DATA_HOME = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-xdg-"));
+process.env.DISCORDRIVE_NO_SYSTEMD = "1"; // never touch the user unit of a running instance
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {

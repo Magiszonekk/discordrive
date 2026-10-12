@@ -40,6 +40,8 @@ function sc(...args: string[]): string {
 
 export function systemdAvailable(): boolean {
   if (process.platform !== "linux") return false;
+  // Tests and demos on a machine that already runs an instance as a service.
+  if (process.env.DISCORDRIVE_NO_SYSTEMD && process.env.DISCORDRIVE_NO_SYSTEMD !== "0") return false;
   try {
     sc("--version");
     return true;

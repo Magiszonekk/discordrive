@@ -280,3 +280,24 @@ Decyzje wykonawcze, których koncept i zlecenie nie przesądzały. Żadna nie zm
   Webhooks”, „Server Integrations Page”. Wersja polska dostała tę samą uwagę o „Utwórz webhook”.
 - **README**: `README.md` po angielsku (Quick start na górze), `README.pl.md` po polsku, linki w
   obie strony; stara dokumentacja ddv4 tylko w `README.md`.
+
+### Rozstrzygnięte samodzielnie 2026-10-12, dopisek: kreator jako TUI
+- **Biblioteka: `@clack/core` 1.5.1 + `@clack/prompts` 1.8.1** (przypięte dokładnie, w
+  lockfile; razem 6 pakietów: sisteransi, fast-wrap-ansi, fast-string-width i pochodne, bez
+  Reacta/Ink). Gotowe `select/confirm/text` z `@clack/prompts` mają angielskie podpowiedzi
+  klawiszy na sztywno i znacznik ●, więc pola są rysowane własnym `render()` na prymitywach
+  `@clack/core` (SelectPrompt, ConfirmPrompt, TextPrompt, PasswordPrompt): ◉/○, Yes/No, pomoc
+  klawiszy i komunikaty walidacji z naszego słownika EN/PL. Z `@clack/prompts` używamy
+  `spinner`, `note` (ramki), `log`, `cancel`, `outro`.
+- **Jedna logika kreatora, dwa interfejsy** (`Prompter`): `tuiPrompter` na prawdziwym
+  terminalu, `ttyPrompter` (numery, `[Y/n]`) bez TTY, przy `TERM=dumb`, `CI`, `--yes` i
+  `DISCORDRIVE_PLAIN=1`. Testy z potokiem dalej przechodzą przez wersję tekstową.
+- **Walidacja na żywo** zamiast pętli „zły wpis → pytanie od nowa”: adres publiczny, adres
+  nasłuchu, port (zakres + zajęty, z podpowiedzią wolnego), katalog danych (zapis), token bota
+  (sprawdzany w Discordzie, `GET /users/@me`, w czasie walidacji „sprawdzam…”).
+- **Multi-select (◼/◻) nie jest użyty**: żadne pytanie kreatora nie wymaga dziś wielu wyborów
+  (wyłączone tryby e2ee/plain są pokazane jako nieaktywne opcje, kursor je pomija).
+- **Esc/Ctrl+C**: `Cancelled` → „Setup cancelled. Nothing was saved.”, kod wyjścia 130 (jak
+  SIGINT), kursor przywrócony. Ctrl+C po starcie dysku w oknie dalej zatrzymuje dysk (kod 0).
+- **`DISCORDRIVE_NO_SYSTEMD=1`** wyłącza pytanie o usługę systemd (testy i demo na maszynie,
+  na której działa już instancja jako usługa: kreator z testu nie może nadpisać jej unitu).

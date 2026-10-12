@@ -6,6 +6,8 @@
 // Re-running edits the existing config (current values are the defaults; the
 // bot token is kept unless you choose otherwise).
 // Non-interactive: --yes plus flags or --answers <file.json>.
+// Interface: arrow keys (tui.ts) on an interactive terminal, plain numbered
+// questions otherwise (prompt.ts); the wizard logic below is the same for both.
 
 import { existsSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -27,8 +29,8 @@ import {
   type SignupPolicy,
 } from "./config.js";
 import { setCliLang, t, type CliLang } from "./i18n.js";
-import { ttyPrompter, type Prompter } from "./prompt.js";
-import { ensureWebBuilt, serve } from "./serve.js";
+import { Cancelled, ttyPrompter, type Prompter } from "./prompt.js";
+import { buildWeb, serve } from "./serve.js";
 import { installAndStart, lingerEnabled, systemdAvailable, unitPath } from "./systemd.js";
 
 export interface SetupFlags {
@@ -114,10 +116,11 @@ export const COMMANDS = {
 
 export const botGuide = (): string[] => [t("s.guide0"), t("s.guide1"), t("s.guide2"), t("s.guide3"), t("s.guide4"), t("s.guide5")];
 
-export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promise<SetupResult> {
+export async function setup(f: SetupFlags, p0?: Prompter): Promise<SetupResult> {
   const yes = !!f.yes;
+  const p: Prompter = p0 ?? ttyPrompter();
   // In --yes mode the step separators (empty lines) are noise.
-  const p: Prompter = yes ? { ...p0, say: (s?: string) => (s ? p0.say(s) : undefined) } : p0;
+  if (yes && !p.tui) p.compact = true;
   const dataDir0 = f.dataDir ?? defaultDataDir();
   const old = tryLoadConfig(dataDir0);
   const c: InstanceConfig = old ? structuredClone(old) : defaults(dataDir0);
@@ -127,7 +130,8 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
   c.language = f.lang ?? old?.language ?? "en";
   setCliLang(c.language);
   if (!yes && !f.lang) {
-    p.say("");
+    if (p.tui) p.intro("discordrive-next", []);
+    else p.say("");
     c.language = await p.choose(
       t("lang.q"),
       [
@@ -139,32 +143,25 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
     setCliLang(c.language);
   }
 
-  p.say("");
-  p.say(t("s.title"));
-  p.say(t("s.intro1"));
-  p.say(t("s.intro2"));
-  p.say(t("s.intro3"));
-  p.say(t("s.intro4"));
+  if (p.tui) p.info([t("s.title"), t("s.intro1"), t("s.intro2"), t("s.intro3"), t("tui.intro4")].join("\n"));
+  else p.intro(t("s.title"), [t("s.intro1"), t("s.intro2"), t("s.intro3"), t("s.intro4")]);
 
   // Requirements
-  p.say("");
-  p.say(t("s.req"));
-  p.say(`  OK  Node.js ${process.version}`);
+  if (!p.tui) p.note(t("s.req"), []);
+  p.ok(`Node.js ${process.version}`);
   if (f.discordApiOrigin) c.testing = { discordApiOrigin: f.discordApiOrigin };
   const w0 = checkWritable(c.dataDir);
-  p.say(w0 ? t("s.reqWriteBad", { why: w0 }) : t("s.reqWriteOk", { dir: c.dataDir }));
+  if (w0) p.warn(t("s.reqWriteBad", { why: w0 }));
+  else p.ok(t("s.reqWriteOk", { dir: c.dataDir }));
   if (w0 && yes) throw new Error(w0);
   const sysd = systemdAvailable();
-  if (old) p.say(t("s.reqOld", { file: configPath(c.dataDir) }));
-  else if (existsSync(configPath(c.dataDir))) p.say(t("s.reqBroken", { file: configPath(c.dataDir) }));
+  if (old) p.ok(t("s.reqOld", { file: configPath(c.dataDir) }));
+  else if (existsSync(configPath(c.dataDir))) p.warn(t("s.reqBroken", { file: configPath(c.dataDir) }));
 
-  // Kroki
+  // Steps
   let step = 0;
   const total = 5;
-  const head = (t: string) => {
-    p.say("");
-    p.say(`${++step}/${total} ${t}`);
-  };
+  const head = (title: string) => p.step(++step, total, title);
 
   // 1. Where it runs
   const scenarioOld: "local" | "public" = isLocalUrl(c.publicUrl) ? "local" : "public";
@@ -185,69 +182,53 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
     if (f.port) c.bind.port = f.port;
     if (!isLoopback(c.bind.host)) c.bind.host = "127.0.0.1";
     if (f.host) c.bind.host = f.host;
-    if (!yes) {
-      p.say(t("s.local1"));
-      p.say(t("s.local2"));
-    }
+    if (!yes) p.info(`${t("s.local1")}\n${t("s.local2")}`);
   } else {
     if (f.publicUrl) c.publicUrl = f.publicUrl.replace(/\/$/, "");
     if (f.host) c.bind.host = f.host;
     if (f.port) c.bind.port = f.port;
     if (!yes && !f.publicUrl) {
-      p.say(t("s.pub1"));
-      p.say(t("s.pub2"));
-      for (;;) {
-        const v = (await p.ask(t("s.pubUrl"), isLocalUrl(c.publicUrl) ? "" : c.publicUrl)).replace(/\/$/, "");
-        if (urlOk(v) && !isLocalUrl(v)) {
-          c.publicUrl = v;
-          break;
-        }
-        p.say(t("s.pubUrlBad"));
-      }
-      if (new URL(c.publicUrl).protocol === "http:") p.say(t("s.pubHttp"));
-      p.say(t("s.bind1"));
-      p.say(t("s.bind2"));
+      p.info(`${t("s.pub1")}\n${t("s.pub2")}`);
+      const url = await p.ask(t("s.pubUrl"), isLocalUrl(c.publicUrl) ? "" : c.publicUrl, (v) => {
+        const u = v.replace(/\/$/, "");
+        return urlOk(u) && !isLocalUrl(u) ? undefined : t("s.pubUrlBad");
+      });
+      c.publicUrl = url.replace(/\/$/, "");
+      if (new URL(c.publicUrl).protocol === "http:") p.warn(t("s.pubHttp"));
+      p.info(`${t("s.bind1")}\n${t("s.bind2")}`);
       const avail = [...new Set(["127.0.0.1", ...localAddresses().filter((a) => !a.startsWith("fe80") && a !== "localhost" && a !== "::" && a !== "0.0.0.0" && a !== "::1")])];
-      for (;;) {
-        const h = await p.ask(t("s.bind"), c.bind.host);
-        if (isLocalAddress(h)) {
-          c.bind.host = h;
-          break;
-        }
-        p.say(t("s.bindBad", { host: h, list: avail.join(", ") }));
-      }
+      c.bind.host = await p.ask(t("s.bind"), c.bind.host, (h) => (isLocalAddress(h) ? undefined : t("s.bindBad", { host: h, list: avail.join(", ") })));
     }
     if (!urlOk(c.publicUrl)) throw new Error(t("s.badPublicUrl", { url: c.publicUrl }));
   }
 
   if (!isLocalAddress(c.bind.host)) throw new Error(t("s.notLocalAddr", { host: c.bind.host }));
 
-  // Port
-  if (!yes && !f.port) {
-    for (;;) {
-      const v = Number(await p.ask(t("s.port"), String(c.bind.port || DEFAULT_PORT)));
-      if (Number.isInteger(v) && v > 0 && v < 65536) {
-        c.bind.port = v;
-        break;
-      }
-      p.say(t("s.portRange"));
-    }
-  }
+  // Port: validated while typing (range, then busy?), a free one is suggested.
+  const portProblem = async (v: string): Promise<string | undefined> => {
+    const n = Number(v);
+    if (!/^\d+$/.test(v.trim()) || !Number.isInteger(n) || n < 1 || n > 65535) return t("s.portRange");
+    const st = await portState(c.bind.host, n);
+    if (st.state !== "busy") return undefined;
+    const alt = await nextFreePort(c.bind.host, n);
+    return `${t("s.portBusy", { port: n, root: st.code === "EACCES" ? t("s.portBusyRoot") : "" })}${alt ? ` ${t("tui.tryPort", { port: alt })}` : ""}`;
+  };
+  if (!yes && !f.port) c.bind.port = Number(await p.ask(t("s.port"), String(c.bind.port || DEFAULT_PORT), portProblem));
   for (;;) {
     const st = await portState(c.bind.host, c.bind.port);
     if (st.state === "free") {
-      p.say(t("s.portFree", { port: c.bind.port }));
+      p.ok(t("s.portFree", { port: c.bind.port }));
       break;
     }
     if (st.state === "ours") {
-      p.say(t("s.portOurs", { port: c.bind.port, version: st.version }));
+      p.ok(t("s.portOurs", { port: c.bind.port, version: st.version }));
       break;
     }
+    // Busy (only reached with --port/--yes, or if the port got taken meanwhile).
     const alt = await nextFreePort(c.bind.host, c.bind.port);
-    p.say(t("s.portBusy", { port: c.bind.port, root: st.code === "EACCES" ? t("s.portBusyRoot") : "" }));
+    p.warn(t("s.portBusy", { port: c.bind.port, root: st.code === "EACCES" ? t("s.portBusyRoot") : "" }));
     if (yes || !alt) throw new Error(t("s.portBusyErr", { port: c.bind.port }));
-    const v = Number(await p.ask(t("s.portOther"), String(alt)));
-    if (Number.isInteger(v) && v > 0 && v < 65536) c.bind.port = v;
+    c.bind.port = Number(await p.ask(t("s.portOther"), String(alt), portProblem));
   }
   if (scenario === "local") c.publicUrl = f.publicUrl && isLocalUrl(f.publicUrl) ? f.publicUrl.replace(/\/$/, "") : `http://localhost:${c.bind.port}`;
 
@@ -255,8 +236,7 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
   if (scenario === "public") {
     if (f.trustProxy) c.trustProxy = f.trustProxy;
     else if (!yes) {
-      p.say(t("s.proxy1"));
-      p.say(t("s.proxy2"));
+      p.info(`${t("s.proxy1")}\n${t("s.proxy2")}`);
       const v = await p.ask(t("s.proxy"), c.trustProxy.join(", ") || (isLoopback(c.bind.host) ? "127.0.0.1" : ""));
       c.trustProxy = v.split(",").map((s) => s.trim()).filter(Boolean);
     }
@@ -284,13 +264,43 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
   const setToken = async (tok: string): Promise<boolean> => {
     const r = await validateBotToken(tok, apiOrigin);
     if (!r.ok) {
-      p.say(t("s.botBad", { why: r.why }));
+      p.warn(t("s.botBad", { why: r.why }));
       return false;
     }
     c.botToken = tok;
     c.bot = { id: r.id, username: r.username };
-    p.say(t("s.botOk", { name: r.username }));
+    p.ok(t("s.botOk", { name: r.username }));
     return true;
+  };
+  /** Token prompt: in the TUI a wrong token is refused under the field (checked with Discord). */
+  const askToken = async () => {
+    botGuide().forEach((l, i) => (i === 0 ? p.info(l) : p.say(l)));
+    let checked: { id: string; username: string } | null = null;
+    for (;;) {
+      const tok = await p.secret(
+        t("s.botToken"),
+        p.tui
+          ? async (v) => {
+              if (!v.trim()) return undefined;
+              const r = await validateBotToken(v.trim(), apiOrigin);
+              if (!r.ok) return t("s.botBad", { why: r.why });
+              checked = { id: r.id, username: r.username };
+              return undefined;
+            }
+          : undefined,
+      );
+      if (!tok) {
+        p.info(skipText);
+        return;
+      }
+      if (checked) {
+        c.botToken = tok;
+        c.bot = checked;
+        p.ok(t("s.botOk", { name: (checked as { username: string }).username }));
+        return;
+      }
+      if (await setToken(tok)) return;
+    }
   };
   const skipText = t("s.botSkip", { cmd: COMMANDS.setup });
   if (f.noBot) {
@@ -299,16 +309,14 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
     step++;
   } else if (f.botTokenFile) {
     step++;
-    if (c.botToken && !f.replaceBot && !yes && !(await p.confirm(t("s.botReplace"), false))) p.say(t("s.botKept"));
+    if (c.botToken && !f.replaceBot && !yes && !(await p.confirm(t("s.botReplace"), false))) p.info(t("s.botKept"));
     else if (!(await setToken(tokenFromFile(f.botTokenFile)))) throw new Error(t("s.botFileBad"));
   } else if (yes) step++;
   else {
     head(t("s.bot"));
-    p.say(t("s.bot1"));
-    p.say(t("s.bot2"));
-    p.say(t("s.bot3"));
+    p.info([t("s.bot1"), t("s.bot2"), t("s.bot3")].join("\n"));
     if (c.botToken) {
-      p.say(t("s.botSaved", { name: c.bot?.username ?? "?" }));
+      p.info(t("s.botSaved", { name: c.bot?.username ?? "?" }));
       const keep = await p.choose(
         "",
         [
@@ -320,21 +328,12 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
       );
       if (keep === "keep") {
         const r = await validateBotToken(c.botToken, apiOrigin);
-        p.say(r.ok ? t("s.botStillOk") : t("s.botStillBad", { why: r.why, cmd: COMMANDS.setup }));
+        if (r.ok) p.ok(t("s.botStillOk"));
+        else p.warn(t("s.botStillBad", { why: r.why, cmd: COMMANDS.setup }));
       } else if (keep === "off") {
         c.botToken = null;
         c.bot = null;
-      } else {
-        botGuide().forEach((l) => p.say(l));
-        for (;;) {
-          const tok = await p.secret(t("s.botToken"));
-          if (!tok) {
-            p.say(skipText);
-            break;
-          }
-          if (await setToken(tok)) break;
-        }
-      }
+      } else await askToken();
     } else {
       const want = await p.choose(
         "",
@@ -344,18 +343,8 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
         ],
         "skip",
       );
-      if (want === "skip") p.say(skipText);
-      else {
-        botGuide().forEach((l) => p.say(l));
-        for (;;) {
-          const tok = await p.secret(t("s.botToken"));
-          if (!tok) {
-            p.say(skipText);
-            break;
-          }
-          if (await setToken(tok)) break;
-        }
-      }
+      if (want === "skip") p.info(skipText);
+      else await askToken();
     }
   }
 
@@ -371,8 +360,7 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
     if (scenario === "local") {
       step++;
       if (!yes) {
-        p.say("");
-        p.say(t("s.signupLocal", { step, total }));
+        p.step(step, total, t("s.signupLocal"));
       }
     } else if (!yes) {
       head(t("s.signup"));
@@ -387,20 +375,15 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
       );
     } else step++;
   }
-  if (c.signup === "open" && scenario === "public") p.say(t("s.signupOpenPublic"));
+  if (c.signup === "open" && scenario === "public") p.warn(t("s.signupOpenPublic"));
 
-  // 5. Data directory
+  // 5. Data directory (write access checked while typing)
   if (!yes && !f.dataDir) {
     head(t("s.data"));
-    for (;;) {
-      const d = await p.ask(t("s.dataDir"), c.dataDir);
+    c.dataDir = await p.ask(t("s.dataDir"), c.dataDir, (d) => {
       const why = checkWritable(d);
-      if (!why) {
-        c.dataDir = d;
-        break;
-      }
-      p.say(t("s.dataBad", { why }));
-    }
+      return why ? t("s.dataBad", { why }) : undefined;
+    });
   } else {
     step++;
     const why = checkWritable(c.dataDir);
@@ -411,27 +394,26 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
   if (errs.length) throw new Error(errs.join("; "));
 
   // Summary + save
-  p.say("");
-  p.say(t("s.sum"));
-  p.say(t("s.sum.addr", { url: c.publicUrl, local: scenario === "local" ? t("s.sum.local") : "" }));
-  p.say(t("s.sum.bind", { bind: `${c.bind.host}:${c.bind.port}` }));
-  if (scenario === "public") p.say(t("s.sum.proxy", { list: c.trustProxy.join(", ") || t("s.sum.none") }));
-  p.say(t("s.sum.mode", { mode: c.mode }));
-  p.say(t("s.sum.lang", { lang: c.language === "pl" ? t("lang.pl") : t("lang.en") }));
-  p.say(t("s.sum.share", { v: c.botToken ? t("s.sum.shareOn", { name: c.bot?.username ?? "?" }) : t("s.sum.shareOff") }));
-  p.say(t("s.sum.signup", { v: t(`signup.${c.signup}`) }));
-  p.say(t("s.sum.data", { dir: c.dataDir }));
-  if (!yes && !(await p.confirm(t("s.save"), true))) throw new Error(t("s.notSaved"));
+  p.note(t("tui.summary"), [
+    t("s.sum.addr", { url: c.publicUrl, local: scenario === "local" ? t("s.sum.local") : "" }),
+    t("s.sum.bind", { bind: `${c.bind.host}:${c.bind.port}` }),
+    ...(scenario === "public" ? [t("s.sum.proxy", { list: c.trustProxy.join(", ") || t("s.sum.none") })] : []),
+    t("s.sum.mode", { mode: c.mode }),
+    t("s.sum.lang", { lang: c.language === "pl" ? t("lang.pl") : t("lang.en") }),
+    t("s.sum.share", { v: c.botToken ? t("s.sum.shareOn", { name: c.bot?.username ?? "?" }) : t("s.sum.shareOff") }),
+    t("s.sum.signup", { v: t(`signup.${c.signup}`) }),
+    t("s.sum.data", { dir: c.dataDir }),
+  ]);
+  if (!yes && !(await p.confirm(t("s.save"), true))) throw new Cancelled(t("s.notSaved"));
   const file = saveConfig(c);
-  p.say(t("s.saved", { file }));
+  p.ok(t("s.saved", { file }));
 
-  // Browser app: built now, not at the first start.
-  try {
-    ensureWebBuilt(c, (s) => p.say(`  ${s}`));
-    p.say(t("s.webOk"));
-  } catch (e) {
-    throw new Error(t("s.webFail", { msg: (e as Error).message }));
-  }
+  // Browser app: built now (spinner), not at the first start.
+  await p.task(
+    t("tui.building"),
+    () => buildWeb(c).catch((e: Error) => Promise.reject(new Error(t("s.webFail", { msg: e.message })))),
+    () => ({ level: "ok", text: t("s.webOk") }),
+  );
 
   // Invite code
   let invite: SetupResult["invite"] = null;
@@ -445,7 +427,6 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
   }
 
   // Start: systemd (Linux) or in this window
-  p.say("");
   let sysdState: SetupResult["systemd"] = sysd ? "skipped" : "unavailable";
   let started = false;
   if (f.systemd && !sysd) throw new Error(t("s.noSystemd"));
@@ -453,15 +434,15 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
     const r = installAndStart(c.dataDir);
     sysdState = "installed";
     started = true;
-    p.say(t("s.systemdOk", { how: r.restarted ? t("s.systemdRestarted") : t("s.systemdStarted"), unit: unitPath() }));
-    if (lingerEnabled() === false) p.say(t("s.linger"));
+    p.ok(t("s.systemdOk", { how: r.restarted ? t("s.systemdRestarted") : t("s.systemdStarted"), unit: unitPath() }));
+    if (lingerEnabled() === false) p.warn(t("s.linger"));
   }
   let running: SetupResult["running"] = null;
   if (!started) {
     const now = f.start ?? (yes ? false : await p.confirm(t("s.startQ"), true));
     if (now) {
       const st = await portState(c.bind.host, c.bind.port);
-      if (st.state === "ours") p.say(t("s.alreadyRunning", { port: c.bind.port, cmd: COMMANDS.start }));
+      if (st.state === "ours") p.warn(t("s.alreadyRunning", { port: c.bind.port, cmd: COMMANDS.start }));
       else {
         running = await serve(c, () => {});
         started = true;
@@ -469,62 +450,60 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
     }
   }
 
-  // Self-test
+  // Self-test (spinner)
   let selfTest: SetupResult["selfTest"] = null;
   if (f.selfTest ?? true) {
     const base = hostUrl(c.bind.host, c.bind.port);
-    let tmp: Awaited<ReturnType<typeof serve>> | null = null;
-    try {
-      if (!started) {
-        const st = await portState(c.bind.host, c.bind.port);
-        if (st.state === "free") tmp = await serve(c, () => {});
-      }
-      let h = await health(base);
-      for (let i = 0; !h.ok && i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 500));
-        h = await health(base);
-      }
-      selfTest = h.ok ? { ok: true, detail: t("s.selfOk", { base, version: String(h.body.version), mode: String(h.body.mode) }) } : { ok: false, detail: `${base}/v1/health: ${h.error}` };
-      p.say(t("s.selfLine", { tag: h.ok ? "OK " : t("s.selfErrTag"), detail: selfTest.detail }));
-      if (scenario === "public") {
-        const hp = await health(c.publicUrl, 8000);
-        p.say(hp.ok ? t("s.pubOk", { url: c.publicUrl }) : t("s.pubNo", { url: c.publicUrl, err: hp.error }));
-      }
-    } finally {
-      if (tmp) await tmp.close();
+    selfTest = await p.task(
+      t("tui.testing"),
+      async () => {
+        let tmp: Awaited<ReturnType<typeof serve>> | null = null;
+        try {
+          if (!started) {
+            const st = await portState(c.bind.host, c.bind.port);
+            if (st.state === "free") tmp = await serve(c, () => {});
+          }
+          let h = await health(base);
+          for (let i = 0; !h.ok && i < 30; i++) {
+            await new Promise((r) => setTimeout(r, 500));
+            h = await health(base);
+          }
+          return h.ok ? { ok: true, detail: t("s.selfOk", { base, version: String(h.body.version), mode: String(h.body.mode) }) } : { ok: false, detail: `${base}/v1/health: ${h.error}` };
+        } finally {
+          if (tmp) await tmp.close();
+        }
+      },
+      (r) => ({ level: r.ok ? "ok" : "fail", text: t("s.selfLine", { detail: r.detail }) }),
+    );
+    if (scenario === "public") {
+      const hp = await health(c.publicUrl, 8000);
+      if (hp.ok) p.ok(t("s.pubOk", { url: c.publicUrl }));
+      else p.info(t("s.pubNo", { url: c.publicUrl, err: hp.error }));
     }
   }
 
   // What next
-  const bar = "─".repeat(Math.min(72, Math.max(40, c.publicUrl.length + 24)));
-  p.say("");
-  p.say(bar);
-  p.say(started ? t("s.doneOpen", { url: c.publicUrl }) : t("s.doneStart", { cmd: COMMANDS.start, url: c.publicUrl }));
-  p.say(bar);
-  p.say("");
-  p.say(t("s.inBrowser"));
-  p.say(t("s.next1", { invite: invite ? t("s.next1code", { code: invite.code }) : c.signup === "invite" ? t("s.next1cmd", { cmd: COMMANDS.invite }) : "" }));
-  p.say(t("s.next2a"));
-  p.say(t("s.next2b"));
-  p.say(t("s.next3"));
-  p.say(t("s.next4"));
-  p.say("");
-  p.say(t("s.cfgFile", { file }));
-  p.say(t("s.dataAt", { dir: c.dataDir }));
-  p.say(t("s.cmds", { dir: REPO_DIR }));
-  if (sysdState === "installed") p.say(t("s.cmdSystemd"));
-  else p.say(t("s.cmdStart", { cmd: COMMANDS.start }));
-  p.say(t("s.cmdSetup", { cmd: COMMANDS.setup }));
-  p.say(t("s.cmdDoctor", { cmd: COMMANDS.doctor }));
-  if (c.signup === "invite") p.say(t("s.cmdInvite", { cmd: COMMANDS.invite }));
+  p.note(t("s.inBrowser"), [
+    t("s.next1", { invite: invite ? t("s.next1code", { code: invite.code }) : c.signup === "invite" ? t("s.next1cmd", { cmd: COMMANDS.invite }) : "" }),
+    t("s.next2a"),
+    `   ${t("s.next2b")}`,
+    t("s.next3"),
+    t("s.next4"),
+  ]);
+  p.note(t("s.cmds", { dir: REPO_DIR }), [
+    sysdState === "installed" ? t("s.cmdSystemd") : t("s.cmdStart", { cmd: COMMANDS.start }),
+    t("s.cmdSetup", { cmd: COMMANDS.setup }),
+    t("s.cmdDoctor", { cmd: COMMANDS.doctor }),
+    ...(c.signup === "invite" ? [t("s.cmdInvite", { cmd: COMMANDS.invite })] : []),
+    "",
+    t("s.cfgFile", { file }),
+    t("s.dataAt", { dir: c.dataDir }),
+  ]);
   if (scenario === "public") {
-    p.say("");
-    p.say(t("s.nginx"));
-    p.say(nginxSnippet(c));
+    p.info(t("s.nginx"));
+    p.raw(nginxSnippet(c));
   }
-  if (running) {
-    p.say("");
-    p.say(t("s.running"));
-  }
+  if (running) p.info(t("s.running"));
+  p.done(started ? t("s.doneOpen", { url: c.publicUrl }) : t("s.doneStart", { cmd: COMMANDS.start, url: c.publicUrl }));
   return { config: c, configFile: file, invite, selfTest, systemd: sysdState, running };
 }

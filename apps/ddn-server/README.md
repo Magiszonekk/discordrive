@@ -12,7 +12,15 @@ message), installs only this app's dependencies on the first run
 (`npm ci --workspace @ddv4/ddn-server`, about 55 packages / 75 MB, without the Prisma/Postgres
 of the old ddv4), then loads the TS sources through tsx.
 
-The wizard (Enter = the value in brackets, yes/no questions always `[Y/n]` / `[y/N]`):
+The wizard runs as an interactive terminal UI (@clack): choices with ↑/↓ and Enter shown as
+◉/○, yes/no as a `Yes / No` toggle (←/→ or y/n; Polish mode also `t`), text fields with the
+current value as a placeholder (Enter keeps it) and live validation (bad address, busy port with
+a free one suggested, unwritable directory, a bot token refused by Discord: the message appears
+under the field), a spinner while the app builds and the server is tested, a “Step n/5” header
+and framed summary / next steps. Esc or Ctrl+C stops it (nothing saved, exit 130, cursor
+restored). `NO_COLOR` is respected. Without a terminal (pipes, CI, `TERM=dumb`, `--yes`,
+`DISCORDRIVE_PLAIN=1`) it falls back to plain numbered questions with `[Y/n]`, same order.
+Steps (Enter = the default):
 0. language: English (default) or Polish; skipped with `--lang en|pl` or `DISCORDRIVE_LANG`,
    saved as `language` in `config.json` and used by the next `start`/`doctor`/`invite` and as
    the default language of the browser app (users can switch there; their choice wins);
@@ -82,5 +90,5 @@ configured with `discordrive setup` alone, in the “server with a domain” mod
 ## Tests
 
 ```
-npm test -w @ddv4/ddn-server     # wizard without questions and with scripted input (EN and PL), i18n key sets, invites, per-IP limits, health, static files, doctor
+npm test -w @ddv4/ddn-server     # wizard without questions, scripted plain input (EN and PL), the arrow-key wizard in a pty (test/tui.test.ts), i18n key sets, invites, per-IP limits, health, static files, doctor
 ```

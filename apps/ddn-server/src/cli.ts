@@ -14,7 +14,8 @@ import { ConfigError, configPath, defaultDataDir, loadConfig, type InstanceConfi
 import type { DdnServer } from "@ddv4/metadata-client/node";
 import { doctor, invite } from "./doctor.js";
 import { serve } from "./serve.js";
-import { ttyPrompter } from "./prompt.js";
+import { Cancelled, ttyPrompter, wantTui } from "./prompt.js";
+import { tuiPrompter } from "./tui.js";
 import { setup, type SetupFlags } from "./setup.js";
 
 const help = () => t("cli.help", { dir: defaultDataDir() });
@@ -114,9 +115,15 @@ export async function main(argv: string[]): Promise<number | "running"> {
     const dataDir = str(p.opts["data-dir"]) ?? defaultDataDir();
     switch (p.cmd) {
       case "setup": {
-        const pr = ttyPrompter();
+        const flags = setupFlags(p.opts);
+        const pr = !flags.yes && wantTui() ? tuiPrompter() : ttyPrompter();
         try {
-          const r = await setup(setupFlags(p.opts), pr);
+          const r = await setup(flags, pr).catch((e) => {
+            if (!(e instanceof Cancelled)) throw e;
+            pr.cancelled(e.message);
+            return null;
+          });
+          if (!r) return 130;
           if (r.running) {
             holdOpen(r.running, r.config);
             return "running";

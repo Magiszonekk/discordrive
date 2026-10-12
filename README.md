@@ -24,7 +24,8 @@ npm run setup
 ```
 
 The first time, `npm run setup` installs the libraries it needs by itself (a few seconds,
-internet required) and then asks a few questions. **You can answer every one with Enter**:
+internet required) and then asks a few questions: pick with the arrow keys, confirm with
+Enter. **You can answer every one with Enter**:
 by default the drive only runs on this computer, at `http://localhost:3020`. Link sharing
 (needs your own Discord bot) can be skipped and turned on later.
 
