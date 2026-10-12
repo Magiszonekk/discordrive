@@ -45,18 +45,33 @@ Steps (Enter = the default):
 5. who can create accounts (server with a domain only),
 6. data directory (checks write access),
 
-then it saves `config.json`, builds the browser app, on Linux with systemd offers the
-`discordrive-next.service` unit (default yes for a server, no for “this computer only”),
-otherwise offers to start in this window (Ctrl+C stops it), runs a `/v1/health` test and ends
+then it saves `config.json`, builds the browser app, offers to **run the drive in the
+background** on every system (default yes for a server, no for “this computer only”):
+- Linux: `systemd --user` unit `discordrive-next.service` (linger reported); without a
+  systemd user session: `~/.config/autostart/discordrive-next.desktop` (XDG, starts after the
+  desktop login),
+- Windows: a Task Scheduler task `\discordrive-next` for the current user, at log on, no
+  administrator rights, no console window (`conhost --headless`), restarted after a crash,
+- macOS: LaunchAgent `~/Library/LaunchAgents/discordrive-next.plist` (`RunAtLoad`,
+  `KeepAlive`),
+
+where no service manager restarts it (Windows, XDG) it runs `discordrive supervise`: `serve` as a
+child, restarted after a crash (2 s doubling to 60 s), output in `<data dir>/discordrive.log`.
+`npm run uninstall-autostart` removes it on any system, `doctor` shows its state, and `npm start`
+while it runs says “already running in the background”. Otherwise it offers to start in this window (Ctrl+C stops it), runs a `/v1/health` test and ends
 with a summary: the address to open, what to do in the browser, where the configuration and
 data are, `npm start` / `npm run setup` / `npm run doctor`.
 Running it again = editing: current values are the defaults, the saved token stays unless you
 choose otherwise.
 
 Cross-platform: data directory `~/.local/share` / `~/Library/Application Support` /
-`%LOCALAPPDATA%` (override: `DISCORDRIVE_DATA_DIR`), paths via `path`/`os.homedir()`, systemd
-on Linux only, POSIX modes (0600/0700) only outside Windows. Tested live on Linux; macOS and
-Windows by code review only.
+`%LOCALAPPDATA%` (override: `DISCORDRIVE_DATA_DIR`), paths via `path`/`os.homedir()`, POSIX
+modes (0600/0700) outside Windows; on Windows the data directory inherits the NTFS permissions
+of the user profile (`doctor` warns when it is outside the profile). Ctrl+C (SIGINT) and
+Ctrl+Break (SIGBREAK) stop the drive in cmd/PowerShell; frames and ◉/○ fall back to ASCII where
+the console has no Unicode. CI (`.github/workflows/cross-platform.yml`) runs the unit tests,
+`setup --yes --accept-risk` + `start` + `doctor` and the real background start on
+windows-latest, ubuntu-latest and macos-latest.
 
 ## Commands
 
@@ -74,8 +89,8 @@ Without questions (tests, automation):
 
 ```
 discordrive setup --yes --accept-risk --public-url https://drive.example.com --host 10.0.0.2 --port 3020 \
-  --trust-proxy 10.0.0.1 --signup invite --bot-token-file ~/bot.token --systemd --lang en
-discordrive setup --yes --answers answers.json      # the same keys in JSON (acceptRisk, publicUrl, host, port, trustProxy, signup, botTokenFile, systemd, language, …)
+  --trust-proxy 10.0.0.1 --signup invite --bot-token-file ~/bot.token --autostart --lang en
+discordrive setup --yes --answers answers.json      # the same keys in JSON (acceptRisk, publicUrl, host, port, trustProxy, signup, botTokenFile, autostart, language, …)
 ```
 
 `--bot-token` on the command line is refused (it would end up in the shell history).
@@ -88,7 +103,10 @@ discordrive setup --yes --answers answers.json      # the same keys in JSON (acc
   does not read environment variables).
 - `<data dir>/ddn.db` (0600): the server database (encrypted log, vaults, device public keys,
   invite codes as SHA-256, attachment addresses of shared files).
-- `~/.config/systemd/user/discordrive-next.service`: unit with the full path to Node.
+- background start (one of): `~/.config/systemd/user/discordrive-next.service`,
+  `~/.config/autostart/discordrive-next.desktop`, Task Scheduler `\discordrive-next`,
+  `~/Library/LaunchAgents/discordrive-next.plist`; all with the full path to Node.
+- `<data dir>/discordrive.log`, `<data dir>/supervisor.pid`: background start via `supervise`.
 
 ## Preview
 

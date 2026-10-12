@@ -46,19 +46,20 @@ według instrukcji na ekranie, zapisz zestaw ratunkowy i wyślij pierwszy plik.
 | włącz dysk | `npm start` (zatrzymanie: Ctrl+C) |
 | zmień ustawienia | `npm run setup` |
 | coś nie działa | `npm run doctor` |
+| wyłącz uruchamianie w tle | `npm run uninstall-autostart` |
 | kod zaproszenia (instancja publiczna) | `npm run invite` |
 | aktualizacja do najnowszej wersji | `npm run update`, potem ponownie włącz dysk |
 
 `npm run update` = `git pull` + `npm install` + świeże zbudowanie aplikacji przeglądarkowej.
 Sam `git pull` też wystarczy: `npm start` zauważy, że źródła aplikacji przeglądarkowej się
-zmieniły, i przed startem ją przebuduje (kilka sekund). Działający dysk (albo usługa systemd)
+zmieniły, i przed startem ją przebuduje (kilka sekund). Działający dysk (albo start w tle: systemd, Harmonogram zadań, LaunchAgent)
 pokazuje starą stronę, dopóki się go nie uruchomi ponownie.
 
 Dane serwera (konfiguracja i zaszyfrowany spis) są w `~/.local/share/discordrive-next`
 (Linux), `~/Library/Application Support/discordrive-next` (macOS) albo
 `%LOCALAPPDATA%\discordrive-next` (Windows). Same pliki są na Twoich kanałach Discorda.
 
-Dla zaawansowanych (serwer z domeną i HTTPS, usługa systemd, opcje bez pytań):
+Dla zaawansowanych (serwer z domeną i HTTPS, start w tle na Linuksie/Windows/macOS, opcje bez pytań):
 [apps/ddn-server/README.md](apps/ddn-server/README.md).
 Uwaga: trzymanie plików na Discordzie jest niezgodne z jego regulaminem; Discord może usunąć
 wiadomości albo zablokować konto. Trzymaj kopię ważnych plików gdzie indziej.

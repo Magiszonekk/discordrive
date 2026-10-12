@@ -8,7 +8,7 @@ import { health, hostUrl, isLocalAddress, portState, validateBotToken } from "./
 import { POSIX_MODES, checkWritable, riskAccepted, configPath, dbPath, fileMode, isLocalUrl, loadConfig, webDir, type InstanceConfig } from "./config.js";
 import { COMMANDS } from "./setup.js";
 import { t } from "./i18n.js";
-import { lingerEnabled, systemdAvailable, unitState } from "./systemd.js";
+import * as autostart from "./autostart.js";
 
 type Level = "ok" | "warn" | "fail";
 export interface Check {
@@ -40,6 +40,12 @@ export async function doctor(dataDir: string, out: (s: string) => void = console
   add(process.versions.node.split(".").map(Number)[0]! >= 22 ? "ok" : "fail", "Node.js", process.version);
   const wr = checkWritable(dataDir);
   add(wr ? "fail" : "ok", t("d.write"), wr ?? dataDir);
+  if (!POSIX_MODES) {
+    // NTFS: a directory inside the user profile inherits "only this user (+ SYSTEM, Administrators)".
+    const prof = (process.env.USERPROFILE ?? "").toLowerCase();
+    const inside = !!prof && dataDir.toLowerCase().startsWith(prof);
+    add(inside ? "ok" : "warn", t("d.acl"), inside ? t("d.aclWin") : t("d.aclWinOutside", { dir: dataDir }));
+  }
   if (POSIX_MODES) {
     const m = fileMode(configPath(dataDir));
     add(m === 0o600 ? "ok" : "fail", t("d.cfgMode"), m === null ? t("d.none") : `0${m.toString(8)}${m === 0o600 ? "" : t("d.cfgModeFix")}`);
@@ -60,11 +66,12 @@ export async function doctor(dataDir: string, out: (s: string) => void = console
   else add("fail", t("d.port"), t("d.portBusy", { port: c.bind.port, code: st.code }));
 
   const local = isLocalUrl(c.publicUrl);
-  if (systemdAvailable()) {
-    const u = unitState();
-    if (u.installed) add(u.active === "active" ? "ok" : "warn", t("d.unit"), `${u.active}, ${u.enabled}`);
-    else add(local ? "ok" : "warn", t("d.unit"), local ? t("d.unitUnused", { cmd: COMMANDS.start }) : t("d.unitMissing", { cmd: COMMANDS.setup }));
-    if (u.installed && lingerEnabled() === false) add("warn", t("d.linger"), t("d.lingerOff"));
+  const bg = autostart.state(dataDir);
+  if (bg.backend !== "none") {
+    const name = bg.backend === "systemd" ? "systemd --user" : bg.backend === "windows-task" ? "Task Scheduler" : bg.backend === "launchd" ? "LaunchAgent" : "XDG autostart";
+    if (bg.installed) add(bg.running === false ? "warn" : "ok", t("d.autostart"), t("d.autostartOn", { backend: name, detail: bg.detail }));
+    else add(local ? "ok" : "warn", t("d.autostart"), local ? t("d.autostartUnused", { cmd: COMMANDS.start }) : t("d.autostartMissing", { cmd: COMMANDS.setup }));
+    if (bg.installed && autostart.lingerOff(bg.backend)) add("warn", t("d.linger"), t("d.lingerOff"));
   }
 
   const h = await health(hostUrl(c.bind.host, c.bind.port));

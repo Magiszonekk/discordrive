@@ -313,3 +313,40 @@ Decyzje wykonawcze, których koncept i zlecenie nie przesądzały. Żadna nie zm
 - `--yes` nie akceptuje: potrzebne `--accept-risk` albo `"acceptRisk": true` w pliku odpowiedzi;
   bez tego `setup --yes` kończy się błędem, zanim cokolwiek zapisze.
 - Ostrzeżenie w aplikacji webowej (Settings → Channels, onboarding) zostaje bez zmian.
+
+### Decyzja właściciela 2026-10-12 (dopisek 2): start w tle na każdym systemie
+- Jedna abstrakcja `apps/ddn-server/src/autostart.ts` (`detectBackend/state/install/uninstall`),
+  jedno pytanie kreatora („Run the drive automatically in the background (…)?”), `doctor` pokazuje
+  stan, `npm run uninstall-autostart` usuwa. Flaga `--autostart` (stara nazwa `--systemd` działa).
+- **Linux:** `systemd --user` jak dotąd. Dostępność = odpowiada menedżer użytkownika
+  (`systemctl --user show-environment`), nie sama obecność binarki. Bez niego: wpis XDG
+  `~/.config/autostart/discordrive-next.desktop` (start po zalogowaniu do pulpitu) z `supervise`.
+- **Windows: Harmonogram zadań**, zadanie `\discordrive-next` bieżącego użytkownika:
+  `LogonTrigger` tego użytkownika, `InteractiveToken` (bez zapisanego hasła), `LeastPrivilege`,
+  bez limitu czasu, `RestartOnFailure` (1 min × 999), `IgnoreNew`, start na baterii. Rejestracja
+  `schtasks /Create /XML` (XML w UTF-16 LE z BOM, generowany z szablonu, pokryty testami).
+  Akcja: `conhost.exe --headless node discordrive.mjs supervise` (konsola bez okna, Windows 10
+  1809+); `supervise` restartuje serwer po awarii i pisze log do `<data dir>/discordrive.log`.
+  - *vs folder Autostart (`shell:startup`)*: skrót z folderu uruchamia proces z widocznym oknem
+    konsoli (albo wymaga skryptu VBS/`wscript` jako pośrednika), nie ma restartu po awarii, nie
+    da się go zapytać o stan ani zatrzymać (`schtasks /Query|/End`), a łatwo go usunąć przez
+    pomyłkę. Harmonogram daje to wszystko bez administratora.
+  - *vs usługa Windows*: wymaga uprawnień administratora przy instalacji (i zwykle NSSM/WinSW
+    albo natywnego wrappera usługi), działa na koncie systemowym, a dane i klucze są w profilu
+    użytkownika. Odrzucone na start; do rozważenia dla instalacji serwerowych.
+  - Zatrzymanie: na Windows nie ma SIGTERM, więc `uninstall-autostart` kończy całe drzewo
+    `taskkill /PID <supervise> /T /F` (inaczej serwer zostałby sierotą na porcie).
+- **macOS:** LaunchAgent `~/Library/LaunchAgents/discordrive-next.plist`: `RunAtLoad`,
+  `KeepAlive.SuccessfulExit=false` (restart po awarii, nie po czystym wyjściu), `Umask 077`,
+  log do `<data dir>/discordrive.log`; `launchctl bootstrap|bootout gui/<uid>`.
+- `npm start` przy działającym starcie w tle: „The drive is already running in the background
+  (…): open <url>”, kod 1.
+- Windows ogólnie: uprawnienia plików = ACL NTFS dziedziczone z profilu (`doctor`: OK w profilu,
+  ostrzeżenie poza nim), Ctrl+Break (SIGBREAK) też zatrzymuje dysk, ramki i ◉/○ z ASCII fallbackiem
+  (@clack `isUnicodeSupported`: Windows Terminal, VS Code, ConEmu → Unicode; stary conhost →
+  ASCII), `npm.cmd`/`npm_execpath` w bootstrapie już były. Testy, które z natury są POSIX-owe
+  (pty przez `script`, `chmod 0500`, `pgrep`), są na Windows pomijane.
+- CI `.github/workflows/cross-platform.yml` (windows-latest, ubuntu-latest, macos-latest):
+  typecheck, testy sync-core/metadata-client/ddn-server, `setup --yes` bez/z `--accept-risk`,
+  `start` + drugi `start` + `doctor`, i prawdziwa rejestracja startu w tle
+  (`DDN_CI_REAL_AUTOSTART=1`, `test/autostart-real.test.ts`).

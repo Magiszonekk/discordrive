@@ -37,7 +37,8 @@ import {
 import { setCliLang, t, type CliLang } from "./i18n.js";
 import { Cancelled, ttyPrompter, type Prompter } from "./prompt.js";
 import { buildWeb, serve } from "./serve.js";
-import { installAndStart, lingerEnabled, systemdAvailable, unitPath } from "./systemd.js";
+import { LOG_FILE, detectBackend, install as autostartInstall, lingerOff } from "./autostart.js";
+import { join } from "node:path";
 
 export interface SetupFlags {
   yes?: boolean;
@@ -53,7 +54,8 @@ export interface SetupFlags {
   /** Replace a saved token without asking (with botTokenFile). */
   replaceBot?: boolean;
   invite?: boolean;
-  systemd?: boolean;
+  /** Run in the background at log-on (systemd --user / Task Scheduler / LaunchAgent / XDG autostart). `--systemd` is an alias. */
+  autostart?: boolean;
   /** Start the server in this terminal after setup (foreground). */
   start?: boolean;
   selfTest?: boolean;
@@ -70,7 +72,8 @@ export interface SetupResult {
   configFile: string;
   invite: { code: string; expiresAt: number } | null;
   selfTest: { ok: boolean; detail: string } | null;
-  systemd: "installed" | "skipped" | "unavailable";
+  /** Background start: registered, declined, or no backend on this system. */
+  autostart: "installed" | "skipped" | "unavailable";
   /** The server was started in this process and keeps running (foreground). */
   running: Awaited<ReturnType<typeof serve>> | null;
 }
@@ -120,6 +123,7 @@ export const COMMANDS = {
   setup: "npm run setup",
   doctor: "npm run doctor",
   invite: "npm run invite",
+  uninstallAutostart: "npm run uninstall-autostart",
 };
 
 /** Word-wrap for the framed risk notice (the frame does not wrap by itself on narrow terminals). */
@@ -207,7 +211,7 @@ export async function setup(f: SetupFlags, p0?: Prompter): Promise<SetupResult> 
   if (w0) p.warn(t("s.reqWriteBad", { why: w0 }));
   else p.ok(t("s.reqWriteOk", { dir: c.dataDir }));
   if (w0 && yes) throw new Error(w0);
-  const sysd = systemdAvailable();
+  const backend = detectBackend();
   if (old) p.ok(t("s.reqOld", { file: configPath(c.dataDir) }));
   else if (existsSync(configPath(c.dataDir))) p.warn(t("s.reqBroken", { file: configPath(c.dataDir) }));
 
@@ -479,16 +483,16 @@ export async function setup(f: SetupFlags, p0?: Prompter): Promise<SetupResult> 
     }
   }
 
-  // Start: systemd (Linux) or in this window
-  let sysdState: SetupResult["systemd"] = sysd ? "skipped" : "unavailable";
+  // Start: in the background (systemd --user / Task Scheduler / LaunchAgent / XDG autostart) or in this window
+  let autoState: SetupResult["autostart"] = backend === "none" ? "unavailable" : "skipped";
   let started = false;
-  if (f.systemd && !sysd) throw new Error(t("s.noSystemd"));
-  if (sysd && (f.systemd ?? (yes ? false : await p.confirm(t("s.systemdQ"), scenario === "public")))) {
-    const r = installAndStart(c.dataDir);
-    sysdState = "installed";
+  if (f.autostart && backend === "none") throw new Error(t("a.unavailable"));
+  if (backend !== "none" && (f.autostart ?? (yes ? false : await p.confirm(t("a.q", { how: t(`a.how.${backend}`) }), scenario === "public")))) {
+    const r = await autostartInstall(c.dataDir, backend);
+    autoState = "installed";
     started = true;
-    p.ok(t("s.systemdOk", { how: r.restarted ? t("s.systemdRestarted") : t("s.systemdStarted"), unit: unitPath() }));
-    if (lingerEnabled() === false) p.warn(t("s.linger"));
+    p.ok(t("a.ok", { how: r.replaced ? t("a.restarted") : t("a.started"), where: r.where }));
+    if (lingerOff(backend)) p.warn(t("s.linger"));
   }
   let running: SetupResult["running"] = null;
   if (!started) {
@@ -544,7 +548,7 @@ export async function setup(f: SetupFlags, p0?: Prompter): Promise<SetupResult> 
     t("s.next4"),
   ]);
   p.note(t("s.cmds", { dir: REPO_DIR }), [
-    sysdState === "installed" ? t("s.cmdSystemd") : t("s.cmdStart", { cmd: COMMANDS.start }),
+    ...(autoState === "installed" ? [t(`a.cmd.${backend}` as "a.cmd.systemd", { log: join(c.dataDir, LOG_FILE) }), t("a.cmdRemove", { cmd: COMMANDS.uninstallAutostart })] : [t("s.cmdStart", { cmd: COMMANDS.start })]),
     t("s.cmdSetup", { cmd: COMMANDS.setup }),
     t("s.cmdDoctor", { cmd: COMMANDS.doctor }),
     ...(c.signup === "invite" ? [t("s.cmdInvite", { cmd: COMMANDS.invite })] : []),
@@ -558,5 +562,5 @@ export async function setup(f: SetupFlags, p0?: Prompter): Promise<SetupResult> 
   }
   if (running) p.info(t("s.running"));
   p.done(started ? t("s.doneOpen", { url: c.publicUrl }) : t("s.doneStart", { cmd: COMMANDS.start, url: c.publicUrl }));
-  return { config: c, configFile: file, invite, selfTest, systemd: sysdState, running };
+  return { config: c, configFile: file, invite, selfTest, autostart: autoState, running };
 }

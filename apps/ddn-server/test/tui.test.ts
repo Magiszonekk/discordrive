@@ -43,7 +43,7 @@ function term(args: string[], env: Record<string, string>): Term {
   const cmd = [process.execPath, BIN, "setup", ...args].map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
   // A fixed terminal size: script's pty would otherwise be 0x0 (one char per line).
   const proc = spawn("script", ["-qfec", `stty cols 120 rows 50; exec ${cmd}`, "/dev/null"], {
-    env: { ...process.env, TERM: "xterm-256color", DISCORDRIVE_NO_SYSTEMD: "1", CI: "", ...env },
+    env: { ...process.env, TERM: "xterm-256color", DISCORDRIVE_NO_AUTOSTART: "1", CI: "", ...env },
     stdio: ["pipe", "pipe", "pipe"],
   });
   procs.push(proc);

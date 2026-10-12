@@ -64,6 +64,32 @@ export const en = {
   "c.v.risk": "acceptedRisk: { version, at } or null",
   "d.risk": "risk accepted",
   "d.riskOk": "version {version}, {at}",
+  // autostart (all systems)
+  "a.q": "Run the drive automatically in the background ({how}), also after a restart of the computer?",
+  "a.how.systemd": "systemd --user service",
+  "a.how.xdg": "starts when you log in to the desktop",
+  "a.how.windows-task": "Task Scheduler, at log on, no window, no administrator rights",
+  "a.how.launchd": "LaunchAgent, at log in",
+  "a.ok": "background start {how} ({where})",
+  "a.started": "registered and started",
+  "a.restarted": "updated and restarted",
+  "a.unavailable": "automatic start is not available on this system",
+  "a.cmd.systemd": "status / stop / start:  systemctl --user status|stop|start discordrive-next",
+  "a.cmd.windows-task": "stop / start:  schtasks /End|/Run /TN discordrive-next   (log: {log})",
+  "a.cmd.launchd": "stop / start:  launchctl kickstart -k gui/$(id -u)/discordrive-next   (log: {log})",
+  "a.cmd.xdg": "log: {log}",
+  "a.cmdRemove": "remove the background start:  {cmd}",
+  "a.removed": "Background start removed ({where}).",
+  "a.none": "No background start was registered.",
+  "a.inBackground": "The drive is already running in the background ({how}): open {url}",
+  "d.autostart": "background start",
+  "d.autostartOn": "{backend}: {detail}",
+  "d.autostartUnused": "not used (manual start: {cmd})",
+  "d.autostartMissing": "not set up ({cmd} → run in the background)",
+  "d.acl": "file permissions",
+  "d.aclWin": "Windows: the data directory is in your profile; NTFS permissions limit it to you (chmod-style modes are not used here)",
+  "d.aclWinOutside": "Windows: {dir} is outside your profile; make sure only you can read it (Properties → Security, or icacls). It holds the server database and the bot token",
+  "sv.restart": "the drive stopped (code {code}); restarting in {s} s",
   // language
   "lang.q": "Language / Język",
   "lang.en": "English",
@@ -248,11 +274,12 @@ export const en = {
   start    run the drive in this window (Ctrl+C stops it)        npm start
   doctor   check what is wrong                                   npm run doctor
   invite   new single-use invite code                            npm run invite
+  uninstall-autostart   remove the background start              npm run uninstall-autostart
 
 Common: --data-dir DIR (default {dir}), --lang en|pl (or DISCORDRIVE_LANG=pl)
 setup without questions: --yes [--answers file.json] [--public-url URL] [--host H] [--port N]
   [--trust-proxy A,B] [--signup invite|open|closed] [--bot-token-file FILE | --no-bot]
-  [--replace-bot] [--systemd|--no-systemd] [--start] [--no-invite] [--no-self-test]
+  [--replace-bot] [--autostart|--no-autostart] [--start] [--no-invite] [--no-self-test]
   --accept-risk is required with --yes (Discord's Terms of Service, no warranty: see README)
 The bot token is only accepted interactively or from a file (never on the command line).`,
   "cli.badArg": "unknown argument: {a}",
@@ -364,6 +391,31 @@ export const pl: Record<CliKey, string> = {
   "c.v.risk": "acceptedRisk: { version, at } albo null",
   "d.risk": "akceptacja ryzyka",
   "d.riskOk": "wersja {version}, {at}",
+  "a.q": "Uruchamiać dysk automatycznie w tle ({how}), także po restarcie komputera?",
+  "a.how.systemd": "usługa systemd --user",
+  "a.how.xdg": "start po zalogowaniu do pulpitu",
+  "a.how.windows-task": "Harmonogram zadań, przy logowaniu, bez okna, bez uprawnień administratora",
+  "a.how.launchd": "LaunchAgent, przy logowaniu",
+  "a.ok": "start w tle {how} ({where})",
+  "a.started": "zarejestrowany i uruchomiony",
+  "a.restarted": "zaktualizowany i uruchomiony ponownie",
+  "a.unavailable": "automatyczny start nie jest dostępny w tym systemie",
+  "a.cmd.systemd": "stan / zatrzymanie / start:  systemctl --user status|stop|start discordrive-next",
+  "a.cmd.windows-task": "zatrzymanie / start:  schtasks /End|/Run /TN discordrive-next   (log: {log})",
+  "a.cmd.launchd": "zatrzymanie / start:  launchctl kickstart -k gui/$(id -u)/discordrive-next   (log: {log})",
+  "a.cmd.xdg": "log: {log}",
+  "a.cmdRemove": "usunięcie startu w tle:  {cmd}",
+  "a.removed": "Start w tle usunięty ({where}).",
+  "a.none": "Start w tle nie był ustawiony.",
+  "a.inBackground": "Dysk już działa w tle ({how}): otwórz {url}",
+  "d.autostart": "start w tle",
+  "d.autostartOn": "{backend}: {detail}",
+  "d.autostartUnused": "nie używany (start ręczny: {cmd})",
+  "d.autostartMissing": "nie ustawiony ({cmd} → uruchamianie w tle)",
+  "d.acl": "uprawnienia plików",
+  "d.aclWin": "Windows: katalog danych jest w Twoim profilu; uprawnienia NTFS ograniczają go do Ciebie (tryby w stylu chmod nie są tu używane)",
+  "d.aclWinOutside": "Windows: {dir} jest poza Twoim profilem; upewnij się, że tylko Ty możesz go czytać (Właściwości → Zabezpieczenia albo icacls). Leży tam baza serwera i token bota",
+  "sv.restart": "dysk się zatrzymał (kod {code}); ponowny start za {s} s",
   "lang.q": "Language / Język",
   "lang.en": "English",
   "lang.pl": "Polski",
@@ -537,11 +589,12 @@ export const pl: Record<CliKey, string> = {
   start    uruchom dysk w tym oknie (Ctrl+C zatrzymuje)                     npm start
   doctor   sprawdź, co nie działa                                           npm run doctor
   invite   nowy jednorazowy kod zaproszenia                                 npm run invite
+  uninstall-autostart   usuń start w tle                                    npm run uninstall-autostart
 
 Wspólne: --data-dir DIR (domyślnie {dir}), --lang en|pl (albo DISCORDRIVE_LANG=pl)
 setup bez pytań: --yes [--answers plik.json] [--public-url URL] [--host H] [--port N]
   [--trust-proxy A,B] [--signup invite|open|closed] [--bot-token-file PLIK | --no-bot]
-  [--replace-bot] [--systemd|--no-systemd] [--start] [--no-invite] [--no-self-test]
+  [--replace-bot] [--autostart|--no-autostart] [--start] [--no-invite] [--no-self-test]
   z --yes wymagane --accept-risk (regulamin Discorda, brak gwarancji: zob. README)
 Token bota podaje się tylko interaktywnie albo plikiem (nigdy w linii poleceń).`,
   "cli.badArg": "nieznany argument: {a}",

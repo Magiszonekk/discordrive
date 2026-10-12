@@ -43,7 +43,9 @@ export function systemdAvailable(): boolean {
   // Tests and demos on a machine that already runs an instance as a service.
   if (process.env.DISCORDRIVE_NO_SYSTEMD && process.env.DISCORDRIVE_NO_SYSTEMD !== "0") return false;
   try {
-    sc("--version");
+    // Not just `--version`: the user manager must answer (CI runners and containers have the
+    // binary but no user session; then the background start falls back to XDG autostart).
+    sc("show-environment");
     return true;
   } catch {
     return false;

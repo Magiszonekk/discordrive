@@ -35,7 +35,7 @@ async function freePort(): Promise<number> {
 
 // Tests must never touch the real instance's data directory (default when unset).
 process.env.XDG_DATA_HOME = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-xdg-"));
-process.env.DISCORDRIVE_NO_SYSTEMD = "1"; // never touch the user unit of a running instance
+process.env.DISCORDRIVE_NO_AUTOSTART = "1"; // never touch the background start of a running instance
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -47,11 +47,14 @@ describe("discordrive setup (non-interactive)", () => {
     const dir = tmp();
     const port = await freePort();
     const { p, out } = quiet();
-    const r = await setup({ yes: true, acceptRisk: true, dataDir: dir, port, systemd: false }, p);
+    const r = await setup({ yes: true, acceptRisk: true, dataDir: dir, port, autostart: false }, p);
     expect(r.selfTest).toMatchObject({ ok: true });
     expect(r.invite).toBeNull();
-    expect(statSync(configPath(dir)).mode & 0o777).toBe(0o600);
-    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    if (process.platform !== "win32") {
+      // POSIX modes; on Windows NTFS permissions are inherited from the profile (doctor reports them).
+      expect(statSync(configPath(dir)).mode & 0o777).toBe(0o600);
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+    }
     const c = loadConfig(dir);
     expect(c).toMatchObject({ mode: "metadata-only", signup: "open", publicUrl: `http://localhost:${port}`, bind: { host: "127.0.0.1", port }, botToken: null });
     const text = out.join("\n");
@@ -64,7 +67,7 @@ describe("discordrive setup (non-interactive)", () => {
     const dir = tmp();
     const port = await freePort();
     const { p, out } = quiet();
-    const r = await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: "https://dysk.example.com", systemd: false }, p);
+    const r = await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: "https://dysk.example.com", autostart: false }, p);
     expect(r.invite?.code).toMatch(/^ddn-inv-[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$/);
     expect(loadConfig(dir)).toMatchObject({ signup: "invite", publicUrl: "https://dysk.example.com" });
     expect(out.join("\n")).toContain("invite code: ddn-inv-");
@@ -82,13 +85,14 @@ describe("discordrive setup (non-interactive)", () => {
     expect(defaultDataDir("linux", { DISCORDRIVE_DATA_DIR: "/d" }, "/h")).toBe("/d");
   });
 
-  it("refuses a data dir it cannot write, with a human message", async () => {
+  // chmod does not make a directory read-only on Windows (NTFS ACLs); root ignores modes.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("refuses a data dir it cannot write, with a human message", async () => {
     const { chmodSync, mkdirSync } = await import("node:fs");
     const ro = join(tmp(), "ro");
     mkdirSync(ro);
     chmodSync(ro, 0o500);
     cleanups.push(() => chmodSync(ro, 0o700));
-    await expect(setup({ yes: true, acceptRisk: true, dataDir: join(ro, "data"), port: await freePort(), systemd: false }, quiet().p)).rejects.toThrow(/no permission to write/);
+    await expect(setup({ yes: true, acceptRisk: true, dataDir: join(ro, "data"), port: await freePort(), autostart: false }, quiet().p)).rejects.toThrow(/no permission to write/);
   });
 
   it("validates the bot token against Discord (GET /users/@me), stores it 0600 and never prints it", async () => {
@@ -101,14 +105,14 @@ describe("discordrive setup (non-interactive)", () => {
     writeFileSync(tf, fake.botToken + "\n", { mode: 0o600 });
     const port = await freePort();
     const { p, out } = quiet();
-    const r = await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, botTokenFile: tf, systemd: false, discordApiOrigin: fake.origin }, p);
+    const r = await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, botTokenFile: tf, autostart: false, discordApiOrigin: fake.origin }, p);
     expect(r.config.bot).toEqual({ id: "1550000000000000001", username: "fake-bot" });
     expect(readFileSync(configPath(dir), "utf8")).toContain(fake.botToken);
     expect(out.join("\n")).not.toContain(fake.botToken);
     // A bad token is refused, the config is not written.
     writeFileSync(tf, "nope");
     const dir2 = tmp();
-    await expect(setup({ yes: true, acceptRisk: true, dataDir: dir2, port, publicUrl: `http://127.0.0.1:${port}`, botTokenFile: tf, systemd: false, discordApiOrigin: fake.origin }, quiet().p)).rejects.toThrow(/token/);
+    await expect(setup({ yes: true, acceptRisk: true, dataDir: dir2, port, publicUrl: `http://127.0.0.1:${port}`, botTokenFile: tf, autostart: false, discordApiOrigin: fake.origin }, quiet().p)).rejects.toThrow(/token/);
     expect(() => loadConfig(dir2)).toThrow(/No configuration/);
   });
 
@@ -121,8 +125,8 @@ describe("discordrive setup (non-interactive)", () => {
     const tf = join(dir, "..", `tok2-${Date.now()}`);
     writeFileSync(tf, fake.botToken);
     const port = await freePort();
-    await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: "https://dysk.example.com", host: "127.0.0.1", trustProxy: ["127.0.0.1"], botTokenFile: tf, systemd: false, selfTest: false, discordApiOrigin: fake.origin }, quiet().p);
-    await setup({ yes: true, acceptRisk: true, dataDir: dir, signup: "closed", systemd: false, selfTest: false, discordApiOrigin: fake.origin }, quiet().p);
+    await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: "https://dysk.example.com", host: "127.0.0.1", trustProxy: ["127.0.0.1"], botTokenFile: tf, autostart: false, selfTest: false, discordApiOrigin: fake.origin }, quiet().p);
+    await setup({ yes: true, acceptRisk: true, dataDir: dir, signup: "closed", autostart: false, selfTest: false, discordApiOrigin: fake.origin }, quiet().p);
     const c = loadConfig(dir);
     expect(c).toMatchObject({ publicUrl: "https://dysk.example.com", trustProxy: ["127.0.0.1"], signup: "closed", botToken: fake.botToken, bind: { port } });
   });
@@ -136,7 +140,7 @@ describe("discordrive setup (non-interactive)", () => {
     // `discordrive start` on a busy port: a human message, not an unhandled 'error' event.
     const { main } = await import("../src/cli.js");
     const dir0 = tmp();
-    await setup({ yes: true, acceptRisk: true, dataDir: dir0, port: await freePort(), systemd: false, selfTest: false }, quiet().p);
+    await setup({ yes: true, acceptRisk: true, dataDir: dir0, port: await freePort(), autostart: false, selfTest: false }, quiet().p);
     const cfg = JSON.parse(readFileSync(configPath(dir0), "utf8"));
     cfg.bind.port = busy;
     writeFileSync(configPath(dir0), JSON.stringify(cfg));
@@ -154,15 +158,15 @@ describe("discordrive setup (non-interactive)", () => {
     await new Promise((r) => s.once("listening", r));
     cleanups.push(() => void s.close());
     const port = (s.address() as { port: number }).port;
-    await expect(setup({ yes: true, acceptRisk: true, dataDir: tmp(), port, systemd: false }, quiet().p)).rejects.toThrow(/in use/);
-    await expect(setup({ yes: true, acceptRisk: true, dataDir: tmp(), host: "203.0.113.7", systemd: false }, quiet().p)).rejects.toThrow(/is not an address/);
+    await expect(setup({ yes: true, acceptRisk: true, dataDir: tmp(), port, autostart: false }, quiet().p)).rejects.toThrow(/in use/);
+    await expect(setup({ yes: true, acceptRisk: true, dataDir: tmp(), host: "203.0.113.7", autostart: false }, quiet().p)).rejects.toThrow(/is not an address/);
   });
 
   it("flags and answers file; --bot-token on the command line is refused", () => {
     const dir = tmp();
     const af = join(dir, "answers.json");
-    writeFileSync(af, JSON.stringify({ publicUrl: "https://x.example", port: 4000, trustProxy: ["192.0.2.1"], signup: "open", systemd: false }));
-    expect(setupFlags({ yes: true, answers: af, port: "4001" })).toMatchObject({ yes: true, publicUrl: "https://x.example", port: 4001, trustProxy: ["192.0.2.1"], signup: "open", systemd: false });
+    writeFileSync(af, JSON.stringify({ publicUrl: "https://x.example", port: 4000, trustProxy: ["192.0.2.1"], signup: "open", autostart: false }));
+    expect(setupFlags({ yes: true, answers: af, port: "4001" })).toMatchObject({ yes: true, publicUrl: "https://x.example", port: 4001, trustProxy: ["192.0.2.1"], signup: "open", autostart: false });
     expect(() => setupFlags({ "bot-token": "x" })).toThrow(/not allowed/);
     expect(setupFlags({ lang: "pl" }).lang).toBe("pl");
     expect(() => setupFlags({ lang: "de" })).toThrow(/en or pl/);
@@ -178,7 +182,7 @@ describe("discordrive setup (non-interactive)", () => {
 describe("risk notice (Discord's Terms of Service, no warranty)", () => {
   it("--yes without --accept-risk: refused before anything is written", async () => {
     const dir = tmp();
-    await expect(setup({ yes: true, dataDir: dir, port: await freePort(), systemd: false, selfTest: false }, quiet().p)).rejects.toThrow(/--accept-risk/);
+    await expect(setup({ yes: true, dataDir: dir, port: await freePort(), autostart: false, selfTest: false }, quiet().p)).rejects.toThrow(/--accept-risk/);
     expect(existsSync(configPath(dir))).toBe(false);
   });
 
@@ -195,7 +199,7 @@ describe("risk notice (Discord's Terms of Service, no warranty)", () => {
       input.write(answers.join("\n"));
       const p = ttyPrompter(input, output);
       try {
-        return { r: await setup({ selfTest: false, systemd: false, start: false }, p).catch((e: Error) => e), text };
+        return { r: await setup({ selfTest: false, autostart: false, start: false }, p).catch((e: Error) => e), text };
       } finally {
         p.close();
       }
@@ -221,7 +225,7 @@ describe("risk notice (Discord's Terms of Service, no warranty)", () => {
   it("start and doctor refuse a config without the current acceptance (old file or older text version)", async () => {
     const dir = tmp();
     const port = await freePort();
-    await setup({ yes: true, acceptRisk: true, dataDir: dir, port, systemd: false, selfTest: false }, quiet().p);
+    await setup({ yes: true, acceptRisk: true, dataDir: dir, port, autostart: false, selfTest: false }, quiet().p);
     const raw = JSON.parse(readFileSync(configPath(dir), "utf8"));
     for (const acceptedRisk of [undefined, { version: RISK_VERSION - 1, at: "2026-01-01T00:00:00.000Z" }]) {
       writeFileSync(configPath(dir), JSON.stringify({ ...raw, acceptedRisk }));
@@ -251,7 +255,8 @@ describe("discordrive setup (interactive, scripted stdin)", () => {
     let text = "";
     output.on("data", (d) => (text += String(d)));
     // language (Enter = English), scenario (Enter = local), port, mode (Enter), bot (Enter = skip), data dir, save (y), [systemd: Enter = no], start now (n)
-    const { systemdAvailable } = await import("../src/systemd.js");
+    const { detectBackend } = await import("../src/autostart.js");
+    const systemdAvailable = () => detectBackend() !== "none";
     input.write(["", "1", "", String(port), "", "", dir, "y", ...(systemdAvailable() ? [""] : []), "n", ""].join("\n"));
     const p = ttyPrompter(input, output);
     // The default data dir comes from DISCORDRIVE_DATA_DIR (never the real user's one in tests).
@@ -286,7 +291,8 @@ describe("discordrive setup (interactive, scripted stdin)", () => {
     const output = new PassThrough();
     let text = "";
     output.on("data", (d) => (text += String(d)));
-    const { systemdAvailable } = await import("../src/systemd.js");
+    const { detectBackend } = await import("../src/autostart.js");
+    const systemdAvailable = () => detectBackend() !== "none";
     // language 2 = Polski, scenario, port, mode, bot, data dir, save: "x" (invalid) then "tak", [systemd: nie], start now: n
     input.write(["2", "1", "", String(port), "", "", dir, "x", "tak", ...(systemdAvailable() ? ["nie"] : []), "n", ""].join("\n"));
     const p = ttyPrompter(input, output);
@@ -321,7 +327,8 @@ describe("discordrive setup (interactive, scripted stdin)", () => {
     const output = new PassThrough();
     let text = "";
     output.on("data", (d) => (text += String(d)));
-    const { systemdAvailable } = await import("../src/systemd.js");
+    const { detectBackend } = await import("../src/autostart.js");
+    const systemdAvailable = () => detectBackend() !== "none";
     // scenario, port, mode, bot, data dir, save: "t" (not accepted in English) then "yes", [systemd], start: no
     input.write(["1", "", String(port), "", "", dir, "t", "yes", ...(systemdAvailable() ? ["no"] : []), "no", ""].join("\n"));
     const p = ttyPrompter(input, output);
@@ -345,7 +352,8 @@ describe("discordrive setup (interactive, scripted stdin)", () => {
     const output = new PassThrough();
     let text = "";
     output.on("data", (d) => (text += String(d)));
-    const { systemdAvailable } = await import("../src/systemd.js");
+    const { detectBackend } = await import("../src/autostart.js");
+    const systemdAvailable = () => detectBackend() !== "none";
     // language, scenario, port, mode, bot: 2 = now, wrong token, right token, data dir, save, [systemd], start now: n
     input.write(["", "1", "", String(port), "", "2", "wrong", fake.botToken, dir, "", ...(systemdAvailable() ? [""] : []), "n", ""].join("\n"));
     const p = ttyPrompter(input, output);
@@ -365,7 +373,7 @@ describe("instance server: invites, limits, health, web app", () => {
   it("invite-only sign-up: no code / bad code 403, good code once, then used", async () => {
     const dir = tmp();
     const port = await freePort();
-    await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, signup: "invite", systemd: false, selfTest: false, invite: false }, quiet().p);
+    await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, signup: "invite", autostart: false, selfTest: false, invite: false }, quiet().p);
     const srv = await serve(loadConfig(dir), () => {});
     cleanups.push(() => srv.close());
     const url = `http://127.0.0.1:${port}`;
@@ -433,15 +441,17 @@ describe("instance server: invites, limits, health, web app", () => {
   it("doctor: green on a running instance, red on a broken config file mode", async () => {
     const dir = tmp();
     const port = await freePort();
-    await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, systemd: false, selfTest: false }, quiet().p);
+    await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, autostart: false, selfTest: false }, quiet().p);
     const srv = await serve(loadConfig(dir), () => {});
     cleanups.push(() => srv.close());
     const lines: string[] = [];
     const d = await doctor(dir, (s) => lines.push(s));
     expect(d.ok).toBe(true);
     expect(lines.join("\n")).toContain("local health: version");
-    const { chmodSync } = await import("node:fs");
-    chmodSync(configPath(dir), 0o644);
-    expect((await doctor(dir, () => {})).ok).toBe(false);
+    if (process.platform !== "win32") {
+      const { chmodSync } = await import("node:fs");
+      chmodSync(configPath(dir), 0o644);
+      expect((await doctor(dir, () => {})).ok).toBe(false);
+    } else expect(lines.join("\n")).toContain("file permissions: Windows");
   });
 });

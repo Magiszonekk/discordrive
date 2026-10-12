@@ -1,10 +1,13 @@
 // discordrive <command>
 //   setup   [--data-dir DIR] [--yes] [--answers FILE] [--public-url URL] [--host H] [--port N]
 //           [--trust-proxy A,B] [--signup invite|open|closed] [--bot-token-file F | --no-bot]
-//           [--replace-bot] [--systemd | --no-systemd] [--no-invite] [--no-self-test]
+//           [--replace-bot] [--autostart | --no-autostart] [--accept-risk] [--no-invite] [--no-self-test]
+//           (--systemd / --no-systemd: older names of --autostart)
 //   start   [--data-dir DIR]   (alias: serve)
 //   doctor  [--data-dir DIR]
 //   invite  [--data-dir DIR] [--days N] [--note TEXT]
+//   uninstall-autostart [--data-dir DIR]   remove the background start (any system)
+//   supervise [--data-dir DIR]   (used by the background start) serve + restart after a crash, log to a file
 // Every command: --lang en|pl (or DISCORDRIVE_LANG); default = the language
 // saved by setup in config.json, else English.
 
@@ -14,6 +17,7 @@ import { ConfigError, configPath, defaultDataDir, loadConfig, riskAccepted, type
 import type { DdnServer } from "@ddv4/metadata-client/node";
 import { doctor, invite } from "./doctor.js";
 import { serve } from "./serve.js";
+import * as autostart from "./autostart.js";
 import { Cancelled, ttyPrompter, wantTui } from "./prompt.js";
 import { tuiPrompter } from "./tui.js";
 import { setup, type SetupFlags } from "./setup.js";
@@ -70,7 +74,7 @@ export function setupFlags(opts: Record<string, string | boolean>): SetupFlags {
     noBot: opts["no-bot"] === true || answers.bot === false,
     replaceBot: opts["replace-bot"] === true || answers.replaceBot === true,
     invite: bool("invite", "invite"),
-    systemd: bool("systemd", "systemd"),
+    autostart: bool("autostart", "autostart") ?? bool("systemd", "systemd"),
     start: bool("start", "start"),
     selfTest: bool("self-test", "selfTest"),
     discordApiOrigin: str(pick("discord-api-origin", "discordApiOrigin")),
@@ -82,7 +86,8 @@ export function setupFlags(opts: Record<string, string | boolean>): SetupFlags {
 /** Keep a started server alive until Ctrl+C / SIGTERM, closing it cleanly. */
 function holdOpen(srv: DdnServer, c: InstanceConfig): void {
   let closing = false;
-  for (const sig of ["SIGINT", "SIGTERM"] as const)
+  // SIGBREAK: Ctrl+Break in a Windows console (Ctrl+C arrives as SIGINT in cmd and PowerShell).
+  for (const sig of ["SIGINT", "SIGTERM", "SIGBREAK"] as const)
     process.on(sig, () => {
       if (closing) return;
       closing = true;
@@ -141,13 +146,27 @@ export async function main(argv: string[]): Promise<number | "running"> {
         const { portState } = await import("./checks.js");
         const st = await portState(c.bind.host, c.bind.port);
         if (st.state === "ours") {
-          console.error(t("cli.alreadyRunning", { url: c.publicUrl }));
+          const bg = autostart.state(c.dataDir);
+          console.error(bg.installed && bg.running !== false ? t("a.inBackground", { how: t(`a.how.${bg.backend}` as "a.how.systemd"), url: c.publicUrl }) : t("cli.alreadyRunning", { url: c.publicUrl }));
           return 1;
         }
         const srv = await serve(c, () => {});
         console.log(t("cli.running", { url: c.publicUrl }));
         holdOpen(srv, c);
         return "running";
+      }
+      case "supervise": {
+        const c = loadConfig(dataDir);
+        if (!riskAccepted(c)) throw new ConfigError(t("r.needed"));
+        const { supervise } = await import("./supervise.js");
+        await supervise(c);
+        return "running";
+      }
+      case "uninstall-autostart": {
+        const backend = autostart.detectBackend();
+        const where = autostart.state(dataDir, backend).where;
+        console.log((await autostart.uninstall(dataDir, backend)) ? t("a.removed", { where }) : t("a.none"));
+        return 0;
       }
       case "doctor":
         return (await doctor(dataDir)).ok ? 0 : 1;

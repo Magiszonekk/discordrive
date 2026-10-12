@@ -8,6 +8,7 @@
 // All texts come from i18n.ts.
 
 import { createInterface, type Interface } from "node:readline";
+import { unicode } from "@clack/prompts";
 import { cliLang, t } from "./i18n.js";
 
 /** Returns an error text (shown under the field / on the next line) or nothing when OK. */
@@ -115,7 +116,7 @@ export function ttyPrompter(input: NodeJS.ReadableStream = process.stdin, output
       ls.forEach((l) => p.say(l ? `  ${l}` : ""));
     },
     done(s) {
-      const bar = "─".repeat(Math.min(72, Math.max(40, s.length + 4)));
+      const bar = (unicode ? "─" : "-").repeat(Math.min(72, Math.max(40, s.length + 4)));
       p.say("");
       p.say(bar);
       p.say(`  ${s}`);

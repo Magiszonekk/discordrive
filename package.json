@@ -34,6 +34,7 @@
     "start:legacy": "concurrently --kill-others-on-fail \"npm run start:api\" \"npm run start:frontend\"",
     "doctor": "node apps/ddn-server/bin/discordrive.mjs doctor",
     "invite": "node apps/ddn-server/bin/discordrive.mjs invite",
+    "uninstall-autostart": "node apps/ddn-server/bin/discordrive.mjs uninstall-autostart",
     "update": "git pull --ff-only && npm install --no-audit --no-fund && npm run build -w @ddv4/web-mo"
   },
   "devDependencies": {
