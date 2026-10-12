@@ -1,7 +1,8 @@
 # @ddv4/web-mo: browser client of the metadata-only mode (stage 2)
 
-Logic and wiring; the look (house-v1) comes from the `frontend` profile (branch
-`design/discordrive-next-20261006`, merged 2026-10-09). Screens added later for the logic
+Logic and wiring; the look comes from the `frontend` profile: nordic, Nordic Calm
+(light, default) / Nordic Night (dark) with a system/light/dark button in the header (branch
+`design/discordrive-next-20261012`, merged 2026-10-12; before: house-v1). Screens added later for the logic
 (rescue kit, joining a device, sharing) use the same classes and tokens.
 Served by the `apps/ddn-server` instance from the same origin; preview:
 https://drive.example.com.
@@ -27,6 +28,6 @@ Architecture (concept §4.1):
   `apps/ddn-server/test/i18n.test.ts`.
 
 Build: `npm run build -w @ddv4/web-mo` → `dist/` (the instance builds it at the first start if
-missing). Chromium test: `npm run check -w @ddv4/web-mo` (instance server + fake Discord, 19
+missing). Chromium test: `npm run check -w @ddv4/web-mo` (instance server + fake Discord, 20
 checks); `DDN_E2E_LANG=pl` runs it in Polish, `DDN_E2E_SCHEME=dark` with a dark color scheme;
 the same scenario against the live preview: `DDN_E2E_URL=…` (see the header of `check.ts`).

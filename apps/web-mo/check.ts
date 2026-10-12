@@ -110,6 +110,12 @@ try {
     await p.waitForSelector("body[data-ready='1']");
   }
   r.lang = await p.evaluate(() => ({ html: document.documentElement.lang, h1: document.querySelector(".welcome h1")?.textContent, pressed: document.querySelector("[data-ddn=lang] [aria-pressed=true]")?.getAttribute("data-lang"), title: document.title }));
+  // Look: Nordic Calm (light) / Nordic Night (dark) follows the system; the header button cycles system → light → dark.
+  r.theme = await p.evaluate(() => ({ resolved: document.documentElement.dataset.theme, mode: document.documentElement.dataset.themeMode, bg: getComputedStyle(document.body).backgroundColor }));
+  const other = SCHEME === "dark" ? "light" : "dark";
+  for (let i = 0; i < 3 && (await p.evaluate(() => document.documentElement.dataset.theme)) !== other; i++) await p.click("[data-ddn-ui=theme]");
+  r.themeToggled = await p.evaluate(() => ({ resolved: document.documentElement.dataset.theme, bg: getComputedStyle(document.body).backgroundColor }));
+  for (let i = 0; i < 3 && (await p.evaluate(() => document.documentElement.dataset.themeMode)) !== "system"; i++) await p.click("[data-ddn-ui=theme]");
   r.serverFieldHidden = await p.isHidden("[data-ddn-ui=server-field]");
   r.inviteFieldShown = await p.isVisible("[data-ddn=invite]");
   await shot(p, "01-welcome");
@@ -363,6 +369,7 @@ try {
   const dl0 = r.defaultLang as { html: string; h1: string; nav: string };
   const lg = r.lang as { html: string; h1: string; pressed: string; title: string };
   const checks: Record<string, boolean> = {
+    theme: (r.theme as { resolved: string }).resolved === SCHEME && (r.themeToggled as { resolved: string; bg: string }).resolved !== SCHEME && (r.themeToggled as { bg: string }).bg !== (r.theme as { bg: string }).bg,
     i18nDefaultEnglish: dl0.nav === "pl-PL" && dl0.html === "en" && dl0.h1 === "A private drive on your own Discord channels",
     i18nLang: lg.html === LANG && lg.pressed === LANG && (LANG === "en" ? lg.h1 === "A private drive on your own Discord channels" : lg.h1 === "Prywatny dysk na Twoich kanałach Discorda"),
     i18nSizeFormat: L.kb.test(String(r.docSize)),
