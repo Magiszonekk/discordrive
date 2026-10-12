@@ -36,7 +36,8 @@ describe("ddn CLI (single device, state persisted between runs)", () => {
     expect(await runCli(["get", "dane.bin", dst], env)).toBe(0);
     expect(await sha256Hex(readFileSync(dst))).toBe(await sha256Hex(data));
 
-    expect(statSync(join(dir, "state")).mode & 0o777).toBe(0o700);
+    // POSIX modes; on Windows the state directory inherits NTFS permissions from the profile.
+    if (process.platform !== "win32") expect(statSync(join(dir, "state")).mode & 0o777).toBe(0o700);
     // Next start: the SQLite index already has the whole log, nothing to replay.
     const st = (await openState(join(dir, "state")));
     const c = await openClient(st, transport);
@@ -44,7 +45,7 @@ describe("ddn CLI (single device, state persisted between runs)", () => {
     expect(c.replica.results.length).toBe(0);
 
     for (const f of ["account.json", "device.json", "seen.json", "server/log.jsonl", "server/vault.json", "index.db"]) {
-      expect(statSync(join(dir, "state", f)).mode & 0o777).toBe(0o600);
+      if (process.platform !== "win32") expect(statSync(join(dir, "state", f)).mode & 0o777).toBe(0o600);
     }
     // What the server would hold: no names, no webhook token, no file keys.
     const serverFiles = readFileSync(join(dir, "state", "server", "log.jsonl"), "utf8") + readFileSync(join(dir, "state", "server", "vault.json"), "utf8");
@@ -113,7 +114,7 @@ describe("ddn CLI against the HTTP server (Ed25519 sign-in)", () => {
 
       // Server mode keeps no server/ dir locally; the device key file is 0600 and never on the server.
       expect(existsSync(join(envA.stateDir, "server"))).toBe(false);
-      expect(statSync(join(envA.stateDir, "device.json")).mode & 0o777).toBe(0o600);
+      if (process.platform !== "win32") expect(statSync(join(envA.stateDir, "device.json")).mode & 0o777).toBe(0o600);
       const pkcs8 = JSON.parse(readFileSync(join(envA.stateDir, "device.json"), "utf8")).pkcs8 as string;
       const dump = JSON.stringify([srv.db.prepare("SELECT * FROM devices").all(), srv.db.prepare("SELECT * FROM log").all(), srv.db.prepare("SELECT * FROM vault").all()]);
       for (const secret of [pkcs8, "raport", "x".repeat(68)]) expect(dump).not.toContain(secret);

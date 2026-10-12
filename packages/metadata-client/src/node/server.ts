@@ -425,8 +425,10 @@ function intParam(url: URL, name: string, dflt: number): number {
 function send(res: ServerResponse, status: number, body: unknown, extra: Record<string, string> = {}): void {
   const data = JSON.stringify(body);
   const req = (res as ServerResponse & { req?: IncomingMessage }).req;
-  // A body we did not read (413): close the connection after answering, and
-  // drain the rest so the client sees the response instead of ECONNRESET.
+  // A body we did not read (413): read and drop the rest, so the client finishes sending and
+  // sees the response. Closing right away is not enough: on Windows a socket closed with unread
+  // data is reset (RST) and the client gets ECONNRESET instead of the 413. Past DRAIN_CAP the
+  // sender is not playing fair and the connection is dropped.
   const unread = req && !req.complete;
   res.writeHead(status, {
     "content-type": "application/json",
@@ -436,9 +438,19 @@ function send(res: ServerResponse, status: number, body: unknown, extra: Record<
     ...extra,
     ...(unread ? { connection: "close" } : {}),
   });
-  res.end(data);
-  if (unread) req.resume();
+  if (!unread) return void res.end(data);
+  let drained = 0;
+  req.on("data", (c: Buffer) => {
+    drained += c.length;
+    if (drained > DRAIN_CAP) req.socket.destroy();
+  });
+  req.once("end", () => res.end(data));
+  req.once("error", () => res.destroy());
+  req.resume();
 }
+
+/** How much of a refused body is still read so the 413 reaches the client (see send()). */
+const DRAIN_CAP = 64 * 1024 * 1024;
 
 async function readJson(req: IncomingMessage, max = MAX_BODY_BYTES): Promise<unknown> {
   // Refuse early by declared length, without reading the body at all.
