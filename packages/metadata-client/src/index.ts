@@ -16,8 +16,13 @@ export {
   sha256Hex,
   type FileKey,
 } from "./file-crypto.js";
+export { type BlobStore, type BlobPutContext, AbortedError, throwIfAborted } from "./blob-store.js";
+export { DriveClient, readVersionRange, type DriveClientOptions } from "./drive-client.js";
 export {
   MetadataClient,
+  WebhookBlobStore,
+  WEBHOOK_VAULT_MARKER,
+  placementOf,
   OpFailedError,
   DEFAULT_CHUNK_SIZE,
   BLOB_EXT,

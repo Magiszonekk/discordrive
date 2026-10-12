@@ -143,6 +143,18 @@ export class Sequencer<E extends SequencedEnvelope = OpEnvelope> {
     if (this.leases.get(uploadId)?.deviceId === deviceId) this.leases.delete(uploadId);
   }
 
+  /** Current lease of an upload (expired or not), or undefined. Server-side blob checks (stage 3). */
+  leaseOf(uploadId: UploadId): Lease | undefined {
+    const l = this.leases.get(uploadId);
+    return l ? { ...l } : undefined;
+  }
+
+  /** Does `deviceId` hold an unexpired lease on `uploadId`? */
+  holdsLease(uploadId: UploadId, deviceId: string): boolean {
+    const l = this.leases.get(uploadId);
+    return !!l && l.deviceId === deviceId && l.expiresAt > this.now();
+  }
+
   /** Expired leases: candidates for cleanup. */
   expiredLeases(): Lease[] {
     const now = this.now();
