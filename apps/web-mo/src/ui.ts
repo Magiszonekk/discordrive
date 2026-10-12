@@ -422,7 +422,7 @@ function renderHooks(wh: Awaited<ReturnType<typeof core.webhooks>>) {
   ui("hook-count").className = `chip${a.ok ? " chip--success" : " chip--warning"}`;
   [...ui("slots").children].forEach((s, i) => s.classList.toggle("on", i < a.channels));
   // e2ee/plain: the instance pool (count only, the URLs stay on the server) and removable own channels.
-  const pool = wh.pool && wh.pool.channels > 0 && wh.using !== "own" ? [h("li", { class: "pool-row", "data-ddn": "pool" }, icon("hash"), h("span", { class: "dname" }, tn("hooks.pool", wh.pool.channels)))] : [];
+  const pool = wh.pool && wh.pool.channels > 0 && wh.using !== "own" ? [h("li", { class: "pool-row", "data-ddn": "pool" }, icon("hash"), h("span", { class: "ptext" }, tn("hooks.pool", wh.pool.channels)), chip(t("hooks.pool.chip"), "accent"))] : [];
   const removable = typeof wh.using === "string";
   ui("hooks").replaceChildren(
     ...pool,
@@ -578,6 +578,7 @@ async function renderNow() {
   shownList = listKey;
   $("list").replaceChildren(...rows.map((row, i) => fileRow(row, i, enter)));
   ui("empty").hidden = pg.total > 0;
+  ui("search-empty").hidden = true;
   const from = pg.total ? pageIndex * PAGE + 1 : 0;
   const to = pageIndex * PAGE + rows.length;
   $("count").textContent = pg.total > PAGE ? t("files.range", { from: fmtNum(from), to: fmtNum(to), total: fmtNum(pg.total) }) : tn("files.count", pg.total);
@@ -605,7 +606,8 @@ async function renderSearch() {
   const hits = await core.search(searchQ);
   ui("folder-meta").textContent = tn("search.results", hits.length, { q: searchQ });
   $("list").replaceChildren(...hits.map((x, i) => fileRow({ ...x, cursor: "" } as never, i, false)));
-  ui("empty").hidden = hits.length > 0;
+  ui("empty").hidden = true;
+  ui("search-empty").hidden = hits.length > 0;
   $("count").textContent = tn("files.count", hits.length);
   ui("pager-btns").hidden = true;
 }
@@ -615,8 +617,10 @@ function wireSearch() {
   box.hidden = !features.search;
   if (!features.search) return;
   const input = $<HTMLInputElement>("search");
+  const clear = ui<HTMLButtonElement>("search-clear");
   let timer: ReturnType<typeof setTimeout> | null = null;
   const go = () => {
+    clear.hidden = !input.value;
     searchQ = input.value.trim();
     shownList = "";
     void render();
@@ -625,7 +629,14 @@ function wireSearch() {
     e.preventDefault();
     go();
   };
+  clear.onclick = () => {
+    if (timer) clearTimeout(timer);
+    input.value = "";
+    go();
+    input.focus();
+  };
   input.oninput = () => {
+    clear.hidden = !input.value;
     if (timer) clearTimeout(timer);
     timer = setTimeout(go, 300);
   };
@@ -648,8 +659,8 @@ async function uploadAll(files: File[]) {
     const state = h("span", { class: "qstate" }, t("queue.wait"));
     const bar = h("i");
     const token = crypto.randomUUID();
-    const cancel = h("button", { class: "iconbtn", type: "button", "data-ddn": "queue-cancel", "aria-label": t("queue.cancel"), title: t("queue.cancel") }, icon("x"));
-    const li = h("li", {}, h("span", { class: "qname", title: f.name }, f.name), state, h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, fmt(f.size)), cancel);
+    const cancel = h("button", { class: "iconbtn qcancel", type: "button", "data-ddn": "queue-cancel", "aria-label": t("queue.cancel"), title: t("queue.cancel") }, icon("x"));
+    const li = h("li", {}, h("span", { class: "qname", title: f.name }, f.name), h("span", { class: "qside" }, cancel, state), h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, fmt(f.size)));
     li.dataset.ddn = "queue-item";
     list.append(li);
     const item = { f, state, bar, token, cancel, cancelled: false };
@@ -671,7 +682,8 @@ async function uploadAll(files: File[]) {
   for (const item of items) {
     const { f, state, bar, token } = item;
     if (item.cancelled) {
-      state.className = "qstate err";
+      state.className = "qstate cancel";
+      bar.className = "cancel";
       state.textContent = t("queue.cancelled");
       uploading.done++;
       meta();
@@ -693,8 +705,9 @@ async function uploadAll(files: File[]) {
       state.textContent = t("queue.ok");
       bar.className = "done";
     } catch (e) {
-      state.className = "qstate err";
-      bar.className = "err";
+      // Cancelled is the user's choice, not a failure: muted text and bar like discordrive's CANCELLED.
+      state.className = item.cancelled ? "qstate cancel" : "qstate err";
+      bar.className = item.cancelled ? "cancel" : "err";
       if (item.cancelled) state.textContent = t("queue.cancelled");
       else {
         failed++;
@@ -706,7 +719,7 @@ async function uploadAll(files: File[]) {
       item.cancel.hidden = true;
     }
     sent = base + f.size;
-    bar.style.width = "100%";
+    if (!item.cancelled) bar.style.width = "100%"; // a cancelled bar stays where it stopped
     uploading.done++;
     meta();
     void render();

@@ -304,6 +304,7 @@ export const pl: Record<string, string> = {
   "hooks.own": "Twoje kanały",
   "hooks.remove": "Usuń",
   "hooks.removed": "Kanał usunięty.",
+  "hooks.pool.chip": "Wspólne",
   "advice.ok@e2ee": "Gotowe: instancja rozkłada wysyłanie równolegle na kanały.",
   "kit.lead@e2ee": "To jedyna droga do plików, gdy stracisz wszystkie urządzenia: zawiera klucz konta (serwer go nie zna). Trzymaj go jak hasło: na papierze albo w menedżerze haseł, nie na czacie.",
   "rescueD.code@e2ee": "Kod zestawu (<span class=\"mono\">ddn-kit2:…</span>)",
@@ -324,4 +325,6 @@ export const pl: Record<string, string> = {
   "search.results_many": "{n} wyników dla „{q}”",
   "search.results_other": "{n} wyniku dla „{q}”",
   "search.clear": "Wyczyść wyszukiwanie",
+  "search.none": "Żaden plik nie pasuje do wyszukiwania",
+  "search.none.s": "Szukamy w nazwach plików we wszystkich folderach.",
 };

@@ -363,6 +363,40 @@ dialog.player { width: min(1000px, 96vw); padding: 0; border: 1px solid var(--co
   .no-print { display: none !important; }
 }
 
-/* stage 3, plain mode (functional placeholders; the look is the frontend profile's job) */
-.thumb { flex: none; width: 28px; height: 28px; border-radius: var(--radius-chip); object-fit: cover; background: var(--color-paper-2, transparent); }
-.search .input { width: 14rem; max-width: 40vw; }
+/* ── stage 3 (e2ee / plain) ───────────────── */
+/* Upload queue, row 1 like discordrive's UploadProgress: name left; cancel + state right.
+ * Cancel: rounded-md p-1.5, icon 13, text-muted, hover bg-paper-3 text-error. */
+.qlist .qside { display: inline-flex; align-items: center; gap: .25rem; min-width: 0; }
+.qlist .qcancel { padding: .375rem; margin: -.375rem 0; color: var(--color-muted); }
+.qlist .qcancel svg.i { width: 13px; height: 13px; }
+.qlist .qcancel:hover, .qlist .qcancel:focus-visible { background: var(--color-paper-3); color: var(--color-error); }
+/* CANCELLED: the user's choice, not a failure: muted text, muted bar kept where it stopped (bg-muted) */
+.qstate.cancel { color: var(--color-muted); }
+.bar > i.cancel { background: var(--color-muted); }
+
+/* Settings → Channels: the instance pool is a sentence (not a name): regular weight, wraps, Shared chip right */
+.list li.pool-row { align-items: flex-start; padding-top: .75rem; padding-bottom: .75rem; padding-right: 1rem; }
+.list li.pool-row > svg.i { margin-top: 2px; color: var(--color-accent); }
+.list li.pool-row .ptext { flex: 1; min-width: 0; line-height: 1.25rem; color: var(--color-ink-2); }
+.list li.pool-row .chip { flex: none; margin-top: 1px; }
+/* Row actions that remove something (own channel, share link): muted at rest, error on hover (like cancel) */
+.list .iconbtn.danger { color: var(--color-muted); }
+.list .iconbtn.danger:hover, .list .iconbtn.danger:focus-visible { background: color-mix(in oklch, var(--color-error) 10%, transparent); color: var(--color-error); }
+
+/* plain: thumbnail in place of the type badge. Desktop: the badge's slot at line height (no taller rows);
+ * phone (below): exactly the FileCard type tile. Hairline frame so light frames do not melt into the paper. */
+.thumb { flex: none; display: block; width: 2.25rem; height: 1.5rem; border-radius: var(--radius-chip); object-fit: cover; background: var(--color-paper-2); outline: 1px solid var(--color-rule); outline-offset: -1px; animation: thumb-in var(--duration-short) var(--ease-out); }
+@keyframes thumb-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .thumb { animation: none; } }
+
+/* plain: server search = discordrive's FileTable filter bar: full width over the table, h-11, Search 16 at
+ * left-3, pl-10; plus a clear button on the right (search.clear) instead of WebKit's own cross. */
+.search { position: relative; margin-bottom: .75rem; }
+.search > svg.i { position: absolute; left: .75rem; top: 50%; transform: translateY(-50%); color: var(--color-muted); pointer-events: none; }
+.search .input { padding-left: 2.5rem; padding-right: 2.75rem; }
+.search .input::-webkit-search-cancel-button, .search .input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+.search .iconbtn { position: absolute; right: .25rem; top: 50%; transform: translateY(-50%); padding: .5rem; }
+.search .iconbtn svg.i { width: 14px; height: 14px; }
+@media (max-width: 767.98px) {
+  .ftable .c-name .nm > .thumb { grid-row: span 2; align-self: start; width: 3.25rem; height: 2rem; border-radius: var(--radius-input); }
+}
