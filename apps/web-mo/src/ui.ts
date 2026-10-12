@@ -241,8 +241,12 @@ function renderShellStatus(st: Status) {
   me.title = st.deviceId ?? "";
 }
 
-function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: number | null; modifiedAt?: number | null }, i: number) {
-  const tr = h("tr", { class: "reveal", style: `--i:${Math.min(i, 12)}` });
+/** Folder + page of the list shown last: the row stagger (.reveal) plays only when that changes, like
+ * discordrive's one-shot load (render() also runs after every upload and sync, and the rows must not fade again). */
+let shownList = "";
+
+function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: number | null; modifiedAt?: number | null }, i: number, enter = false) {
+  const tr = enter ? h("tr", { class: "reveal", style: `--i:${Math.min(i, 12)}` }) : h("tr");
   tr.dataset.ddn = "row";
   tr.dataset.id = r.id;
   const name = h("td", { class: "c-name" });
@@ -512,7 +516,10 @@ async function renderNow() {
   const pageIndex = cursorStack.length - 1;
   // Both kinds of tab (main on OPFS, secondary in memory) page with a (name, id) cursor.
   const rows = pg.rows;
-  $("list").replaceChildren(...rows.map(fileRow));
+  const listKey = `${folder}|${pageIndex}|${cursorStack.at(-1) ?? ""}`;
+  const enter = listKey !== shownList;
+  shownList = listKey;
+  $("list").replaceChildren(...rows.map((row, i) => fileRow(row, i, enter)));
   ui("empty").hidden = pg.total > 0;
   const from = pg.total ? pageIndex * PAGE + 1 : 0;
   const to = pageIndex * PAGE + rows.length;

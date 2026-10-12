@@ -63,7 +63,7 @@ svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none;
 .input:focus, .codebox:focus, .input:focus-visible, .codebox:focus-visible { background: var(--color-paper); outline: 2px solid var(--color-focus); outline-offset: 1px; border-radius: var(--radius-input); }
 .codebox { height: auto; min-height: 5.25rem; padding: .625rem .75rem; resize: vertical; font: 400 .75rem/1.5 var(--font-mono); word-break: break-all; background: var(--color-paper-2); }
 .hint { display: block; margin-top: .375rem; font-size: .75rem; line-height: 1rem; color: var(--color-muted); }
-.stack { display: grid; gap: 1rem; }
+.stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
 .row-btns { display: flex; flex-wrap: wrap; gap: .5rem; }
 .inline { display: flex; gap: .5rem; align-items: flex-end; }
 .inline .field { flex: 1; min-width: 0; }
@@ -105,7 +105,7 @@ svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none;
 .auth-card.wide { max-width: 42rem; }
 .auth-card > h1 { font: 600 1.5rem/2rem var(--font-display); color: var(--color-ink); }
 .auth-card > .sub { margin-top: .25rem; font-size: .875rem; line-height: 1.25rem; color: var(--color-muted); }
-.auth-body { margin-top: 1.5rem; display: grid; gap: 1rem; }
+.auth-body { margin-top: 1.5rem; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
 .auth-foot { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--color-rule); text-align: center; font-size: .875rem; color: var(--color-muted); display: grid; gap: .5rem; justify-items: center; }
 .auth-foot .row-btns { justify-content: center; }
 .wordmark { display: flex; align-items: center; gap: .625rem; }
@@ -250,25 +250,42 @@ svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none;
 .pager .iconbtn svg.i { width: 18px; height: 18px; }
 .pager .iconbtn:disabled { cursor: not-allowed; opacity: .3; }
 @media (max-width: 767.98px) {
+  /* Phone: FileCard / FolderCard (space-y-3, rounded-card border border-rule bg-paper p-4) instead of a table */
+  .ftable-wrap { overflow: visible; border: 0; border-radius: 0; background: none; }
+  .ftable, .ftable tbody { display: block; }
+  .ftable tbody { display: grid; gap: .75rem; }
   .ftable thead { display: none; }
-  .ftable tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; border-bottom: 1px solid var(--color-rule); }
-  .ftable tbody tr:last-child { border-bottom: 0; }
-  .ftable td { border-bottom: 0; padding: .75rem .75rem .75rem 1rem; }
+  .ftable tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; border: 1px solid var(--color-rule); border-radius: var(--radius-card); background: var(--color-paper); }
+  .ftable tbody tr:hover { border-color: var(--color-rule-2); background: var(--color-paper-2); }
+  .ftable td { border-bottom: 0; padding: 1rem .5rem 1rem 1rem; }
+  /* card body: type tile on the left over two lines, name + meta on the right (FileCard / FolderCard) */
+  .ftable td.c-name { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: .75rem; align-items: center; }
+  .ftable .c-name .nm { display: contents; }
+  .ftable .c-name .nm > :first-child { grid-row: span 2; align-self: start; }
+  .ftable .c-name a, .ftable .c-name .nm > span:last-child { grid-column: 2; font-size: .875rem; line-height: 1.25rem; font-weight: 500; }
+  .ftable .c-name .sub { grid-column: 2; margin-top: .25rem; }
+  /* FolderCard: rounded-md bg-paper-2 p-2 text-ink-2, icon 18 */
+  .ftable .c-name .nm > svg.i { box-sizing: content-box; width: 18px; height: 18px; padding: .5rem; border-radius: var(--radius-input); background: var(--color-paper-2); color: var(--color-ink-2); }
+  /* FileCard: rounded-md bg-paper-2 px-3 py-2 font-mono text-xs font-semibold uppercase tracking-wide text-ink-2 */
+  .ftable .c-name .nm > .badge { min-width: 3.25rem; padding: .5rem .5rem; border: 0; border-radius: var(--radius-input); background: var(--color-paper-2); color: var(--color-ink-2); font-size: .6875rem; line-height: 1rem; text-align: center; }
+  .ftable-wrap .empty { border: 1px dashed var(--color-rule); border-radius: var(--radius-card); background: var(--color-paper); padding: 2.5rem 1rem; }
   .ftable td.size, .ftable td.c-date { display: none; }
   .ftable .c-name { max-width: none; }
-  .ftable .c-name .nm { display: flex; }
   .ftable .sub { display: block; margin-top: .125rem; }
-  .ftable td.c-acts { padding-right: .5rem; }
+  .ftable td.c-acts { padding-right: .75rem; }
 }
 
 /* ── Settings / Devices (spec sheets) ─────── */
 .page-title { margin-bottom: 2rem; font: 600 1.5rem/2rem var(--font-display); color: var(--color-ink); }
-.sections { display: grid; gap: 2rem; }
+/* Single-column grids get minmax(0, 1fr): an auto track grows to the widest nowrap row (device list on a phone)
+ * and pushes the whole page past the screen edge. */
+.sections { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2rem; }
+.sections > section { min-width: 0; }
 .sections > section + section { padding-top: 2rem; border-top: 1px solid var(--color-rule); }
 .sec-h { margin-bottom: .25rem; font: 600 1.125rem/1.75rem var(--font-body); color: var(--color-ink); display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; }
 .sec-h .chip { font-weight: 500; }
 .sec-lead { margin-bottom: 1rem; font-size: .875rem; line-height: 1.25rem; color: var(--color-muted); }
-.sec-body { display: grid; gap: 1rem; }
+.sec-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
 /* channel slots: 4 hairline segments, filled ones in accent */
 .slots { display: grid; grid-template-columns: repeat(4, 1fr); gap: .25rem; }
 .slots i { height: .375rem; border-radius: 9999px; background: var(--color-paper-3); }
@@ -305,7 +322,13 @@ details.howto[open] > summary svg.i { transform: rotate(90deg); }
 .limits b { display: block; color: var(--color-ink-2); font-weight: 500; }
 @media (max-width: 559.98px) {
   .about > div { grid-template-columns: 1fr; }
+  /* list rows wrap: name, chip and the action on the first line, the date under the name */
+  .list li { flex-wrap: wrap; row-gap: .125rem; padding-top: .625rem; padding-bottom: .625rem; }
+  .list li .when { order: 9; flex-basis: calc(100% - 1.75rem); margin-left: 1.75rem; }
+  .list li > .iconbtn, .list li > span[aria-hidden="true"] { margin-left: auto; }
+  /* field on its own line, the action full width under it (no half-width input, no wrapped label) */
   .inline { flex-wrap: wrap; }
+  .inline .field { flex-basis: 100%; }
   .inline .btn { flex: 1; }
 }
 
@@ -317,7 +340,7 @@ dialog::backdrop { background: color-mix(in oklch, var(--color-ink) 40%, transpa
 .modal-h h2 { display: flex; align-items: center; gap: .5rem; font: 600 1rem/1.5rem var(--font-display); color: var(--color-ink); }
 .modal-h h2 svg.i { width: 18px; height: 18px; color: var(--color-muted); }
 .modal-h .iconbtn { padding: .375rem; }
-.modal-b { display: grid; gap: 1rem; }
+.modal-b { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
 .modal-b > .muted { font-size: .875rem; line-height: 1.5; }
 .modal-acts { display: flex; gap: .5rem; }
 .modal-acts .btn { flex: 1; }
