@@ -1,0 +1,104 @@
+name: Cross-platform (Windows, Linux, macOS)
+
+# discordrive-next on every system the instance supports: unit tests of the instance, the sync
+# core and the client, a non-interactive `setup --yes --accept-risk` + `doctor`, and the
+# background start registered for real (Task Scheduler / systemd --user or XDG / LaunchAgent).
+on:
+  push:
+    branches:
+      - feat/metadata-only
+  pull_request:
+    paths:
+      - "apps/ddn-server/**"
+      - "apps/web-mo/**"
+      - "packages/sync-core/**"
+      - "packages/metadata-client/**"
+      - ".github/workflows/cross-platform.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      # The real background start is registered on these throw-away runners only.
+      DDN_CI_REAL_AUTOSTART: "1"
+      FORCE_COLOR: "0"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (only what the instance needs)
+        run: npm ci --workspace @ddv4/ddn-server --workspace @ddv4/sync-core --workspace @ddv4/metadata-client --workspace @ddv4/web-mo --no-audit --no-fund
+
+      - name: Versions
+        run: |
+          node -v
+          npm -v
+          node -e "const s=require('node:sqlite'); const db=new s.DatabaseSync(':memory:'); console.log('node:sqlite', db.prepare('select sqlite_version() v').get().v)"
+
+      - name: Typecheck
+        run: |
+          npm run typecheck -w @ddv4/ddn-server
+          npm run typecheck -w @ddv4/sync-core
+          npm run typecheck -w @ddv4/metadata-client
+
+      - name: Unit tests (sync-core)
+        run: npm test -w @ddv4/sync-core
+
+      - name: Unit tests (metadata-client)
+        run: npm test -w @ddv4/metadata-client
+
+      - name: Unit tests (ddn-server, incl. the real background start)
+        run: npm test -w @ddv4/ddn-server
+
+      - name: setup --yes without --accept-risk is refused
+        run: |
+          set +e
+          out=$(node apps/ddn-server/bin/discordrive.mjs setup --yes --no-self-test --data-dir "$RUNNER_TEMP/refused" 2>&1)
+          code=$?
+          echo "$out"
+          test $code -eq 1
+          echo "$out" | grep -q -- "--accept-risk"
+          test ! -e "$RUNNER_TEMP/refused/config.json"
+
+      - name: setup --yes --accept-risk, start, doctor
+        run: |
+          D="$RUNNER_TEMP/ddn"
+          node apps/ddn-server/bin/discordrive.mjs setup --yes --accept-risk --no-autostart --port 3020 --data-dir "$D"
+          node apps/ddn-server/bin/discordrive.mjs start --data-dir "$D" > "$RUNNER_TEMP/start.log" 2>&1 &
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3020/v1/health && break; sleep 1; done
+          echo
+          node apps/ddn-server/bin/discordrive.mjs doctor --data-dir "$D"
+          # a second start says it is already running
+          set +e
+          node apps/ddn-server/bin/discordrive.mjs start --data-dir "$D"
+          test $? -eq 1
+          set -e
+          curl -fsS http://127.0.0.1:3020/ | grep -q "cobalt/tokens.css"
+          cat "$RUNNER_TEMP/start.log"
+
+      - name: Same in PowerShell (Windows console, UTF-8 and the ASCII fallback)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $D = Join-Path $env:RUNNER_TEMP "ddn-pwsh"
+          node apps/ddn-server/bin/discordrive.mjs setup --yes --accept-risk --no-autostart --port 3021 --data-dir $D --lang pl
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          node apps/ddn-server/bin/discordrive.mjs doctor --data-dir $D
+          node apps/ddn-server/bin/discordrive.mjs --help
