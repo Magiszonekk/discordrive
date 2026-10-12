@@ -139,9 +139,9 @@ svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none;
 .nav a:hover { background: var(--color-paper-2); color: var(--color-ink); }
 .nav a[aria-current="page"] { background: var(--color-paper-2); color: var(--color-ink); }
 .nav a[aria-current="page"] svg.i { color: var(--color-accent); }
-.side-f { margin-top: auto; flex: none; padding: 1rem; border-top: 1px solid var(--color-rule); display: grid; gap: .75rem; }
+.side-f { margin-top: auto; flex: none; padding: 1rem; border-top: 1px solid var(--color-rule); display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; }
 .side-f .me { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
-.side-f .me p { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 .75rem/1rem var(--font-mono); color: var(--color-muted); }
+.side-f .me p { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 .75rem/1rem var(--font-mono); color: var(--color-muted); }
 .side-f .tools { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .topbar { position: sticky; top: 0; z-index: var(--z-sticky); display: flex; height: 3.5rem; align-items: center; justify-content: space-between; padding: 0 1rem; border-bottom: 1px solid var(--color-rule); background: var(--color-paper); }
 .topbar b { font: 600 1rem/1.5rem var(--font-display); color: var(--color-ink); }
