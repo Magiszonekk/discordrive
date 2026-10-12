@@ -1,4 +1,5 @@
-// `discordrive setup`: interactive wizard (Polish), Enter accepts the value in brackets.
+// `discordrive setup`: interactive wizard (English by default, Polish with --lang pl,
+// DISCORDRIVE_LANG=pl or the first question), Enter accepts the value in brackets.
 // Written for someone who does not know the project: it checks the
 // requirements first, defaults to "only this computer" (http://localhost),
 // explains every Discord step, and ends with what to open and what to run.
@@ -25,6 +26,7 @@ import {
   type InstanceConfig,
   type SignupPolicy,
 } from "./config.js";
+import { setCliLang, t, type CliLang } from "./i18n.js";
 import { ttyPrompter, type Prompter } from "./prompt.js";
 import { ensureWebBuilt, serve } from "./serve.js";
 import { installAndStart, lingerEnabled, systemdAvailable, unitPath } from "./systemd.js";
@@ -47,6 +49,8 @@ export interface SetupFlags {
   /** Start the server in this terminal after setup (foreground). */
   start?: boolean;
   selfTest?: boolean;
+  /** Language of the wizard and the instance default (skips the first question). */
+  lang?: CliLang;
   /** Tests: Discord API on a fake. */
   discordApiOrigin?: string;
 }
@@ -83,7 +87,7 @@ export function nginxSnippet(c: InstanceConfig): string {
   return `server {
     listen 443 ssl http2;
     server_name ${host};
-    # ssl_certificate / ssl_certificate_key: np. certbot --nginx -d ${host}
+    ${t("s.nginxCert", { host })}
 
     client_max_body_size 50m;
     location / {
@@ -97,7 +101,7 @@ export function nginxSnippet(c: InstanceConfig): string {
         proxy_read_timeout 3600s;
     }
 }
-# w bloku http {}: map $http_upgrade $connection_upgrade { default upgrade; '' close; }`;
+${t("s.nginxMap")}`;
 }
 
 /** How to run things again, as the user would type it (from the repo directory). */
@@ -108,41 +112,51 @@ export const COMMANDS = {
   invite: "npm run invite",
 };
 
-export const BOT_GUIDE = [
-  "Jak zdobyć token bota (ok. 3 minuty, można to zrobić później):",
-  "  1. Otwórz https://discord.com/developers/applications i zaloguj się na swoje konto Discord.",
-  "  2. Kliknij „New Application”, wpisz dowolną nazwę (np. „Mój dysk”), zaakceptuj warunki, „Create”.",
-  "  3. Po lewej wybierz „Bot”, potem „Reset Token” → „Yes, do it!” → „Copy”.",
-  "  4. Wklej token tutaj. Bota NIE trzeba zapraszać na żaden serwer i nie potrzebuje żadnych uprawnień.",
-  "  Token to hasło bota: nie pokazuj go nikomu. Tutaj wpisywanie jest niewidoczne.",
-];
+export const botGuide = (): string[] => [t("s.guide0"), t("s.guide1"), t("s.guide2"), t("s.guide3"), t("s.guide4"), t("s.guide5")];
 
 export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promise<SetupResult> {
   const yes = !!f.yes;
   // In --yes mode the step separators (empty lines) are noise.
   const p: Prompter = yes ? { ...p0, say: (s?: string) => (s ? p0.say(s) : undefined) } : p0;
-  p.say("");
-  p.say("discordrive-next · konfiguracja");
-  p.say("Prywatny dysk na Twoich kanałach Discorda: pliki są szyfrowane w przeglądarce, a Discord");
-  p.say("przechowuje tylko zaszyfrowane kawałki. Ten kreator ustawia serwer; konto i kanały");
-  p.say("założysz potem w przeglądarce (aplikacja pokaże, gdzie kliknąć).");
-  p.say("Enter przyjmuje wartość w nawiasie [ ]. Ctrl+C przerywa bez zapisu.");
-
-  // Wymagania
-  p.say("");
-  p.say("Sprawdzam wymagania:");
-  p.say(`  OK  Node.js ${process.version}`);
   const dataDir0 = f.dataDir ?? defaultDataDir();
   const old = tryLoadConfig(dataDir0);
   const c: InstanceConfig = old ? structuredClone(old) : defaults(dataDir0);
   c.dataDir = dataDir0;
+
+  // Language: flag/env, else ask first (Enter = the saved one, else English).
+  c.language = f.lang ?? old?.language ?? "en";
+  setCliLang(c.language);
+  if (!yes && !f.lang) {
+    p.say("");
+    c.language = await p.choose(
+      t("lang.q"),
+      [
+        { value: "en", label: t("lang.en") },
+        { value: "pl", label: t("lang.pl") },
+      ],
+      c.language,
+    );
+    setCliLang(c.language);
+  }
+
+  p.say("");
+  p.say(t("s.title"));
+  p.say(t("s.intro1"));
+  p.say(t("s.intro2"));
+  p.say(t("s.intro3"));
+  p.say(t("s.intro4"));
+
+  // Requirements
+  p.say("");
+  p.say(t("s.req"));
+  p.say(`  OK  Node.js ${process.version}`);
   if (f.discordApiOrigin) c.testing = { discordApiOrigin: f.discordApiOrigin };
   const w0 = checkWritable(c.dataDir);
-  p.say(w0 ? `  !!  ${w0} (zapytam o inny katalog)` : `  OK  zapis w ${c.dataDir}`);
+  p.say(w0 ? t("s.reqWriteBad", { why: w0 }) : t("s.reqWriteOk", { dir: c.dataDir }));
   if (w0 && yes) throw new Error(w0);
   const sysd = systemdAvailable();
-  if (old) p.say(`  OK  znaleziono konfigurację (${configPath(c.dataDir)}): obecne wartości są domyślnymi`);
-  else if (existsSync(configPath(c.dataDir))) p.say(`  !!  ${configPath(c.dataDir)} jest uszkodzony, zostanie zastąpiony`);
+  if (old) p.say(t("s.reqOld", { file: configPath(c.dataDir) }));
+  else if (existsSync(configPath(c.dataDir))) p.say(t("s.reqBroken", { file: configPath(c.dataDir) }));
 
   // Kroki
   let step = 0;
@@ -152,16 +166,16 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
     p.say(`${++step}/${total} ${t}`);
   };
 
-  // 1. Gdzie ma działać
+  // 1. Where it runs
   const scenarioOld: "local" | "public" = isLocalUrl(c.publicUrl) ? "local" : "public";
   let scenario: "local" | "public" = f.publicUrl ? (isLocalUrl(f.publicUrl) ? "local" : "public") : scenarioOld;
   if (!yes && !f.publicUrl) {
-    head("Gdzie ma działać dysk?");
+    head(t("s.where"));
     scenario = await p.choose(
       "",
       [
-        { value: "local", label: "Tylko na tym komputerze (najprostsze, nic nie wystawiam do sieci)" },
-        { value: "public", label: "Na serwerze z własną domeną i HTTPS, dla innych urządzeń (dla zaawansowanych)" },
+        { value: "local", label: t("s.where.local") },
+        { value: "public", label: t("s.where.public") },
       ],
       scenario,
     );
@@ -172,68 +186,67 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
     if (!isLoopback(c.bind.host)) c.bind.host = "127.0.0.1";
     if (f.host) c.bind.host = f.host;
     if (!yes) {
-      p.say("  Dysk będzie dostępny tylko z tej przeglądarki na tym komputerze, pod adresem http://localhost:<port>.");
-      p.say("  (localhost nie potrzebuje certyfikatu HTTPS: przeglądarka traktuje go jak bezpieczny adres.)");
+      p.say(t("s.local1"));
+      p.say(t("s.local2"));
     }
   } else {
     if (f.publicUrl) c.publicUrl = f.publicUrl.replace(/\/$/, "");
     if (f.host) c.bind.host = f.host;
     if (f.port) c.bind.port = f.port;
     if (!yes && !f.publicUrl) {
-      p.say("  Potrzebujesz domeny i reverse proxy z certyfikatem (np. nginx + Let's Encrypt). Przykład vhosta");
-      p.say("  wydrukuję na końcu. Przeglądarka uruchomi aplikację tylko przez https:// (albo na localhost).");
+      p.say(t("s.pub1"));
+      p.say(t("s.pub2"));
       for (;;) {
-        const v = (await p.ask("Adres, który wpiszą użytkownicy (np. https://dysk.example.com)", isLocalUrl(c.publicUrl) ? "" : c.publicUrl)).replace(/\/$/, "");
+        const v = (await p.ask(t("s.pubUrl"), isLocalUrl(c.publicUrl) ? "" : c.publicUrl)).replace(/\/$/, "");
         if (urlOk(v) && !isLocalUrl(v)) {
           c.publicUrl = v;
           break;
         }
-        p.say("  To nie wygląda na adres. Przykład: https://dysk.example.com");
+        p.say(t("s.pubUrlBad"));
       }
-      if (new URL(c.publicUrl).protocol === "http:") p.say("  Uwaga: http:// poza localhost: przeglądarka nie włączy szyfrowania ani odtwarzania wideo. Użyj https://.");
-      p.say("  Na jakim adresie tej maszyny serwer ma słuchać? Proxy na tej samej maszynie: 127.0.0.1.");
-      p.say("  Proxy na innej maszynie: adres sieci, przez którą łączy się proxy (LAN/VPN), nie 0.0.0.0.");
+      if (new URL(c.publicUrl).protocol === "http:") p.say(t("s.pubHttp"));
+      p.say(t("s.bind1"));
+      p.say(t("s.bind2"));
       const avail = [...new Set(["127.0.0.1", ...localAddresses().filter((a) => !a.startsWith("fe80") && a !== "localhost" && a !== "::" && a !== "0.0.0.0" && a !== "::1")])];
       for (;;) {
-        const h = await p.ask("Adres nasłuchu", c.bind.host);
+        const h = await p.ask(t("s.bind"), c.bind.host);
         if (isLocalAddress(h)) {
           c.bind.host = h;
           break;
         }
-        p.say(`  ${h} nie jest adresem tej maszyny. Dostępne: ${avail.join(", ")}`);
+        p.say(t("s.bindBad", { host: h, list: avail.join(", ") }));
       }
     }
-    if (!urlOk(c.publicUrl)) throw new Error(`zły adres publiczny: ${c.publicUrl}`);
-    if (!isLocalAddress(c.bind.host)) throw new Error(`${c.bind.host} nie jest adresem tej maszyny`);
+    if (!urlOk(c.publicUrl)) throw new Error(t("s.badPublicUrl", { url: c.publicUrl }));
   }
 
-  if (!isLocalAddress(c.bind.host)) throw new Error(`${c.bind.host} nie jest adresem tej maszyny`);
+  if (!isLocalAddress(c.bind.host)) throw new Error(t("s.notLocalAddr", { host: c.bind.host }));
 
   // Port
   if (!yes && !f.port) {
     for (;;) {
-      const v = Number(await p.ask("Port", String(c.bind.port || DEFAULT_PORT)));
+      const v = Number(await p.ask(t("s.port"), String(c.bind.port || DEFAULT_PORT)));
       if (Number.isInteger(v) && v > 0 && v < 65536) {
         c.bind.port = v;
         break;
       }
-      p.say("  Port to liczba od 1 do 65535.");
+      p.say(t("s.portRange"));
     }
   }
   for (;;) {
     const st = await portState(c.bind.host, c.bind.port);
     if (st.state === "free") {
-      p.say(`  OK  port ${c.bind.port} jest wolny`);
+      p.say(t("s.portFree", { port: c.bind.port }));
       break;
     }
     if (st.state === "ours") {
-      p.say(`  OK  na porcie ${c.bind.port} działa już discordrive-next ${st.version} (zostanie uruchomiony ponownie z nową konfiguracją)`);
+      p.say(t("s.portOurs", { port: c.bind.port, version: st.version }));
       break;
     }
     const alt = await nextFreePort(c.bind.host, c.bind.port);
-    p.say(`  Port ${c.bind.port} jest zajęty przez inny program${st.code === "EACCES" ? " albo wymaga uprawnień administratora" : ""}.`);
-    if (yes || !alt) throw new Error(`port ${c.bind.port} jest zajęty. Podaj inny: --port <numer>`);
-    const v = Number(await p.ask("Inny port", String(alt)));
+    p.say(t("s.portBusy", { port: c.bind.port, root: st.code === "EACCES" ? t("s.portBusyRoot") : "" }));
+    if (yes || !alt) throw new Error(t("s.portBusyErr", { port: c.bind.port }));
+    const v = Number(await p.ask(t("s.portOther"), String(alt)));
     if (Number.isInteger(v) && v > 0 && v < 65536) c.bind.port = v;
   }
   if (scenario === "local") c.publicUrl = f.publicUrl && isLocalUrl(f.publicUrl) ? f.publicUrl.replace(/\/$/, "") : `http://localhost:${c.bind.port}`;
@@ -242,111 +255,111 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
   if (scenario === "public") {
     if (f.trustProxy) c.trustProxy = f.trustProxy;
     else if (!yes) {
-      p.say("  Adres reverse proxy: tylko od niego serwer przyjmie prawdziwy adres IP użytkownika");
-      p.say("  (X-Forwarded-For, limity logowania). Puste = nie ufaj nikomu.");
-      const v = await p.ask("Adres proxy (kilka: po przecinku)", c.trustProxy.join(", ") || (isLoopback(c.bind.host) ? "127.0.0.1" : ""));
+      p.say(t("s.proxy1"));
+      p.say(t("s.proxy2"));
+      const v = await p.ask(t("s.proxy"), c.trustProxy.join(", ") || (isLoopback(c.bind.host) ? "127.0.0.1" : ""));
       c.trustProxy = v.split(",").map((s) => s.trim()).filter(Boolean);
     }
   } else c.trustProxy = f.trustProxy ?? [];
 
-  // 2. Tryb
+  // 2. Mode
   if (yes) {
     c.mode = "metadata-only";
     step++;
   } else {
-    head("Tryb (jedna instancja = jeden tryb, na zawsze)");
+    head(t("s.mode"));
     c.mode = await p.choose(
       "",
       [
-        { value: "metadata-only", label: "metadata only: serwer nie widzi plików ani adresów Twoich kanałów, przeglądarka wysyła wprost na Discorda" },
-        { value: "e2ee" as "metadata-only", label: "e2ee: wkrótce", disabled: true },
-        { value: "plain" as "metadata-only", label: "plain (bez szyfrowania, miniatury): wkrótce", disabled: true },
+        { value: "metadata-only", label: t("s.mode.mo") },
+        { value: "e2ee" as "metadata-only", label: t("s.mode.e2ee"), disabled: true },
+        { value: "plain" as "metadata-only", label: t("s.mode.plain"), disabled: true },
       ],
       "metadata-only",
     );
   }
 
-  // 3. Bot do udostępniania
+  // 3. Bot for share links
   const apiOrigin = c.testing?.discordApiOrigin;
   const setToken = async (tok: string): Promise<boolean> => {
     const r = await validateBotToken(tok, apiOrigin);
     if (!r.ok) {
-      p.say(`  Token nie działa: ${r.why}. Sprawdź, czy skopiowałeś cały token (przycisk „Copy”).`);
+      p.say(t("s.botBad", { why: r.why }));
       return false;
     }
     c.botToken = tok;
     c.bot = { id: r.id, username: r.username };
-    p.say(`  OK  token działa: bot ${r.username}. Zapisany tylko w pliku konfiguracji, nigdzie nie jest wypisywany.`);
+    p.say(t("s.botOk", { name: r.username }));
     return true;
   };
-  const skipText = "  Pominięto. Udostępnianie linkiem będzie wyłączone; wszystko inne działa. Żeby włączyć je później: " + COMMANDS.setup + ".";
+  const skipText = t("s.botSkip", { cmd: COMMANDS.setup });
   if (f.noBot) {
     c.botToken = null;
     c.bot = null;
     step++;
   } else if (f.botTokenFile) {
     step++;
-    if (c.botToken && !f.replaceBot && !yes && !(await p.confirm("Zastąpić zapisany token bota tokenem z pliku?", false))) p.say("  Zostaje obecny token.");
-    else if (!(await setToken(tokenFromFile(f.botTokenFile)))) throw new Error("token bota z pliku nie działa");
+    if (c.botToken && !f.replaceBot && !yes && !(await p.confirm(t("s.botReplace"), false))) p.say(t("s.botKept"));
+    else if (!(await setToken(tokenFromFile(f.botTokenFile)))) throw new Error(t("s.botFileBad"));
   } else if (yes) step++;
   else {
-    head("Udostępnianie plików linkiem (opcjonalne, można pominąć)");
-    p.say("  Żeby wysłać komuś link do pliku, serwer potrzebuje własnego bota Discorda: odświeża nim linki,");
-    p.say("  bo Discord unieważnia je po ok. 24 h. Bot nie dostaje dostępu do Twoich plików ani kanałów.");
-    p.say("  Bez bota: nie ma udostępniania linkiem. Wysyłanie, pobieranie, wideo i kilka urządzeń działają normalnie.");
+    head(t("s.bot"));
+    p.say(t("s.bot1"));
+    p.say(t("s.bot2"));
+    p.say(t("s.bot3"));
     if (c.botToken) {
-      p.say(`  Zapisany bot: ${c.bot?.username ?? "?"}.`);
+      p.say(t("s.botSaved", { name: c.bot?.username ?? "?" }));
       const keep = await p.choose(
         "",
         [
-          { value: "keep", label: "Zostaw obecny token" },
-          { value: "new", label: "Wpisz nowy token" },
-          { value: "off", label: "Wyłącz udostępnianie (usuń token)" },
+          { value: "keep", label: t("s.bot.keep") },
+          { value: "new", label: t("s.bot.new") },
+          { value: "off", label: t("s.bot.off") },
         ],
         "keep",
       );
       if (keep === "keep") {
         const r = await validateBotToken(c.botToken, apiOrigin);
-        p.say(r.ok ? "  OK  token nadal działa." : `  Uwaga: zapisany token nie działa (${r.why}). Uruchom ${COMMANDS.setup} i wpisz nowy.`);
+        p.say(r.ok ? t("s.botStillOk") : t("s.botStillBad", { why: r.why, cmd: COMMANDS.setup }));
       } else if (keep === "off") {
         c.botToken = null;
         c.bot = null;
       } else {
-        BOT_GUIDE.forEach((l) => p.say(l));
+        botGuide().forEach((l) => p.say(l));
         for (;;) {
-          const t = await p.secret("Token bota (puste = pomiń)");
-          if (!t) {
+          const tok = await p.secret(t("s.botToken"));
+          if (!tok) {
             p.say(skipText);
             break;
           }
-          if (await setToken(t)) break;
+          if (await setToken(tok)) break;
         }
       }
     } else {
       const want = await p.choose(
         "",
         [
-          { value: "skip", label: "Pomiń na razie (zalecane na start)" },
-          { value: "now", label: "Skonfiguruj teraz (pokażę krok po kroku, ok. 3 minuty)" },
+          { value: "skip", label: t("s.bot.skip") },
+          { value: "now", label: t("s.bot.now") },
         ],
         "skip",
       );
       if (want === "skip") p.say(skipText);
       else {
-        BOT_GUIDE.forEach((l) => p.say(l));
+        botGuide().forEach((l) => p.say(l));
         for (;;) {
-          const t = await p.secret("Token bota (puste = pomiń)");
-          if (!t) {
+          const tok = await p.secret(t("s.botToken"));
+          if (!tok) {
             p.say(skipText);
             break;
           }
-          if (await setToken(t)) break;
+          if (await setToken(tok)) break;
         }
       }
     }
   }
 
-  // 4. Rejestracja
+  // 4. Sign-up
   if (f.signup) {
     c.signup = f.signup;
     step++;
@@ -359,34 +372,34 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
       step++;
       if (!yes) {
         p.say("");
-        p.say(`${step}/${total} Konta: zakładanie kont jest otwarte, bo serwer jest dostępny tylko z tego komputera.`);
+        p.say(t("s.signupLocal", { step, total }));
       }
     } else if (!yes) {
-      head("Kto może zakładać konta?");
+      head(t("s.signup"));
       c.signup = await p.choose(
         "",
         [
-          { value: "invite", label: "Tylko z kodem zaproszenia (zalecane; kod dostaniesz na końcu)" },
-          { value: "open", label: "Każdy, kto zna adres (uwaga: obcy z internetu mogą zakładać konta)" },
-          { value: "closed", label: "Nikt (rejestracja zamknięta)" },
+          { value: "invite", label: t("s.signup.invite") },
+          { value: "open", label: t("s.signup.open") },
+          { value: "closed", label: t("s.signup.closed") },
         ],
         c.signup,
       );
     } else step++;
   }
-  if (c.signup === "open" && scenario === "public") p.say("  Uwaga: rejestracja otwarta na publicznym adresie. Każdy z internetu może założyć konto.");
+  if (c.signup === "open" && scenario === "public") p.say(t("s.signupOpenPublic"));
 
-  // 5. Katalog danych
+  // 5. Data directory
   if (!yes && !f.dataDir) {
-    head("Gdzie trzymać dane serwera (konfiguracja i zaszyfrowany spis; pliki są na Discordzie)");
+    head(t("s.data"));
     for (;;) {
-      const d = await p.ask("Katalog", c.dataDir);
+      const d = await p.ask(t("s.dataDir"), c.dataDir);
       const why = checkWritable(d);
       if (!why) {
         c.dataDir = d;
         break;
       }
-      p.say(`  ${why}. Podaj inny katalog.`);
+      p.say(t("s.dataBad", { why }));
     }
   } else {
     step++;
@@ -397,31 +410,32 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
   const errs = validate(c);
   if (errs.length) throw new Error(errs.join("; "));
 
-  // Podsumowanie + zapis
+  // Summary + save
   p.say("");
-  p.say("Podsumowanie:");
-  p.say(`  adres:          ${c.publicUrl}${scenario === "local" ? "  (tylko ten komputer)" : ""}`);
-  p.say(`  nasłuch:        ${c.bind.host}:${c.bind.port}`);
-  if (scenario === "public") p.say(`  zaufane proxy:  ${c.trustProxy.join(", ") || "brak"}`);
-  p.say(`  tryb:           ${c.mode}`);
-  p.say(`  udostępnianie:  ${c.botToken ? `włączone (bot ${c.bot?.username ?? "?"})` : "wyłączone (brak bota)"}`);
-  p.say(`  rejestracja:    ${{ invite: "z kodem zaproszenia", open: "otwarta", closed: "zamknięta" }[c.signup]}`);
-  p.say(`  dane:           ${c.dataDir}`);
-  if (!yes && !(await p.confirm("Zapisać?", true))) throw new Error("Przerwano bez zapisu.");
+  p.say(t("s.sum"));
+  p.say(t("s.sum.addr", { url: c.publicUrl, local: scenario === "local" ? t("s.sum.local") : "" }));
+  p.say(t("s.sum.bind", { bind: `${c.bind.host}:${c.bind.port}` }));
+  if (scenario === "public") p.say(t("s.sum.proxy", { list: c.trustProxy.join(", ") || t("s.sum.none") }));
+  p.say(t("s.sum.mode", { mode: c.mode }));
+  p.say(t("s.sum.lang", { lang: c.language === "pl" ? t("lang.pl") : t("lang.en") }));
+  p.say(t("s.sum.share", { v: c.botToken ? t("s.sum.shareOn", { name: c.bot?.username ?? "?" }) : t("s.sum.shareOff") }));
+  p.say(t("s.sum.signup", { v: t(`signup.${c.signup}`) }));
+  p.say(t("s.sum.data", { dir: c.dataDir }));
+  if (!yes && !(await p.confirm(t("s.save"), true))) throw new Error(t("s.notSaved"));
   const file = saveConfig(c);
-  p.say(`  OK  zapisano ${file}`);
+  p.say(t("s.saved", { file }));
 
-  // Aplikacja w przeglądarce: zbudowana teraz, nie przy pierwszym starcie.
+  // Browser app: built now, not at the first start.
   try {
     ensureWebBuilt(c, (s) => p.say(`  ${s}`));
-    p.say("  OK  aplikacja przeglądarkowa gotowa");
+    p.say(t("s.webOk"));
   } catch (e) {
-    throw new Error(`nie udało się zbudować aplikacji przeglądarkowej: ${(e as Error).message}`);
+    throw new Error(t("s.webFail", { msg: (e as Error).message }));
   }
 
-  // Kod zaproszenia
+  // Invite code
   let invite: SetupResult["invite"] = null;
-  if (c.signup === "invite" && (f.invite ?? (yes ? true : await p.confirm("Wygenerować kod zaproszenia dla pierwszego konta?", true)))) {
+  if (c.signup === "invite" && (f.invite ?? (yes ? true : await p.confirm(t("s.inviteQ"), true)))) {
     const db = new DatabaseSync(dbPath(c));
     try {
       invite = new InviteStore(db).create(undefined, "setup");
@@ -430,24 +444,24 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
     }
   }
 
-  // Uruchomienie: systemd (Linux) albo w tym oknie
+  // Start: systemd (Linux) or in this window
   p.say("");
   let sysdState: SetupResult["systemd"] = sysd ? "skipped" : "unavailable";
   let started = false;
-  if (f.systemd && !sysd) throw new Error("systemd --user jest niedostępny (tylko Linux z systemd)");
-  if (sysd && (f.systemd ?? (yes ? false : await p.confirm("Uruchamiać dysk automatycznie w tle (usługa systemd --user, także po restarcie komputera)?", scenario === "public")))) {
+  if (f.systemd && !sysd) throw new Error(t("s.noSystemd"));
+  if (sysd && (f.systemd ?? (yes ? false : await p.confirm(t("s.systemdQ"), scenario === "public")))) {
     const r = installAndStart(c.dataDir);
     sysdState = "installed";
     started = true;
-    p.say(`  OK  usługa ${r.restarted ? "uruchomiona ponownie" : "uruchomiona"} (${unitPath()})`);
-    if (lingerEnabled() === false) p.say("  Uwaga: bez `loginctl enable-linger` usługa zatrzyma się po wylogowaniu.");
+    p.say(t("s.systemdOk", { how: r.restarted ? t("s.systemdRestarted") : t("s.systemdStarted"), unit: unitPath() }));
+    if (lingerEnabled() === false) p.say(t("s.linger"));
   }
   let running: SetupResult["running"] = null;
   if (!started) {
-    const now = f.start ?? (yes ? false : await p.confirm("Uruchomić dysk teraz, w tym oknie?", true));
+    const now = f.start ?? (yes ? false : await p.confirm(t("s.startQ"), true));
     if (now) {
       const st = await portState(c.bind.host, c.bind.port);
-      if (st.state === "ours") p.say(`  Na porcie ${c.bind.port} działa już poprzednio uruchomiony dysk: zatrzymaj go (Ctrl+C w tamtym oknie) i uruchom ${COMMANDS.start}.`);
+      if (st.state === "ours") p.say(t("s.alreadyRunning", { port: c.bind.port, cmd: COMMANDS.start }));
       else {
         running = await serve(c, () => {});
         started = true;
@@ -455,7 +469,7 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
     }
   }
 
-  // Test
+  // Self-test
   let selfTest: SetupResult["selfTest"] = null;
   if (f.selfTest ?? true) {
     const base = hostUrl(c.bind.host, c.bind.port);
@@ -470,50 +484,47 @@ export async function setup(f: SetupFlags, p0: Prompter = ttyPrompter()): Promis
         await new Promise((r) => setTimeout(r, 500));
         h = await health(base);
       }
-      selfTest = h.ok ? { ok: true, detail: `${base}/v1/health: wersja ${h.body.version}, tryb ${h.body.mode}` } : { ok: false, detail: `${base}/v1/health: ${h.error}` };
-      p.say(`  ${h.ok ? "OK " : "BŁĄD"} test serwera: ${selfTest.detail}`);
+      selfTest = h.ok ? { ok: true, detail: t("s.selfOk", { base, version: String(h.body.version), mode: String(h.body.mode) }) } : { ok: false, detail: `${base}/v1/health: ${h.error}` };
+      p.say(t("s.selfLine", { tag: h.ok ? "OK " : t("s.selfErrTag"), detail: selfTest.detail }));
       if (scenario === "public") {
         const hp = await health(c.publicUrl, 8000);
-        p.say(hp.ok ? `  OK  ${c.publicUrl} odpowiada (proxy działa)` : `  ..  ${c.publicUrl}: ${hp.error} (proxy jeszcze nie skonfigurowane? przykład niżej)`);
+        p.say(hp.ok ? t("s.pubOk", { url: c.publicUrl }) : t("s.pubNo", { url: c.publicUrl, err: hp.error }));
       }
     } finally {
       if (tmp) await tmp.close();
     }
   }
 
-  // Co dalej
+  // What next
   const bar = "─".repeat(Math.min(72, Math.max(40, c.publicUrl.length + 24)));
   p.say("");
   p.say(bar);
-  p.say(started ? `  Gotowe. Otwórz w przeglądarce:  ${c.publicUrl}` : `  Gotowe. Uruchom dysk (${COMMANDS.start}) i otwórz:  ${c.publicUrl}`);
+  p.say(started ? t("s.doneOpen", { url: c.publicUrl }) : t("s.doneStart", { cmd: COMMANDS.start, url: c.publicUrl }));
   p.say(bar);
   p.say("");
-  p.say("W przeglądarce:");
-  p.say(`  1. Załóż konto${invite ? ` (kod zaproszenia: ${invite.code}, jednorazowy, ważny 7 dni)` : c.signup === "invite" ? ` (kod zaproszenia: ${COMMANDS.invite})` : ""}.`);
-  p.say("  2. Podłącz kanał Discorda: aplikacja pokaże krok po kroku, jak założyć własny serwer Discord,");
-  p.say("     kanał i webhook (wystarczy zwykłe konto Discord; 3–4 kanały = szybsze wysyłanie).");
-  p.say("  3. Zapisz zestaw ratunkowy, który pokaże aplikacja: bez niego i bez urządzeń plików nie odzyskasz.");
-  p.say("  4. Wyślij pliki. Telefon dołączysz kodem QR (Urządzenia → Sparuj).");
+  p.say(t("s.inBrowser"));
+  p.say(t("s.next1", { invite: invite ? t("s.next1code", { code: invite.code }) : c.signup === "invite" ? t("s.next1cmd", { cmd: COMMANDS.invite }) : "" }));
+  p.say(t("s.next2a"));
+  p.say(t("s.next2b"));
+  p.say(t("s.next3"));
+  p.say(t("s.next4"));
   p.say("");
-  p.say(`Konfiguracja: ${file}`);
-  p.say(`Dane serwera: ${c.dataDir}`);
-  p.say(`Polecenia (w katalogu ${REPO_DIR}):`);
-  if (sysdState === "installed") {
-    p.say("  stan / zatrzymanie / start:  systemctl --user status|stop|start discordrive-next");
-  } else {
-    p.say(`  uruchomienie:      ${COMMANDS.start}   (zatrzymanie: Ctrl+C w tym oknie)`);
-  }
-  p.say(`  zmiana ustawień:   ${COMMANDS.setup}`);
-  p.say(`  coś nie działa:    ${COMMANDS.doctor}`);
-  if (c.signup === "invite") p.say(`  nowy kod zaproszenia: ${COMMANDS.invite}`);
+  p.say(t("s.cfgFile", { file }));
+  p.say(t("s.dataAt", { dir: c.dataDir }));
+  p.say(t("s.cmds", { dir: REPO_DIR }));
+  if (sysdState === "installed") p.say(t("s.cmdSystemd"));
+  else p.say(t("s.cmdStart", { cmd: COMMANDS.start }));
+  p.say(t("s.cmdSetup", { cmd: COMMANDS.setup }));
+  p.say(t("s.cmdDoctor", { cmd: COMMANDS.doctor }));
+  if (c.signup === "invite") p.say(t("s.cmdInvite", { cmd: COMMANDS.invite }));
   if (scenario === "public") {
     p.say("");
-    p.say("Przykładowy vhost nginx (niczego nie zmieniam na innych maszynach):");
+    p.say(t("s.nginx"));
     p.say(nginxSnippet(c));
   }
   if (running) {
     p.say("");
-    p.say(`Dysk działa w tym oknie. Nie zamykaj go, dopóki korzystasz z dysku. Ctrl+C zatrzymuje.`);
+    p.say(t("s.running"));
   }
   return { config: c, configFile: file, invite, selfTest, systemd: sysdState, running };
 }

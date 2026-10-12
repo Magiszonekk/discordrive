@@ -11,7 +11,7 @@ const aad = (accountId: string, deviceId: string) => `ddn-devname-v1|${accountId
 
 export function cleanDeviceName(name: string): string {
   const n = name.normalize("NFC").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
-  return [...n].slice(0, MAX_DEVICE_NAME).join("") || "urządzenie";
+  return [...n].slice(0, MAX_DEVICE_NAME).join("") || "device";
 }
 
 export async function sealDeviceName(key: AccountKey, accountId: string, deviceId: string, name: string): Promise<string> {

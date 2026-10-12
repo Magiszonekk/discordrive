@@ -124,11 +124,12 @@ export function vaultAdvice(v: VaultContent): VaultAdvice {
   const ok = channels >= REQUIRED_CHANNELS;
   const suggestMore = channels < RECOMMENDED_CHANNELS;
   let message: string;
-  if (!ok) message = "Dodaj co najmniej 1 kanał z webhookiem.";
+  // English; the web app translates from the fields above (apps/web-mo i18n).
+  if (!ok) message = "Add at least 1 channel with a webhook.";
   else if (suggestMore)
-    message = `Kanały: ${channels}. Discord ogranicza wysyłanie na kanał (~30 fragmentów/min, ~4 MiB/s), więc 3–4 kanały, każdy z jednym webhookiem, przyspieszą upload.`;
-  else message = `Kanały: ${channels}. Gotowe.`;
-  if (sharedChannels.length) message += " Kilka webhooków w jednym kanale nie przyspiesza uploadu, lepiej osobne kanały.";
+    message = `Channels: ${channels}. Discord limits uploads per channel (~30 pieces/min, ~4 MiB/s), so 3–4 channels, each with one webhook, make uploads faster.`;
+  else message = `Channels: ${channels}. All set.`;
+  if (sharedChannels.length) message += " Several webhooks in one channel do not speed up uploads; use separate channels.";
   return { webhooks: v.webhooks.length, channels, ok, suggestMore, sharedChannels, message };
 }
 

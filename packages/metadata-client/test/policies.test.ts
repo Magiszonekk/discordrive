@@ -78,7 +78,7 @@ describe("client policies (DECISIONS Q4, Q5, Q10)", () => {
     expect(h.obs.invalidCount("dev-good")).toBe(0);
     expect(h.alerts).toHaveLength(1);
     expect(h.alerts[0]).toMatchObject({ deviceId: "dev-bad", count: 5 });
-    expect(LogObserver.message(h.alerts[0] as never)).toMatch(/5 błędnych operacji/);
+    expect(LogObserver.message(h.alerts[0] as never)).toMatch(/5 invalid operations/);
   });
 
   it("Q5: a non-NFC name from another device is applied as is and only flagged", () => {

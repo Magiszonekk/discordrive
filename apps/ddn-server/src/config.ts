@@ -6,6 +6,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, sta
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { t, type CliLang } from "./i18n.js";
 
 export const CONFIG_VERSION = 1;
 export const DEFAULT_PORT = 3020;
@@ -23,6 +24,8 @@ export interface InstanceConfig {
   /** Reverse proxies whose X-Forwarded-For is trusted (e.g. ["192.0.2.1"]). */
   trustProxy: string[];
   signup: SignupPolicy;
+  /** Default language of the web app and the CLI (users can switch in the browser). */
+  language: CliLang;
   /** Instance bot token for share links (§3.7). Secret; null = sharing off. */
   botToken: string | null;
   /** Display info about the bot (from GET /users/@me at setup time). */
@@ -87,6 +90,7 @@ export function defaults(dataDir = defaultDataDir()): InstanceConfig {
     dataDir,
     trustProxy: [],
     signup: "open",
+    language: "en",
     botToken: null,
     bot: null,
     limits: { ...DEFAULT_LIMITS },
@@ -97,31 +101,32 @@ export class ConfigError extends Error {}
 
 export function validate(c: InstanceConfig): string[] {
   const e: string[] = [];
-  if (c.version !== 1) e.push("version: nieznana wersja pliku");
-  if (c.mode !== "metadata-only") e.push(`mode: tryb ${c.mode} jeszcze nie istnieje`);
+  if (c.version !== 1) e.push(t("c.v.version"));
+  if (c.mode !== "metadata-only") e.push(t("c.v.mode", { mode: c.mode }));
   try {
     const u = new URL(c.publicUrl);
-    if (u.protocol !== "https:" && u.protocol !== "http:") e.push("publicUrl: tylko http(s)");
-    if (u.pathname !== "/" || u.search || u.hash) e.push("publicUrl: sam adres, bez ścieżki (np. https://dysk.example.com)");
+    if (u.protocol !== "https:" && u.protocol !== "http:") e.push(t("c.v.proto"));
+    if (u.pathname !== "/" || u.search || u.hash) e.push(t("c.v.path"));
   } catch {
-    e.push("publicUrl: to nie jest adres URL");
+    e.push(t("c.v.url"));
   }
-  if (!Number.isInteger(c.bind?.port) || c.bind.port < 1 || c.bind.port > 65535) e.push("bind.port: 1–65535");
-  if (!c.bind?.host) e.push("bind.host: pusty");
-  if (!["invite", "open", "closed"].includes(c.signup)) e.push("signup: invite | open | closed");
-  if (c.botToken !== null && typeof c.botToken !== "string") e.push("botToken: tekst albo null");
-  if (!Array.isArray(c.trustProxy)) e.push("trustProxy: lista adresów");
+  if (!Number.isInteger(c.bind?.port) || c.bind.port < 1 || c.bind.port > 65535) e.push(t("c.v.port"));
+  if (!c.bind?.host) e.push(t("c.v.host"));
+  if (!["invite", "open", "closed"].includes(c.signup)) e.push(t("c.v.signup"));
+  if (c.language !== "en" && c.language !== "pl") e.push(t("c.v.lang"));
+  if (c.botToken !== null && typeof c.botToken !== "string") e.push(t("c.v.bot"));
+  if (!Array.isArray(c.trustProxy)) e.push(t("c.v.proxy"));
   return e;
 }
 
 export function loadConfig(dataDir: string): InstanceConfig {
   const p = configPath(dataDir);
-  if (!existsSync(p)) throw new ConfigError(`Brak konfiguracji w ${p}.\nNajpierw uruchom kreator: npm run setup`);
+  if (!existsSync(p)) throw new ConfigError(t("c.noConfig", { file: p }));
   let c: InstanceConfig;
   try {
     c = JSON.parse(readFileSync(p, "utf8")) as InstanceConfig;
   } catch {
-    throw new ConfigError(`${p}: plik jest uszkodzony (to nie JSON)`);
+    throw new ConfigError(t("c.notJson", { file: p }));
   }
   c = { ...defaults(dataDir), ...c, limits: { ...DEFAULT_LIMITS, ...c.limits } };
   const errs = validate(c);
@@ -171,10 +176,10 @@ export function checkWritable(dir: string): string | null {
     return null;
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
-    if (code === "EACCES" || code === "EPERM") return `brak uprawnień do zapisu w ${dir}`;
-    if (code === "EROFS") return `${dir} jest tylko do odczytu`;
-    if (code === "ENOSPC") return `brak miejsca na dysku dla ${dir}`;
-    return `nie da się zapisać w ${dir} (${code ?? (e as Error).message})`;
+    if (code === "EACCES" || code === "EPERM") return t("c.noWrite", { dir });
+    if (code === "EROFS") return t("c.ro", { dir });
+    if (code === "ENOSPC") return t("c.noSpace", { dir });
+    return t("c.cannotWrite", { dir, code: code ?? (e as Error).message });
   }
 }
 

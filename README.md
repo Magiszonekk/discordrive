@@ -1,19 +1,21 @@
 # discordrive-next
 
-Prywatny dysk na Twoich kanałach Discorda. Pliki są szyfrowane w przeglądarce, zanim
-cokolwiek opuści komputer; Discord przechowuje tylko zaszyfrowane kawałki, a serwer tylko
-zaszyfrowany spis plików. Działa w przeglądarce na komputerze i telefonie.
+**English** · [Polski](README.pl.md)
 
-## Szybki start
+A private drive on your own Discord channels. Files are encrypted in the browser before
+anything leaves the computer; Discord only stores encrypted pieces, and the server only an
+encrypted file list. Works in the browser on computers and phones.
 
-**Potrzebujesz:**
-- **Node.js 22 lub nowszy** (wersja „LTS” ze strony https://nodejs.org; na Windows/macOS
-  zwykły instalator, potem otwórz nowe okno terminala). Sprawdzenie: `node -v`.
-- **Git** (https://git-scm.com) i dostęp do tego repozytorium.
-- **Konto Discord** (zwykłe, darmowe). Serwer, kanały i webhooki założysz w trakcie: aplikacja
-  pokaże, gdzie kliknąć.
+## Quick start
 
-**Uruchomienie** (Terminal na macOS/Linuksie albo PowerShell na Windows):
+**You need:**
+- **Node.js 22 or newer** (the “LTS” version from https://nodejs.org; on Windows/macOS the
+  regular installer, then open a new terminal window). Check: `node -v`.
+- **Git** (https://git-scm.com) and access to this repository.
+- **A Discord account** (a regular, free one). You create the server, channels and webhooks
+  along the way: the app shows where to click.
+
+**Run it** (Terminal on macOS/Linux or PowerShell on Windows):
 
 ```
 git clone -b feat/metadata-only https://github.com/Magiszonekk/discordrive.git
@@ -21,39 +23,46 @@ cd discordrive
 npm run setup
 ```
 
-Za pierwszym razem `npm run setup` sam doinstaluje potrzebne biblioteki (kilkanaście sekund,
-potrzebny internet), a potem zada kilka pytań. **Na każde możesz odpowiedzieć Enterem**:
-domyślnie dysk działa tylko na tym komputerze, pod adresem `http://localhost:3020`.
-Udostępnianie linkiem (wymaga własnego bota Discord) możesz pominąć i włączyć później.
+The first time, `npm run setup` installs the libraries it needs by itself (a few seconds,
+internet required) and then asks a few questions. **You can answer every one with Enter**:
+by default the drive only runs on this computer, at `http://localhost:3020`. Link sharing
+(needs your own Discord bot) can be skipped and turned on later.
 
-**Co zobaczysz:** na końcu kreator napisze „Gotowe. Otwórz w przeglądarce: http://localhost:3020”
-i zostawi dysk włączony w tym oknie. Otwórz ten adres, załóż konto, podłącz kanał Discorda
-według instrukcji na ekranie, zapisz zestaw ratunkowy i wyślij pierwszy plik.
+**What you will see:** at the end the wizard says “Done. Open in the browser:
+http://localhost:3020” and keeps the drive running in that window. Open that address, create an
+account, connect a Discord channel following the on-screen guide, save the rescue kit and
+upload your first file.
 
-**Później:**
+**Language:** English by default. Polish: answer `2` to the first question
+(`Language / Język`), or run `npm run setup -- --lang pl`, or set `DISCORDRIVE_LANG=pl`. The
+choice is saved for the next commands. Yes/no questions are always `[Y/n]` / `[y/N]`. The
+browser app has an EN/PL switch in the header (remembered in the browser).
 
-| Co | Polecenie (w katalogu `discordrive`) |
+**Later:**
+
+| What | Command (in the `discordrive` directory) |
 |---|---|
-| włącz dysk | `npm start` (zatrzymanie: Ctrl+C) |
-| zmień ustawienia | `npm run setup` |
-| coś nie działa | `npm run doctor` |
-| kod zaproszenia (instancja publiczna) | `npm run invite` |
+| start the drive | `npm start` (stop: Ctrl+C) |
+| change settings | `npm run setup` |
+| something is wrong | `npm run doctor` |
+| invite code (public instance) | `npm run invite` |
 
-Dane serwera (konfiguracja i zaszyfrowany spis) są w `~/.local/share/discordrive-next`
-(Linux), `~/Library/Application Support/discordrive-next` (macOS) albo
-`%LOCALAPPDATA%\discordrive-next` (Windows). Same pliki są na Twoich kanałach Discorda.
+Server data (configuration and the encrypted file list) is in `~/.local/share/discordrive-next`
+(Linux), `~/Library/Application Support/discordrive-next` (macOS) or
+`%LOCALAPPDATA%\discordrive-next` (Windows). The files themselves are on your Discord channels.
 
-Dla zaawansowanych (serwer z domeną i HTTPS, usługa systemd, opcje bez pytań):
+Advanced (server with a domain and HTTPS, systemd service, options without questions):
 [apps/ddn-server/README.md](apps/ddn-server/README.md).
-Uwaga: trzymanie plików na Discordzie jest niezgodne z jego regulaminem; Discord może usunąć
-wiadomości albo zablokować konto. Trzymaj kopię ważnych plików gdzie indziej.
+Note: storing files on Discord is against its terms of service; Discord may delete messages
+or block the account. Keep a copy of important files somewhere else.
 
 ---
 
-## Starsza wersja: DiscorDrive v4 (kod źródłowy dla kolejnych trybów)
+## Older version: DiscorDrive v4 (source for the next modes)
 
-Poniżej dokumentacja odziedziczonego kodu ddv4 (`apps/api`, `apps/frontend`), z którego
-powstaną tryby e2ee i plain. Do uruchomienia dysku z „Szybkiego startu” nie jest potrzebna.
+Below is the documentation of the inherited ddv4 code (`apps/api`, `apps/frontend`), from which
+the e2ee and plain modes will be built. It is not needed to run the drive from “Quick start”.
+
 
 Use Discord **or Telegram** as (almost) unlimited cloud storage. Files are split into chunks, encrypted with AES-GCM, and uploaded as message attachments through pluggable storage providers (`DISCORD`, `TELEGRAM`, `LOCAL`). Downloads are streamed back through the API (or directly in the browser via a Service Worker).
 

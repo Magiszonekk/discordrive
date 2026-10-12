@@ -1,11 +1,16 @@
 // UI layer of the metadata-only browser client (look: house-v1, frontend profile).
+// Texts: i18n.ts (en default, pl); static HTML via data-i18n hooks.
 // Every element the tests drive keeps its stable data-ddn attribute; purely
 // visual hooks use data-ddn-ui. All logic lives in app-core (worker) behind `core`.
 import { renderSVG } from "uqr";
 import type { CoreEvent } from "./app-core.js";
+import { applyStatic, fmtDate, fmtDateTime, fmtNum, fmtSize, getLang, isLang, setLang, storeLang, storedLang, t, tn, type Lang } from "./i18n.js";
 import { connect } from "./rpc.js";
 
-const cfg = (window as unknown as { DDN_CONFIG?: { discordApiOrigin?: string; serverUrl?: string } }).DDN_CONFIG ?? {};
+const cfg = (window as unknown as { DDN_CONFIG?: { discordApiOrigin?: string; serverUrl?: string; language?: string } }).DDN_CONFIG ?? {};
+// Language before the first paint: this browser's choice, else the instance default, else English.
+setLang(storedLang() ?? (isLang(cfg.language) ? cfg.language : "en"));
+applyStatic();
 /** Same-origin instance (served by `discordrive serve`): the API is this origin. */
 const serverUrl = cfg.serverUrl ?? location.origin;
 const worker = new Worker("./worker.js", { type: "module" });
@@ -33,10 +38,7 @@ navigator.serviceWorker?.addEventListener("message", async (e) => {
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(`[data-ddn="${sel}"]`)!;
 const ui = <T extends HTMLElement>(sel: string) => document.querySelector<T>(`[data-ddn-ui="${sel}"]`)!;
 
-const nf1 = new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 1 });
-const nf0 = new Intl.NumberFormat("pl-PL");
-const fmt = (n: number | null) =>
-  n === null ? "" : n < 1024 ? `${n} B` : n < 1 << 20 ? `${nf1.format(n / 1024)} KB` : n < 1 << 30 ? `${nf1.format(n / (1 << 20))} MB` : `${nf1.format(n / (1 << 30))} GB`;
+const fmt = fmtSize;
 const short = (id: string | null | undefined) => (id ? id.slice(0, 6) : "-");
 
 /** Tiny DOM builder: h("span", {class: "x"}, "text", child). */
@@ -60,12 +62,15 @@ const VIDEO = /\.(webm|mp4|m4v|mov|mkv|ogv)$/i;
 const IMAGE = /\.(jpe?g|png|gif|webp|avif|heic|bmp)$/i;
 const kindIcon = (name: string, kind: string) => (kind === "folder" ? "folder" : VIDEO.test(name) ? "video" : IMAGE.test(name) ? "image" : "file");
 
-// ── komunikaty i akcje ──────────────────────────────────────────────
+// ── messages and actions ────────────────────────────────────────────
+const KNOWN_ERRORS = ["invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone"];
 const errText = (e: unknown) => {
   const m = String((e as Error)?.message ?? e);
-  if (/fetch|network/i.test(m)) return "Brak połączenia z serwerem. Sprawdź adres i sieć.";
-  if (/not a pairing code|bad pairing code/i.test(m)) return "To nie jest kod parowania. Powinien zaczynać się od ddn-pair1:.";
-  if (/webhook/i.test(m)) return `Webhook nie zadziałał: ${m}`;
+  if (/fetch|network/i.test(m)) return t("err.network");
+  if (/not a pairing code|bad pairing code/i.test(m)) return t("err.pairCode");
+  const code = KNOWN_ERRORS.find((c) => m.includes(c));
+  if (code) return t(`err.${code}`);
+  if (/webhook/i.test(m)) return t("err.webhook", { msg: m });
   return m;
 };
 function toast(text: string, kind: "ok" | "err" = "ok") {
@@ -73,7 +78,7 @@ function toast(text: string, kind: "ok" | "err" = "ok") {
   ui("toasts").append(t);
   setTimeout(() => t.remove(), kind === "err" ? 7000 : 3500);
 }
-/** Run an action from a button: busy state, Polish error message instead of a silent rejection. */
+/** Run an action from a button: busy state, a readable error message instead of a silent rejection. */
 async function act(btn: HTMLElement | null, fn: () => Promise<unknown>) {
   if (btn?.getAttribute("aria-busy") === "true") return;
   btn?.setAttribute("aria-busy", "true");
@@ -86,11 +91,12 @@ async function act(btn: HTMLElement | null, fn: () => Promise<unknown>) {
   }
 }
 
-// ── stan widoku ─────────────────────────────────────────────────────
+// ── view state ──────────────────────────────────────────────────────
 const PAGE = 50;
 let cursorStack: (string | undefined)[] = [undefined];
 let currentFolder = "root";
-let path: { id: string; name: string }[] = [{ id: "root", name: "Mój dysk" }];
+/** The root crumb's name comes from t("files.root") at render time (language can change). */
+let path: { id: string; name: string }[] = [{ id: "root", name: "" }];
 let uploading: { done: number; total: number } | null = null;
 let devicesLoaded = false;
 
@@ -108,7 +114,8 @@ function renderCrumbs() {
   path.forEach((p, i) => {
     if (i) nav.append(h("span", { class: "sep", "aria-hidden": "true" }, "/"));
     const last = i === path.length - 1;
-    const b = h("button", { class: "crumb", type: "button", title: p.name }, p.name);
+    const name = p.id === "root" ? t("files.root") : p.name;
+    const b = h("button", { class: "crumb", type: "button", title: name }, name);
     if (last) b.setAttribute("aria-current", "page");
     else b.onclick = () => openFolder(p.id, p.name);
     nav.append(b);
@@ -122,20 +129,20 @@ function chip(dot: string, text: string, title: string) {
 function renderStatus(st: Awaited<ReturnType<typeof core.status>>) {
   const s = $("status");
   if (!st.signedIn) {
-    s.replaceChildren(chip("", st.hasAccount ? "łączenie…" : "niezalogowano", "To urządzenie nie ma jeszcze konta."));
+    delete s.dataset.tabRole;
+    s.replaceChildren(chip("", st.hasAccount ? t("status.connecting") : t("status.signedOut"), t("status.signedOut.t")));
     return;
   }
+  // Technical details (which tab keeps the list, persistent storage) live in the tooltip;
+  // only a secondary tab gets its own chip, because it behaves differently (slower start).
+  s.dataset.tabRole = st.leader ? "main" : "secondary";
+  const details = [st.leader ? t("status.main.t") : t("status.secondary.t"), st.persistent ? t("status.persistent.t") : t("status.cache.t")].join("\n");
   s.replaceChildren(
-    st.leader
-      ? chip("ok", "karta główna", "Ta karta prowadzi spis plików na dysku przeglądarki (OPFS). Inne otwarte karty są pomocnicze.")
-      : chip("warm", "karta pomocnicza", "Spis na dysku prowadzi inna otwarta karta. Ta działa na kopii w pamięci: wszystko działa, tylko start jest wolniejszy."),
     uploading
-      ? chip("live", `wysyłanie ${uploading.done}/${uploading.total}`, "Wysyłanie trwa, dopóki ta karta jest otwarta.")
-      : chip("live", `synchronizacja · zmiana ${nf0.format(st.headSeq)}`, `Pozycja w dzienniku zmian: ${st.headSeq}. Zmiany z innych urządzeń przychodzą od razu.`),
-    chip(st.persistent ? "ok" : "", st.persistent ? "pamięć trwała" : "pamięć podręczna", st.persistent
-      ? "Przeglądarka obiecała nie czyścić danych tej witryny. Mimo to to tylko kopia: pliki są na Discordzie."
-      : "Przeglądarka może wyczyścić lokalną kopię spisu. Pliki są na Discordzie, spis odtworzy się z serwera."),
-    h("span", { class: "chip", title: `Identyfikator urządzenia: ${st.deviceId ?? "-"}` }, icon("phone"), h("b", {}, st.deviceName || short(st.deviceId))),
+      ? chip("live", t("status.uploading", { done: uploading.done, total: uploading.total }), t("status.uploading.t"))
+      : chip("live", t("status.synced"), `${t("status.synced.t", { seq: fmtNum(st.headSeq) })}\n${details}`),
+    ...(st.leader ? [] : [chip("warm", t("status.secondary"), t("status.secondary.t"))]),
+    h("span", { class: "chip", title: t("status.device.t", { id: st.deviceId ?? "-" }) }, icon("phone"), h("b", {}, st.deviceName || short(st.deviceId))),
   );
 }
 
@@ -145,24 +152,24 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
   li.dataset.id = r.id;
   const ic = kindIcon(r.name, r.kind);
   const name = h("div", { class: "name" });
-  const sub = h("span", { class: "sub" }, r.kind === "folder" ? "folder" : fmt(r.size));
+  const sub = h("span", { class: "sub" }, r.kind === "folder" ? t("files.folder") : fmt(r.size));
   const acts = h("div", { class: "acts" });
   if (r.kind === "folder") {
     const b = h("button", { class: "name-btn", type: "button", title: r.name }, r.name);
     b.onclick = () => openFolder(r.id, r.name);
     name.append(b, sub);
-    const go = h("button", { class: "iconbtn", type: "button", "aria-label": `Otwórz ${r.name}` }, icon("right"));
+    const go = h("button", { class: "iconbtn", type: "button", "aria-label": t("files.open", { name: r.name }) }, icon("right"));
     go.onclick = () => openFolder(r.id, r.name);
     acts.append(go);
   } else {
     name.append(h("span", { class: "name-text", title: r.name }, r.name), sub);
     if (VIDEO.test(r.name)) {
-      const play = h("button", { class: "iconbtn", type: "button", "aria-label": `Odtwórz ${r.name}`, title: "Odtwórz" }, icon("play"));
+      const play = h("button", { class: "iconbtn", type: "button", "aria-label": t("files.play.aria", { name: r.name }), title: t("files.play") }, icon("play"));
       play.dataset.ddn = "play";
       play.onclick = () => openPlayer(r.id, r.name, r.size ?? 0);
       acts.append(play);
     }
-    const dl = h("button", { class: "iconbtn", type: "button", "aria-label": `Pobierz ${r.name}`, title: "Pobierz" }, icon("down"));
+    const dl = h("button", { class: "iconbtn", type: "button", "aria-label": t("files.download.aria", { name: r.name }), title: t("files.download") }, icon("down"));
     dl.dataset.ddn = "download";
     dl.onclick = () =>
       act(dl, async () => {
@@ -175,7 +182,7 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
       });
     acts.append(dl);
     if (sharesOn) {
-      const sh = h("button", { class: "iconbtn", type: "button", "aria-label": `Udostępnij ${r.name}`, title: "Udostępnij link" }, icon("share"));
+      const sh = h("button", { class: "iconbtn", type: "button", "aria-label": t("files.share.aria", { name: r.name }), title: t("files.share") }, icon("share"));
       sh.dataset.ddn = "share";
       sh.onclick = () =>
         act(sh, async () => {
@@ -216,16 +223,16 @@ async function renderDevices(myId: string | null) {
     ui("dev-count").textContent = String(devs.length);
     list.replaceChildren(
       ...devs.map((d) => {
-        const when = new Date(d.createdAt).toLocaleDateString("pl-PL", { day: "numeric", month: "short", year: "numeric" });
+        const when = fmtDate(d.createdAt);
         const li = h("li", { title: `ID: ${d.deviceId}` }, icon("phone"), d.name ? h("span", { class: "dname" }, d.name) : h("span", { class: "mono" }, short(d.deviceId)));
         li.dataset.ddn = "device";
-        if (d.deviceId === myId) li.append(h("span", { class: "me" }, "to urządzenie"));
-        li.append(h("span", { class: "when" }, `od ${when}`));
+        if (d.deviceId === myId) li.append(h("span", { class: "me" }, t("dev.me")));
+        li.append(h("span", { class: "when" }, t("dev.since", { date: when })));
         if (d.deviceId !== myId) {
-          const rm = h("button", { class: "iconbtn", type: "button", "aria-label": `Odwołaj ${d.name ?? short(d.deviceId)}`, title: "Odwołaj urządzenie" }, icon("x"));
+          const rm = h("button", { class: "iconbtn", type: "button", "aria-label": t("dev.revoke.aria", { name: d.name ?? short(d.deviceId) }), title: t("dev.revoke") }, icon("x"));
           rm.onclick = () =>
             act(rm, async () => {
-              if (!confirm(`Odwołać urządzenie „${d.name ?? short(d.deviceId)}”? Straci dostęp do konta.`)) return;
+              if (!confirm(t("dev.revoke.confirm", { name: d.name ?? short(d.deviceId) }))) return;
               await core.revokeDevice(d.deviceId);
               devicesLoaded = false;
               await render();
@@ -236,7 +243,7 @@ async function renderDevices(myId: string | null) {
       }),
     );
   } catch {
-    list.replaceChildren(h("li", { class: "muted" }, "Nie udało się pobrać listy urządzeń."));
+    list.replaceChildren(h("li", { class: "muted" }, t("dev.loadFail")));
   }
 }
 
@@ -267,9 +274,9 @@ async function renderShares() {
   ui("share-count").textContent = String(live.length);
   $("shares").replaceChildren(
     ...live.map((x) => {
-      const li = h("li", {}, icon("share"), h("span", { class: "dname" }, x.name ?? "plik"), h("span", { class: "when" }, new Date(x.createdAt).toLocaleDateString("pl-PL")));
-      const off = h("button", { class: "iconbtn", type: "button", "aria-label": `Wyłącz link do ${x.name ?? "pliku"}`, title: "Wyłącz link" }, icon("x"));
-      off.onclick = () => act(off, async () => (await core.revokeShare(x.shareId), await renderShares(), toast("Link wyłączony.")));
+      const li = h("li", {}, icon("share"), h("span", { class: "dname" }, x.name ?? t("sh.file")), h("span", { class: "when" }, fmtDate(x.createdAt, {})));
+      const off = h("button", { class: "iconbtn", type: "button", "aria-label": t("sh.off.aria", { name: x.name ?? t("sh.file") }), title: t("sh.off") }, icon("x"));
+      off.onclick = () => act(off, async () => (await core.revokeShare(x.shareId), await renderShares(), toast(t("sh.offDone"))));
       li.append(off);
       return li;
     }),
@@ -284,14 +291,15 @@ async function renderNow() {
   $("signed-in").hidden = !st.signedIn;
   if (!st.signedIn) return;
 
-  // kanały: kreator, dopóki nie ma żadnego
+  // channels: wizard until there is one
   const wh = await core.webhooks();
   const channels = wh.advice.channels;
   ui("app").classList.toggle("setup", !wh.advice.ok);
   const adv = $("advice");
-  adv.textContent = wh.advice.message;
+  const a = wh.advice;
+  adv.textContent = [!a.ok ? t("advice.none") : a.suggestMore ? t("advice.more", { n: a.channels }) : t("advice.ok", { n: a.channels }), a.sharedChannels.length ? t("advice.shared") : ""].filter(Boolean).join(" ");
   adv.classList.toggle("need", !wh.advice.ok || wh.advice.sharedChannels.length > 0);
-  ui("hook-count").textContent = `${channels} ${channels === 1 ? "kanał" : channels >= 2 && channels <= 4 ? "kanały" : "kanałów"}`;
+  ui("hook-count").textContent = tn("hooks.channels", channels);
   [...ui("slots").children].forEach((s, i) => s.classList.toggle("on", i < channels));
   ui("hooks").replaceChildren(
     ...wh.webhooks.map((w) => h("li", {}, icon("hook"), h("b", { title: w.label }, w.label || "webhook"), h("span", { class: "mono" }, `#${String(w.channelId).slice(-6)}`))),
@@ -300,17 +308,19 @@ async function renderNow() {
   if (!devicesLoaded) void renderDevices(st.deviceId);
   if (wh.advice.ok && !st.kitSaved && !$<HTMLDialogElement>("kit-dialog").open) void openKit(true);
 
-  // pliki
+  // files
   renderCrumbs();
   const page = await core.list(currentFolder, cursorStack.at(-1), PAGE);
   const pageIndex = cursorStack.length - 1;
-  // Obie karty (główna na OPFS i pomocnicza w pamięci) stronicują kursorem po (nazwa, id).
+  // Both kinds of tab (main on OPFS, secondary in memory) page with a (name, id) cursor.
   const rows = page.rows;
   $("list").replaceChildren(...rows.map(fileRow));
   ui("empty").hidden = page.total > 0;
   const from = page.total ? pageIndex * PAGE + 1 : 0;
   const to = pageIndex * PAGE + rows.length;
-  $("count").textContent = page.total > PAGE ? `${nf0.format(from)}–${nf0.format(to)} z ${nf0.format(page.total)} pozycji` : `${nf0.format(page.total)} ${page.total === 1 ? "pozycja" : "pozycji"}`;
+  $("count").textContent = page.total > PAGE ? t("files.range", { from: fmtNum(from), to: fmtNum(to), total: fmtNum(page.total) }) : tn("files.count", page.total);
+  // One page only: no ‹ › buttons.
+  ui("pager-btns").hidden = page.total <= PAGE;
   const prev = $<HTMLButtonElement>("prev");
   const next = $<HTMLButtonElement>("next");
   prev.disabled = pageIndex === 0;
@@ -329,7 +339,7 @@ async function renderNow() {
   };
 }
 
-// ── kolejka wysyłania ──────────────────────────────────────────────
+// ── upload queue ───────────────────────────────────────────────────
 async function uploadAll(files: File[]) {
   if (!files.length) return;
   const box = ui("queue");
@@ -338,7 +348,7 @@ async function uploadAll(files: File[]) {
   let sent = 0;
   let failed = 0;
   const items = files.map((f) => {
-    const state = h("span", { class: "qstate wait" }, "czeka");
+    const state = h("span", { class: "qstate wait" }, t("queue.wait"));
     const bar = h("i");
     const li = h("li", {}, h("span", { title: f.name }, f.name), h("span", { class: "mono" }, fmt(f.size)), state, h("span", { class: "qitem-bar" }, bar));
     li.dataset.ddn = "queue-item";
@@ -349,14 +359,14 @@ async function uploadAll(files: File[]) {
   ui("queue-close").hidden = true;
   uploading = { done: 0, total: files.length };
   const meta = () => {
-    ui("queue-title").textContent = uploading ? `Wysyłanie ${uploading.done} z ${uploading.total}` : failed ? `Wysłano z błędami (${failed})` : "Wysłano";
-    ui("queue-meta").textContent = `${fmt(sent)} z ${fmt(total)}`;
+    ui("queue-title").textContent = uploading ? t("queue.running", { done: uploading.done, total: uploading.total }) : failed ? t("queue.doneErr", { n: failed }) : t("queue.done");
+    ui("queue-meta").textContent = t("queue.meta", { sent: fmt(sent), total: fmt(total) });
     ui("queue-bar").style.width = `${total ? (sent / total) * 100 : 100}%`;
   };
   meta();
   for (const { f, state, bar } of items) {
     state.className = "qstate run";
-    state.textContent = "szyfrowanie…";
+    state.textContent = t("queue.encrypting");
     const token = crypto.randomUUID();
     const base = sent;
     progressHandlers.set(token, (done, tot) => {
@@ -369,11 +379,11 @@ async function uploadAll(files: File[]) {
     try {
       await core.upload(f, f.name, currentFolder, token);
       state.className = "qstate done";
-      state.textContent = "gotowe";
+      state.textContent = t("queue.ok");
     } catch (e) {
       failed++;
       state.className = "qstate err";
-      state.textContent = "błąd";
+      state.textContent = t("queue.err");
       state.title = errText(e);
     } finally {
       progressHandlers.delete(token);
@@ -387,7 +397,7 @@ async function uploadAll(files: File[]) {
   uploading = null;
   meta();
   ui("queue-close").hidden = false;
-  if (failed) toast(`${failed} z ${files.length} plików nie udało się wysłać. Najedź na „błąd”, żeby zobaczyć powód.`, "err");
+  if (failed) toast(t("queue.failed", { failed, total: files.length }), "err");
   await render();
 }
 
@@ -397,8 +407,8 @@ let shareMode = false;
 function defaultDeviceName(): string {
   const ua = navigator.userAgent;
   const os = /Android/i.test(ua) ? "Android" : /iPhone|iPad/i.test(ua) ? "iPhone" : /Mac/i.test(ua) ? "Mac" : /Windows/i.test(ua) ? "Windows" : /Linux/i.test(ua) ? "Linux" : "";
-  const br = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "przeglądarka";
-  return os ? `${br} na ${os}` : br;
+  const br = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : t("browser.generic");
+  return os ? t("device.on", { browser: br, os }) : br;
 }
 
 async function copy(text: string, done: string) {
@@ -406,17 +416,17 @@ async function copy(text: string, done: string) {
     await navigator.clipboard.writeText(text);
     toast(done);
   } catch {
-    toast("Nie udało się skopiować. Zaznacz tekst i skopiuj ręcznie.", "err");
+    toast(t("copy.fail"), "err");
   }
 }
 
 function qr(el: HTMLElement, text: string) {
   el.innerHTML = renderSVG(text, { border: 2, ecc: "L" });
   el.querySelector("svg")?.setAttribute("role", "img");
-  el.querySelector("svg")?.setAttribute("aria-label", "Kod QR");
+  el.querySelector("svg")?.setAttribute("aria-label", t("qr.label"));
 }
 
-// ── zestaw ratunkowy ───────────────────────────────────────────────
+// ── rescue kit ─────────────────────────────────────────────────────
 let kitOpening = false;
 let kitConfirmed = false;
 async function openKit(forced: boolean) {
@@ -439,7 +449,8 @@ async function openKit(forced: boolean) {
   ack.checked = !forced;
   ack.closest("label")!.hidden = !forced;
   $<HTMLButtonElement>("kit-done").disabled = forced;
-  $<HTMLButtonElement>("kit-done").textContent = forced ? "Zapisałem, dalej" : "Zamknij";
+  $("kit-done").dataset.i18n = forced ? "kit.doneForced" : "kit.close";
+  $<HTMLButtonElement>("kit-done").textContent = t($("kit-done").dataset.i18n!);
   d.dataset.forced = forced ? "1" : "";
   d.dataset.account = accountId;
   d.showModal();
@@ -449,23 +460,23 @@ function wireKit() {
   // A forced kit cannot be dismissed with Esc.
   d.addEventListener("cancel", (e) => d.dataset.forced && e.preventDefault());
   $<HTMLInputElement>("kit-ack").onchange = (e) => ($<HTMLButtonElement>("kit-done").disabled = !(e.target as HTMLInputElement).checked);
-  $("kit-copy").onclick = () => void copy($<HTMLTextAreaElement>("kit-text").value, "Zestaw skopiowany. Wklej go w bezpieczne miejsce.");
+  $("kit-copy").onclick = () => void copy($<HTMLTextAreaElement>("kit-text").value, t("kit.copied"));
   $("kit-download").onclick = () => {
     const text = [
-      "discordrive-next: zestaw ratunkowy",
-      `Konto: ${d.dataset.account}`,
-      `Serwer: ${serverUrl}`,
-      `Utworzono: ${new Date().toLocaleString("pl-PL")}`,
+      t("kit.file.title"),
+      t("kit.file.account", { id: d.dataset.account ?? "" }),
+      t("kit.file.server", { url: serverUrl }),
+      t("kit.file.created", { date: fmtDateTime(Date.now()) }),
       "",
-      "Kod (sekret, trzymaj jak hasło):",
+      t("kit.file.code"),
       $<HTMLTextAreaElement>("kit-text").value,
       "",
-      "Jak użyć: otwórz adres serwera → „Mam zestaw ratunkowy” → wklej kod.",
+      t("kit.file.how"),
       "",
     ].join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
-    a.download = "discordrive-zestaw-ratunkowy.txt";
+    a.download = t("kit.file.name");
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
   };
@@ -481,7 +492,7 @@ function wireKit() {
     });
 }
 
-// ── dołączanie urządzenia (QR + 6 cyfr) i z zestawu ─────────────────
+// ── joining a device (QR + 6 digits) and from a rescue kit ─────────
 function wireJoin(server: () => string) {
   const d = $<HTMLDialogElement>("join-dialog");
   let polling: ReturnType<typeof setInterval> | null = null;
@@ -515,7 +526,7 @@ function wireJoin(server: () => string) {
       polling = setInterval(async () => {
         if (Date.now() - t0 > 10 * 60_000) {
           stop();
-          toast("Kod wygasł. Zacznij od nowa.", "err");
+          toast(t("joinD.expired"), "err");
           reset();
           return;
         }
@@ -539,12 +550,12 @@ function wireJoin(server: () => string) {
       d.close();
       await core.open();
       await render();
-      toast("To urządzenie dołączyło do konta.");
+      toast(t("dev.paired"));
     });
   $("join-reject").onclick = () => {
     void core.pairCancel();
     d.close();
-    toast("Parowanie przerwane. Na drugim urządzeniu odwołaj nowe urządzenie z listy.", "err");
+    toast(t("joinD.rejected"), "err");
   };
 
   const rd = $<HTMLDialogElement>("rescue-dialog");
@@ -560,11 +571,11 @@ function wireJoin(server: () => string) {
       rd.close();
       await core.open();
       await render();
-      toast("Konto odtworzone na tym urządzeniu.");
+      toast(t("rescueD.done"));
     });
 }
 
-// ── odbiorca linku /s/<id>#<klucz> ─────────────────────────────────
+// ── share link recipient /s/<id>#<key> ─────────────────────────────
 async function openShareView(): Promise<boolean> {
   const m = /^\/s\/([A-Za-z0-9_-]{22})\/?$/.exec(location.pathname);
   if (!m) return false;
@@ -577,7 +588,7 @@ async function openShareView(): Promise<boolean> {
   const state = $("share-state");
   const key = location.hash.slice(1);
   if (!key) {
-    state.textContent = "Link jest niepełny: brakuje klucza po znaku #.";
+    state.textContent = t("shareV.noKey");
     return true;
   }
   try {
@@ -587,28 +598,53 @@ async function openShareView(): Promise<boolean> {
     $<HTMLButtonElement>("share-get").disabled = false;
     state.textContent = "";
   } catch (e) {
-    state.textContent = /not found|revoked/.test(String(e)) ? "Ten link nie działa (wyłączony albo nie istnieje)." : /wrong key/.test(String(e)) ? "Klucz w linku jest niepoprawny." : errText(e);
+    state.textContent = /not found|revoked/.test(String(e)) ? t("shareV.dead") : /wrong key/.test(String(e)) ? t("shareV.badKey") : errText(e);
     return true;
   }
   onShareProgress = (done, total) => {
     ui("share-bar").style.width = `${total ? (done / total) * 100 : 100}%`;
-    state.textContent = `${fmt(done)} z ${fmt(total)}`;
+    state.textContent = t("shareV.progress", { done: fmt(done), total: fmt(total) });
   };
   $("share-get").onclick = (e) =>
     act(e.currentTarget as HTMLElement, async () => {
       const b = await core.shareDownload();
-      state.textContent = "Pobrano i sprawdzono (SHA-256 zgodny).";
+      state.textContent = t("shareV.done");
       document.body.dataset.shareDone = "1";
       const a = document.createElement("a");
       a.href = URL.createObjectURL(b);
-      a.download = $("share-file-name").textContent || "plik";
+      a.download = $("share-file-name").textContent || t("sh.file");
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
     });
   return true;
 }
 
+// ── language switch (no reload: static texts re-applied, dynamic parts re-rendered) ──
+function markLang() {
+  document.querySelectorAll<HTMLButtonElement>("[data-ddn=lang] [data-lang]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.lang === getLang())));
+}
+function wireLang() {
+  markLang();
+  document.querySelectorAll<HTMLButtonElement>("[data-ddn=lang] [data-lang]").forEach((b) => {
+    b.onclick = () => {
+      const l = b.dataset.lang as Lang;
+      if (l === getLang()) return;
+      setLang(l);
+      storeLang(l);
+      applyStatic();
+      markLang();
+      document.body.dataset.lang = l;
+      if (shareMode) return;
+      devicesLoaded = false;
+      void render();
+      void renderShares();
+    };
+  });
+  document.body.dataset.lang = getLang();
+}
+
 async function main() {
+  wireLang();
   if ("serviceWorker" in navigator) await navigator.serviceWorker.register("./sw.js").catch(() => {});
   await core.init({ discordApiOrigin: cfg.discordApiOrigin, wasmUrl: new URL("./sqlite3.wasm", location.href).href });
   if (await openShareView()) return;
@@ -622,7 +658,7 @@ async function main() {
   ui("invite-field").hidden = info?.signup !== "invite";
   if (info?.signup === "closed") {
     $<HTMLButtonElement>("create").disabled = true;
-    $("create").title = "Rejestracja na tej instancji jest zamknięta.";
+    $("create").title = t("create.closed");
   }
   const pre = new URLSearchParams(location.search).get("invite");
   if (pre) $<HTMLInputElement>("invite").value = pre;
@@ -637,16 +673,16 @@ async function main() {
   $("add-webhook").onclick = (e) =>
     act(e.currentTarget as HTMLElement, async () => {
       const i = $<HTMLInputElement>("webhook-url");
-      if (!i.value.trim()) throw new Error("Wklej adres webhooka z ustawień kanału.");
+      if (!i.value.trim()) throw new Error(t("hooks.pasteFirst"));
       await core.addWebhook(i.value);
       i.value = "";
       await render();
-      toast("Kanał dodany.");
+      toast(t("hooks.added"));
     });
   $("mkdir").onclick = (e) =>
     act(e.currentTarget as HTMLElement, async () => {
       const i = $<HTMLInputElement>("folder-name");
-      await core.mkdir(i.value.trim() || "Nowy folder", currentFolder);
+      await core.mkdir(i.value.trim() || t("files.defaultFolder"), currentFolder);
       i.value = "";
       await render();
     });
@@ -672,7 +708,7 @@ async function main() {
       devicesLoaded = false;
       await render();
     });
-  $("share-copy").onclick = () => void copy($<HTMLTextAreaElement>("share-link").value, "Link skopiowany.");
+  $("share-copy").onclick = () => void copy($<HTMLTextAreaElement>("share-link").value, t("shareD.copied"));
   $("share-close").onclick = () => $<HTMLDialogElement>("share-dialog").close();
   $("kit-show").onclick = (e) => act(e.currentTarget as HTMLElement, () => openKit(false));
   ui("player-close").onclick = closePlayer;
@@ -695,8 +731,8 @@ async function main() {
       ui("app").dataset.tab = "devices";
       document.querySelectorAll(".tab").forEach((x) => x.setAttribute("aria-selected", String((x as HTMLElement).dataset.tab === "devices")));
       $("pair-code").scrollIntoView({ block: "center" });
-      toast("Kod parowania wczytany. Naciśnij „Sparuj”.");
-    } else toast("Ten kod paruje NOWE urządzenie. Otwórz go na urządzeniu, które jest już zalogowane.", "err");
+      toast(t("dev.pairLoaded"));
+    } else toast(t("dev.pairWrongDevice"), "err");
   }
   let seen = -1;
   setInterval(async () => {

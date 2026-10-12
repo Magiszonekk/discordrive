@@ -21,7 +21,7 @@ describe("ddn CLI (single device, state persisted between runs)", () => {
     expect(await runCli(["init"], env)).toBe(0);
     await expect(runCli(["put", hookFile], env)).rejects.toThrow(/no webhooks/);
     expect(await runCli(["webhook", "add", hookFile], env)).toBe(0);
-    expect(lines.at(-1)).toMatch(/3–4 kanały/);
+    expect(lines.at(-1)).toMatch(/3–4 channels/);
 
     const src = join(dir, "in.bin");
     const data = rand(65_000);

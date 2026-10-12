@@ -423,7 +423,7 @@ export class AppCore {
     let v = await this.vault!.load();
     if (v.pointer) return v.pointer;
     const hooks = toWebhookRefs(v);
-    if (!hooks.length) throw new Error("Najpierw dodaj kanał z webhookiem.");
+    if (!hooks.length) throw new Error("need_channel: add a channel with a webhook first");
     const io = clientBlobIO(this.c(), this.transport());
     const mine = await createPointerMessage(io, this.key!, this.acct!.accountId, hooks[0]!);
     v = await this.vault!.update((x) => {
@@ -440,7 +440,7 @@ export class AppCore {
     const ptr = await this.ensurePointer();
     const v = await this.vault!.load();
     const hook = v.webhooks.find((w) => w.id === ptr.webhookId);
-    if (!hook) throw new Error("Kanał wiadomości wskaźnikowej został usunięty z sejfu.");
+    if (!hook) throw new Error("pointer_hook_gone: the pointer message channel was removed from the vault");
     const a = this.acct!;
     this.startSnapshots();
     void this.snapshotSoon(true);

@@ -1,25 +1,32 @@
-# @ddv4/web-mo — klient przeglądarkowy trybu metadata only (etap 2)
+# @ddv4/web-mo: browser client of the metadata-only mode (stage 2)
 
-Logika i okablowanie; wygląd (house-v1) od profilu `frontend` (gałąź
-`design/discordrive-next-20261006`, zmergowana 2026-10-09). Nowe ekrany wymagane logiką
-(zestaw ratunkowy, dołączanie urządzenia, udostępnianie) używają tych samych klas i tokenów.
-Serwowana przez instancję `apps/ddn-server` z tego samego originu; preview:
+Logic and wiring; the look (house-v1) comes from the `frontend` profile (branch
+`design/discordrive-next-20261006`, merged 2026-10-09). Screens added later for the logic
+(rescue kit, joining a device, sharing) use the same classes and tokens.
+Served by the `apps/ddn-server` instance from the same origin; preview:
 https://drive.example.com.
 
-Architektura (koncept §4.1):
-- `src/app-core.ts` — stan aplikacji (konto, urządzenie, klucz konta, lista folderu
-  stronicowana, upload/download, parowanie), bez DOM; wywoływany przez UI.
-- `src/keystore.ts` — klucz urządzenia Ed25519 (nieeksportowalny CryptoKey) i klucz konta w
+Architecture (concept §4.1):
+- `src/app-core.ts`: application state (account, device, account key, paged folder list,
+  upload/download, pairing), no DOM; called by the UI.
+- `src/keystore.ts`: Ed25519 device key (non-extractable CryptoKey) and the account key in
   IndexedDB.
-- `src/sw.ts` — service worker: streaming `Range` dla `/ddn/file/<id>`.
-- `index.html` + `src/ui.ts` — interfejs: konto (z kodem zaproszenia), kreator kanałów, zestaw
-  ratunkowy (tekst `ddn-kit1:` + QR + plik + druk; wymuszony raz po pierwszym kanale), pliki
-  (stronicowanie keyset po 50, kolejka wysyłania z postępem w bajtach, pobieranie, wideo,
-  udostępnianie), urządzenia (nazwy, odwołanie, parowanie: QR + 6 cyfr po obu stronach),
-  dołączanie z zestawu, strona odbiorcy linku `/s/<id>#<klucz>`, widok telefonu (zakładki).
-  Elementy sterowane przez testy mają stabilne `data-ddn`.
+- `src/sw.ts`: service worker: `Range` streaming for `/ddn/file/<id>`.
+- `index.html` + `src/ui.ts`: the interface: account (with invite code), channel wizard, rescue
+  kit (`ddn-kit1:` text + QR + file + print; forced once after the first channel), files
+  (keyset paging by 50, upload queue with byte progress, download, video, sharing), devices
+  (names, revoke, pairing: QR + 6 digits on both sides), joining from a kit, the share link
+  recipient page `/s/<id>#<key>`, phone view (tabs). Elements driven by tests have stable
+  `data-ddn` attributes.
+- `src/i18n.ts` + `src/locales/{en,pl}.ts`: all texts. English is the default (not taken from
+  `navigator.language`); the instance default comes from `language` in the server config
+  (`window.DDN_CONFIG.language`, also in `/v1/health`); the EN/PL switch in the header stores
+  the user's choice in `localStorage` (`ddn.lang`) and applies it without a reload. Static
+  HTML uses `data-i18n` / `data-i18n-html` / `data-i18n-attr`; numbers, sizes and dates are
+  formatted for the language (“11.4 MB” / “11,4 MB”). The key sets are compared by
+  `apps/ddn-server/test/i18n.test.ts`.
 
-Budowanie: `npm run build -w @ddv4/web-mo` → `dist/` (instancja buduje sama przy pierwszym
-starcie, jeśli brak). Test w Chromium: `npm run check -w @ddv4/web-mo` (serwer instancji +
-fałszywy Discord, 15 sprawdzeń); ten sam scenariusz na żywym preview: `DDN_E2E_URL=…`
-(patrz nagłówek `check.ts`).
+Build: `npm run build -w @ddv4/web-mo` → `dist/` (the instance builds it at the first start if
+missing). Chromium test: `npm run check -w @ddv4/web-mo` (instance server + fake Discord, 19
+checks); `DDN_E2E_LANG=pl` runs it in Polish, `DDN_E2E_SCHEME=dark` with a dark color scheme;
+the same scenario against the live preview: `DDN_E2E_URL=…` (see the header of `check.ts`).

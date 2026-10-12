@@ -75,6 +75,8 @@ export interface ServerOptions {
   /** Allowed CDN origin of shared attachments (tests: the fake Discord). */
   cdnOrigins?: string[];
   mode?: string;
+  /** Default language of the web app for this instance (users can switch). */
+  language?: string;
   /** Browser origins allowed via CORS (exact match). Default: none. */
   corsOrigins?: string[];
   /** Session token lifetime (default 1 h). */
@@ -143,6 +145,7 @@ export class DdnServer {
       uptimeS: Math.round((this.now() - this.startedAt) / 1000),
       signup: this.signup,
       shares: this.shares.available,
+      language: this.opts.language ?? "en",
     };
   }
 
@@ -371,8 +374,10 @@ export class DdnServer {
     }
     if (path === "/v1/vault") {
       if (method === "GET") {
+        // No vault yet (new account): 200 with an empty state, not a 404 that
+        // browsers log as an error. Clients also accept the old 404.
         const v = this.getVault(s);
-        return v ? send(res, 200, v) : send(res, 404, { error: "no_vault" });
+        return send(res, 200, v ?? { revision: 0, blob: null });
       }
       if (method === "PUT") {
         const r = this.putVault(s, await json());

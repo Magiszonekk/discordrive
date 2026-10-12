@@ -1,78 +1,86 @@
-# @ddv4/ddn-server: instancja discordrive-next (`discordrive`)
+# @ddv4/ddn-server: the discordrive-next instance (`discordrive`)
 
-Jeden proces: API trybu metadata only (`/v1/...`), websocket powiadomień (`/v1/notify`) i
-zbudowana aplikacja przeglądarkowa (`apps/web-mo/dist`) z tego samego originu (service
-worker do odtwarzania wideo wymaga tego samego originu i HTTPS).
+One process: the metadata-only API (`/v1/...`), the notify websocket (`/v1/notify`) and the
+built browser app (`apps/web-mo/dist`), all from the same origin (the service worker that
+plays video needs the same origin and HTTPS).
 
-## Szybki start
+## Quick start
 
-Patrz „Szybki start” w głównym [README](../../README.md): `git clone` → `npm run setup`.
-`bin/discordrive.mjs` jest w czystym JS: sprawdza wersję Node (≥ 22.13, czytelny komunikat),
-przy pierwszym uruchomieniu doinstalowuje tylko zależności tej aplikacji
-(`npm ci --workspace @ddv4/ddn-server`, ok. 55 pakietów / 75 MB, bez Prismy/Postgresa
-starego ddv4), potem ładuje źródła TS przez tsx.
+See “Quick start” in the main [README](../../README.md): `git clone` → `npm run setup`.
+`bin/discordrive.mjs` is plain JS: it checks the Node version (≥ 22.13, with a readable
+message), installs only this app's dependencies on the first run
+(`npm ci --workspace @ddv4/ddn-server`, about 55 packages / 75 MB, without the Prisma/Postgres
+of the old ddv4), then loads the TS sources through tsx.
 
-Kreator (po polsku, Enter = wartość w nawiasie):
-0. sprawdza wymagania (Node, zapis w katalogu danych),
-1. gdzie ma działać: **tylko ten komputer** (domyślnie: `http://localhost:<port>`, bind
-   127.0.0.1, rejestracja otwarta; localhost to bezpieczny kontekst, więc service worker i
-   WebCrypto działają bez TLS) albo **serwer z domeną** (adres https, adres nasłuchu,
-   zaufane proxy, rejestracja domyślnie z kodem zaproszenia); port z wykryciem zajętego,
-2. tryb (dziś `metadata-only`; e2ee i plain widoczne jako „wkrótce”),
-3. udostępnianie linkiem: „Pomiń na razie” jest domyślne i wyjaśnia, co się traci; „teraz”
-   pokazuje krok po kroku Discord Developer Portal; token wpisywany bez echa, sprawdzany przez
-   `GET /users/@me`, zapisywany tylko w pliku konfiguracji,
-4. kto zakłada konta (tylko dla serwera z domeną),
-5. katalog danych (sprawdza zapis),
+The wizard (Enter = the value in brackets, yes/no questions always `[Y/n]` / `[y/N]`):
+0. language: English (default) or Polish; skipped with `--lang en|pl` or `DISCORDRIVE_LANG`,
+   saved as `language` in `config.json` and used by the next `start`/`doctor`/`invite` and as
+   the default language of the browser app (users can switch there; their choice wins);
+   in Polish mode `t`/`tak`/`nie` are accepted too, but `y/n` is what is shown,
+1. checks the requirements (Node, write access to the data directory),
+2. where it runs: **this computer only** (default: `http://localhost:<port>`, bind 127.0.0.1,
+   open sign-up; localhost is a secure context, so the service worker and WebCrypto work
+   without TLS) or **a server with a domain** (https address, listen address, trusted proxy,
+   sign-up by invite code by default); port with busy-port detection,
+3. mode (`metadata-only` today; e2ee and plain shown as “coming soon”),
+4. link sharing: “Skip for now” is the default and explains what you lose; “now” shows the
+   Discord Developer Portal step by step; the token is typed without echo, checked with
+   `GET /users/@me`, stored only in the configuration file,
+5. who can create accounts (server with a domain only),
+6. data directory (checks write access),
 
-potem zapisuje `config.json`, buduje aplikację przeglądarkową, na Linuksie z systemd pyta o
-usługę `discordrive-next.service` (domyślnie tak dla serwera, nie dla „tylko ten komputer”),
-w przeciwnym razie proponuje uruchomienie w tym oknie (Ctrl+C zatrzymuje), robi test
-`/v1/health` i kończy podsumowaniem: adres do otwarcia, co zrobić w przeglądarce, gdzie są
-konfiguracja i dane, `npm start` / `npm run setup` / `npm run doctor`.
-Ponowne uruchomienie = edycja: obecne wartości są domyślne, zapisany token zostaje, chyba że
-wybierzesz inaczej.
+then it saves `config.json`, builds the browser app, on Linux with systemd offers the
+`discordrive-next.service` unit (default yes for a server, no for “this computer only”),
+otherwise offers to start in this window (Ctrl+C stops it), runs a `/v1/health` test and ends
+with a summary: the address to open, what to do in the browser, where the configuration and
+data are, `npm start` / `npm run setup` / `npm run doctor`.
+Running it again = editing: current values are the defaults, the saved token stays unless you
+choose otherwise.
 
-Wieloplatformowość: katalog danych `~/.local/share` / `~/Library/Application Support` /
-`%LOCALAPPDATA%` (nadpisanie: `DISCORDRIVE_DATA_DIR`), ścieżki przez `path`/`os.homedir()`,
-systemd tylko na Linuksie, uprawnienia POSIX (0600/0700) tylko poza Windows. Na żywo
-sprawdzone na Linuksie; macOS i Windows tylko przeglądem kodu.
+Cross-platform: data directory `~/.local/share` / `~/Library/Application Support` /
+`%LOCALAPPDATA%` (override: `DISCORDRIVE_DATA_DIR`), paths via `path`/`os.homedir()`, systemd
+on Linux only, POSIX modes (0600/0700) only outside Windows. Tested live on Linux; macOS and
+Windows by code review only.
 
-## Polecenia
-
-```
-discordrive setup  [--data-dir DIR]          # kreator; ponownie = edycja         (npm run setup)
-discordrive start  [--data-dir DIR]          # serwer w tym oknie (alias: serve)  (npm start)
-discordrive doctor [--data-dir DIR]          # (npm run doctor) Node, zapis, konfiguracja, uprawnienia, port, bind, unit, health lokalnie i publicznie, token bota
-discordrive invite [--days N] [--note TXT]   # nowy jednorazowy kod zaproszenia (npm run invite)
-```
-
-Bez pytań (testy, automatyzacja):
+## Commands
 
 ```
-discordrive setup --yes --public-url https://dysk.example.com --host 10.0.0.2 --port 3020 \
-  --trust-proxy 10.0.0.1 --signup invite --bot-token-file ~/bot.token --systemd
-discordrive setup --yes --answers odpowiedzi.json      # te same klucze w JSON (publicUrl, host, port, trustProxy, signup, botTokenFile, systemd, …)
+discordrive setup  [--data-dir DIR] [--lang en|pl]   # wizard; again = edit                 (npm run setup)
+discordrive start  [--data-dir DIR]                  # server in this window (alias: serve) (npm start)
+discordrive doctor [--data-dir DIR]                  # (npm run doctor) Node, write access, config, permissions, port, bind, unit, local and public health, bot token
+discordrive invite [--days N] [--note TXT]           # new single-use invite code (npm run invite)
 ```
 
-`--bot-token` w linii poleceń jest odrzucany (trafiłby do historii powłoki).
-`--bot-token-file` przyjmuje sam token albo plik `.env` z linią `NAZWA=token`.
+`--lang en|pl` (or `DISCORDRIVE_LANG=pl`) works with every command and beats the saved language.
+Through npm: `npm run setup -- --lang pl`.
 
-## Pliki
+Without questions (tests, automation):
 
-- `<katalog danych>/config.json` (0600; katalog 0700; domyślnie wg platformy, wyżej): jedyne źródło konfiguracji serwera. Opis pól:
-  [.env.example](.env.example) (dokumentacja, serwer nie czyta zmiennych środowiskowych).
-- `<katalog danych>/ddn.db` (0600): baza serwera (zaszyfrowany log, sejfy, klucze publiczne
-  urządzeń, kody zaproszeń jako SHA-256, adresy załączników udostępnionych plików).
-- `~/.config/systemd/user/discordrive-next.service`: unit z pełną ścieżką do Node.
+```
+discordrive setup --yes --public-url https://drive.example.com --host 10.0.0.2 --port 3020 \
+  --trust-proxy 10.0.0.1 --signup invite --bot-token-file ~/bot.token --systemd --lang en
+discordrive setup --yes --answers answers.json      # the same keys in JSON (publicUrl, host, port, trustProxy, signup, botTokenFile, systemd, language, …)
+```
+
+`--bot-token` on the command line is refused (it would end up in the shell history).
+`--bot-token-file` accepts the bare token or an `.env` file with a `NAME=token` line.
+
+## Files
+
+- `<data dir>/config.json` (0600; dir 0700; default per platform, above): the only source of
+  the server configuration. Fields: [.env.example](.env.example) (documentation; the server
+  does not read environment variables).
+- `<data dir>/ddn.db` (0600): the server database (encrypted log, vaults, device public keys,
+  invite codes as SHA-256, attachment addresses of shared files).
+- `~/.config/systemd/user/discordrive-next.service`: unit with the full path to Node.
 
 ## Preview
 
-Publiczny preview projektu stoi za nginx z TLS (websocket przekazywany) i został
-skonfigurowany samym `discordrive setup` w trybie „serwer z domeną”.
+The public preview of the project runs behind nginx with TLS (websocket forwarded) and was
+configured with `discordrive setup` alone, in the “server with a domain” mode.
 
-## Testy
+## Tests
 
 ```
-npm test -w @ddv4/ddn-server     # kreator bez pytań i ze skryptowanym wejściem, zaproszenia, limity per IP, health, statyka, doctor
+npm test -w @ddv4/ddn-server     # wizard without questions and with scripted input (EN and PL), i18n key sets, invites, per-IP limits, health, static files, doctor
 ```

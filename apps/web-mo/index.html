@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="pl">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <base href="/">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<title>Dysk · discordrive-next</title>
+<title>Drive · discordrive-next</title>
 <style>
 /* Styl: house-v1 (jasny nordic / ciemny garden), tokeny przeniesione lokalnie.
  * Bez zewnętrznych fontów: prywatna aplikacja nie pobiera nic z obcych domen. */
@@ -249,6 +249,12 @@ dialog.player::backdrop { background: rgba(5, 10, 8, .66); }
 
 .tabs { display: none; }
 
+/* language switch (minimal; look comes from the frontend profile) */
+.lang { display: inline-flex; flex: none; border: 1px solid var(--border); border-radius: var(--radius-pill); overflow: hidden; background: var(--surface); }
+.lang button { border: 0; background: none; color: var(--muted); font: 600 var(--text-xs)/1 var(--font-body); padding: 7px 10px; cursor: pointer; }
+.lang button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); }
+.lang button:focus-visible { outline: none; box-shadow: var(--ring); }
+
 /* ── dodatki logiki (2026-10-09): te same tokeny i klasy co reszta ── */
 dialog.sheet { width: min(560px, 94vw); max-height: 92vh; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); color: var(--fg); box-shadow: var(--shadow-pop); }
 dialog.sheet::backdrop { background: rgba(5, 10, 8, .5); }
@@ -280,6 +286,8 @@ dialog.sheet::backdrop { background: rgba(5, 10, 8, .5); }
   .top { flex-wrap: wrap; gap: 8px; }
   .brand small { display: none; }
   .status { width: 100%; justify-content: flex-start; overflow-x: auto; scrollbar-width: none; }
+  .lang { margin-left: auto; }
+  .status { order: 3; }
   .status::-webkit-scrollbar { display: none; }
   .chip { height: 28px; }
   .app { padding: 14px 12px calc(92px + env(safe-area-inset-bottom)); }
@@ -351,217 +359,220 @@ dialog.sheet::backdrop { background: rgba(5, 10, 8, .5); }
 </svg>
 
 <header class="top">
-  <div class="brand"><span class="brand-mark"><svg class="i"><use href="#i-drive"/></svg></span>Dysk <small>discordrive-next</small></div>
+  <div class="brand"><span class="brand-mark"><svg class="i"><use href="#i-drive"/></svg></span><span data-i18n="brand.name">Drive</span> <small>discordrive-next</small></div>
   <div class="status" data-ddn="status" role="status" aria-live="polite"></div>
+  <div class="lang" role="group" data-ddn="lang" data-i18n-attr="aria-label=lang.label" aria-label="Language">
+    <button type="button" data-lang="en" aria-pressed="true" lang="en" title="English">EN</button><button type="button" data-lang="pl" aria-pressed="false" lang="pl" title="Polski">PL</button>
+  </div>
 </header>
 
-<!-- 1. Zakładanie konta -->
+<!-- 1. New account -->
 <main class="welcome" data-ddn="signed-out">
   <div>
-    <h1>Prywatny dysk na Twoich kanałach Discorda</h1>
-    <p class="lead">Pliki są szyfrowane tutaj, w przeglądarce, zanim cokolwiek opuści urządzenie. Discord przechowuje tylko zaszyfrowane fragmenty, a serwer tylko zaszyfrowany spis zmian.</p>
+    <h1 data-i18n="welcome.h1">A private drive on your own Discord channels</h1>
+    <p class="lead" data-i18n="welcome.lead"></p>
     <ol class="facts">
-      <li><span class="n">1</span><div><b>Konto i to urządzenie</b><span>Klucz konta powstaje w tej przeglądarce i w niej zostaje.</span></div></li>
-      <li><span class="n">2</span><div><b>Kanały z webhookami</b><span>Wystarczy jeden kanał. Przy 3–4 kanałach wysyłanie jest szybsze.</span></div></li>
-      <li><span class="n">3</span><div><b>Pliki i kolejne urządzenia</b><span>Telefon albo laptop domownika dołączasz parowaniem z 6-cyfrowym kodem.</span></div></li>
+      <li><span class="n">1</span><div><b data-i18n="welcome.fact1.b"></b><span data-i18n="welcome.fact1.s"></span></div></li>
+      <li><span class="n">2</span><div><b data-i18n="welcome.fact2.b"></b><span data-i18n="welcome.fact2.s"></span></div></li>
+      <li><span class="n">3</span><div><b data-i18n="welcome.fact3.b"></b><span data-i18n="welcome.fact3.s"></span></div></li>
     </ol>
   </div>
   <section class="card create" aria-labelledby="create-h">
-    <h2 id="create-h">Nowe konto</h2>
-    <label class="field" data-ddn-ui="server-field"><span>Serwer</span><input data-ddn="server" inputmode="url" autocomplete="off" spellcheck="false"></label>
-    <label class="field" data-ddn-ui="invite-field"><span>Kod zaproszenia</span><input data-ddn="invite" placeholder="ddn-inv-XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false"><span class="hint">Ta instancja przyjmuje nowe konta tylko z kodem od jej administratora.</span></label>
-    <label class="field"><span>Nazwa tego urządzenia</span><input data-ddn="device-name" placeholder="laptop" autocomplete="off"><span class="hint">Pokaże się na liście urządzeń, np. „laptop w salonie”.</span></label>
-    <p class="hint" data-ddn-ui="local-note" hidden>Ten dysk działa tylko na tym komputerze (localhost). Inne urządzenia dołączysz, gdy postawisz go na serwerze z adresem https.</p>
-    <div class="note warm"><svg class="i"><use href="#i-lock"/></svg><p><strong>Zestaw ratunkowy.</strong> Klucz konta istnieje tylko na Twoich urządzeniach, serwer go nie zna. Bez żadnego urządzenia i bez zestawu ratunkowego plików nie da się odczytać. Po podłączeniu pierwszego kanału pokażemy zestaw do zapisania lub wydrukowania; bez potwierdzenia nie przejdziesz dalej.</p></div>
-    <button class="btn primary block" data-ddn="create">Załóż konto</button>
+    <h2 id="create-h" data-i18n="create.h2">New account</h2>
+    <label class="field" data-ddn-ui="server-field"><span data-i18n="create.server">Server</span><input data-ddn="server" inputmode="url" autocomplete="off" spellcheck="false"></label>
+    <label class="field" data-ddn-ui="invite-field"><span data-i18n="create.invite">Invite code</span><input data-ddn="invite" placeholder="ddn-inv-XXXX-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false"><span class="hint" data-i18n="create.invite.hint"></span></label>
+    <label class="field"><span data-i18n="create.device">Name of this device</span><input data-ddn="device-name" data-i18n-attr="placeholder=create.device.ph" placeholder="laptop" autocomplete="off"><span class="hint" data-i18n="create.device.hint"></span></label>
+    <p class="hint" data-ddn-ui="local-note" data-i18n="create.local" hidden></p>
+    <div class="note warm"><svg class="i"><use href="#i-lock"/></svg><p data-i18n-html="create.kitnote"></p></div>
+    <button class="btn primary block" data-ddn="create" data-i18n="create.btn">Create account</button>
     <div class="join">
-      <b>Masz już konto na innym urządzeniu?</b>
-      <span>Ta przeglądarka pokaże kod QR. Zeskanuj go albo wklej na zalogowanym urządzeniu (Urządzenia → Sparuj), potem porównaj 6 cyfr.</span>
-      <div class="row-btns"><button class="btn" data-ddn="join-pair" type="button"><svg class="i"><use href="#i-phone"/></svg>Dołącz to urządzenie</button><button class="btn" data-ddn="join-kit-open" type="button"><svg class="i"><use href="#i-lock"/></svg>Mam zestaw ratunkowy</button></div>
+      <b data-i18n="join.b"></b>
+      <span data-i18n="join.s"></span>
+      <div class="row-btns"><button class="btn" data-ddn="join-pair" type="button"><svg class="i"><use href="#i-phone"/></svg><span data-i18n="join.pair">Join this device</span></button><button class="btn" data-ddn="join-kit-open" type="button"><svg class="i"><use href="#i-lock"/></svg><span data-i18n="join.kit">I have a rescue kit</span></button></div>
     </div>
   </section>
 </main>
 
 <div data-ddn="signed-in" hidden>
   <div class="app setup" data-tab="files" data-ddn-ui="app">
-    <!-- 3. Menedżer plików -->
+    <!-- 3. Files -->
     <main class="files" aria-labelledby="files-h">
-      <h2 class="sr" id="files-h">Pliki</h2>
-      <nav class="crumbs" aria-label="Ścieżka" data-ddn-ui="crumbs"></nav>
+      <h2 class="sr" id="files-h" data-i18n="files.h">Files</h2>
+      <nav class="crumbs" data-i18n-attr="aria-label=files.crumbs" data-ddn-ui="crumbs"></nav>
       <div class="toolbar">
         <div class="mk">
-          <label class="field"><span class="sr">Nazwa nowego folderu</span><input data-ddn="folder-name" placeholder="Nazwa nowego folderu" autocomplete="off"></label>
-          <button class="btn" data-ddn="mkdir"><svg class="i"><use href="#i-plus"/></svg>Folder</button>
+          <label class="field"><span class="sr" data-i18n="files.newFolder"></span><input data-ddn="folder-name" data-i18n-attr="placeholder=files.newFolder" autocomplete="off"></label>
+          <button class="btn" data-ddn="mkdir"><svg class="i"><use href="#i-plus"/></svg><span data-i18n="files.folderBtn">Folder</span></button>
         </div>
         <span class="grow"></span>
-        <label class="btn primary upload-btn"><svg class="i"><use href="#i-up"/></svg>Wyślij pliki<input type="file" multiple data-ddn="file" aria-label="Wybierz pliki do wysłania"></label>
+        <label class="btn primary upload-btn"><svg class="i"><use href="#i-up"/></svg><span data-i18n="files.upload">Upload files</span><input type="file" multiple data-ddn="file" data-i18n-attr="aria-label=files.upload.aria"></label>
       </div>
 
       <section class="card queue" data-ddn-ui="queue" hidden aria-live="polite">
-        <div class="queue-h"><b data-ddn-ui="queue-title">Wysyłanie</b><span class="muted" data-ddn-ui="queue-meta"></span><button class="iconbtn x" data-ddn-ui="queue-close" aria-label="Ukryj listę" hidden><svg class="i"><use href="#i-x"/></svg></button></div>
+        <div class="queue-h"><b data-ddn-ui="queue-title" data-i18n="queue.title">Uploading</b><span class="muted" data-ddn-ui="queue-meta"></span><button class="iconbtn x" data-ddn-ui="queue-close" data-i18n-attr="aria-label=queue.hide" hidden><svg class="i"><use href="#i-x"/></svg></button></div>
         <div class="bar"><i data-ddn-ui="queue-bar"></i></div>
         <ul class="qlist" data-ddn-ui="queue-list"></ul>
-        <p class="hint">Szyfrowanie i wysyłanie trwa tylko, dopóki ta karta jest otwarta. Zamknięcie karty przerywa kolejkę.</p>
+        <p class="hint" data-i18n="queue.note"></p>
       </section>
 
       <section class="card listcard">
-        <div class="list-head" aria-hidden="true"><span></span><span>Nazwa</span><span class="r">Rozmiar</span><span></span></div>
-        <ul class="rows" data-ddn="list" aria-label="Zawartość folderu"></ul>
-        <div class="empty" data-ddn-ui="empty" hidden><svg class="i"><use href="#i-folder"/></svg><b>Ten folder jest pusty</b><span>Wyślij pliki albo utwórz folder.</span></div>
+        <div class="list-head" aria-hidden="true"><span></span><span data-i18n="files.col.name">Name</span><span class="r" data-i18n="files.col.size">Size</span><span></span></div>
+        <ul class="rows" data-ddn="list" data-i18n-attr="aria-label=files.list"></ul>
+        <div class="empty" data-ddn-ui="empty" hidden><svg class="i"><use href="#i-folder"/></svg><b data-i18n="files.empty.b"></b><span data-i18n="files.empty.s"></span></div>
         <div class="pager">
           <span data-ddn="count"></span>
-          <div class="btns">
-            <button class="btn" data-ddn="prev" aria-label="Poprzednia strona"><svg class="i"><use href="#i-left"/></svg></button>
-            <button class="btn" data-ddn="next" aria-label="Następna strona"><svg class="i"><use href="#i-right"/></svg></button>
+          <div class="btns" data-ddn-ui="pager-btns">
+            <button class="btn" data-ddn="prev" data-i18n-attr="aria-label=files.prev"><svg class="i"><use href="#i-left"/></svg></button>
+            <button class="btn" data-ddn="next" data-i18n-attr="aria-label=files.next"><svg class="i"><use href="#i-right"/></svg></button>
           </div>
         </div>
       </section>
     </main>
 
     <aside class="side">
-      <!-- 2. Kanały (kreator, dopóki nie ma żadnego) -->
+      <!-- 2. Channels (wizard until there is one) -->
       <section class="card panel hooks-panel" aria-labelledby="hooks-h">
         <div class="wizard-head">
-          <div class="steps"><span class="done">1 · Konto</span><span class="cur">2 · Kanały</span><span>3 · Pliki</span></div>
-          <h1>Podłącz kanał na Discordzie</h1>
-          <p class="muted">Pliki trafiają jako zaszyfrowane fragmenty na kanały Twojego serwera Discord. Do startu wystarczy jeden kanał z webhookiem.</p>
+          <div class="steps"><span class="done" data-i18n="wiz.step1"></span><span class="cur" data-i18n="wiz.step2"></span><span data-i18n="wiz.step3"></span></div>
+          <h1 data-i18n="wiz.h1">Connect a Discord channel</h1>
+          <p class="muted" data-i18n="wiz.lead"></p>
           <ol class="howto" data-ddn="discord-guide">
-            <li><b>Konto Discord.</b> Wystarczy zwykłe, darmowe konto (aplikacja albo <b>discord.com/app</b> w przeglądarce).</li>
-            <li><b>Własny serwer.</b> Na liście serwerów po lewej kliknij <b>+</b> („Dodaj serwer”) → <b>Utwórz własny</b> → <b>Dla mnie i znajomych</b> → wpisz nazwę, np. „Mój dysk” → <b>Utwórz</b>. Serwer jest prywatny: nikt go nie widzi, dopóki kogoś nie zaprosisz.</li>
-            <li><b>Kanał.</b> Przy „Kanały tekstowe” kliknij <b>+</b> → nazwa np. <b>dysk-1</b> → <b>Utwórz kanał</b>. Na tym kanale będą zaszyfrowane fragmenty plików; nie pisz tam niczego.</li>
-            <li><b>Webhook.</b> Najedź na kanał → ikona zębatki (<b>Edytuj kanał</b>) → <b>Integracje</b> → <b>Webhooki</b> → <b>Nowy webhook</b> → kliknij go → <b>Kopiuj URL webhooka</b>.</li>
-            <li><b>Wklej adres poniżej</b> i kliknij <b>Dodaj</b>. Szybciej: powtórz kroki 3–5 dla kanałów <b>dysk-2</b>, <b>dysk-3</b> (i <b>dysk-4</b>). Discord ogranicza wysyłanie na każdy kanał osobno, więc 3–4 kanały to 3–4 razy szybsze wysyłanie. Kanały możesz dodać też później.</li>
+            <li data-i18n-html="wiz.g1"></li>
+            <li data-i18n-html="wiz.g2"></li>
+            <li data-i18n-html="wiz.g3"></li>
+            <li data-i18n-html="wiz.g4"></li>
+            <li data-i18n-html="wiz.g5"></li>
           </ol>
-          <p class="hint">Telefon: w aplikacji Discord zrobisz to samo (serwer → nazwa kanału → Ustawienia → Integracje → Webhooki), ale najwygodniej na komputerze.</p>
+          <p class="hint" data-i18n="wiz.phone"></p>
         </div>
-        <div class="panel-h"><h2 id="hooks-h">Kanały</h2><span class="count-badge" data-ddn-ui="hook-count"></span></div>
+        <div class="panel-h"><h2 id="hooks-h" data-i18n="hooks.h">Channels</h2><span class="count-badge" data-ddn-ui="hook-count"></span></div>
         <div class="slots" aria-hidden="true" data-ddn-ui="slots"><i></i><i></i><i></i><i></i></div>
-        <div class="slots-legend" aria-hidden="true"><span>1 wymagany</span><span>3–4 zalecane</span></div>
+        <div class="slots-legend" aria-hidden="true"><span data-i18n="hooks.req"></span><span data-i18n="hooks.rec"></span></div>
         <p class="advice" data-ddn="advice"></p>
         <ul class="hooks" data-ddn-ui="hooks"></ul>
         <div class="inline">
-          <label class="field"><span>URL webhooka</span><input data-ddn="webhook-url" type="password" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" spellcheck="false"></label>
-          <button class="btn primary" data-ddn="add-webhook">Dodaj</button>
+          <label class="field"><span data-i18n="hooks.url">Webhook URL</span><input data-ddn="webhook-url" type="password" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" spellcheck="false"></label>
+          <button class="btn primary" data-ddn="add-webhook" data-i18n="hooks.add">Add</button>
         </div>
-        <div class="note"><svg class="i"><use href="#i-lock"/></svg><p><strong>Adres webhooka to sekret, jak hasło.</strong> Kto go zna, może pisać na ten kanał i kasować wiadomości z niego. Zapisujemy go zaszyfrowany (serwer go nie widzi) i nie pokazujemy później. Nie wklejaj go na czatach ani w zrzutach ekranu.</p></div>
-        <div class="note warm"><svg class="i"><use href="#i-info"/></svg><p><strong>Dobrze wiedzieć.</strong> Przechowywanie plików na Discordzie jest niezgodne z jego regulaminem; Discord może usunąć wiadomości albo zablokować webhook lub konto. Trzymaj kopię ważnych plików gdzie indziej.</p></div>
+        <div class="note"><svg class="i"><use href="#i-lock"/></svg><p data-i18n-html="hooks.secret"></p></div>
+        <div class="note warm"><svg class="i"><use href="#i-info"/></svg><p data-i18n-html="hooks.tos"></p></div>
       </section>
 
-      <!-- 4. Urządzenia i parowanie -->
+      <!-- 4. Devices and pairing -->
       <section class="card panel devices-panel" aria-labelledby="dev-h">
-        <div class="panel-h"><h2 id="dev-h">Urządzenia</h2><span class="count-badge" data-ddn-ui="dev-count"></span></div>
+        <div class="panel-h"><h2 id="dev-h" data-i18n="dev.h">Devices</h2><span class="count-badge" data-ddn-ui="dev-count"></span></div>
         <ul class="devlist" data-ddn-ui="devices"></ul>
-        <p class="hint">Na nowym urządzeniu otwórz ten adres i wybierz „Dołącz to urządzenie”. Pokaże kod QR: zeskanuj go aparatem tego telefonu albo wklej tutaj tekst <span class="mono">ddn-pair1:…</span>, a potem porównaj 6 cyfr na obu ekranach.</p>
+        <p class="hint" data-i18n-html="dev.hint"></p>
         <div class="inline">
-          <label class="field"><span>Kod z nowego urządzenia</span><input data-ddn="pair-code" placeholder="ddn-pair1:…" autocomplete="off" spellcheck="false"></label>
-          <button class="btn" data-ddn="pair">Sparuj</button>
+          <label class="field"><span data-i18n="dev.code">Code from the new device</span><input data-ddn="pair-code" placeholder="ddn-pair1:…" autocomplete="off" spellcheck="false"></label>
+          <button class="btn" data-ddn="pair" data-i18n="dev.pair">Pair</button>
         </div>
         <div class="sas" data-ddn-ui="sas-box" hidden>
-          <span class="hint">Kod do porównania</span>
+          <span class="hint" data-i18n="dev.sas"></span>
           <span class="sas-code" data-ddn="pair-sas"></span>
-          <span class="hint">Na nowym urządzeniu musi być dokładnie ten sam kod. Jeśli jest inny, ktoś się podszywa: odwołaj to urządzenie.</span>
+          <span class="hint" data-i18n="dev.sas.hint"></span>
         </div>
-        <div class="note warm"><svg class="i"><use href="#i-lock"/></svg><p><strong>Zestaw ratunkowy</strong> odtworzy konto, gdy stracisz wszystkie urządzenia. <button class="btn" data-ddn="kit-show" type="button" style="margin-top:8px">Pokaż zestaw ratunkowy</button></p></div>
+        <div class="note warm"><svg class="i"><use href="#i-lock"/></svg><p><span data-i18n-html="dev.kit"></span> <button class="btn" data-ddn="kit-show" type="button" style="margin-top:8px" data-i18n="dev.kitShow">Show rescue kit</button></p></div>
       </section>
 
-      <!-- 4b. Udostępnione pliki -->
+      <!-- 4b. Shared files -->
       <section class="card panel shares-panel" aria-labelledby="sh-h" data-ddn-ui="shares-panel" hidden>
-        <div class="panel-h"><h2 id="sh-h">Udostępnione</h2><span class="count-badge" data-ddn-ui="share-count"></span></div>
+        <div class="panel-h"><h2 id="sh-h" data-i18n="sh.h">Shared</h2><span class="count-badge" data-ddn-ui="share-count"></span></div>
         <ul class="devlist" data-ddn="shares"></ul>
-        <p class="hint">Wyłączenie linku zatrzymuje nowych odbiorców. Kto już pobrał plik albo zna adresy fragmentów i klucz, zachowa dostęp, dopóki fragmenty istnieją.</p>
+        <p class="hint" data-i18n="sh.hint"></p>
       </section>
 
-      <!-- 5. Uczciwie o ograniczeniach -->
+      <!-- 5. Honest about the limits -->
       <section class="card panel limits-panel" aria-labelledby="lim-h">
-        <div class="panel-h"><h2 id="lim-h">Jak to działa w przeglądarce</h2></div>
+        <div class="panel-h"><h2 id="lim-h" data-i18n="lim.h">How it works in the browser</h2></div>
         <ul class="limits">
-          <li><b>Praca w tle tylko przy otwartej karcie</b>Wysyłanie, pobieranie i synchronizacja zatrzymują się po zamknięciu karty.</li>
-          <li><b>Przeglądarka to pamięć podręczna</b>Pliki są na Discordzie, spis na serwerze, tu jest tylko kopia. Wyczyszczenie danych witryny nie usuwa plików, ale usuwa klucz z tego urządzenia.</li>
-          <li><b>Jedna karta główna</b>Spis na dysku prowadzi jedna karta. Pozostałe są pomocnicze: działają tak samo, tylko wolniej startują.</li>
+          <li><b data-i18n="lim.1.b"></b><span data-i18n="lim.1"></span></li>
+          <li><b data-i18n="lim.2.b"></b><span data-i18n="lim.2"></span></li>
+          <li><b data-i18n="lim.3.b"></b><span data-i18n="lim.3"></span></li>
         </ul>
       </section>
     </aside>
   </div>
 
-  <nav class="tabs" role="tablist" aria-label="Widok">
-    <button class="tab" role="tab" data-tab="files" aria-selected="true"><svg class="i"><use href="#i-folder"/></svg>Pliki</button>
-    <button class="tab" role="tab" data-tab="hooks" aria-selected="false"><svg class="i"><use href="#i-hook"/></svg>Kanały</button>
-    <button class="tab" role="tab" data-tab="devices" aria-selected="false"><svg class="i"><use href="#i-phone"/></svg>Urządzenia</button>
+  <nav class="tabs" role="tablist" data-i18n-attr="aria-label=tabs.label">
+    <button class="tab" role="tab" data-tab="files" aria-selected="true"><svg class="i"><use href="#i-folder"/></svg><span data-i18n="tabs.files">Files</span></button>
+    <button class="tab" role="tab" data-tab="hooks" aria-selected="false"><svg class="i"><use href="#i-hook"/></svg><span data-i18n="tabs.hooks">Channels</span></button>
+    <button class="tab" role="tab" data-tab="devices" aria-selected="false"><svg class="i"><use href="#i-phone"/></svg><span data-i18n="tabs.devices">Devices</span></button>
   </nav>
 </div>
 
 <dialog class="player" data-ddn-ui="player-dialog" aria-labelledby="player-title">
-  <div class="player-h"><b id="player-title" data-ddn-ui="player-title"></b><button class="iconbtn" data-ddn-ui="player-close" aria-label="Zamknij odtwarzacz"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <div class="player-h"><b id="player-title" data-ddn-ui="player-title"></b><button class="iconbtn" data-ddn-ui="player-close" data-i18n-attr="aria-label=player.close"><svg class="i"><use href="#i-x"/></svg></button></div>
   <video data-ddn="player" controls muted playsinline></video>
 </dialog>
 
-<!-- Zestaw ratunkowy -->
+<!-- Rescue kit -->
 <dialog class="sheet" data-ddn="kit-dialog" aria-labelledby="kit-h">
   <div class="sheet-b">
-    <h2 id="kit-h">Zestaw ratunkowy</h2>
-    <p class="muted">To jedyna droga do plików, gdy stracisz wszystkie urządzenia. Zawiera klucz konta i dostęp do kanału ze spisem. Trzymaj go jak hasło: na papierze albo w menedżerze haseł, nie na czacie.</p>
+    <h2 id="kit-h" data-i18n="kit.h">Rescue kit</h2>
+    <p class="muted" data-i18n="kit.lead"></p>
     <div class="qr" data-ddn="kit-qr"></div>
-    <label class="field"><span>Kod (do skopiowania)</span><textarea class="codebox" data-ddn="kit-text" readonly rows="4" spellcheck="false"></textarea></label>
+    <label class="field"><span data-i18n="kit.code">Code (to copy)</span><textarea class="codebox" data-ddn="kit-text" readonly rows="4" spellcheck="false"></textarea></label>
     <div class="row-btns no-print">
-      <button class="btn" data-ddn="kit-copy" type="button">Kopiuj</button>
-      <button class="btn" data-ddn="kit-download" type="button"><svg class="i"><use href="#i-down"/></svg>Pobierz plik</button>
-      <button class="btn" data-ddn="kit-print" type="button">Drukuj</button>
+      <button class="btn" data-ddn="kit-copy" type="button" data-i18n="kit.copy">Copy</button>
+      <button class="btn" data-ddn="kit-download" type="button"><svg class="i"><use href="#i-down"/></svg><span data-i18n="kit.download">Download file</span></button>
+      <button class="btn" data-ddn="kit-print" type="button" data-i18n="kit.print">Print</button>
     </div>
-    <label class="check no-print"><input type="checkbox" data-ddn="kit-ack"><span>Zapisałem zestaw ratunkowy w bezpiecznym miejscu. Rozumiem, że bez niego i bez urządzeń plików nie da się odczytać.</span></label>
-    <div class="row-btns no-print"><button class="btn primary" data-ddn="kit-done" type="button" disabled>Gotowe</button></div>
+    <label class="check no-print"><input type="checkbox" data-ddn="kit-ack"><span data-i18n="kit.ack"></span></label>
+    <div class="row-btns no-print"><button class="btn primary" data-ddn="kit-done" type="button" disabled data-i18n="kit.done">Done</button></div>
   </div>
 </dialog>
 
-<!-- Dołączanie tego urządzenia: kod QR + 6 cyfr -->
+<!-- Join this device: QR code + 6 digits -->
 <dialog class="sheet" data-ddn="join-dialog" aria-labelledby="join-h">
   <div class="sheet-b">
-    <h2 id="join-h">Dołącz to urządzenie</h2>
-    <label class="field" data-ddn-ui="join-name-field"><span>Nazwa tego urządzenia</span><input data-ddn="join-name" placeholder="telefon" autocomplete="off"></label>
+    <h2 id="join-h" data-i18n="joinD.h">Join this device</h2>
+    <label class="field" data-ddn-ui="join-name-field"><span data-i18n="joinD.name">Name of this device</span><input data-ddn="join-name" data-i18n-attr="placeholder=joinD.name.ph" autocomplete="off"></label>
     <div data-ddn-ui="join-offer" hidden>
-      <p class="muted">Na zalogowanym urządzeniu: Urządzenia → zeskanuj kod albo wklej tekst poniżej → Sparuj.</p>
+      <p class="muted" data-i18n="joinD.offer"></p>
       <div class="qr" data-ddn="join-qr"></div>
-      <label class="field"><span>Kod parowania</span><textarea class="codebox" data-ddn="join-offer" readonly rows="3" spellcheck="false"></textarea></label>
-      <p class="hint">Czekam na drugie urządzenie… Kod jest ważny 10 minut.</p>
+      <label class="field"><span data-i18n="joinD.code">Pairing code</span><textarea class="codebox" data-ddn="join-offer" readonly rows="3" spellcheck="false"></textarea></label>
+      <p class="hint" data-i18n="joinD.wait"></p>
     </div>
     <div class="sas" data-ddn-ui="join-sas-box" hidden>
-      <span class="hint">Kod do porównania</span>
+      <span class="hint" data-i18n="joinD.sas"></span>
       <span class="sas-code" data-ddn="join-sas"></span>
-      <span class="hint">Czy na drugim urządzeniu jest dokładnie ten sam kod?</span>
-      <div class="row-btns" style="justify-content:center"><button class="btn primary" data-ddn="join-confirm" type="button">Tak, ten sam</button><button class="btn" data-ddn="join-reject" type="button">Nie, inny</button></div>
+      <span class="hint" data-i18n="joinD.sas.q"></span>
+      <div class="row-btns" style="justify-content:center"><button class="btn primary" data-ddn="join-confirm" type="button" data-i18n="joinD.yes">Yes, the same</button><button class="btn" data-ddn="join-reject" type="button" data-i18n="joinD.no">No, different</button></div>
     </div>
-    <div class="row-btns" data-ddn-ui="join-actions"><button class="btn primary" data-ddn="join-start" type="button">Pokaż kod</button><button class="btn" data-ddn="join-cancel" type="button">Anuluj</button></div>
+    <div class="row-btns" data-ddn-ui="join-actions"><button class="btn primary" data-ddn="join-start" type="button" data-i18n="joinD.show">Show code</button><button class="btn" data-ddn="join-cancel" type="button" data-i18n="joinD.cancel">Cancel</button></div>
   </div>
 </dialog>
 
-<!-- Dołączanie z zestawu ratunkowego -->
+<!-- Join from a rescue kit -->
 <dialog class="sheet" data-ddn="rescue-dialog" aria-labelledby="rescue-h">
   <div class="sheet-b">
-    <h2 id="rescue-h">Odtwórz z zestawu ratunkowego</h2>
-    <label class="field"><span>Kod zestawu (<span class="mono">ddn-kit1:…</span>)</span><textarea class="codebox" data-ddn="rescue-text" rows="4" spellcheck="false"></textarea></label>
-    <label class="field"><span>Nazwa tego urządzenia</span><input data-ddn="rescue-name" placeholder="laptop" autocomplete="off"></label>
-    <div class="row-btns"><button class="btn primary" data-ddn="rescue-go" type="button">Dołącz</button><button class="btn" data-ddn="rescue-cancel" type="button">Anuluj</button></div>
+    <h2 id="rescue-h" data-i18n="rescueD.h">Restore from a rescue kit</h2>
+    <label class="field"><span data-i18n-html="rescueD.code"></span><textarea class="codebox" data-ddn="rescue-text" rows="4" spellcheck="false"></textarea></label>
+    <label class="field"><span data-i18n="joinD.name">Name of this device</span><input data-ddn="rescue-name" data-i18n-attr="placeholder=create.device.ph" autocomplete="off"></label>
+    <div class="row-btns"><button class="btn primary" data-ddn="rescue-go" type="button" data-i18n="rescueD.go">Join</button><button class="btn" data-ddn="rescue-cancel" type="button" data-i18n="joinD.cancel">Cancel</button></div>
   </div>
 </dialog>
 
-<!-- Link do udostępnienia -->
+<!-- Share link -->
 <dialog class="sheet" data-ddn="share-dialog" aria-labelledby="share-h">
   <div class="sheet-b">
-    <h2 id="share-h">Link do pliku</h2>
+    <h2 id="share-h" data-i18n="shareD.h">Link to file</h2>
     <p class="muted" data-ddn-ui="share-name"></p>
-    <label class="field"><span>Link (zawiera klucz tego jednego pliku, po znaku #)</span><textarea class="codebox" data-ddn="share-link" readonly rows="3" spellcheck="false"></textarea></label>
-    <div class="note"><svg class="i"><use href="#i-info"/></svg><p>Kto ma link, pobierze i odszyfruje ten plik. Serwer nie zna klucza ani nazwy. Wyłączenie linku zatrzyma nowych odbiorców, ale nie cofnie dostępu komuś, kto już ma adresy i klucz.</p></div>
-    <div class="row-btns"><button class="btn primary" data-ddn="share-copy" type="button">Kopiuj link</button><button class="btn" data-ddn="share-close" type="button">Zamknij</button></div>
+    <label class="field"><span data-i18n="shareD.link"></span><textarea class="codebox" data-ddn="share-link" readonly rows="3" spellcheck="false"></textarea></label>
+    <div class="note"><svg class="i"><use href="#i-info"/></svg><p data-i18n="shareD.note"></p></div>
+    <div class="row-btns"><button class="btn primary" data-ddn="share-copy" type="button" data-i18n="shareD.copy">Copy link</button><button class="btn" data-ddn="share-close" type="button" data-i18n="shareD.close">Close</button></div>
   </div>
 </dialog>
 
-<!-- Odbiorca udostępnionego pliku -->
+<!-- Share recipient -->
 <main class="share-page" data-ddn="share-view" hidden>
   <section class="card create">
-    <h2>Udostępniony plik</h2>
-    <p class="muted">Plik jest zaszyfrowany. Odszyfrowanie dzieje się w tej przeglądarce kluczem z linku, serwer go nie zna.</p>
+    <h2 data-i18n="shareV.h">Shared file</h2>
+    <p class="muted" data-i18n="shareV.lead"></p>
     <ul class="devlist"><li><svg class="i"><use href="#i-file"/></svg><span class="dname" data-ddn="share-file-name">…</span><span class="when" data-ddn="share-file-size"></span></li></ul>
     <div class="bar"><i data-ddn-ui="share-bar"></i></div>
-    <button class="btn primary block" data-ddn="share-get" type="button" disabled><svg class="i"><use href="#i-down"/></svg>Pobierz</button>
+    <button class="btn primary block" data-ddn="share-get" type="button" disabled><svg class="i"><use href="#i-down"/></svg><span data-i18n="shareV.get">Download</span></button>
     <p class="hint" data-ddn="share-state"></p>
   </section>
 </main>

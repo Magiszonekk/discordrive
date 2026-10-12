@@ -105,6 +105,6 @@ export class LogObserver {
 
   /** UI text (Q10). */
   static message(a: InvalidOpAlert): string {
-    return `Urządzenie ${a.deviceId} wysłało ${a.count} błędnych operacji (pominięte, nic nie zginęło). Zaktualizuj na nim aplikację.`;
+    return `Device ${a.deviceId} sent ${a.count} invalid operations (skipped, nothing was lost). Update the app on that device.`;
   }
 }

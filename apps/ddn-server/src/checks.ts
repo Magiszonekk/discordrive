@@ -3,6 +3,7 @@
 import { createServer } from "node:net";
 import { networkInterfaces } from "node:os";
 import { checkBotToken } from "@ddv4/metadata-client/node";
+import { t } from "./i18n.js";
 
 export type PortState = { state: "free" } | { state: "ours"; version: string } | { state: "busy"; code: string };
 
@@ -36,7 +37,7 @@ export async function health(base: string, timeoutMs = 4000): Promise<{ ok: true
     const r = await fetch(`${base}/v1/health`, { signal: AbortSignal.timeout(timeoutMs), redirect: "manual" });
     if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
     const body = (await r.json()) as Record<string, unknown>;
-    if (body.service !== "discordrive-next") return { ok: false, error: "odpowiada inna usługa" };
+    if (body.service !== "discordrive-next") return { ok: false, error: t("c.otherService") };
     return { ok: true, body };
   } catch (e) {
     const err = e as Error & { cause?: { code?: string } };
@@ -63,8 +64,8 @@ export async function validateBotToken(token: string, apiOrigin?: string): Promi
   try {
     const r = await checkBotToken(token, apiOrigin);
     if (r.ok) return r;
-    return { ok: false, why: r.status === 401 ? "Discord odrzucił token (401)" : `Discord odpowiedział HTTP ${r.status}` };
+    return { ok: false, why: r.status === 401 ? t("c.tok401") : t("c.tokHttp", { status: r.status }) };
   } catch (e) {
-    return { ok: false, why: `brak połączenia z Discordem (${(e as Error).name})` };
+    return { ok: false, why: t("c.tokNet", { name: (e as Error).name }) };
   }
 }

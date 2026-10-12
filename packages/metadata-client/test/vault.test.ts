@@ -91,7 +91,7 @@ describe("webhook vault (koncept §3.2)", () => {
     v.webhooks.push(hook("2", "c1"));
     const shared = vaultAdvice(v);
     expect(shared).toMatchObject({ channels: 1, sharedChannels: ["c1"] });
-    expect(shared.message).toMatch(/osobne kanały/);
+    expect(shared.message).toMatch(/separate channels/);
     v.webhooks.push(hook("3", "c2"), hook("4", "c3"));
     expect(vaultAdvice(v)).toMatchObject({ ok: true, suggestMore: false, channels: 3 });
   });

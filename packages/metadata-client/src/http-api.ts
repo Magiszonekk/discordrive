@@ -95,7 +95,7 @@ export interface ServerDevice {
 }
 
 /** Server health (GET /v1/health, no auth). */
-export async function getHealth(baseUrl: string, f: typeof fetch = defaultFetch): Promise<{ ok: boolean; version: string; mode: string; rulesVersion: number; uptimeS: number; signup: string; shares: boolean }> {
+export async function getHealth(baseUrl: string, f: typeof fetch = defaultFetch): Promise<{ ok: boolean; version: string; mode: string; rulesVersion: number; uptimeS: number; signup: string; shares: boolean; language?: string }> {
   const r = await f(`${baseUrl}/v1/health`);
   if (!r.ok) throw new ServerError(r.status, "health");
   return r.json() as never;
@@ -191,8 +191,8 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
 
   // VaultStore (accountId comes from the session; the argument is ignored)
   async get(): Promise<SealedVault | null> {
-    const r = await this.call<{ revision: number; blob: string }>("GET", "/v1/vault", undefined, [404]);
-    return r.status === 404 ? null : { revision: r.body.revision, blob: fromBase64(r.body.blob) };
+    const r = await this.call<{ revision: number; blob: string | null }>("GET", "/v1/vault", undefined, [404]);
+    return r.status === 404 || r.body.blob === null ? null : { revision: r.body.revision, blob: fromBase64(r.body.blob) };
   }
   async put(_accountId: string, expectedRevision: number, next: SealedVault): Promise<VaultPutResult> {
     const r = await this.call<{ status: "ok" } | { status: "conflict"; current: { revision: number; blob: string } | null }>(

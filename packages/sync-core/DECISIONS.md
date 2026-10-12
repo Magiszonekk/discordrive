@@ -246,3 +246,37 @@ Decyzje wykonawcze, których koncept i zlecenie nie przesądzały. Żadna nie zm
 - **Instrukcja Discorda w aplikacji** (kreator kanałów): 5 kroków od konta przez własny
   serwer, kanał i webhook (gdzie kliknąć), że URL webhooka to sekret, czemu 3–4 kanały, oraz
   uwaga o regulaminie Discorda (koncept §6.5 „Ryzyko”: informować przy zakładaniu konta).
+
+### Rozstrzygnięte samodzielnie 2026-10-12 (zlecenie: angielski domyślnie + przełącznik PL)
+- **Kolejność języka w przeglądarce**: wybór użytkownika (`localStorage` `ddn.lang`) >
+  `language` instancji (`config.json`, przekazany w `/config.js` jako `DDN_CONFIG.language` i w
+  `/v1/health`) > angielski. `navigator.language` celowo nie jest brany pod uwagę (test w
+  Chromium z `locale: pl-PL` sprawdza, że start jest po angielsku).
+- **Przełącznik EN/PL** jest w nagłówku (widoczny na ekranie startowym i w aplikacji), działa
+  bez przeładowania: statyczne teksty przez `data-i18n*`, dynamiczne przez ponowny render.
+  Odbiorca linku `/s/…` też ma przełącznik (ten sam nagłówek).
+- **Kolejność języka w CLI**: `--lang` > `DISCORDRIVE_LANG` > `language` z `config.json` >
+  angielski. Kreator pyta o język jako pierwszy (Enter = zapisany albo English); `--yes` bez
+  `--lang` zostawia zapisany (nowa instancja: `en`). Tryb polski akceptuje `t`/`tak`/`nie`,
+  ale zawsze pokazuje `[Y/n]` / `[y/N]`; tryb angielski nie akceptuje `t`.
+- **Teksty bibliotek (`@ddv4/metadata-client`) po angielsku** (`vaultAdvice().message`,
+  `LogObserver.message`, domyślna nazwa urządzenia `device`). Aplikacja przeglądarkowa składa
+  porady o kanałach z pól (`ok`, `suggestMore`, `channels`, `sharedChannels`) we własnym
+  słowniku, więc tekst z biblioteki służy tylko CLI/logom.
+- **Kody błędów serwera** (`invite_required`, `signup_closed`, `rate_limited`, …) zostają w
+  API jako kody; UI tłumaczy znane kody i dopisuje kod w nawiasie (łatwiej szukać w zgłoszeniu).
+- **`GET /v1/vault` dla nowego konta: 200 `{revision: 0, blob: null}`** zamiast 404 (404
+  wyglądał w konsoli przeglądarki jak błąd). Klient przyjmuje obie odpowiedzi (stary serwer z
+  404 dalej działa).
+- **Nagłówek: mniej technicznych etykiet.** Zamiast „karta główna/pomocnicza” i „pamięć
+  podręczna/trwała” jest jeden chip „synced/zsynchronizowano” ze szczegółami w tooltipie;
+  osobny chip pojawia się tylko w karcie pomocniczej („open in another tab” / „otwarte w innej
+  karcie”), bo ona startuje wolniej. Stan karty dla testów: `data-tab-role` na `[data-ddn=status]`.
+- **Paginacja ‹ › ukryta przy jednej stronie** (≤ 50 pozycji); licznik pozycji zostaje.
+- **Instrukcja Discorda po angielsku** wg aktualnych nazw z dokumentacji/supportu Discorda
+  (Add a Server → Create My Own → For me and my friends → Create; Text Channels + → Create
+  Channel; Edit Channel → Integrations → Webhooks → New Webhook (pierwszy raz: Create Webhook)
+  → Copy Webhook URL). Źródła: support.discord.com „How do I create a server?”, „Intro to
+  Webhooks”, „Server Integrations Page”. Wersja polska dostała tę samą uwagę o „Utwórz webhook”.
+- **README**: `README.md` po angielsku (Quick start na górze), `README.pl.md` po polsku, linki w
+  obie strony; stara dokumentacja ddv4 tylko w `README.md`.

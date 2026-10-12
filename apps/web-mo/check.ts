@@ -5,7 +5,9 @@
 //
 // Against a deployed instance: DDN_E2E_URL=https://… DDN_E2E_INVITE=ddn-inv-…
 // DDN_E2E_WEBHOOK_FILES=a.url:b.url (Discord is real then). DDN_E2E_SHOTS=dir
-// saves screenshots.
+// saves screenshots. DDN_E2E_LANG=en|pl (default en): the UI language the run
+// switches to (English is the default; pl is picked with the header switch).
+// DDN_E2E_SCHEME=light|dark: emulated prefers-color-scheme (default light).
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -20,6 +22,13 @@ execFileSync(process.execPath, [join(here, "..", "..", "node_modules", "tsx", "d
 const dist = join(here, "dist");
 const remote = process.env.DDN_E2E_URL?.replace(/\/$/, "");
 const shotDir = process.env.DDN_E2E_SHOTS;
+const LANG = process.env.DDN_E2E_LANG === "pl" ? "pl" : "en";
+const SCHEME = process.env.DDN_E2E_SCHEME === "dark" ? "dark" : "light";
+/** Language-dependent texts the run waits for. */
+const L = {
+  en: { one: /^1 item$/, four: /^4 items$/, of: (n: number) => new RegExp(`of ${n}`), range: (a: number, b: number, n: number) => new RegExp(`${a}–${b} of ${n}`), uploaded: "Uploaded", dead: /does not work/, kb: /^\d+\.\d KB$/ },
+  pl: { one: /^1 pozycja$/, four: /^4 pozycje$/, of: (n: number) => new RegExp(`z ${n}`), range: (a: number, b: number, n: number) => new RegExp(`${a}–${b} z ${n}`), uploaded: "Wysłano", dead: /nie działa/, kb: /^\d+,\d KB$/ },
+}[LANG];
 if (shotDir) mkdirSync(shotDir, { recursive: true });
 
 let fake: FakeDiscord | null = null;
@@ -86,11 +95,21 @@ const count = (p: Page, re: RegExp) => p.waitForFunction((src) => new RegExp(src
 let ok = false;
 const r: Record<string, unknown> = { base };
 try {
-  const ctx = await browser.newContext({ acceptDownloads: true, viewport: { width: 1280, height: 860 } });
+  // Polish browser locale on purpose: the app must still start in English (no navigator.language).
+  const ctx = await browser.newContext({ acceptDownloads: true, viewport: { width: 1280, height: 860 }, colorScheme: SCHEME, locale: "pl-PL" });
   await ctx.addInitScript({ content: "window.__name = (f) => f;" }); // tsx wraps named fns passed to evaluate()
   const p = await newPage(ctx);
   await p.goto(base);
   await p.waitForSelector("body[data-ready='1']");
+  // i18n: English by default (whatever navigator.language says), switch without reload, choice kept.
+  r.defaultLang = await p.evaluate(() => ({ html: document.documentElement.lang, h1: document.querySelector(".welcome h1")?.textContent, nav: navigator.language }));
+  if (LANG === "pl") {
+    await p.click("[data-ddn=lang] [data-lang=pl]");
+    await p.waitForFunction(() => document.documentElement.lang === "pl");
+    await p.reload();
+    await p.waitForSelector("body[data-ready='1']");
+  }
+  r.lang = await p.evaluate(() => ({ html: document.documentElement.lang, h1: document.querySelector(".welcome h1")?.textContent, pressed: document.querySelector("[data-ddn=lang] [aria-pressed=true]")?.getAttribute("data-lang"), title: document.title }));
   r.serverFieldHidden = await p.isHidden("[data-ddn-ui=server-field]");
   r.inviteFieldShown = await p.isVisible("[data-ddn=invite]");
   await shot(p, "01-welcome");
@@ -104,7 +123,8 @@ try {
   await p.fill("[data-ddn=invite]", invite);
   await p.click("[data-ddn=create]");
   await p.waitForSelector("[data-ddn=signed-in]:not([hidden])");
-  r.mainTab = (await p.textContent("[data-ddn=status]"))?.includes("karta główna") ?? false;
+  await p.waitForSelector("[data-ddn=status][data-tab-role]");
+  r.mainTab = (await p.getAttribute("[data-ddn=status]", "data-tab-role")) === "main";
 
   // 2. channel wizard; the rescue kit is forced right after the first channel
   step("channels");
@@ -136,7 +156,8 @@ try {
   step("upload");
   await p.fill("[data-ddn=folder-name]", "Wakacje");
   await p.click("[data-ddn=mkdir]");
-  await count(p, /^1 pozycja$/);
+  await count(p, L.one);
+  r.pagerHiddenOnOnePage = await p.isHidden("[data-ddn=next]");
   const progress: string[] = [];
   await p.exposeFunction("__progress", (s: string) => void progress.push(s));
   await p.evaluate(() => {
@@ -146,8 +167,9 @@ try {
     }).observe(q, { childList: true, characterData: true, subtree: true });
   });
   await p.setInputFiles("[data-ddn=file]", [doc, video, big]);
-  await p.waitForFunction(() => document.querySelector("[data-ddn-ui=queue-title]")?.textContent === "Wysłano", null, { timeout: 300_000 });
-  await count(p, /^4 pozycji$/);
+  await p.waitForFunction((done) => document.querySelector("[data-ddn-ui=queue-title]")?.textContent === done, L.uploaded, { timeout: 300_000 });
+  await count(p, L.four);
+  r.docSize = await p.locator("[data-ddn=row]", { hasText: "notatki.txt" }).locator(".size").textContent();
   const bigSteps = [...new Set(progress.filter((x) => x.startsWith("duzy.bin:") && /%$/.test(x)))];
   r.progressBigFile = bigSteps;
   await shot(p, "04-uploaded");
@@ -193,10 +215,11 @@ try {
   });
   await p.reload();
   await p.waitForSelector("body[data-ready='1']");
-  await count(p, /z 64/);
+  await count(p, L.of(64));
+  r.pagerShownOnManyPages = await p.isVisible("[data-ddn=next]");
   const page1 = await p.$$eval("[data-ddn=row]", (e) => e.length);
   await p.click("[data-ddn=next]");
-  await count(p, /51–64 z 64/);
+  await count(p, L.range(51, 64, 64));
   r.paging = { page1, page2: await p.$$eval("[data-ddn=row]", (e) => e.length), count: await p.textContent("[data-ddn=count]") };
 
   // 7. second tab (secondary, in-memory): keyset paging there too + live update over the websocket
@@ -204,18 +227,19 @@ try {
   const p2 = await newPage(ctx);
   await p2.goto(base);
   await p2.waitForSelector("body[data-ready='1']");
-  await count(p2, /z 64/);
-  const st2 = { secondary: (await p2.textContent("[data-ddn=status]"))?.includes("karta pomocnicza") ?? false, rows: await p2.$$eval("[data-ddn=row]", (e) => e.length), page2: 0, liveUpdate: false };
+  await count(p2, L.of(64));
+  await p2.waitForSelector("[data-ddn=status][data-tab-role]");
+  const st2 = { secondary: (await p2.getAttribute("[data-ddn=status]", "data-tab-role")) === "secondary", rows: await p2.$$eval("[data-ddn=row]", (e) => e.length), page2: 0, liveUpdate: false };
   await p2.click("[data-ddn=next]");
-  await count(p2, /51–64 z 64/);
+  await count(p2, L.range(51, 64, 64));
   st2.page2 = await p2.$$eval("[data-ddn=row]", (e) => e.length);
   await p2.fill("[data-ddn=folder-name]", "Z drugiej karty");
   await p2.click("[data-ddn=mkdir]");
-  await count(p2, /z 65/).catch(async (e) => {
+  await count(p2, L.of(65)).catch(async (e) => {
     console.error("p2 count", await p2.textContent("[data-ddn=count]"), await p2.textContent("[data-ddn-ui=toasts]"));
     throw e;
   });
-  await count(p, /z 65/).catch(async (e) => {
+  await count(p, L.of(65)).catch(async (e) => {
     console.error("p count", await p.textContent("[data-ddn=count]"), await p.textContent("[data-ddn=status]"));
     throw e;
   });
@@ -234,7 +258,9 @@ try {
     const link = await p.inputValue("[data-ddn=share-link]");
     await shot(p, "06-share-link");
     await p.click("[data-ddn=share-close]");
-    const sctx = await browser.newContext({ acceptDownloads: true });
+    const sctx = await browser.newContext({ acceptDownloads: true, colorScheme: SCHEME });
+    // The recipient's browser has its own language choice; use the run's language there too.
+    await sctx.addInitScript({ content: `try { localStorage.setItem("ddn.lang", ${JSON.stringify(LANG)}) } catch {}` });
     const sp = await newPage(sctx);
     await sp.goto(link);
     await sp.waitForFunction(() => document.querySelector("[data-ddn=share-file-name]")?.textContent === "notatki.txt", null, { timeout: 30_000 });
@@ -249,7 +275,7 @@ try {
     await p.waitForFunction(() => document.querySelectorAll("[data-ddn=shares] li").length === 0);
     const sp2 = await newPage(sctx);
     await sp2.goto(link);
-    await sp2.waitForFunction(() => /nie działa/.test(document.querySelector("[data-ddn=share-state]")?.textContent ?? ""), null, { timeout: 15_000 });
+    await sp2.waitForFunction((re) => new RegExp(re).test(document.querySelector("[data-ddn=share-state]")?.textContent ?? ""), L.dead.source, { timeout: 15_000 });
     share.revokedStopsNew = true;
     r.share = share;
     await sctx.close();
@@ -264,8 +290,9 @@ try {
     isMobile: true,
     hasTouch: true,
     userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36",
+    colorScheme: SCHEME,
   });
-  await phone.addInitScript({ content: "window.__name = (f) => f;" });
+  await phone.addInitScript({ content: `window.__name = (f) => f; try { localStorage.setItem("ddn.lang", ${JSON.stringify(LANG)}) } catch {}` });
   const m = await newPage(phone);
   await m.goto(base);
   await m.waitForSelector("body[data-ready='1']");
@@ -287,7 +314,7 @@ try {
   await shot(m, "10-phone-sas");
   await m.click("[data-ddn=join-confirm]");
   await m.waitForSelector("[data-ddn=signed-in]:not([hidden])", { timeout: 30_000 });
-  await count(m, /z 65/);
+  await count(m, L.of(65));
   r.phoneCount = await m.textContent("[data-ddn=count]");
   r.phoneNoKitPrompt = !(await m.isVisible("[data-ddn=kit-dialog][open]"));
   await shot(m, "11-phone-files");
@@ -308,8 +335,8 @@ try {
 
   // 10. the rescue kit restores the account on a third device
   step("rescue");
-  const third = await browser.newContext();
-  await third.addInitScript({ content: "window.__name = (f) => f;" });
+  const third = await browser.newContext({ colorScheme: SCHEME });
+  await third.addInitScript({ content: `window.__name = (f) => f; try { localStorage.setItem("ddn.lang", ${JSON.stringify(LANG)}) } catch {}` });
   const t = await newPage(third);
   await t.goto(base);
   await t.waitForSelector("body[data-ready='1']");
@@ -317,7 +344,7 @@ try {
   await t.fill("[data-ddn=rescue-text]", kit);
   await t.fill("[data-ddn=rescue-name]", "Odtworzony");
   await t.click("[data-ddn=rescue-go]");
-  await count(t, /z 65/);
+  await count(t, L.of(65));
   r.rescueCount = await t.textContent("[data-ddn=count]");
   await third.close();
 
@@ -333,7 +360,13 @@ try {
   const share = r.share as { sha256Ok?: boolean; revokedStopsNew?: boolean; linkHasKeyAfterHash?: boolean } | string;
   const v = r.video as { duration: number; t: number; err: string | null; seeked: boolean };
   const pg = r.paging as { page1: number; page2: number };
+  const dl0 = r.defaultLang as { html: string; h1: string; nav: string };
+  const lg = r.lang as { html: string; h1: string; pressed: string; title: string };
   const checks: Record<string, boolean> = {
+    i18nDefaultEnglish: dl0.nav === "pl-PL" && dl0.html === "en" && dl0.h1 === "A private drive on your own Discord channels",
+    i18nLang: lg.html === LANG && lg.pressed === LANG && (LANG === "en" ? lg.h1 === "A private drive on your own Discord channels" : lg.h1 === "Prywatny dysk na Twoich kanałach Discorda"),
+    i18nSizeFormat: L.kb.test(String(r.docSize)),
+    pager: r.pagerHiddenOnOnePage === true && r.pagerShownOnManyPages === true,
     invite: r.signupWithoutInviteRefused === true,
     mainTab: r.mainTab === true,
     kit: r.kitFormat === true && r.kitQr === true && r.kitDoneDisabledBeforeAck === true && r.kitNotDismissableByEsc === true && r.kitFileHasCode === true,
@@ -346,7 +379,7 @@ try {
     pairing: (r.sas as { match: boolean }).match && r.phoneNoKitPrompt === true && r.phoneDownloadOk === true,
     names: JSON.stringify(r.deviceNamesOnLaptop) === JSON.stringify(["Laptop testowy", "Telefon testowy"]),
     mobile: r.phoneFilesHiddenOnDevicesTab === true && r.phoneNoHorizontalScroll === true,
-    rescue: r.rescueCount === "51–65 z 65 pozycji" || /z 65/.test(String(r.rescueCount)),
+    rescue: L.of(65).test(String(r.rescueCount)),
     serverBlind: r.serverSeesNoNames !== false,
     noPageErrors: errors.length === 0,
   };

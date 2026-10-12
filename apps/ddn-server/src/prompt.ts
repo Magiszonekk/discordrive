@@ -1,8 +1,9 @@
-// Tiny interactive prompter (Polish UI). Works on a TTY and on piped stdin
+// Tiny interactive prompter (texts from i18n.ts, English by default). Works on a TTY and on piped stdin
 // (tests, `script` pty runs): lines are buffered, so answers typed or piped
 // ahead of the question are not lost. Secrets are read without echo on a TTY.
 
 import { createInterface, type Interface } from "node:readline";
+import { cliLang, t } from "./i18n.js";
 
 export interface Prompter {
   ask(q: string, dflt?: string): Promise<string>;
@@ -12,6 +13,11 @@ export interface Prompter {
   say(s?: string): void;
   close(): void;
 }
+
+const YES = ["y", "yes"];
+const NO = ["n", "no"];
+const YES_PL = ["t", "tak"];
+const NO_PL = ["nie"];
 
 export function ttyPrompter(input: NodeJS.ReadableStream = process.stdin, output: NodeJS.WritableStream = process.stdout): Prompter {
   const terminal = !!(input as { isTTY?: boolean }).isTTY;
@@ -37,7 +43,7 @@ export function ttyPrompter(input: NodeJS.ReadableStream = process.stdin, output
   const line = async (prompt: string): Promise<string> => {
     write(prompt);
     const l = await next();
-    if (l === null) throw new Error("przerwano (Ctrl+C albo koniec wejścia). Uruchom ponownie: npm run setup");
+    if (l === null) throw new Error(t("p.aborted"));
     if (!terminal) write("\n");
     return l.trim();
   };
@@ -53,7 +59,7 @@ export function ttyPrompter(input: NodeJS.ReadableStream = process.stdin, output
       muted = terminal;
       try {
         const l = await next();
-        if (l === null) throw new Error("przerwano (Ctrl+C albo koniec wejścia). Uruchom ponownie: npm run setup");
+        if (l === null) throw new Error(t("p.aborted"));
         return l.trim();
       } finally {
         muted = false;
@@ -62,23 +68,24 @@ export function ttyPrompter(input: NodeJS.ReadableStream = process.stdin, output
     },
     async confirm(q, dflt) {
       for (;;) {
-        const a = (await line(`${q} [${dflt ? "T/n" : "t/N"}]: `)).toLowerCase();
+        // Always shown as y/n; Polish mode also accepts t/tak/nie.
+        const a = (await line(`${q} [${dflt ? "Y/n" : "y/N"}]: `)).toLowerCase();
         if (a === "") return dflt;
-        if (["t", "tak", "y", "yes"].includes(a)) return true;
-        if (["n", "nie", "no"].includes(a)) return false;
-        p.say("  Odpowiedz t (tak) albo n (nie).");
+        if (YES.includes(a) || (cliLang() === "pl" && YES_PL.includes(a))) return true;
+        if (NO.includes(a) || (cliLang() === "pl" && NO_PL.includes(a))) return false;
+        p.say(t("p.yesNo"));
       }
     },
     async choose(q, options, dflt) {
       if (q) p.say(q);
-      options.forEach((o, i) => p.say(`  ${i + 1}) ${o.label}${o.value === dflt ? "  (domyślnie)" : ""}`));
+      options.forEach((o, i) => p.say(`  ${i + 1}) ${o.label}${o.value === dflt ? t("p.default") : ""}`));
       for (;;) {
         const di = options.findIndex((o) => o.value === dflt) + 1;
-        const a = await line(`Wybierz numer [${di}]: `);
+        const a = await line(t("p.choose", { n: di }));
         const n = a === "" ? di : Number(a);
         const o = options[n - 1];
-        if (!o) p.say("  Nie ma takiej opcji.");
-        else if (o.disabled) p.say("  Ta opcja jeszcze nie jest dostępna.");
+        if (!o) p.say(t("p.noOption"));
+        else if (o.disabled) p.say(t("p.disabled"));
         else return o.value;
       }
     },
