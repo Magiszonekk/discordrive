@@ -7,12 +7,14 @@ on:
   push:
     branches:
       - feat/metadata-only
+      - feat/stage3-modes
   pull_request:
     paths:
       - "apps/ddn-server/**"
       - "apps/web-mo/**"
       - "packages/sync-core/**"
       - "packages/metadata-client/**"
+      - "packages/server-discord/**"
       - ".github/workflows/cross-platform.yml"
   workflow_dispatch:
 
@@ -61,12 +63,17 @@ jobs:
           npm run typecheck -w @ddv4/ddn-server
           npm run typecheck -w @ddv4/sync-core
           npm run typecheck -w @ddv4/metadata-client
+          npm run typecheck -w @ddv4/server-discord
+          npx tsc -p apps/web-mo/tsconfig.json --noEmit
 
       - name: Unit tests (sync-core)
         run: npm test -w @ddv4/sync-core
 
       - name: Unit tests (metadata-client)
         run: npm test -w @ddv4/metadata-client
+
+      - name: Unit tests (server-discord, e2ee server side against the fake Discord)
+        run: npm test -w @ddv4/server-discord
 
       - name: Unit tests (ddn-server, incl. the real background start)
         run: npm test -w @ddv4/ddn-server
@@ -96,6 +103,26 @@ jobs:
           set -e
           curl -fsS http://127.0.0.1:3020/ | grep -q "cobalt/tokens.css"
           cat "$RUNNER_TEMP/start.log"
+
+      - name: setup --mode e2ee (instance pool on a fake Discord), start, doctor, health
+        run: |
+          D="$RUNNER_TEMP/ddn-e2ee"
+          npx tsx apps/ddn-server/scripts/fake-discord.ts "$RUNNER_TEMP" 2 > "$RUNNER_TEMP/fake.log" 2>&1 &
+          for i in $(seq 1 30); do test -s "$RUNNER_TEMP/pool.txt" && break; sleep 1; done
+          node apps/ddn-server/bin/discordrive.mjs setup --yes --accept-risk --no-autostart --port 3030 --data-dir "$D" --mode e2ee --webhooks-file "$RUNNER_TEMP/pool.txt" --discord-api-origin "$(cat $RUNNER_TEMP/fake.origin)" --no-self-test
+          node apps/ddn-server/bin/discordrive.mjs start --data-dir "$D" > "$RUNNER_TEMP/start-e2ee.log" 2>&1 &
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3030/v1/health > "$RUNNER_TEMP/h.json" && break; sleep 1; done
+          cat "$RUNNER_TEMP/h.json"; echo
+          grep -q '"mode":"e2ee"' "$RUNNER_TEMP/h.json"
+          grep -q '"pool":{"channels":2,"alive":2}' "$RUNNER_TEMP/h.json"
+          node apps/ddn-server/bin/discordrive.mjs doctor --data-dir "$D" | tee "$RUNNER_TEMP/doctor-e2ee.txt"
+          grep -q "Mode: built for e2ee" "$RUNNER_TEMP/doctor-e2ee.txt"
+          # the mode is fixed: another one on the same data directory is refused
+          set +e
+          node apps/ddn-server/bin/discordrive.mjs setup --yes --accept-risk --no-autostart --port 3030 --data-dir "$D" --mode metadata-only --no-self-test
+          test $? -eq 1
+          set -e
+          cat "$RUNNER_TEMP/start-e2ee.log"
 
       - name: Same in PowerShell (Windows console, UTF-8 and the ASCII fallback)
         if: runner.os == 'Windows'
