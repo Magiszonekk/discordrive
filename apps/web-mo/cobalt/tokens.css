@@ -141,3 +141,15 @@ body { background: var(--color-paper); color: var(--color-ink-2); font-family: v
 @media (prefers-reduced-motion: reduce) {
   .reveal { animation-duration: 1ms; animation-delay: 0ms; opacity: 1; transform: none; }
 }
+
+/* Accent preset. discordrive's stores/theme.ts applies the chosen accent preset (default "Cobalt") as an
+ * inline style on <html> at start-up, which overrides the dark-mode accent above. So the live app has this
+ * accent in BOTH modes (measured on old-drive.example.com/login, light and dark: button
+ * oklch(58% 0.2 256) with oklch(99% 0.004 250) text). Same effect here; the specificity beats both
+ * dark-mode selectors. */
+html:root:root {
+  --color-accent: oklch(58% 0.2 256);
+  --color-accent-hover: oklch(52% 0.2 256);
+  --color-accent-ink: oklch(99% 0.004 250);
+  --color-focus: oklch(58% 0.2 256);
+}
