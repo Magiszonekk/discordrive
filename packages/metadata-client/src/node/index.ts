@@ -1,6 +1,6 @@
 // Node-only parts of the metadata-only client (CLI/desktop).
 export { SqliteIndexStore, nodeSqliteDriver, type ChildRow } from "./sqlite-store.js";
-export { DdnServer, SERVER_VERSION, DEFAULT_LIMITS, DEFAULT_RATE_LIMITS, type Authenticator, type ServerOptions, type ServerLimits, type Session } from "./server.js";
+export { DdnServer, HttpError, ModeMismatchError, send, readJson, type ServerExtension, type ExtRequest, SERVER_VERSION, DEFAULT_LIMITS, DEFAULT_RATE_LIMITS, type Authenticator, type ServerOptions, type ServerLimits, type Session } from "./server.js";
 export { InviteStore, normalizeInvite, DEFAULT_INVITE_TTL_MS } from "./invites.js";
 export { IpLimiter, clientIp } from "./ip-limit.js";
 export { ShareStore, DiscordBotRefresher, checkBotToken, type BotRefresher } from "./shares.js";

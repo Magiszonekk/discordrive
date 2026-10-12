@@ -1,0 +1,22 @@
+{
+  "name": "@ddv4/server-discord",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "discordrive-next stage 3: server-side Discord sender for the e2ee and plain modes (instance webhooks, per-channel pacer, Cloudflare fail-fast, egress budget, health checks). Node only, no Prisma/Redis.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@ddv4/metadata-client": "*"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.5"
+  }
+}

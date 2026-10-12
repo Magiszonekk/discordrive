@@ -50,8 +50,42 @@ export const DEFAULT_RATE_LIMITS: Record<"auth" | "signup" | "mailbox" | "share"
 };
 const MAX_WAIT_S = 30;
 
+/**
+ * A mode plugs its server side in here (stage 3, docs/stage3-modes.md): e2ee/plain add
+ * instance webhooks, blob upload/download and background work. Metadata only adds nothing.
+ */
+export interface ServerExtension {
+  readonly name: string;
+  /** Called once from the DdnServer constructor (tables, timers). */
+  init?(srv: DdnServer): void;
+  /** Handle a request; return true when it was answered. Runs before the built-in /v1 routes. */
+  route?(r: ExtRequest): Promise<boolean>;
+  /** Extra fields for GET /v1/health. */
+  health?(): Record<string, unknown>;
+  /** Called after an entry is appended to an account's log. */
+  onAppend?(accountId: string, entry: EncryptedEntry): void;
+  /** May a device take/renew the lease of this upload? (e2ee: not after the server reaped it.) */
+  leaseGate?(accountId: string, uploadId: string, deviceId: string): boolean;
+  close?(): Promise<void>;
+}
+
+export interface ExtRequest {
+  req: IncomingMessage;
+  res: ServerResponse;
+  method: string;
+  path: string;
+  url: URL;
+  /** Signed-in session or a 401 HttpError. */
+  session(): Session;
+  json(): Promise<unknown>;
+  send(status: number, body: unknown, headers?: Record<string, string>): void;
+  limit(kind: keyof typeof DEFAULT_RATE_LIMITS): void;
+}
+
 export interface ServerOptions {
   dbPath?: string;
+  /** Mode-specific server parts (stage 3). */
+  extensions?: ServerExtension[];
   now?: () => number;
   leaseMs?: number;
   minRulesVersion?: number;
@@ -133,10 +167,59 @@ export class DdnServer {
     }
     this.web = opts.web ? new StaticSite(opts.web) : null;
     this.startedAt = this.now();
+    this.lockMode(opts.mode ?? "metadata-only");
+    this.extensions = opts.extensions ?? [];
+    for (const x of this.extensions) x.init?.(this);
+  }
+
+  readonly extensions: ServerExtension[];
+
+  /**
+   * One instance = one mode, forever (koncept §2): the first start writes the mode into the
+   * database; a later start with another mode refuses to run instead of misreading the data.
+   */
+  private lockMode(mode: string): void {
+    const row = this.db.prepare("SELECT v FROM server_meta WHERE k = 'mode'").get() as { v: string } | undefined;
+    if (!row) this.db.prepare("INSERT INTO server_meta (k, v) VALUES ('mode', ?)").run(mode);
+    else if (row.v !== mode) {
+      this.db.close();
+      throw new ModeMismatchError(row.v, mode);
+    }
+  }
+
+  /** Server clock (extensions use it so tests can drive time). */
+  get clock(): () => number {
+    return this.now;
+  }
+
+  /** Does `deviceId` hold an unexpired lease on the upload (rule 8)? */
+  holdsLease(accountId: string, uploadId: string, deviceId: string): boolean {
+    return this.seq(accountId).holdsLease(uploadId, deviceId);
+  }
+
+  /** Lease of an upload, expired or not (background cleanup). */
+  leaseOf(accountId: string, uploadId: string): { deviceId: string; expiresAt: number } | undefined {
+    return this.seq(accountId).leaseOf(uploadId);
+  }
+
+  /** Encrypted log of an account (background snapshots). */
+  logRead(accountId: string, after: number, limit: number): EncryptedEntry[] {
+    return this.seq(accountId).read(after, limit);
+  }
+
+  logHead(accountId: string): number {
+    return this.seq(accountId).headSeq;
+  }
+
+  /** Accounts with at least one log entry. */
+  accountsWithLog(): string[] {
+    return (this.db.prepare("SELECT DISTINCT account_id FROM log").all() as { account_id: string }[]).map((r) => r.account_id);
   }
 
   health() {
+    const extra = Object.assign({}, ...this.extensions.map((x) => x.health?.() ?? {}));
     return {
+      ...extra,
       ok: true,
       service: "discordrive-next",
       version: SERVER_VERSION,
@@ -182,6 +265,7 @@ export class DdnServer {
       this.db.prepare("INSERT INTO log (account_id, seq, op_id, entry) VALUES (?, ?, ?, ?)").run(s.accountId, r.entry.seq, r.entry.opId, JSON.stringify(r.entry));
       for (const w of this.waiters.get(s.accountId) ?? []) w();
       this.notify.publish(s.accountId, r.entry.seq);
+      for (const x of this.extensions) x.onAppend?.(s.accountId, r.entry);
     }
     return r;
   }
@@ -205,6 +289,7 @@ export class DdnServer {
   }
 
   renewLease(s: Session, uploadId: string): boolean {
+    if (!this.extensions.every((x) => x.leaseGate?.(s.accountId, uploadId, s.deviceId) ?? true)) return false;
     return this.seq(s.accountId).renewLease(uploadId, s.deviceId);
   }
   releaseLease(s: Session, uploadId: string): void {
@@ -293,6 +378,7 @@ export class DdnServer {
   }
 
   async close(): Promise<void> {
+    for (const x of this.extensions) await x.close?.();
     for (const set of this.waiters.values()) for (const w of [...set]) w();
     this.notify.closeAll();
     if (this.http) await new Promise<void>((r) => this.http!.close(() => r()));
@@ -317,11 +403,29 @@ export class DdnServer {
     const path = url.pathname;
     const method = req.method ?? "GET";
 
+    const json = () => readJson(req, this.limits.bodyBytes);
+    if (this.extensions.length) {
+      const r: ExtRequest = {
+        req,
+        res,
+        method,
+        path,
+        url,
+        json,
+        session: () => {
+          const s = this.auth.verify(req.headers.authorization);
+          if (!s) throw new HttpError(401, "unauthorized");
+          return s;
+        },
+        send: (status, body, headers) => send(res, status, body, headers),
+        limit: (kind) => this.limit(kind, req),
+      };
+      for (const x of this.extensions) if (x.route && (await x.route(r))) return;
+    }
     if (!path.startsWith("/v1/")) {
       if (this.web?.handle(req, res, path)) return;
       throw new HttpError(404, "not_found");
     }
-    const json = () => readJson(req, this.limits.bodyBytes);
 
     if (method === "GET" && path === "/v1/health") return send(res, 200, this.health());
     if (method === "POST" && path === "/v1/auth/challenge") return (this.limit("auth", req), send(res, 200, this.auth.challenge()));
@@ -492,4 +596,14 @@ function validateEnvelope(b: unknown, maxPayload = MAX_PAYLOAD_B64): EncryptedEn
   };
 }
 
-export { HttpError };
+export class ModeMismatchError extends Error {
+  constructor(
+    readonly stored: string,
+    readonly wanted: string,
+  ) {
+    super(`this data directory belongs to a "${stored}" instance, not "${wanted}" (one instance = one mode; use another data directory)`);
+    this.name = "ModeMismatchError";
+  }
+}
+
+export { HttpError, send, readJson };

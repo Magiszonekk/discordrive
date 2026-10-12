@@ -30,6 +30,27 @@ export class FakeDiscord {
   cdnGets = 0;
   /** Per-channel sustained limit (messages/min); 0 = off. */
   perChannelPerMin = 0;
+  /**
+   * Cloudflare edge block of the webhook route until this time (ms): HTML 429, no
+   * x-ratelimit-* headers, retry-after in seconds (ddrive 0d098ca). 0 = off.
+   */
+  cloudflareUntil = 0;
+  /** Accepted posts per channel (tests: rotation over channels). */
+  readonly postsByChannel = new Map<string, number>();
+  /** 429 answers per channel. */
+  readonly rejectedByChannel = new Map<string, number>();
+  /** Every request that reached a webhook route (tests: egress budget). */
+  webhookRequests = 0;
+
+  /** Delete a webhook (its URL answers 401/404 from now on, like a webhook removed in Discord). */
+  deleteWebhook(id: string): void {
+    this.hooks.delete(id);
+  }
+
+  /** Bytes of a stored attachment (tests: what landed on Discord). */
+  attachmentData(attachmentId: string): Uint8Array | undefined {
+    return this.blobs.get(attachmentId);
+  }
   private readonly chanTimes = new Map<string, number[]>();
 
   private id(): string {
@@ -131,6 +152,13 @@ export class FakeDiscord {
       return void res.end(b);
     }
     const m = /^\/api(?:\/v\d+)?\/webhooks\/(\d+)\/([A-Za-z0-9_.-]+)(?:\/messages\/(\d+))?$/.exec(url.pathname);
+    if (m) this.webhookRequests++;
+    if (m && this.cloudflareUntil > Date.now()) {
+      for await (const _ of req) void _;
+      const ra = Math.ceil((this.cloudflareUntil - Date.now()) / 1000);
+      res.writeHead(429, { "content-type": "text/html; charset=UTF-8", "retry-after": String(ra) });
+      return void res.end("<!DOCTYPE html><title>Access denied | discord.com used Cloudflare to restrict access</title>");
+    }
     const hook = m ? this.hooks.get(m[1]!) : undefined;
     if (!m || !hook || hook.token !== m[2]) return this.send(res, 401, { message: "Invalid Webhook Token", code: 50027 });
     const webhookId = m[1]!;
@@ -153,6 +181,7 @@ export class FakeDiscord {
 
     if (!mid && req.method === "POST") {
       const wait = this.limited(hook.channelId);
+      if (wait > 0) this.rejectedByChannel.set(hook.channelId, (this.rejectedByChannel.get(hook.channelId) ?? 0) + 1);
       if (wait > 0) return this.send(res, 429, { message: "The resource is being rate limited.", retry_after: wait, global: false }, { ...cors, "x-ratelimit-scope": "shared" });
       const f = await fileOf(await readForm());
       if (!f) return this.send(res, 400, { message: "no file" }, cors);
@@ -164,6 +193,7 @@ export class FakeDiscord {
       const msg: Msg = { webhookId, channelId: hook.channelId, attachments: [{ id: aid, ...f }] };
       this.messages.set(id, msg);
       this.posts++;
+      this.postsByChannel.set(hook.channelId, (this.postsByChannel.get(hook.channelId) ?? 0) + 1);
       return this.send(res, 200, this.msgJson(id, msg), cors);
     }
     const msg = mid ? this.messages.get(mid) : undefined;

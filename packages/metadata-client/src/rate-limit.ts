@@ -36,6 +36,8 @@ interface Bucket {
   blockedUntil: number;
   /** Serialises waiters so tokens are handed out in FIFO order. */
   tail: Promise<void>;
+  /** Callers queued in acquire() and not served yet. */
+  waiting: number;
 }
 
 export class ChannelPacer {
@@ -61,7 +63,7 @@ export class ChannelPacer {
   private bucket(key: string): Bucket {
     let b = this.buckets.get(key);
     if (!b) {
-      b = { tokens: this.burst, updatedAt: this.now(), perMin: this.perMin, blockedUntil: 0, tail: Promise.resolve() };
+      b = { tokens: this.burst, updatedAt: this.now(), perMin: this.perMin, blockedUntil: 0, tail: Promise.resolve(), waiting: 0 };
       this.buckets.set(key, b);
     }
     return b;
@@ -81,6 +83,7 @@ export class ChannelPacer {
   /** Wait until one request may be sent to this channel. */
   acquire(key: string): Promise<void> {
     const b = this.bucket(key);
+    b.waiting++;
     const turn = b.tail.then(async () => {
       for (;;) {
         this.refill(b);
@@ -92,6 +95,7 @@ export class ChannelPacer {
         }
         if (b.tokens >= 1) {
           b.tokens -= 1;
+          b.waiting--;
           this.stats.acquired++;
           return;
         }
@@ -102,6 +106,19 @@ export class ChannelPacer {
     });
     b.tail = turn.catch(() => {});
     return turn;
+  }
+
+  /**
+   * Milliseconds until `key` could hand out a token, counting requests already queued on it
+   * (each costs one interval). Lets a server pick the channel that frees up first.
+   */
+  readyIn(key: string): number {
+    const b = this.bucket(key);
+    this.refill(b);
+    const interval = 60_000 / b.perMin;
+    const block = Math.max(0, b.blockedUntil - this.now());
+    const ahead = b.waiting + 1 - b.tokens;
+    return block + Math.max(0, Math.ceil(ahead * interval));
   }
 
   onSuccess(key: string): void {

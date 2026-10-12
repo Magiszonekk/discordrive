@@ -13,8 +13,14 @@ export class RateLimitedError extends Error {
     readonly retryAfterMs: number,
     readonly scope: string | null,
     readonly global: boolean,
+    /**
+     * Cloudflare edge block of this IP on the webhook route (ddrive 0d098ca): 429 with an
+     * HTML body and no x-ratelimit-* headers, retry-after in the thousands of seconds. Every
+     * webhook reached from this IP fails until it lifts; waiting it out inside a request hangs it.
+     */
+    readonly cloudflare = false,
   ) {
-    super(`rate limited (${scope ?? "?"}), retry in ${retryAfterMs} ms`);
+    super(cloudflare ? `blocked by Cloudflare, retry in ${Math.round(retryAfterMs / 1000)} s` : `rate limited (${scope ?? "?"}), retry in ${retryAfterMs} ms`);
     this.name = "RateLimitedError";
   }
 }
@@ -34,7 +40,17 @@ export function redactWebhookUrl(s: string): string {
   return s.replace(/(\/webhooks\/\d+\/)[A-Za-z0-9_.-]+/g, "$1<redacted>");
 }
 
+/** Cloudflare edge block (HTML, no Discord rate-limit headers), not a Discord 429. */
+export function isCloudflareBlock(res: Response): boolean {
+  return (res.headers.get("content-type") ?? "").includes("text/html") && res.headers.get("x-ratelimit-remaining") === null && res.headers.get("x-ratelimit-scope") === null;
+}
+
 async function rateLimitFrom(res: Response): Promise<RateLimitedError> {
+  if (isCloudflareBlock(res)) {
+    await res.body?.cancel().catch(() => {});
+    const ra = Number(res.headers.get("retry-after") ?? 60);
+    return new RateLimitedError(Math.ceil((Number.isFinite(ra) ? ra : 60) * 1000), null, true, true);
+  }
   let body: { retry_after?: number; global?: boolean } = {};
   try {
     body = (await res.json()) as typeof body;
@@ -65,12 +81,14 @@ export class DiscordWebhookTransport implements WebhookTransport {
     this.timeoutMs = opts.timeoutMs ?? 120_000;
   }
 
-  private async req(url: string, init: RequestInit, what: string): Promise<Response> {
+  private async req(url: string, init: RequestInit, what: string, signal?: AbortSignal): Promise<Response> {
     if (this.apiOrigin) url = url.replace(/^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com/, this.apiOrigin);
     let res: Response;
+    const timeout = AbortSignal.timeout(this.timeoutMs);
     try {
-      res = await this.f(url, { ...init, signal: AbortSignal.timeout(this.timeoutMs) });
+      res = await this.f(url, { ...init, signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
     } catch (e) {
+      if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
       throw new Error(`${what}: ${redactWebhookUrl(String((e as Error)?.message ?? e))}`);
     }
     if (res.status === 429) throw await rateLimitFrom(res);
@@ -81,11 +99,11 @@ export class DiscordWebhookTransport implements WebhookTransport {
     return res;
   }
 
-  async postFile(hook: WebhookRef, data: Uint8Array, filename: string): Promise<PostedAttachment> {
+  async postFile(hook: WebhookRef, data: Uint8Array, filename: string, signal?: AbortSignal): Promise<PostedAttachment> {
     const fd = new FormData();
     fd.append("payload_json", JSON.stringify({ content: "", attachments: [{ id: 0, filename }] }));
     fd.append("files[0]", new Blob([data as BlobPart], { type: "application/octet-stream" }), filename);
-    const res = await this.req(`${hook.url}?wait=true`, { method: "POST", body: fd }, "webhook post");
+    const res = await this.req(`${hook.url}?wait=true`, { method: "POST", body: fd }, "webhook post", signal);
     const j = (await res.json()) as { id: string; channel_id: string; attachments: { id: string; url: string; size: number }[] };
     const a = j.attachments?.[0];
     if (!a) throw new Error("webhook post: no attachment in response");
@@ -110,8 +128,8 @@ export class DiscordWebhookTransport implements WebhookTransport {
     return (j.attachments ?? []).map((a) => ({ id: a.id, url: a.url, size: a.size }));
   }
 
-  async fetchCdn(url: string): Promise<Uint8Array> {
-    const res = await this.req(url, { method: "GET" }, "cdn get");
+  async fetchCdn(url: string, signal?: AbortSignal): Promise<Uint8Array> {
+    const res = await this.req(url, { method: "GET" }, "cdn get", signal);
     return new Uint8Array(await res.arrayBuffer());
   }
 
