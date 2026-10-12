@@ -42,8 +42,13 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Install (only what the instance needs)
-        run: npm ci --workspace @ddv4/ddn-server --workspace @ddv4/sync-core --workspace @ddv4/metadata-client --workspace @ddv4/web-mo --no-audit --no-fund
+      - name: Install
+        # The whole workspace: typescript, tsx and playwright (types) are root devDependencies.
+        # Playwright browsers are not downloaded (the browser checks run elsewhere).
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+          PRISMA_SKIP_POSTINSTALL_GENERATE: "1"
+        run: npm ci --no-audit --no-fund
 
       - name: Versions
         run: |
