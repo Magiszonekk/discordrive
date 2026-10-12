@@ -33,7 +33,8 @@
     "test:ddn-server": "npm run typecheck --workspace=@ddv4/ddn-server && npm run test --workspace=@ddv4/ddn-server",
     "start:legacy": "concurrently --kill-others-on-fail \"npm run start:api\" \"npm run start:frontend\"",
     "doctor": "node apps/ddn-server/bin/discordrive.mjs doctor",
-    "invite": "node apps/ddn-server/bin/discordrive.mjs invite"
+    "invite": "node apps/ddn-server/bin/discordrive.mjs invite",
+    "update": "git pull --ff-only && npm install --no-audit --no-fund && npm run build -w @ddv4/web-mo"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

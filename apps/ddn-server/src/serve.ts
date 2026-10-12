@@ -8,17 +8,37 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { DdnServer, DiscordBotRefresher, DISCORD_ORIGINS } from "@ddv4/metadata-client/node";
 import { t } from "./i18n.js";
+import { builtHash, sourceHash } from "../../web-mo/source-hash.js";
 import { PACKAGE_DIR, POSIX_MODES, REPO_DIR, dbPath, originOf, webDir, type InstanceConfig } from "./config.js";
 
-/** Build apps/web-mo/dist if it is missing (first start after a fresh clone). */
+/**
+ * Is the default web build missing or older than the sources? "stale" = dist exists but
+ * its build-stamp.json does not match the hash of the current sources (e.g. after
+ * `git pull`) or has no stamp at all (built before stamps existed).
+ */
+export function webBuildState(c: InstanceConfig): "ok" | "missing" | "stale" {
+  const dir = webDir(c);
+  if (!existsSync(join(dir, "index.html")) || !existsSync(join(dir, "ui.js"))) return "missing";
+  // A custom webDir is someone else's build: never rebuild it.
+  if (c.webDir) return "ok";
+  return builtHash(dir) === sourceHash(REPO_DIR) ? "ok" : "stale";
+}
+
+function buildArgs(): [string, string[]] {
+  const tsxCli = createRequire(join(PACKAGE_DIR, "package.json")).resolve("tsx/cli");
+  return [process.execPath, [tsxCli, join(REPO_DIR, "apps", "web-mo", "build.ts")]];
+}
+
+/** Build apps/web-mo/dist if it is missing (first start after a fresh clone) or older than the sources. */
 export function ensureWebBuilt(c: InstanceConfig, log: (s: string) => void = () => {}): string {
   const dir = webDir(c);
-  if (existsSync(join(dir, "index.html")) && existsSync(join(dir, "ui.js"))) return dir;
+  const state = webBuildState(c);
+  if (state === "ok") return dir;
   if (c.webDir) throw new Error(t("c.webDirMissing", { dir }));
-  log(t("s.building"));
-  const tsxCli = createRequire(join(PACKAGE_DIR, "package.json")).resolve("tsx/cli");
+  log(t(state === "stale" ? "s.rebuilding" : "s.building"));
+  const [cmd, args] = buildArgs();
   try {
-    execFileSync(process.execPath, [tsxCli, join(REPO_DIR, "apps", "web-mo", "build.ts")], { stdio: ["ignore", "ignore", "pipe"], cwd: REPO_DIR });
+    execFileSync(cmd, args, { stdio: ["ignore", "ignore", "pipe"], cwd: REPO_DIR });
   } catch (e) {
     throw new Error(String((e as { stderr?: Buffer }).stderr ?? (e as Error).message).trim().split("\n").slice(-3).join(" "));
   }
@@ -28,20 +48,20 @@ export function ensureWebBuilt(c: InstanceConfig, log: (s: string) => void = () 
 /** Async build (the setup spinner keeps turning while esbuild works). */
 export async function buildWeb(c: InstanceConfig): Promise<string> {
   const dir = webDir(c);
-  if (existsSync(join(dir, "index.html")) && existsSync(join(dir, "ui.js"))) return dir;
+  if (webBuildState(c) === "ok") return dir;
   if (c.webDir) throw new Error(t("c.webDirMissing", { dir }));
-  const tsxCli = createRequire(join(PACKAGE_DIR, "package.json")).resolve("tsx/cli");
+  const [cmd, args] = buildArgs();
   try {
-    await promisify(execFile)(process.execPath, [tsxCli, join(REPO_DIR, "apps", "web-mo", "build.ts")], { cwd: REPO_DIR });
+    await promisify(execFile)(cmd, args, { cwd: REPO_DIR });
   } catch (e) {
     throw new Error(String((e as { stderr?: string }).stderr || (e as Error).message).trim().split("\n").slice(-3).join(" "));
   }
   return dir;
 }
 
-export function createServer(c: InstanceConfig): DdnServer {
+export function createServer(c: InstanceConfig, log: (s: string) => void = () => {}): DdnServer {
   const test = c.testing?.discordApiOrigin;
-  const dir = ensureWebBuilt(c);
+  const dir = ensureWebBuilt(c, log);
   return new DdnServer({
     dbPath: dbPath(c),
     signup: c.signup,
@@ -61,7 +81,8 @@ export function createServer(c: InstanceConfig): DdnServer {
 }
 
 export async function serve(c: InstanceConfig, log: (s: string) => void = console.log): Promise<DdnServer> {
-  const srv = createServer(c);
+  // The build notice goes to stderr: it is shown even when the caller silences the usual log.
+  const srv = createServer(c, (s) => console.error(s));
   // Databases created before umask was set (older versions) are tightened here.
   if (POSIX_MODES) for (const f of [dbPath(c), `${dbPath(c)}-wal`, `${dbPath(c)}-shm`]) if (existsSync(f)) chmodSync(f, 0o600);
   const { url } = await srv.listen(c.bind.port, c.bind.host);

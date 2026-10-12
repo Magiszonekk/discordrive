@@ -27,7 +27,8 @@ Architecture (concept §4.1):
   formatted for the language (“11.4 MB” / “11,4 MB”). The key sets are compared by
   `apps/ddn-server/test/i18n.test.ts`.
 
-Build: `npm run build -w @ddv4/web-mo` → `dist/` (the instance builds it at the first start if
-missing). Chromium test: `npm run check -w @ddv4/web-mo` (instance server + fake Discord, 20
+Build: `npm run build -w @ddv4/web-mo` → `dist/` (the instance builds it at start when it is
+missing or older than the sources: `build.ts` writes `dist/build-stamp.json` with a hash of
+the inputs, `source-hash.ts`; `npm run update` in the repo root = pull + install + build). Chromium test: `npm run check -w @ddv4/web-mo` (instance server + fake Discord, 20
 checks); `DDN_E2E_LANG=pl` runs it in Polish, `DDN_E2E_SCHEME=dark` with a dark color scheme;
 the same scenario against the live preview: `DDN_E2E_URL=…` (see the header of `check.ts`).

@@ -47,6 +47,12 @@ browser app has an EN/PL switch in the header (remembered in the browser).
 | change settings | `npm run setup` |
 | something is wrong | `npm run doctor` |
 | invite code (public instance) | `npm run invite` |
+| update to the newest version | `npm run update`, then start the drive again |
+
+`npm run update` = `git pull` + `npm install` + a fresh build of the browser app. A plain
+`git pull` is fine too: `npm start` notices that the browser app sources changed and rebuilds
+it before starting (a few seconds). A running drive (or the systemd service) keeps serving the
+old page until it is restarted.
 
 Server data (configuration and the encrypted file list) is in `~/.local/share/discordrive-next`
 (Linux), `~/Library/Application Support/discordrive-next` (macOS) or

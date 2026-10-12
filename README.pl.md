@@ -45,6 +45,12 @@ według instrukcji na ekranie, zapisz zestaw ratunkowy i wyślij pierwszy plik.
 | zmień ustawienia | `npm run setup` |
 | coś nie działa | `npm run doctor` |
 | kod zaproszenia (instancja publiczna) | `npm run invite` |
+| aktualizacja do najnowszej wersji | `npm run update`, potem ponownie włącz dysk |
+
+`npm run update` = `git pull` + `npm install` + świeże zbudowanie aplikacji przeglądarkowej.
+Sam `git pull` też wystarczy: `npm start` zauważy, że źródła aplikacji przeglądarkowej się
+zmieniły, i przed startem ją przebuduje (kilka sekund). Działający dysk (albo usługa systemd)
+pokazuje starą stronę, dopóki się go nie uruchomi ponownie.
 
 Dane serwera (konfiguracja i zaszyfrowany spis) są w `~/.local/share/discordrive-next`
 (Linux), `~/Library/Application Support/discordrive-next` (macOS) albo
