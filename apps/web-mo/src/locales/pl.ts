@@ -3,6 +3,10 @@ export const pl: Record<string, string> = {
   "app.title": "Dysk · discordrive-next",
   "brand.name": "Dysk",
   "lang.label": "Język",
+  "theme.label": "Motyw: {mode}. Kliknij: {next}.",
+  "theme.system": "jak system",
+  "theme.light": "jasny",
+  "theme.dark": "ciemny",
 
   // welcome / new account
   "welcome.h1": "Prywatny dysk na Twoich kanałach Discorda",

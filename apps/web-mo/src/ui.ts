@@ -1,4 +1,4 @@
-// UI layer of the metadata-only browser client (look: house-v1, frontend profile).
+// UI layer of the metadata-only browser client (look: nordic = Nordic Calm / Nordic Night, frontend profile).
 // Texts: i18n.ts (en default, pl); static HTML via data-i18n hooks.
 // Every element the tests drive keeps its stable data-ddn attribute; purely
 // visual hooks use data-ddn-ui. All logic lives in app-core (worker) behind `core`.
@@ -619,6 +619,31 @@ async function openShareView(): Promise<boolean> {
   return true;
 }
 
+// ── light / dark / system (nordic theme.js keeps the choice in the cik_theme cookie) ──
+type ThemeMode = "system" | "light" | "dark";
+const cikTheme = () => (window as unknown as { cikTheme?: { get(): ThemeMode; cycle(): void } }).cikTheme;
+const THEME_NEXT: Record<ThemeMode, ThemeMode> = { system: "light", light: "dark", dark: "system" };
+const THEME_ICON: Record<ThemeMode, string> = { system: "sys", light: "sun", dark: "moon" };
+function paintTheme() {
+  const b = ui("theme");
+  const th = cikTheme();
+  if (!b || !th) return;
+  const m = th.get();
+  b.hidden = false;
+  b.dataset.mode = m;
+  b.replaceChildren(icon(THEME_ICON[m]));
+  const label = t("theme.label", { mode: t(`theme.${m}`), next: t(`theme.${THEME_NEXT[m]}`) });
+  b.setAttribute("aria-label", label);
+  b.title = label;
+}
+function wireTheme() {
+  const b = ui("theme");
+  if (!b || !cikTheme()) return;
+  b.onclick = () => cikTheme()!.cycle();
+  document.addEventListener("cik-theme", paintTheme);
+  paintTheme();
+}
+
 // ── language switch (no reload: static texts re-applied, dynamic parts re-rendered) ──
 function markLang() {
   document.querySelectorAll<HTMLButtonElement>("[data-ddn=lang] [data-lang]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.lang === getLang())));
@@ -633,6 +658,7 @@ function wireLang() {
       storeLang(l);
       applyStatic();
       markLang();
+      paintTheme();
       document.body.dataset.lang = l;
       if (shareMode) return;
       devicesLoaded = false;
@@ -645,6 +671,7 @@ function wireLang() {
 
 async function main() {
   wireLang();
+  wireTheme();
   if ("serviceWorker" in navigator) await navigator.serviceWorker.register("./sw.js").catch(() => {});
   await core.init({ discordApiOrigin: cfg.discordApiOrigin, wasmUrl: new URL("./sqlite3.wasm", location.href).href });
   if (await openShareView()) return;
