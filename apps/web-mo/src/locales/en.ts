@@ -3,6 +3,10 @@ export const en: Record<string, string> = {
   "app.title": "Drive · discordrive-next",
   "brand.name": "Drive",
   "lang.label": "Language",
+  "theme.label": "Theme: {mode}. Click for {next}.",
+  "theme.system": "as the system",
+  "theme.light": "light",
+  "theme.dark": "dark",
 
   // welcome / new account
   "welcome.h1": "A private drive on your own Discord channels",
