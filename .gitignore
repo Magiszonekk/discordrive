@@ -26,5 +26,5 @@ var/
 
 # Keep Vite ambient types tracked
 !apps/frontend/src/vite-env.d.ts
-# web-mo: vendored theme script of the nordic look (plain JS, not a build output)
-!apps/web-mo/nordic/theme.js
+# web-mo: colour-mode script of the Cobalt look (plain JS, not a build output)
+!apps/web-mo/cobalt/theme.js

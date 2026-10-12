@@ -1,7 +1,13 @@
-// UI layer of the metadata-only browser client (look: nordic = Nordic Calm / Nordic Night, frontend profile).
-// Texts: i18n.ts (en default, pl); static HTML via data-i18n hooks.
-// Every element the tests drive keeps its stable data-ddn attribute; purely
-// visual hooks use data-ddn-ui. All logic lives in app-core (worker) behind `core`.
+// UI layer of the metadata-only browser client. Look: Cobalt (the theme of discordrive, cobalt/README.md);
+// layout: discordrive's app-shell (sidebar Files / Devices / Settings, AuthCard screens before sign-in).
+// Routing: History API (/, /folder/<id>, /devices, /settings, /welcome; signed out: /, /join, /restore;
+// share links /s/<id>#<key>); the instance serves index.html for every path without an extension, so a
+// reload keeps the page. Texts: i18n.ts (en default, pl); static HTML via data-i18n hooks.
+// Every element the tests drive keeps its stable data-ddn attribute; purely visual hooks use data-ddn-ui.
+// All logic lives in app-core (worker) behind `core`.
+//
+// on* handlers: always a block body or `void …`. An on* handler that RETURNS false cancels the event
+// (an `e.key === "Enter" && …` arrow blocked typing in the webhook field); check.ts greps for it.
 import { renderSVG } from "uqr";
 import type { CoreEvent } from "./app-core.js";
 import { applyStatic, fmtDate, fmtDateTime, fmtNum, fmtSize, getLang, isLang, setLang, storeLang, storedLang, t, tn, type Lang } from "./i18n.js";
@@ -37,6 +43,7 @@ navigator.serviceWorker?.addEventListener("message", async (e) => {
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(`[data-ddn="${sel}"]`)!;
 const ui = <T extends HTMLElement>(sel: string) => document.querySelector<T>(`[data-ddn-ui="${sel}"]`)!;
+const all = <T extends HTMLElement>(css: string) => [...document.querySelectorAll<T>(css)];
 
 const fmt = fmtSize;
 const short = (id: string | null | undefined) => (id ? id.slice(0, 6) : "-");
@@ -57,26 +64,39 @@ function icon(name: string) {
   s.append(u);
   return s;
 }
+const chip = (text: string, tone = "", title = "") => h("span", { class: `chip${tone ? ` chip--${tone}` : ""}`, ...(title ? { title } : {}) }, text);
 
-const VIDEO = /\.(webm|mp4|m4v|mov|mkv|ogv)$/i;
-const IMAGE = /\.(jpe?g|png|gif|webp|avif|heic|bmp)$/i;
-const kindIcon = (name: string, kind: string) => (kind === "folder" ? "folder" : VIDEO.test(name) ? "video" : IMAGE.test(name) ? "image" : "file");
+// File type badge (FileTable): from the extension, the index keeps no MIME type.
+const EXT: [RegExp, string, string][] = [
+  [/\.(webm|mp4|m4v|mov|mkv|ogv|avi)$/i, "video", "media"],
+  [/\.(jpe?g|png|gif|webp|avif|heic|bmp|svg)$/i, "image", "media"],
+  [/\.(mp3|flac|wav|ogg|oga|m4a|opus|aac)$/i, "audio", ""],
+  [/\.pdf$/i, "pdf", "doc"],
+  [/\.(docx?|odt|rtf|pages)$/i, "doc", "doc"],
+  [/\.(xlsx?|ods|csv|tsv)$/i, "sheet", "sheet"],
+  [/\.(zip|gz|tgz|tar|7z|rar|xz|bz2|zst)$/i, "archive", "archive"],
+  [/\.(txt|md|json|log|ya?ml|xml|html?|ini|toml)$/i, "text", ""],
+];
+const typeOf = (name: string) => EXT.find(([re]) => re.test(name)) ?? [null, "file", ""];
+const VIDEO = EXT[0]![0];
 
 // ── messages and actions ────────────────────────────────────────────
 const KNOWN_ERRORS = ["invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone"];
+/** Readable text for an error: no technical codes in the message (the raw one goes to the console). */
 const errText = (e: unknown) => {
   const m = String((e as Error)?.message ?? e);
+  console.warn("ddn:", m);
   if (/fetch|network/i.test(m)) return t("err.network");
   if (/not a pairing code|bad pairing code/i.test(m)) return t("err.pairCode");
   const code = KNOWN_ERRORS.find((c) => m.includes(c));
   if (code) return t(`err.${code}`);
-  if (/webhook/i.test(m)) return t("err.webhook", { msg: m });
-  return m;
+  if (/webhook/i.test(m)) return t("err.webhook");
+  return /^[A-Z]/.test(m) && !/[_{}]/.test(m) ? m : t("err.generic", { msg: m.replace(/^[a-z_]+:\s*/, "") });
 };
-function toast(text: string, kind: "ok" | "err" = "ok") {
-  const t = h("div", { class: `toast ${kind}`, role: kind === "err" ? "alert" : "status" }, icon(kind === "err" ? "info" : "info"), h("span", {}, text));
-  ui("toasts").append(t);
-  setTimeout(() => t.remove(), kind === "err" ? 7000 : 3500);
+function toast(text: string, kind: "ok" | "err" | "info" = "ok") {
+  const el = h("div", { class: `toast ${kind}`, role: kind === "err" ? "alert" : "status" }, text);
+  ui("toasts").append(el);
+  setTimeout(() => el.remove(), kind === "err" ? 7000 : 3500);
 }
 /** Run an action from a button: busy state, a readable error message instead of a silent rejection. */
 async function act(btn: HTMLElement | null, fn: () => Promise<unknown>) {
@@ -91,88 +111,161 @@ async function act(btn: HTMLElement | null, fn: () => Promise<unknown>) {
   }
 }
 
-// ── view state ──────────────────────────────────────────────────────
-const PAGE = 50;
-let cursorStack: (string | undefined)[] = [undefined];
-let currentFolder = "root";
-/** The root crumb's name comes from t("files.root") at render time (language can change). */
-let path: { id: string; name: string }[] = [{ id: "root", name: "" }];
-let uploading: { done: number; total: number } | null = null;
-let devicesLoaded = false;
-
-function openFolder(id: string, name: string) {
-  const at = path.findIndex((p) => p.id === id);
-  path = at >= 0 ? path.slice(0, at + 1) : [...path, { id, name }];
-  currentFolder = id;
-  cursorStack = [undefined];
-  void render();
+// ── routing ─────────────────────────────────────────────────────────
+type Route =
+  | { name: "files"; folder: string }
+  | { name: "devices" }
+  | { name: "settings" }
+  | { name: "welcome" }
+  | { name: "create" }
+  | { name: "join" }
+  | { name: "restore" };
+const SIGNED_OUT_ROUTES = new Set(["create", "join", "restore"]);
+function parseRoute(path = location.pathname): Route {
+  const p = path.replace(/\/+$/, "") || "/";
+  const f = /^\/folder\/([A-Za-z0-9_-]{1,64})$/.exec(p);
+  if (f) return { name: "files", folder: f[1]! };
+  if (p === "/devices") return { name: "devices" };
+  if (p === "/settings") return { name: "settings" };
+  if (p === "/welcome") return { name: "welcome" };
+  if (p === "/join") return { name: "join" };
+  if (p === "/restore") return { name: "restore" };
+  return { name: "files", folder: "root" };
 }
-
-function renderCrumbs() {
-  const nav = ui("crumbs");
-  nav.replaceChildren();
-  path.forEach((p, i) => {
-    if (i) nav.append(h("span", { class: "sep", "aria-hidden": "true" }, "/"));
-    const last = i === path.length - 1;
-    const name = p.id === "root" ? t("files.root") : p.name;
-    const b = h("button", { class: "crumb", type: "button", title: name }, name);
-    if (last) b.setAttribute("aria-current", "page");
-    else b.onclick = () => openFolder(p.id, p.name);
-    nav.append(b);
+const hrefOf = (r: Route) =>
+  r.name === "files" ? (r.folder === "root" ? "/" : `/folder/${r.folder}`) : r.name === "create" ? "/" : `/${r.name}`;
+let route: Route = parseRoute();
+let routeSeq = 0;
+/** Go to a page (pushState). `replace` for redirects, so Back does not bounce. */
+function navigate(href: string, replace = false) {
+  const u = new URL(href, location.origin);
+  if (u.pathname + u.hash !== location.pathname + location.hash) history[replace ? "replaceState" : "pushState"](null, "", u.pathname + u.search + u.hash);
+  void onRoute();
+}
+async function onRoute() {
+  const prev = route;
+  route = parseRoute();
+  const seq = ++routeSeq;
+  if (prev.name !== route.name || (prev.name === "files" && route.name === "files" && prev.folder !== route.folder)) {
+    cursorStack = [undefined];
+    if (route.name === "devices") devicesLoaded = false;
+    if (route.name === "join") resetJoin?.();
+  }
+  closeDrawer();
+  await render();
+  if (seq !== routeSeq) return;
+  const anchor = location.hash.length > 1 && !location.hash.startsWith("#pair=") ? document.getElementById(decodeURIComponent(location.hash.slice(1))) : null;
+  if (anchor) anchor.scrollIntoView({ block: "start" });
+  else if (prev.name !== route.name || (prev.name === "files" && route.name === "files" && prev.folder !== route.folder)) window.scrollTo(0, 0);
+}
+function wireLinks() {
+  document.addEventListener("click", (e) => {
+    const a = (e.target as Element | null)?.closest<HTMLAnchorElement>("a[data-link]");
+    if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    navigate(a.getAttribute("href")!);
+  });
+  window.addEventListener("popstate", () => {
+    void onRoute();
   });
 }
 
-function chip(dot: string, text: string, title: string) {
-  return h("span", { class: "chip", title }, h("span", { class: `dot ${dot}` }), text);
+// ── mobile drawer (MainLayout) ──────────────────────────────────────
+function openDrawer() {
+  ui("signed-in-shell").dataset.drawer = "open";
+  ui("nav-open").setAttribute("aria-expanded", "true");
+  ui<HTMLElement>("sidebar").querySelector<HTMLElement>("a[aria-current=page], a")?.focus({ preventScroll: true });
+}
+function closeDrawer() {
+  const s = ui("signed-in-shell");
+  if (s.dataset.drawer !== "open") return;
+  delete s.dataset.drawer;
+  ui("nav-open").setAttribute("aria-expanded", "false");
+}
+function wireDrawer() {
+  ui("nav-open").onclick = () => openDrawer();
+  ui("nav-close").onclick = () => closeDrawer();
+  ui("scrim").onclick = () => closeDrawer();
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeDrawer();
+  });
 }
 
-function renderStatus(st: Awaited<ReturnType<typeof core.status>>) {
+// ── view state ──────────────────────────────────────────────────────
+const PAGE = 50;
+let cursorStack: (string | undefined)[] = [undefined];
+let uploading: { done: number; total: number } | null = null;
+let devicesLoaded = false;
+let channelsOk = false;
+let sharesOn = false;
+let shareMode = false;
+let resetJoin: (() => void) | null = null;
+const SKIP_KEY = "ddn.skip-welcome";
+
+const currentFolder = () => (route.name === "files" ? route.folder : "root");
+const openFolder = (id: string) => navigate(id === "root" ? "/" : `/folder/${id}`);
+
+function renderCrumbs(path: { id: string; name: string }[]) {
+  const nav = ui("crumbs");
+  const kids: (Node | string)[] = [];
+  // Mobile: back arrow to the parent (FolderBreadcrumb); desktop: the full path.
+  const back = h("span", { class: "back" });
+  if (path.length) {
+    const parent = path.at(-2);
+    const a = h("a", { href: parent ? `/folder/${parent.id}` : "/", "data-link": "" }, icon("left"), parent ? parent.name : t("files.root"));
+    back.append(a);
+  } else back.append(h("span", { "aria-current": "page" }, t("files.root")));
+  kids.push(back);
+  const desk = h("span", { class: "desk crumbs" });
+  desk.append(path.length ? h("a", { href: "/", "data-link": "" }, t("files.root")) : h("span", { "aria-current": "page" }, t("files.root")));
+  path.forEach((p, i) => {
+    desk.append(icon("right"));
+    desk.append(i === path.length - 1 ? h("span", { "aria-current": "page", title: p.name }, p.name) : h("a", { href: `/folder/${p.id}`, "data-link": "", title: p.name }, p.name));
+  });
+  kids.push(desk);
+  nav.replaceChildren(...kids);
+}
+
+type Status = Awaited<ReturnType<typeof core.status>>;
+
+function renderShellStatus(st: Status) {
   const s = $("status");
-  if (!st.signedIn) {
-    delete s.dataset.tabRole;
-    s.replaceChildren(chip("", st.hasAccount ? t("status.connecting") : t("status.signedOut"), t("status.signedOut.t")));
-    return;
-  }
-  // Technical details (which tab keeps the list, persistent storage) live in the tooltip;
-  // only a secondary tab gets its own chip, because it behaves differently (slower start).
   s.dataset.tabRole = st.leader ? "main" : "secondary";
-  const details = [st.leader ? t("status.main.t") : t("status.secondary.t"), st.persistent ? t("status.persistent.t") : t("status.cache.t")].join("\n");
   s.replaceChildren(
     uploading
-      ? chip("live", t("status.uploading", { done: uploading.done, total: uploading.total }), t("status.uploading.t"))
-      : chip("live", t("status.synced"), `${t("status.synced.t", { seq: fmtNum(st.headSeq) })}\n${details}`),
-    ...(st.leader ? [] : [chip("warm", t("status.secondary"), t("status.secondary.t"))]),
-    h("span", { class: "chip", title: t("status.device.t", { id: st.deviceId ?? "-" }) }, icon("phone"), h("b", {}, st.deviceName || short(st.deviceId))),
+      ? chip(t("status.uploading", { done: uploading.done, total: uploading.total }), "accent", t("status.uploading.t"))
+      : chip(t("status.synced"), "success", t("status.synced.t", { seq: fmtNum(st.headSeq) })),
   );
+  const me = ui("me-name");
+  me.textContent = st.deviceName || short(st.deviceId);
+  me.title = st.deviceId ?? "";
 }
 
-function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: number | null }) {
-  const li = h("li", { class: "row" });
-  li.dataset.ddn = "row";
-  li.dataset.id = r.id;
-  const ic = kindIcon(r.name, r.kind);
-  const name = h("div", { class: "name" });
-  const sub = h("span", { class: "sub" }, r.kind === "folder" ? t("files.folder") : fmt(r.size));
-  const acts = h("div", { class: "acts" });
+function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: number | null; modifiedAt?: number | null }, i: number) {
+  const tr = h("tr", { class: "reveal", style: `--i:${Math.min(i, 12)}` });
+  tr.dataset.ddn = "row";
+  tr.dataset.id = r.id;
+  const name = h("td", { class: "c-name" });
+  const acts = h("span", { class: "acts" });
+  const iconBtn = (ic: string, label: string, title: string, tone = "") => h("button", { class: `iconbtn${tone ? ` ${tone}` : ""}`, type: "button", "aria-label": label, title }, icon(ic));
   if (r.kind === "folder") {
-    const b = h("button", { class: "name-btn", type: "button", title: r.name }, r.name);
-    b.onclick = () => openFolder(r.id, r.name);
-    name.append(b, sub);
-    const go = h("button", { class: "iconbtn", type: "button", "aria-label": t("files.open", { name: r.name }) }, icon("right"));
-    go.onclick = () => openFolder(r.id, r.name);
+    name.append(h("span", { class: "nm" }, icon("folder"), h("a", { href: `/folder/${r.id}`, "data-link": "", title: r.name }, r.name)), h("span", { class: "sub" }, t("files.folder")));
+    const go = iconBtn("right", t("files.open", { name: r.name }), t("files.open", { name: r.name }));
+    go.onclick = () => openFolder(r.id);
     acts.append(go);
   } else {
-    name.append(h("span", { class: "name-text", title: r.name }, r.name), sub);
+    const [, label, tone] = typeOf(r.name);
+    name.append(h("span", { class: "nm" }, h("span", { class: `badge ${tone}` }, label), h("span", { title: r.name }, r.name)), h("span", { class: "sub" }, [fmt(r.size), r.modifiedAt ? fmtDate(r.modifiedAt) : ""].filter(Boolean).join(" · ")));
     if (VIDEO.test(r.name)) {
-      const play = h("button", { class: "iconbtn", type: "button", "aria-label": t("files.play.aria", { name: r.name }), title: t("files.play") }, icon("play"));
+      const play = iconBtn("play", t("files.play.aria", { name: r.name }), t("files.play"));
       play.dataset.ddn = "play";
       play.onclick = () => openPlayer(r.id, r.name, r.size ?? 0);
       acts.append(play);
     }
-    const dl = h("button", { class: "iconbtn", type: "button", "aria-label": t("files.download.aria", { name: r.name }), title: t("files.download") }, icon("down"));
+    const dl = iconBtn("download", t("files.download.aria", { name: r.name }), t("files.download"), "accent");
     dl.dataset.ddn = "download";
     dl.onclick = () =>
-      act(dl, async () => {
+      void act(dl, async () => {
         const b = await core.download(r.id);
         const a = document.createElement("a");
         a.href = URL.createObjectURL(b);
@@ -182,21 +275,21 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
       });
     acts.append(dl);
     if (sharesOn) {
-      const sh = h("button", { class: "iconbtn", type: "button", "aria-label": t("files.share.aria", { name: r.name }), title: t("files.share") }, icon("share"));
+      const sh = iconBtn("share", t("files.share.aria", { name: r.name }), t("files.share"));
       sh.dataset.ddn = "share";
       sh.onclick = () =>
-        act(sh, async () => {
+        void act(sh, async () => {
           const s = await core.shareFile(r.id, serverUrl);
           ui("share-name").textContent = r.name;
           $<HTMLTextAreaElement>("share-link").value = s.link;
           $<HTMLDialogElement>("share-dialog").showModal();
-          void renderShares();
         });
       acts.append(sh);
     }
   }
-  li.append(h("span", { class: `ficon ${ic}` }, icon(ic)), name, h("span", { class: "size" }, r.kind === "folder" ? "" : fmt(r.size)), acts);
-  return li;
+  const when = r.kind === "file" && r.modifiedAt ? fmtDate(r.modifiedAt, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+  tr.append(name, h("td", { class: "size" }, r.kind === "folder" ? "" : fmt(r.size)), h("td", { class: "c-date" }, when), h("td", { class: "c-acts" }, acts));
+  return tr;
 }
 
 function openPlayer(id: string, name: string, size: number) {
@@ -223,28 +316,90 @@ async function renderDevices(myId: string | null) {
     ui("dev-count").textContent = String(devs.length);
     list.replaceChildren(
       ...devs.map((d) => {
-        const when = fmtDate(d.createdAt);
-        const li = h("li", { title: `ID: ${d.deviceId}` }, icon("phone"), d.name ? h("span", { class: "dname" }, d.name) : h("span", { class: "mono" }, short(d.deviceId)));
+        const li = h("li", { title: `ID: ${d.deviceId}` }, icon("phone"), d.name ? h("span", { class: "dname" }, d.name) : h("span", { class: "dname mono" }, short(d.deviceId)));
         li.dataset.ddn = "device";
-        if (d.deviceId === myId) li.append(h("span", { class: "me" }, t("dev.me")));
-        li.append(h("span", { class: "when" }, t("dev.since", { date: when })));
+        if (d.deviceId === myId) li.append(chip(t("dev.me"), "accent"));
+        li.append(h("span", { class: "when" }, t("dev.since", { date: fmtDate(d.createdAt) })));
         if (d.deviceId !== myId) {
-          const rm = h("button", { class: "iconbtn", type: "button", "aria-label": t("dev.revoke.aria", { name: d.name ?? short(d.deviceId) }), title: t("dev.revoke") }, icon("x"));
+          const name = d.name ?? short(d.deviceId);
+          const rm = h("button", { class: "iconbtn danger", type: "button", "aria-label": t("dev.revoke.aria", { name }), title: t("dev.revoke") }, icon("x"));
           rm.onclick = () =>
-            act(rm, async () => {
-              if (!confirm(t("dev.revoke.confirm", { name: d.name ?? short(d.deviceId) }))) return;
+            void act(rm, async () => {
+              if (!confirm(t("dev.revoke.confirm", { name }))) return;
               await core.revokeDevice(d.deviceId);
               devicesLoaded = false;
               await render();
             });
           li.append(rm);
-        }
+        } else li.append(h("span", { style: "width:31px", "aria-hidden": "true" }));
         return li;
       }),
     );
   } catch {
-    list.replaceChildren(h("li", { class: "muted" }, t("dev.loadFail")));
+    list.replaceChildren(h("li", { class: "empty-row" }, t("dev.loadFail")));
   }
+}
+
+async function renderShares() {
+  ui("share-state").replaceChildren(document.createTextNode(sharesOn ? t("sh.on") : t("sh.off.state")));
+  ui("share-state").className = `chip${sharesOn ? " chip--success" : ""}`;
+  ui("share-lead").textContent = sharesOn ? t("sh.lead.on") : t("sh.lead.off");
+  if (!sharesOn) {
+    $("shares").replaceChildren();
+    $("shares").hidden = true;
+    ui("shares-empty").hidden = true;
+    return;
+  }
+  const list = await core.shares().catch(() => null);
+  if (!list) return;
+  const live = list.filter((x) => !x.revoked);
+  $("shares").hidden = live.length === 0;
+  ui("shares-empty").hidden = live.length > 0;
+  $("shares").replaceChildren(
+    ...live.map((x) => {
+      const name = x.name ?? t("sh.file");
+      const li = h("li", {}, icon("share"), h("span", { class: "dname" }, name), h("span", { class: "when" }, fmtDate(x.createdAt, {})));
+      const off = h("button", { class: "iconbtn danger", type: "button", "aria-label": t("sh.off.aria", { name }), title: t("sh.off") }, icon("x"));
+      off.onclick = () =>
+        void act(off, async () => {
+          await core.revokeShare(x.shareId);
+          await renderShares();
+          toast(t("sh.offDone"));
+        });
+      li.append(off);
+      return li;
+    }),
+  );
+}
+
+function renderHooks(wh: Awaited<ReturnType<typeof core.webhooks>>) {
+  const a = wh.advice;
+  const adv = $("advice");
+  adv.textContent = [!a.ok ? t("advice.none") : a.suggestMore ? t("advice.more") : t("advice.ok"), a.sharedChannels.length ? t("advice.shared") : ""].filter(Boolean).join(" ");
+  adv.classList.toggle("need", !a.ok || a.sharedChannels.length > 0);
+  ui("hook-count").textContent = tn("hooks.channels", a.channels);
+  ui("hook-count").className = `chip${a.ok ? " chip--success" : " chip--warning"}`;
+  [...ui("slots").children].forEach((s, i) => s.classList.toggle("on", i < a.channels));
+  ui("hooks").replaceChildren(
+    ...(wh.webhooks.length
+      ? wh.webhooks.map((w) => h("li", {}, icon("hash"), h("span", { class: "dname", title: w.label }, w.label || "webhook"), h("span", { class: "when" }, `#…${String(w.channelId).slice(-6)}`)))
+      : [h("li", { class: "empty-row" }, t("hooks.none"))]),
+  );
+}
+
+/** One copy of the channel form: in the onboarding card on the first run, in Settings otherwise. */
+function placeHooks(where: "wizard" | "settings") {
+  const block = ui("hooks-block");
+  const target = where === "wizard" ? ui("wiz-slot") : ui("hooks-slot");
+  if (block.parentElement !== target) target.prepend(block);
+  ui<HTMLDetailsElement>("howto").open = where === "wizard";
+}
+
+function showOnly(view: "signed-out" | "onboarding" | "shell" | "share") {
+  $("signed-out").hidden = view !== "signed-out";
+  ui("onboarding").hidden = view !== "onboarding";
+  $("signed-in").hidden = view !== "shell";
+  $("share-view").hidden = view !== "share";
 }
 
 let rendering: Promise<void> | null = null;
@@ -265,72 +420,114 @@ function render(): Promise<void> {
   return rendering;
 }
 
-async function renderShares() {
-  if (!sharesOn) return;
-  const list = await core.shares().catch(() => null);
-  if (!list) return;
-  const live = list.filter((x) => !x.revoked);
-  ui("shares-panel").hidden = live.length === 0;
-  ui("share-count").textContent = String(live.length);
-  $("shares").replaceChildren(
-    ...live.map((x) => {
-      const li = h("li", {}, icon("share"), h("span", { class: "dname" }, x.name ?? t("sh.file")), h("span", { class: "when" }, fmtDate(x.createdAt, {})));
-      const off = h("button", { class: "iconbtn", type: "button", "aria-label": t("sh.off.aria", { name: x.name ?? t("sh.file") }), title: t("sh.off") }, icon("x"));
-      off.onclick = () => act(off, async () => (await core.revokeShare(x.shareId), await renderShares(), toast(t("sh.offDone"))));
-      li.append(off);
-      return li;
-    }),
-  );
-}
+/** False until main() has opened the account: an early render would see "signed out" and redirect. */
+let booted = false;
 
 async function renderNow() {
-  if (shareMode) return;
+  if (shareMode || !booted) return;
   const st = await core.status();
-  renderStatus(st);
-  $("signed-out").hidden = st.signedIn;
-  $("signed-in").hidden = !st.signedIn;
-  if (!st.signedIn) return;
+  if (!st.signedIn) {
+    showOnly("signed-out");
+    if (!SIGNED_OUT_ROUTES.has(route.name) && !(route.name === "files" && route.folder === "root")) return navigate("/", true);
+    const screen = route.name === "join" || route.name === "restore" ? route.name : "create";
+    all<HTMLElement>("[data-auth]").forEach((el) => (el.hidden = el.dataset.auth !== screen));
+    document.title = t("app.title");
+    return;
+  }
+  if (route.name === "join" || route.name === "restore") return navigate("/", true);
 
-  // channels: wizard until there is one
   const wh = await core.webhooks();
-  const channels = wh.advice.channels;
-  ui("app").classList.toggle("setup", !wh.advice.ok);
-  const adv = $("advice");
-  const a = wh.advice;
-  adv.textContent = [!a.ok ? t("advice.none") : a.suggestMore ? t("advice.more", { n: a.channels }) : t("advice.ok", { n: a.channels }), a.sharedChannels.length ? t("advice.shared") : ""].filter(Boolean).join(" ");
-  adv.classList.toggle("need", !wh.advice.ok || wh.advice.sharedChannels.length > 0);
-  ui("hook-count").textContent = tn("hooks.channels", channels);
-  [...ui("slots").children].forEach((s, i) => s.classList.toggle("on", i < channels));
-  ui("hooks").replaceChildren(
-    ...wh.webhooks.map((w) => h("li", {}, icon("hook"), h("b", { title: w.label }, w.label || "webhook"), h("span", { class: "mono" }, `#${String(w.channelId).slice(-6)}`))),
-  );
-
-  if (!devicesLoaded) void renderDevices(st.deviceId);
+  channelsOk = wh.advice.ok;
+  renderHooks(wh);
+  // First run: no channel and no saved kit yet -> onboarding (unless skipped in this tab).
+  const firstRun = !wh.advice.ok && !st.kitSaved;
+  if (route.name === "files" && route.folder === "root" && firstRun && !sessionStorage.getItem(SKIP_KEY)) return navigate("/welcome", true);
+  if (route.name === "welcome" && wh.advice.ok && st.kitSaved && !$<HTMLDialogElement>("kit-dialog").open) return navigate("/", true);
+  // The rescue kit is forced once, right after the first channel (wherever that was added).
   if (wh.advice.ok && !st.kitSaved && !$<HTMLDialogElement>("kit-dialog").open) void openKit(true);
 
-  // files
-  renderCrumbs();
-  const page = await core.list(currentFolder, cursorStack.at(-1), PAGE);
+  if (route.name === "welcome") {
+    showOnly("onboarding");
+    const kitStep = wh.advice.ok;
+    placeHooks("wizard");
+    ui("hooks-block").hidden = kitStep;
+    ui("wiz-kit").hidden = !kitStep;
+    ui("wiz-h").textContent = t(kitStep ? "wiz.kit.h1" : "wiz.h1");
+    ui("wiz-lead").textContent = t(kitStep ? "wiz.kit.lead" : "wiz.lead");
+    ui("step-channel").classList.toggle("done", kitStep);
+    ui("step-channel").toggleAttribute("aria-current", !kitStep);
+    if (!kitStep) ui("step-channel").setAttribute("aria-current", "step");
+    ui("step-kit").toggleAttribute("aria-current", kitStep);
+    if (kitStep) ui("step-kit").setAttribute("aria-current", "step");
+    ui("wiz-skip").hidden = kitStep;
+    document.title = `${t("wiz.h1")} · ${t("app.title")}`;
+    return;
+  }
+
+  showOnly("shell");
+  placeHooks("settings");
+  ui("hooks-block").hidden = false;
+  renderShellStatus(st);
+  const page = route.name;
+  all<HTMLElement>("[data-page]").forEach((el) => (el.hidden = el.dataset.page !== page));
+  all<HTMLAnchorElement>("a[data-nav]").forEach((a) => (a.dataset.nav === page ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current")));
+  document.title = `${t(`page.${page}`)} · ${t("app.title")}`;
+
+  if (page === "devices") {
+    if (!devicesLoaded) await renderDevices(st.deviceId);
+    return;
+  }
+  if (page === "settings") {
+    ui("acc-id").textContent = st.accountId ?? "-";
+    ui("acc-device").textContent = st.deviceName || short(st.deviceId);
+    ui("acc-server").textContent = serverUrl;
+    ui("about-sync").replaceChildren(document.createTextNode(uploading ? t("status.uploading", { done: uploading.done, total: uploading.total }) : t("status.synced")));
+    ui("about-sync").className = "chip chip--success";
+    ui("about-sync-t").textContent = t("status.synced.t", { seq: fmtNum(st.headSeq) });
+    ui("about-tab").textContent = st.leader ? t("status.main") : t("status.secondary");
+    ui("about-tab").className = `chip${st.leader ? "" : " chip--warning"}`;
+    ui("about-tab-t").textContent = st.leader ? t("status.main.t") : t("status.secondary.t");
+    ui("about-storage").textContent = st.persistent ? t("status.persistent") : t("status.cache");
+    ui("about-storage-t").textContent = st.persistent ? t("status.persistent.t") : t("status.cache.t");
+    ui("about-device").textContent = st.deviceId ?? "-";
+    await renderShares();
+    return;
+  }
+
+  // Files
+  const folder = currentFolder();
+  // Recomputed on every render: another device may rename or remove a folder on the path.
+  const path = folder === "root" ? [] : await core.folderPath(folder);
+  if (!path) {
+    toast(t("files.gone"), "err");
+    return navigate("/", true);
+  }
+  renderCrumbs(path);
+  ui("folder-title").textContent = path.length ? path.at(-1)!.name : t("files.root");
+  const [stats, pg] = await Promise.all([core.folderStats(folder), core.list(folder, cursorStack.at(-1), PAGE)]);
+  ui("folder-meta").textContent = [tn("files.meta.folders", stats.folders), tn("files.meta.files", stats.files), stats.bytes > 0 ? fmt(stats.bytes) : ""].filter(Boolean).join(" · ");
+  ui("need-channel").hidden = channelsOk;
+  ui("upload-btn").setAttribute("aria-disabled", String(!channelsOk));
+  $<HTMLInputElement>("file").disabled = !channelsOk;
   const pageIndex = cursorStack.length - 1;
   // Both kinds of tab (main on OPFS, secondary in memory) page with a (name, id) cursor.
-  const rows = page.rows;
+  const rows = pg.rows;
   $("list").replaceChildren(...rows.map(fileRow));
-  ui("empty").hidden = page.total > 0;
-  const from = page.total ? pageIndex * PAGE + 1 : 0;
+  ui("empty").hidden = pg.total > 0;
+  const from = pg.total ? pageIndex * PAGE + 1 : 0;
   const to = pageIndex * PAGE + rows.length;
-  $("count").textContent = page.total > PAGE ? t("files.range", { from: fmtNum(from), to: fmtNum(to), total: fmtNum(page.total) }) : tn("files.count", page.total);
-  // One page only: no ‹ › buttons.
-  ui("pager-btns").hidden = page.total <= PAGE;
+  $("count").textContent = pg.total > PAGE ? t("files.range", { from: fmtNum(from), to: fmtNum(to), total: fmtNum(pg.total) }) : tn("files.count", pg.total);
+  // One page only: no pager (the counts are in the heading).
+  ui("pager-btns").hidden = pg.total <= PAGE;
   const prev = $<HTMLButtonElement>("prev");
   const next = $<HTMLButtonElement>("next");
   prev.disabled = pageIndex === 0;
-  next.disabled = to >= page.total;
+  next.disabled = to >= pg.total;
   const toTop = () => {
-    const top = ui("crumbs").getBoundingClientRect().top;
-    if (top < 0) ui("crumbs").scrollIntoView({ block: "start" });
+    if (ui("folder-title").getBoundingClientRect().top < 0) window.scrollTo(0, 0);
   };
   next.onclick = () => {
-    if (rows.length && to < page.total) cursorStack.push(rows.at(-1)!.cursor);
+    if (rows.length && to < pg.total) cursorStack.push(rows.at(-1)!.cursor);
     void render().then(toTop);
   };
   prev.onclick = () => {
@@ -339,18 +536,23 @@ async function renderNow() {
   };
 }
 
-// ── upload queue ───────────────────────────────────────────────────
+// ── upload queue (UploadProgress) ───────────────────────────────────
 async function uploadAll(files: File[]) {
   if (!files.length) return;
+  if (!channelsOk) {
+    toast(t("err.need_channel"), "err");
+    return;
+  }
+  const folder = currentFolder();
   const box = ui("queue");
   const list = ui("queue-list");
   const total = files.reduce((s, f) => s + f.size, 0);
   let sent = 0;
   let failed = 0;
   const items = files.map((f) => {
-    const state = h("span", { class: "qstate wait" }, t("queue.wait"));
+    const state = h("span", { class: "qstate" }, t("queue.wait"));
     const bar = h("i");
-    const li = h("li", {}, h("span", { title: f.name }, f.name), h("span", { class: "mono" }, fmt(f.size)), state, h("span", { class: "qitem-bar" }, bar));
+    const li = h("li", {}, h("span", { class: "qname", title: f.name }, f.name), state, h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, fmt(f.size)));
     li.dataset.ddn = "queue-item";
     list.append(li);
     return { f, state, bar };
@@ -361,7 +563,6 @@ async function uploadAll(files: File[]) {
   const meta = () => {
     ui("queue-title").textContent = uploading ? t("queue.running", { done: uploading.done, total: uploading.total }) : failed ? t("queue.doneErr", { n: failed }) : t("queue.done");
     ui("queue-meta").textContent = t("queue.meta", { sent: fmt(sent), total: fmt(total) });
-    ui("queue-bar").style.width = `${total ? (sent / total) * 100 : 100}%`;
   };
   meta();
   for (const { f, state, bar } of items) {
@@ -377,14 +578,16 @@ async function uploadAll(files: File[]) {
       meta();
     });
     try {
-      await core.upload(f, f.name, currentFolder, token);
+      await core.upload(f, f.name, folder, token);
       state.className = "qstate done";
       state.textContent = t("queue.ok");
+      bar.className = "done";
     } catch (e) {
       failed++;
       state.className = "qstate err";
       state.textContent = t("queue.err");
       state.title = errText(e);
+      bar.className = "err";
     } finally {
       progressHandlers.delete(token);
     }
@@ -401,8 +604,72 @@ async function uploadAll(files: File[]) {
   await render();
 }
 
-let sharesOn = false;
-let shareMode = false;
+function wireFilesPage() {
+  $<HTMLInputElement>("file").onchange = async (e) => {
+    const input = e.target as HTMLInputElement;
+    const files = [...(input.files ?? [])];
+    input.value = "";
+    await uploadAll(files);
+  };
+  ui("queue-close").onclick = () => {
+    ui("queue").hidden = true;
+    ui("queue-list").replaceChildren();
+  };
+  // Drop zone + drag over the whole Files page (Dashboard).
+  const zone = ui("dropzone");
+  const page = document.querySelector<HTMLElement>("[data-page=files]")!;
+  let depth = 0;
+  const isFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files");
+  page.addEventListener("dragenter", (e) => {
+    if (!isFiles(e)) return;
+    e.preventDefault();
+    if (++depth === 1) zone.classList.add("over");
+  });
+  page.addEventListener("dragleave", (e) => {
+    if (!isFiles(e)) return;
+    if (--depth <= 0) ((depth = 0), zone.classList.remove("over"));
+  });
+  page.addEventListener("dragover", (e) => {
+    if (isFiles(e)) e.preventDefault();
+  });
+  page.addEventListener("drop", (e) => {
+    if (!isFiles(e)) return;
+    e.preventDefault();
+    depth = 0;
+    zone.classList.remove("over");
+    void uploadAll([...(e.dataTransfer?.files ?? [])]);
+  });
+  zone.onclick = () => {
+    if (channelsOk) $<HTMLInputElement>("file").click();
+    else toast(t("err.need_channel"), "err");
+  };
+  zone.onkeydown = (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      zone.click();
+    }
+  };
+  // New folder (NewFolderModal).
+  const d = $<HTMLDialogElement>("folder-dialog");
+  const name = $<HTMLInputElement>("folder-name");
+  $("new-folder").onclick = () => {
+    name.value = "";
+    d.showModal();
+    name.focus();
+  };
+  ui("nf-cancel").onclick = () => d.close();
+  ui("nf-close").onclick = () => d.close();
+  $("mkdir").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      await core.mkdir(name.value.trim() || t("files.defaultFolder"), currentFolder());
+      name.value = "";
+      d.close();
+      await render();
+    });
+  name.onkeydown = (e) => {
+    if (e.key === "Enter") $("mkdir").click();
+  };
+}
 
 function defaultDeviceName(): string {
   const ua = navigator.userAgent;
@@ -458,8 +725,12 @@ async function openKit(forced: boolean) {
 function wireKit() {
   const d = $<HTMLDialogElement>("kit-dialog");
   // A forced kit cannot be dismissed with Esc.
-  d.addEventListener("cancel", (e) => d.dataset.forced && e.preventDefault());
-  $<HTMLInputElement>("kit-ack").onchange = (e) => ($<HTMLButtonElement>("kit-done").disabled = !(e.target as HTMLInputElement).checked);
+  d.addEventListener("cancel", (e) => {
+    if (d.dataset.forced) e.preventDefault();
+  });
+  $<HTMLInputElement>("kit-ack").onchange = (e) => {
+    $<HTMLButtonElement>("kit-done").disabled = !(e.target as HTMLInputElement).checked;
+  };
   $("kit-copy").onclick = () => void copy($<HTMLTextAreaElement>("kit-text").value, t("kit.copied"));
   $("kit-download").onclick = () => {
     const text = [
@@ -482,19 +753,70 @@ function wireKit() {
   };
   $("kit-print").onclick = () => window.print();
   $("kit-done").onclick = (e) =>
-    act(e.currentTarget as HTMLElement, async () => {
-      if (d.dataset.forced) {
+    void act(e.currentTarget as HTMLElement, async () => {
+      const forced = !!d.dataset.forced;
+      if (forced) {
         kitConfirmed = true;
         await core.confirmKitSaved();
       }
       d.close();
-      await render();
+      // First run done: straight to the files.
+      if (forced && route.name === "welcome") navigate("/", true);
+      else await render();
     });
+  $("kit-show").onclick = (e) => void act(e.currentTarget as HTMLElement, () => openKit(false));
+  ui("wiz-kit").onclick = (e) => void act(e.currentTarget as HTMLElement, () => openKit(true));
+  ui("wiz-skip").onclick = () => {
+    sessionStorage.setItem(SKIP_KEY, "1");
+  };
 }
 
-// ── joining a device (QR + 6 digits) and from a rescue kit ─────────
-function wireJoin(server: () => string) {
-  const d = $<HTMLDialogElement>("join-dialog");
+// ── channels ───────────────────────────────────────────────────────
+function wireHooks() {
+  const input = $<HTMLInputElement>("webhook-url");
+  $("add-webhook").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      if (!input.value.trim()) throw new Error(t("hooks.pasteFirst"));
+      await core.addWebhook(input.value);
+      input.value = "";
+      await render();
+      toast(t("hooks.added"));
+    });
+  // Block body on purpose: an on* handler that returns false cancels the key, so an
+  // `e.key === "Enter" && ...` arrow blocked typing and Ctrl+V in this field.
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") $("add-webhook").click();
+  };
+}
+
+// ── devices: pairing a new device from this one ────────────────────
+function wireDevices() {
+  const code = $<HTMLInputElement>("pair-code");
+  $("pair").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      const r = await core.pairAccept(code.value);
+      $("pair-sas").textContent = r.sas;
+      ui("sas-box").hidden = false;
+      ui("sas-box").scrollIntoView({ block: "nearest" });
+      code.value = "";
+      devicesLoaded = false;
+      await render();
+    });
+  code.onkeydown = (e) => {
+    if (e.key === "Enter") $("pair").click();
+  };
+}
+
+// ── signed out: create account, join this device (QR + 6 digits), restore from a kit ──
+function wireSignedOut(server: () => string) {
+  $("create").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      await core.createAccount(server(), $<HTMLInputElement>("device-name").value.trim() || defaultDeviceName(), $<HTMLInputElement>("invite").value);
+      await core.open();
+      sessionStorage.removeItem(SKIP_KEY);
+      navigate("/welcome");
+    });
+
   let polling: ReturnType<typeof setInterval> | null = null;
   const stop = () => {
     if (polling) clearInterval(polling);
@@ -506,16 +828,18 @@ function wireJoin(server: () => string) {
     ui("join-sas-box").hidden = true;
     ui("join-actions").hidden = false;
     ui("join-name-field").hidden = false;
-  };
-  $("join-pair").onclick = () => {
-    reset();
     $<HTMLInputElement>("join-name").value ||= defaultDeviceName();
-    d.showModal();
   };
-  $("join-cancel").onclick = () => (stop(), void core.pairCancel(), d.close());
-  d.addEventListener("close", stop);
+  resetJoin = () => {
+    void core.pairCancel();
+    reset();
+  };
+  $("join-cancel").addEventListener("click", () => {
+    stop();
+    void core.pairCancel();
+  });
   $("join-start").onclick = (e) =>
-    act(e.currentTarget as HTMLElement, async () => {
+    void act(e.currentTarget as HTMLElement, async () => {
       const r = await core.pairStart(server(), $<HTMLInputElement>("join-name").value.trim() || defaultDeviceName());
       $<HTMLTextAreaElement>("join-offer").value = r.offer;
       qr($("join-qr"), r.link);
@@ -545,45 +869,36 @@ function wireJoin(server: () => string) {
       }, 2000);
     });
   $("join-confirm").onclick = (e) =>
-    act(e.currentTarget as HTMLElement, async () => {
+    void act(e.currentTarget as HTMLElement, async () => {
       await core.pairConfirm();
-      d.close();
       await core.open();
-      await render();
+      navigate("/", true);
       toast(t("dev.paired"));
     });
   $("join-reject").onclick = () => {
     void core.pairCancel();
-    d.close();
+    reset();
     toast(t("joinD.rejected"), "err");
   };
-
-  const rd = $<HTMLDialogElement>("rescue-dialog");
-  $("join-kit-open").onclick = () => {
-    $<HTMLInputElement>("rescue-name").value ||= defaultDeviceName();
-    rd.showModal();
-  };
-  $("rescue-cancel").onclick = () => rd.close();
   $("rescue-go").onclick = (e) =>
-    act(e.currentTarget as HTMLElement, async () => {
+    void act(e.currentTarget as HTMLElement, async () => {
       await core.joinWithKit(server(), $<HTMLTextAreaElement>("rescue-text").value, $<HTMLInputElement>("rescue-name").value.trim() || defaultDeviceName());
       $<HTMLTextAreaElement>("rescue-text").value = "";
-      rd.close();
       await core.open();
-      await render();
+      navigate("/", true);
       toast(t("rescueD.done"));
     });
+  $<HTMLInputElement>("rescue-name").value ||= defaultDeviceName();
+  if (route.name === "join") reset();
 }
 
-// ── share link recipient /s/<id>#<key> ─────────────────────────────
+// ── share link recipient /s/<id>#<key> (SharedFile) ────────────────
 async function openShareView(): Promise<boolean> {
   const m = /^\/s\/([A-Za-z0-9_-]{22})\/?$/.exec(location.pathname);
   if (!m) return false;
   shareMode = true;
-  $("signed-out").hidden = true;
-  $("signed-in").hidden = true;
-  $("status").hidden = true;
-  $("share-view").hidden = false;
+  showOnly("share");
+  document.title = `${t("shareV.h")} · ${t("app.title")}`;
   document.body.dataset.ready = "1";
   const state = $("share-state");
   const key = location.hash.slice(1);
@@ -606,8 +921,9 @@ async function openShareView(): Promise<boolean> {
     state.textContent = t("shareV.progress", { done: fmt(done), total: fmt(total) });
   };
   $("share-get").onclick = (e) =>
-    act(e.currentTarget as HTMLElement, async () => {
+    void act(e.currentTarget as HTMLElement, async () => {
       const b = await core.shareDownload();
+      ui("share-bar").className = "done";
       state.textContent = t("shareV.done");
       document.body.dataset.shareDone = "1";
       const a = document.createElement("a");
@@ -619,38 +935,54 @@ async function openShareView(): Promise<boolean> {
   return true;
 }
 
-// ── light / dark / system (nordic theme.js keeps the choice in the cik_theme cookie) ──
-type ThemeMode = "system" | "light" | "dark";
-const cikTheme = () => (window as unknown as { cikTheme?: { get(): ThemeMode; cycle(): void } }).cikTheme;
-const THEME_NEXT: Record<ThemeMode, ThemeMode> = { system: "light", light: "dark", dark: "system" };
-const THEME_ICON: Record<ThemeMode, string> = { system: "sys", light: "sun", dark: "moon" };
-function paintTheme() {
-  const b = ui("theme");
-  const th = cikTheme();
-  if (!b || !th) return;
-  const m = th.get();
-  b.hidden = false;
-  b.dataset.mode = m;
-  b.replaceChildren(icon(THEME_ICON[m]));
-  const label = t("theme.label", { mode: t(`theme.${m}`), next: t(`theme.${THEME_NEXT[m]}`) });
-  b.setAttribute("aria-label", label);
-  b.title = label;
+// ── light / dark / system (cobalt/theme.js, like discordrive's ColorModeToggle) ──
+type ThemeMode = "light" | "dark" | "system";
+const ddnTheme = () => (window as unknown as { ddnTheme?: { get(): ThemeMode; set(m: ThemeMode): void } }).ddnTheme;
+const MODES: [ThemeMode, string][] = [
+  ["light", "sun"],
+  ["dark", "moon"],
+  ["system", "monitor"],
+];
+function paintModes() {
+  const th = ddnTheme();
+  if (!th) return;
+  const cur = th.get();
+  for (const box of all<HTMLElement>("[data-ddn-ui=modes]")) {
+    if (!box.childElementCount) {
+      box.setAttribute("role", "radiogroup");
+      box.append(...MODES.map(([m, ic]) => h("button", { type: "button", role: "radio", "data-mode": m }, icon(ic))));
+    }
+    box.setAttribute("aria-label", t("theme.label"));
+    box.querySelectorAll<HTMLButtonElement>("button[data-mode]").forEach((b) => {
+      const label = t(`theme.${b.dataset.mode}`);
+      b.setAttribute("aria-label", label);
+      b.title = label;
+      b.setAttribute("aria-checked", String(b.dataset.mode === cur));
+    });
+  }
+  const choice = ui("mode-choice");
+  if (!choice.childElementCount) choice.append(...MODES.map(([m]) => h("button", { type: "button", role: "radio", "data-mode": m })));
+  choice.querySelectorAll<HTMLButtonElement>("button[data-mode]").forEach((b) => {
+    b.textContent = t(`theme.${b.dataset.mode}`);
+    b.setAttribute("aria-checked", String(b.dataset.mode === cur));
+  });
 }
 function wireTheme() {
-  const b = ui("theme");
-  if (!b || !cikTheme()) return;
-  b.onclick = () => cikTheme()!.cycle();
-  document.addEventListener("cik-theme", paintTheme);
-  paintTheme();
+  document.addEventListener("click", (e) => {
+    const b = (e.target as Element | null)?.closest<HTMLButtonElement>("[data-ddn-ui=modes] button[data-mode], [data-ddn-ui=mode-choice] button[data-mode]");
+    if (b) ddnTheme()?.set(b.dataset.mode as ThemeMode);
+  });
+  document.addEventListener("ddn-theme", paintModes);
+  paintModes();
 }
 
 // ── language switch (no reload: static texts re-applied, dynamic parts re-rendered) ──
 function markLang() {
-  document.querySelectorAll<HTMLButtonElement>("[data-ddn=lang] [data-lang]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.lang === getLang())));
+  all<HTMLButtonElement>("[data-ddn=lang] [data-lang]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.lang === getLang())));
 }
 function wireLang() {
   markLang();
-  document.querySelectorAll<HTMLButtonElement>("[data-ddn=lang] [data-lang]").forEach((b) => {
+  all<HTMLButtonElement>("[data-ddn=lang] [data-lang]").forEach((b) => {
     b.onclick = () => {
       const l = b.dataset.lang as Lang;
       if (l === getLang()) return;
@@ -658,12 +990,11 @@ function wireLang() {
       storeLang(l);
       applyStatic();
       markLang();
-      paintTheme();
+      paintModes();
       document.body.dataset.lang = l;
       if (shareMode) return;
       devicesLoaded = false;
       void render();
-      void renderShares();
     };
   });
   document.body.dataset.lang = getLang();
@@ -672,8 +1003,10 @@ function wireLang() {
 async function main() {
   wireLang();
   wireTheme();
+  wireLinks();
+  wireDrawer();
   if ("serviceWorker" in navigator) await navigator.serviceWorker.register("./sw.js").catch(() => {});
-  await core.init({ discordApiOrigin: cfg.discordApiOrigin, wasmUrl: new URL("./sqlite3.wasm", location.href).href });
+  await core.init({ discordApiOrigin: cfg.discordApiOrigin, wasmUrl: new URL("./sqlite3.wasm", document.baseURI).href /* <base href="/">: right on /folder/<id> too */ });
   if (await openShareView()) return;
   $<HTMLInputElement>("server").value = serverUrl;
   // Same-origin instance: the server field is noise; keep it only for a dev setup with a separate API.
@@ -689,88 +1022,41 @@ async function main() {
   }
   const pre = new URLSearchParams(location.search).get("invite");
   if (pre) $<HTMLInputElement>("invite").value = pre;
-  $("create").onclick = (e) =>
-    act(e.currentTarget as HTMLElement, async () => {
-      await core.createAccount(server(), $<HTMLInputElement>("device-name").value.trim() || defaultDeviceName(), $<HTMLInputElement>("invite").value);
-      await core.open();
-      await render();
-    });
-  wireJoin(server);
+  wireSignedOut(server);
   wireKit();
-  $("add-webhook").onclick = (e) =>
-    act(e.currentTarget as HTMLElement, async () => {
-      const i = $<HTMLInputElement>("webhook-url");
-      if (!i.value.trim()) throw new Error(t("hooks.pasteFirst"));
-      await core.addWebhook(i.value);
-      i.value = "";
-      await render();
-      toast(t("hooks.added"));
-    });
-  $("mkdir").onclick = (e) =>
-    act(e.currentTarget as HTMLElement, async () => {
-      const i = $<HTMLInputElement>("folder-name");
-      await core.mkdir(i.value.trim() || t("files.defaultFolder"), currentFolder);
-      i.value = "";
-      await render();
-    });
-  // Block body on purpose: an on* handler that returns false cancels the key, so an
-  // `e.key === "Enter" && ...` arrow blocked typing and Ctrl+V in these fields.
-  $<HTMLInputElement>("folder-name").onkeydown = (e) => {
-    if (e.key === "Enter") $("mkdir").click();
-  };
-  $<HTMLInputElement>("webhook-url").onkeydown = (e) => {
-    if (e.key === "Enter") $("add-webhook").click();
-  };
-  $<HTMLInputElement>("file").onchange = async (e) => {
-    const input = e.target as HTMLInputElement;
-    const files = [...(input.files ?? [])];
-    input.value = "";
-    await uploadAll(files);
-  };
-  ui("queue-close").onclick = () => {
-    ui("queue").hidden = true;
-    ui("queue-list").replaceChildren();
-  };
-  $("pair").onclick = (e) =>
-    act(e.currentTarget as HTMLElement, async () => {
-      const r = await core.pairAccept($<HTMLInputElement>("pair-code").value);
-      $("pair-sas").textContent = r.sas;
-      ui("sas-box").hidden = false;
-      ui("sas-box").scrollIntoView({ block: "nearest" });
-      $<HTMLInputElement>("pair-code").value = "";
-      devicesLoaded = false;
-      await render();
-    });
+  wireHooks();
+  wireFilesPage();
+  wireDevices();
   $("share-copy").onclick = () => void copy($<HTMLTextAreaElement>("share-link").value, t("shareD.copied"));
   $("share-close").onclick = () => $<HTMLDialogElement>("share-dialog").close();
-  $("kit-show").onclick = (e) => act(e.currentTarget as HTMLElement, () => openKit(false));
-  ui("player-close").onclick = closePlayer;
-  ui<HTMLDialogElement>("player-dialog").addEventListener("close", () => $<HTMLVideoElement>("player").pause());
-  document.querySelectorAll<HTMLButtonElement>(".tab").forEach((t) => {
-    t.onclick = () => {
-      ui("app").dataset.tab = t.dataset.tab!;
-      document.querySelectorAll(".tab").forEach((x) => x.setAttribute("aria-selected", String(x === t)));
-    };
+  $<HTMLDialogElement>("share-dialog").addEventListener("close", () => {
+    if (route.name === "settings") void renderShares();
   });
+  ui("player-close").onclick = () => closePlayer();
+  ui<HTMLDialogElement>("player-dialog").addEventListener("close", () => $<HTMLVideoElement>("player").pause());
   if ((await core.status()).hasAccount) await act(null, () => core.open());
-  await render();
-  void renderShares();
   // Link from a QR code scanned by a phone camera: …/#pair=ddn-pair1:…
   const hashPair = location.hash.startsWith("#pair=") ? decodeURIComponent(location.hash.slice(6)) : null;
   if (hashPair) {
-    history.replaceState(null, "", location.pathname);
     if ((await core.status()).signedIn) {
+      history.replaceState(null, "", "/devices");
+      route = parseRoute();
       $<HTMLInputElement>("pair-code").value = hashPair;
-      ui("app").dataset.tab = "devices";
-      document.querySelectorAll(".tab").forEach((x) => x.setAttribute("aria-selected", String((x as HTMLElement).dataset.tab === "devices")));
-      $("pair-code").scrollIntoView({ block: "center" });
-      toast(t("dev.pairLoaded"));
-    } else toast(t("dev.pairWrongDevice"), "err");
+      toast(t("dev.pairLoaded"), "info");
+    } else {
+      history.replaceState(null, "", "/");
+      toast(t("dev.pairWrongDevice"), "err");
+    }
   }
+  booted = true;
+  await onRoute();
   let seen = -1;
   setInterval(async () => {
     const v = (await core.status()).version;
-    if (v !== seen) ((seen = v), void render());
+    if (v !== seen) {
+      seen = v;
+      void render();
+    }
   }, 1000);
   document.body.dataset.ready = "1";
 }

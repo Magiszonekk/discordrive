@@ -35,9 +35,17 @@ export interface ChildRow {
   name: string;
   kind: "file" | "folder";
   size: number | null;
+  /** Files: when the current version was written (author's clock, display only). Folders: null. */
+  modifiedAt: number | null;
   trashed: boolean;
   /** Opaque keyset cursor for the next page. */
   cursor: string;
+}
+
+export interface FolderStats {
+  folders: number;
+  files: number;
+  bytes: number;
 }
 
 export class SqlIndexStore implements IndexStore {
@@ -143,11 +151,21 @@ export class SqlIndexStore implements IndexStore {
     );
     return rows.map((r) => {
       const n = JSON.parse(r.rec) as NodeRecord;
-      return { id: n.id, name: n.name, kind: n.kind, size: n.content?.sizeBytes ?? null, trashed: n.trashed !== null, cursor: JSON.stringify([r.name_key, r.id]) };
+      return { id: n.id, name: n.name, kind: n.kind, size: n.content?.sizeBytes ?? null, modifiedAt: n.content?.createdAt ?? null, trashed: n.trashed !== null, cursor: JSON.stringify([r.name_key, r.id]) };
     });
   }
 
   countChildren(parentId: NodeId): number {
     return Number(this.sql.get<{ n: number }>("SELECT count(*) AS n FROM nodes WHERE parent_id = ? AND live = 1", [parentId])!.n);
+  }
+
+  /** Folder heading counters: direct sub-folders, files and the bytes of those files (one indexed pass). */
+  folderStats(parentId: NodeId): FolderStats {
+    const rows = this.sql.all<{ k: string; n: number; b: number | null }>(
+      "SELECT json_extract(rec, '$.kind') AS k, count(*) AS n, sum(json_extract(rec, '$.content.sizeBytes')) AS b FROM nodes WHERE parent_id = ? AND live = 1 GROUP BY k",
+      [parentId],
+    );
+    const f = rows.find((r) => r.k === "file");
+    return { folders: Number(rows.find((r) => r.k === "folder")?.n ?? 0), files: Number(f?.n ?? 0), bytes: Number(f?.b ?? 0) };
   }
 }

@@ -8,10 +8,12 @@
 // saves screenshots. DDN_E2E_LANG=en|pl (default en): the UI language the run
 // switches to (English is the default; pl is picked with the header switch).
 // DDN_E2E_SCHEME=light|dark: emulated prefers-color-scheme (default light).
+// Text fields are filled with the REAL keyboard (keyboard.type, Control+V from the clipboard), never
+// fill(): fill() sets the value directly and did not notice an onkeydown that cancelled every key.
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,6 +71,17 @@ if (remote) {
   invite = s.invites.create().code;
 }
 
+// Lint: no on* handler may be an arrow that returns a boolean expression (`onkeydown = (e) => e.key === "Enter" && …`
+// returns false for every other key, which cancels it: the webhook field accepted no typing or paste).
+const lint: string[] = [];
+const walkSrc = (d: string): string[] => readdirSync(d).flatMap((f) => (statSync(join(d, f)).isDirectory() ? walkSrc(join(d, f)) : f.endsWith(".ts") ? [join(d, f)] : []));
+for (const f of walkSrc(join(here, "src"))) {
+  readFileSync(f, "utf8").split("\n").forEach((line, i) => {
+    // `.onxxx = (…) => <expression>` (not a block, not `void …`) or `return false` inside an on* handler line
+    if (/\.on[a-z]+\s*=\s*(\([^)]*\)|\w+)\s*=>(?!\s*(?:\{|void\b))/.test(line) && /&&|\|\||===|!==|\bfalse\b/.test(line)) lint.push(`${f.slice(here.length + 1)}:${i + 1}: ${line.trim()}`);
+  });
+}
+
 const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-web-"));
 const video = join(dir, "klip.webm");
 execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=8", "-c:v", "libvpx-vp9", "-b:v", "400k", "-deadline", "realtime", "-cpu-used", "8", video]);
@@ -90,53 +103,83 @@ async function newPage(ctx: BrowserContext): Promise<Page> {
 const shot = async (p: Page, name: string) => void (shotDir && (await p.screenshot({ path: join(shotDir, `${name}.png`) })));
 const t0 = Date.now();
 const step = (s: string) => console.error(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${s}`);
+/** Type into a field with the real keyboard (click, select all, type). */
+async function typeInto(p: Page, sel: string, text: string) {
+  await p.click(sel);
+  await p.keyboard.press("Control+A");
+  await p.keyboard.press("Delete");
+  await p.keyboard.type(text, { delay: 2 });
+}
+/** Paste into a field with Control+V from the system clipboard (what a user does with a webhook URL). */
+async function pasteInto(p: Page, sel: string, text: string) {
+  await p.evaluate((t) => navigator.clipboard.writeText(t), text);
+  await p.click(sel);
+  await p.keyboard.press("Control+A");
+  await p.keyboard.press("Delete");
+  await p.keyboard.press("Control+V");
+}
+/** Click a sidebar link (opens the drawer first on a phone). */
+async function nav(p: Page, name: "files" | "devices" | "settings") {
+  if (await p.isVisible("[data-ddn-ui=nav-open]")) {
+    await p.click("[data-ddn-ui=nav-open]");
+    await p.waitForSelector("[data-ddn-ui=signed-in-shell][data-drawer=open]");
+  }
+  await p.click(`a[data-nav=${name}]`);
+  await p.waitForSelector(`[data-page=${name}]:not([hidden])`);
+}
 const count = (p: Page, re: RegExp) => p.waitForFunction((src) => new RegExp(src).test(document.querySelector("[data-ddn=count]")?.textContent ?? ""), re.source, { timeout: 30_000 });
 
 let ok = false;
 const r: Record<string, unknown> = { base };
 try {
   // Polish browser locale on purpose: the app must still start in English (no navigator.language).
-  const ctx = await browser.newContext({ acceptDownloads: true, viewport: { width: 1280, height: 860 }, colorScheme: SCHEME, locale: "pl-PL" });
+  const ctx = await browser.newContext({ acceptDownloads: true, viewport: { width: 1280, height: 860 }, colorScheme: SCHEME, locale: "pl-PL", permissions: ["clipboard-read", "clipboard-write"] });
   await ctx.addInitScript({ content: "window.__name = (f) => f;" }); // tsx wraps named fns passed to evaluate()
   const p = await newPage(ctx);
   await p.goto(base);
   await p.waitForSelector("body[data-ready='1']");
   // i18n: English by default (whatever navigator.language says), switch without reload, choice kept.
-  r.defaultLang = await p.evaluate(() => ({ html: document.documentElement.lang, h1: document.querySelector(".welcome h1")?.textContent, nav: navigator.language }));
+  r.defaultLang = await p.evaluate(() => ({ html: document.documentElement.lang, h1: document.querySelector("[data-auth=create] h1")?.textContent, nav: navigator.language }));
   if (LANG === "pl") {
     await p.click("[data-ddn=lang] [data-lang=pl]");
     await p.waitForFunction(() => document.documentElement.lang === "pl");
     await p.reload();
     await p.waitForSelector("body[data-ready='1']");
   }
-  r.lang = await p.evaluate(() => ({ html: document.documentElement.lang, h1: document.querySelector(".welcome h1")?.textContent, pressed: document.querySelector("[data-ddn=lang] [aria-pressed=true]")?.getAttribute("data-lang"), title: document.title }));
-  // Look: Nordic Calm (light) / Nordic Night (dark) follows the system; the header button cycles system → light → dark.
-  r.theme = await p.evaluate(() => ({ resolved: document.documentElement.dataset.theme, mode: document.documentElement.dataset.themeMode, bg: getComputedStyle(document.body).backgroundColor }));
+  r.lang = await p.evaluate(() => ({ html: document.documentElement.lang, h1: document.querySelector("[data-auth=create] h1")?.textContent, pressed: document.querySelector("[data-ddn=lang] [aria-pressed=true]")?.getAttribute("data-lang"), title: document.title }));
+  // Look: Cobalt follows the system by default; the light/dark/system switch (ColorModeToggle) overrides it.
+  r.theme = await p.evaluate(() => ({ resolved: document.documentElement.dataset.theme, mode: document.documentElement.dataset.themeMode, bg: getComputedStyle(document.body).backgroundColor, font: getComputedStyle(document.querySelector("[data-auth=create] h1")!).fontFamily }));
   const other = SCHEME === "dark" ? "light" : "dark";
-  for (let i = 0; i < 3 && (await p.evaluate(() => document.documentElement.dataset.theme)) !== other; i++) await p.click("[data-ddn-ui=theme]");
+  await p.click(`main[data-ddn=signed-out] > .auth-tools [data-mode=${other}]`);
   r.themeToggled = await p.evaluate(() => ({ resolved: document.documentElement.dataset.theme, bg: getComputedStyle(document.body).backgroundColor }));
-  for (let i = 0; i < 3 && (await p.evaluate(() => document.documentElement.dataset.themeMode)) !== "system"; i++) await p.click("[data-ddn-ui=theme]");
+  await p.click("main[data-ddn=signed-out] > .auth-tools [data-mode=system]");
+
   r.serverFieldHidden = await p.isHidden("[data-ddn-ui=server-field]");
   r.inviteFieldShown = await p.isVisible("[data-ddn=invite]");
   await shot(p, "01-welcome");
 
   // 1. sign-up: without a code refused, with the code OK
   step("sign-up");
-  await p.fill("[data-ddn=device-name]", "Laptop testowy");
+  await typeInto(p, "[data-ddn=device-name]", "Laptop testowy");
   await p.click("[data-ddn=create]");
   await p.waitForSelector(".toast.err");
-  r.signupWithoutInviteRefused = (await p.textContent(".toast.err"))?.includes("invite_required") ?? false;
-  await p.fill("[data-ddn=invite]", invite);
+  const refusal = (await p.textContent(".toast.err")) ?? "";
+  // A readable message, no technical code in it.
+  r.signupWithoutInviteRefused = /invite code|kodu zaproszenia/.test(refusal) && !/invite_required/.test(refusal);
+  await typeInto(p, "[data-ddn=invite]", invite);
+  r.typedInvite = (await p.inputValue("[data-ddn=invite]")) === invite;
   await p.click("[data-ddn=create]");
-  await p.waitForSelector("[data-ddn=signed-in]:not([hidden])");
-  await p.waitForSelector("[data-ddn=status][data-tab-role]");
-  r.mainTab = (await p.getAttribute("[data-ddn=status]", "data-tab-role")) === "main";
+  // First run: onboarding (channel, then the rescue kit), not the file list.
+  await p.waitForURL((u) => u.pathname === "/welcome", { timeout: 30_000 });
+  await p.waitForSelector("[data-ddn-ui=onboarding]:not([hidden]) [data-ddn=webhook-url]");
 
   // 2. channel wizard; the rescue kit is forced right after the first channel
   step("channels");
   await shot(p, "02-wizard");
-  await p.fill("[data-ddn=webhook-url]", hookUrls[0]!);
-  await p.click("[data-ddn=add-webhook]");
+  // Paste with Control+V (the bug of 533bf9d: onkeydown returned false and cancelled every key but Enter).
+  await pasteInto(p, "[data-ddn=webhook-url]", hookUrls[0]!);
+  r.pastedWebhook = (await p.inputValue("[data-ddn=webhook-url]")) === hookUrls[0];
+  await p.keyboard.press("Enter");
   await p.waitForSelector("[data-ddn=kit-dialog][open]", { timeout: 30_000 });
   await p.waitForFunction(() => (document.querySelector<HTMLTextAreaElement>("[data-ddn=kit-text]")?.value ?? "").length > 20);
   const kit = await p.inputValue("[data-ddn=kit-text]");
@@ -151,17 +194,41 @@ try {
   await p.check("[data-ddn=kit-ack]");
   await p.click("[data-ddn=kit-done]");
   await p.waitForSelector("[data-ddn=kit-dialog][open]", { state: "detached" });
+  // After the kit: straight to Files; channels and the kit are NOT on the files page.
+  await p.waitForURL((u) => u.pathname === "/");
+  await p.waitForSelector("[data-page=files]:not([hidden])");
+  await p.waitForSelector("[data-ddn=status][data-tab-role]");
+  r.mainTab = (await p.getAttribute("[data-ddn=status]", "data-tab-role")) === "main";
+  r.filesPageClean = await p.evaluate(() => {
+    const page = document.querySelector("[data-page=files]")!;
+    const visible = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)].some((e) => e.offsetParent !== null);
+    return !page.querySelector("[data-ddn=webhook-url], [data-ddn=kit-show], [data-ddn=pair-code], [data-ddn-ui=devices]") && !visible("[data-ddn=webhook-url]") && !visible("[data-ddn=advice]");
+  });
+  // Channels live in Settings; a reload of /settings stays there.
+  await nav(p, "settings");
+  await p.reload();
+  await p.waitForSelector("body[data-ready='1']");
+  r.settingsSurvivesReload = new URL(p.url()).pathname === "/settings" && (await p.isVisible("[data-page=settings] [data-ddn=webhook-url]"));
   if (hookUrls[1]) {
-    await p.fill("[data-ddn=webhook-url]", hookUrls[1]);
+    // Type the second one key by key (not paste) and add with the button.
+    await typeInto(p, "[data-ddn=webhook-url]", hookUrls[1]);
+    r.typedWebhook = (await p.inputValue("[data-ddn=webhook-url]")) === hookUrls[1];
     await p.click("[data-ddn=add-webhook]");
     await p.waitForFunction(() => document.querySelector("[data-ddn-ui=hook-count]")?.textContent?.startsWith("2"), null, { timeout: 30_000 });
   }
   r.advice = await p.textContent("[data-ddn=advice]");
+  await shot(p, "03b-settings");
+  // Cobalt fonts are local files (CSP: 'self' only) and really load: Space Grotesk / Inter / JetBrains Mono.
+  r.fontsLoaded = await p.evaluate(async () => (await document.fonts.ready, [...new Set([...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family.replace(/"/g, "")))].sort()));
+  await nav(p, "files");
 
   // 3. upload with byte progress
   step("upload");
-  await p.fill("[data-ddn=folder-name]", "Wakacje");
-  await p.click("[data-ddn=mkdir]");
+  await p.click("[data-ddn=new-folder]");
+  await p.waitForSelector("[data-ddn=folder-dialog][open]");
+  await p.keyboard.type("Wakacje", { delay: 2 }); // the field has focus when the dialog opens
+  r.typedFolder = (await p.inputValue("[data-ddn=folder-name]")) === "Wakacje";
+  await p.keyboard.press("Enter");
   await count(p, L.one);
   r.pagerHiddenOnOnePage = await p.isHidden("[data-ddn=next]");
   const progress: string[] = [];
@@ -213,6 +280,18 @@ try {
   await shot(p, "05-video");
   await p.click("[data-ddn-ui=player-close]");
 
+  // 5b. a folder has its own address: open it, reload, the breadcrumb is rebuilt from the index
+  step("folder route");
+  await p.locator("[data-ddn=row]", { hasText: "Wakacje" }).locator("a").click();
+  await p.waitForURL(/\/folder\//);
+  await p.reload();
+  await p.waitForSelector("body[data-ready='1']");
+  await p.waitForFunction(() => document.querySelector("[data-ddn-ui=folder-title]")?.textContent === "Wakacje");
+  r.folderRoute = { path: new URL(p.url()).pathname.startsWith("/folder/"), crumb: await p.textContent("[data-ddn-ui=crumbs] [aria-current=page]") };
+  await p.goBack();
+  await p.waitForFunction(() => location.pathname === "/");
+  await count(p, L.four);
+
   // 6. paging: 60 more folders, pages of 50 in the main tab
   step("paging");
   await p.evaluate(async () => {
@@ -239,7 +318,9 @@ try {
   await p2.click("[data-ddn=next]");
   await count(p2, L.range(51, 64, 64));
   st2.page2 = await p2.$$eval("[data-ddn=row]", (e) => e.length);
-  await p2.fill("[data-ddn=folder-name]", "Z drugiej karty");
+  await p2.click("[data-ddn=new-folder]");
+  await p2.waitForSelector("[data-ddn=folder-dialog][open]");
+  await typeInto(p2, "[data-ddn=folder-name]", "Z drugiej karty");
   await p2.click("[data-ddn=mkdir]");
   await count(p2, L.of(65)).catch(async (e) => {
     console.error("p2 count", await p2.textContent("[data-ddn=count]"), await p2.textContent("[data-ddn-ui=toasts]"));
@@ -277,8 +358,12 @@ try {
       state: await sp.textContent("[data-ddn=share-state]"),
     };
     await shot(sp, "07-share-recipient");
+    await nav(p, "settings");
+    await p.waitForSelector("[data-ddn=shares] li");
+    await shot(p, "06b-settings-sharing");
     await p.locator("[data-ddn=shares] button").first().click();
     await p.waitForFunction(() => document.querySelectorAll("[data-ddn=shares] li").length === 0);
+    await nav(p, "files");
     const sp2 = await newPage(sctx);
     await sp2.goto(link);
     await sp2.waitForFunction((re) => new RegExp(re).test(document.querySelector("[data-ddn=share-state]")?.textContent ?? ""), L.dead.source, { timeout: 15_000 });
@@ -297,6 +382,7 @@ try {
     hasTouch: true,
     userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36",
     colorScheme: SCHEME,
+    permissions: ["clipboard-read", "clipboard-write"],
   });
   await phone.addInitScript({ content: `window.__name = (f) => f; try { localStorage.setItem("ddn.lang", ${JSON.stringify(LANG)}) } catch {}` });
   const m = await newPage(phone);
@@ -304,13 +390,16 @@ try {
   await m.waitForSelector("body[data-ready='1']");
   await shot(m, "08-phone-welcome");
   await m.click("[data-ddn=join-pair]");
-  await m.fill("[data-ddn=join-name]", "Telefon testowy");
+  await m.waitForURL((u) => u.pathname === "/join");
+  await typeInto(m, "[data-ddn=join-name]", "Telefon testowy");
   await m.click("[data-ddn=join-start]");
   await m.waitForSelector("[data-ddn=join-qr] svg");
   const offer = await m.inputValue("[data-ddn=join-offer]");
   r.pairOffer = offer.startsWith("ddn-pair1:");
   await shot(m, "09-phone-qr");
-  await p.fill("[data-ddn=pair-code]", offer);
+  await nav(p, "devices");
+  await pasteInto(p, "[data-ddn=pair-code]", offer);
+  r.pastedPairCode = (await p.inputValue("[data-ddn=pair-code]")) === offer;
   await p.click("[data-ddn=pair]");
   await p.waitForSelector("[data-ddn-ui=sas-box]:not([hidden])", { timeout: 30_000 });
   const sasA = await p.textContent("[data-ddn=pair-sas]");
@@ -319,7 +408,7 @@ try {
   r.sas = { a: sasA, b: sasB, match: !!sasA && sasA === sasB && /^\d{6}$/.test(sasA) };
   await shot(m, "10-phone-sas");
   await m.click("[data-ddn=join-confirm]");
-  await m.waitForSelector("[data-ddn=signed-in]:not([hidden])", { timeout: 30_000 });
+  await m.waitForSelector("[data-ddn=signed-in]:not([hidden]) [data-page=files]:not([hidden])", { timeout: 30_000 });
   await count(m, L.of(65));
   r.phoneCount = await m.textContent("[data-ddn=count]");
   r.phoneNoKitPrompt = !(await m.isVisible("[data-ddn=kit-dialog][open]"));
@@ -327,14 +416,23 @@ try {
   await m.click("[data-ddn=next]");
   const [mdl] = await Promise.all([m.waitForEvent("download", { timeout: 60_000 }), m.locator("[data-ddn=row]", { hasText: "notatki.txt" }).locator("[data-ddn=download]").click()]);
   r.phoneDownloadOk = sha(readFileSync((await mdl.path())!)) === sha(readFileSync(doc));
-  await m.click(".tab[data-tab=devices]");
+  // Phone: hamburger + drawer (MainLayout), no bottom tabs.
+  r.phoneSidebarHiddenUntilMenu = !(await m.isVisible("[data-ddn-ui=sidebar] a[data-nav=devices]"));
+  await m.click("[data-ddn-ui=nav-open]");
+  await m.waitForSelector("[data-ddn-ui=signed-in-shell][data-drawer=open]");
+  await m.waitForTimeout(300);
+  await shot(m, "11b-phone-drawer");
+  await m.click("a[data-nav=devices]");
+  await m.waitForSelector("[data-page=devices]:not([hidden])");
+  r.phoneDrawerClosedAfterNav = (await m.getAttribute("[data-ddn-ui=signed-in-shell]", "data-drawer")) !== "open";
   await m.waitForFunction(() => document.querySelectorAll("[data-ddn=device] .dname").length === 2, null, { timeout: 15_000 });
   r.deviceNamesOnPhone = await m.$$eval("[data-ddn=device] .dname", (e) => e.map((x) => x.textContent));
-  r.phoneFilesHiddenOnDevicesTab = await m.isHidden("main.files");
+  r.phoneFilesHiddenOnDevicesTab = await m.isHidden("[data-page=files]");
   r.phoneNoHorizontalScroll = await m.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
   await shot(m, "12-phone-devices");
   await p.reload();
   await p.waitForSelector("body[data-ready='1']");
+  r.devicesSurvivesReload = new URL(p.url()).pathname === "/devices";
   await p.waitForFunction(() => document.querySelectorAll("[data-ddn=device] .dname").length === 2, null, { timeout: 15_000 });
   r.deviceNamesOnLaptop = await p.$$eval("[data-ddn=device] .dname", (e) => e.map((x) => x.textContent));
   await shot(p, "13-laptop-devices");
@@ -347,8 +445,10 @@ try {
   await t.goto(base);
   await t.waitForSelector("body[data-ready='1']");
   await t.click("[data-ddn=join-kit-open]");
-  await t.fill("[data-ddn=rescue-text]", kit);
-  await t.fill("[data-ddn=rescue-name]", "Odtworzony");
+  await t.waitForURL((u) => u.pathname === "/restore");
+  await t.evaluate((k) => navigator.clipboard.writeText(k), kit).catch(() => {});
+  await typeInto(t, "[data-ddn=rescue-text]", kit);
+  await typeInto(t, "[data-ddn=rescue-name]", "Odtworzony");
   await t.click("[data-ddn=rescue-go]");
   await count(t, L.of(65));
   r.rescueCount = await t.textContent("[data-ddn=count]");
@@ -361,6 +461,7 @@ try {
   }
   await phone.close();
   r.pageErrors = errors;
+  r.lint = lint;
   if (fake) r.discordPosts = fake.posts;
   console.log(JSON.stringify(r, null, 1));
   const share = r.share as { sha256Ok?: boolean; revokedStopsNew?: boolean; linkHasKeyAfterHash?: boolean } | string;
@@ -369,9 +470,13 @@ try {
   const dl0 = r.defaultLang as { html: string; h1: string; nav: string };
   const lg = r.lang as { html: string; h1: string; pressed: string; title: string };
   const checks: Record<string, boolean> = {
+    noFalseReturningHandlers: lint.length === 0,
+    keyboard: r.typedInvite === true && r.pastedWebhook === true && r.typedFolder === true && (!hookUrls[1] || r.typedWebhook === true) && r.pastedPairCode === true,
+    layout: r.filesPageClean === true && r.settingsSurvivesReload === true && r.devicesSurvivesReload === true && (r.folderRoute as { path: boolean; crumb: string }).path && (r.folderRoute as { crumb: string }).crumb === "Wakacje",
+    fonts: JSON.stringify(r.fontsLoaded) === JSON.stringify(["Inter", "JetBrains Mono", "Space Grotesk"]),
     theme: (r.theme as { resolved: string }).resolved === SCHEME && (r.themeToggled as { resolved: string; bg: string }).resolved !== SCHEME && (r.themeToggled as { bg: string }).bg !== (r.theme as { bg: string }).bg,
-    i18nDefaultEnglish: dl0.nav === "pl-PL" && dl0.html === "en" && dl0.h1 === "A private drive on your own Discord channels",
-    i18nLang: lg.html === LANG && lg.pressed === LANG && (LANG === "en" ? lg.h1 === "A private drive on your own Discord channels" : lg.h1 === "Prywatny dysk na Twoich kanałach Discorda"),
+    i18nDefaultEnglish: dl0.nav === "pl-PL" && dl0.html === "en" && dl0.h1 === "Create account",
+    i18nLang: lg.html === LANG && lg.pressed === LANG && (LANG === "en" ? lg.h1 === "Create account" : lg.h1 === "Załóż konto"),
     i18nSizeFormat: L.kb.test(String(r.docSize)),
     pager: r.pagerHiddenOnOnePage === true && r.pagerShownOnManyPages === true,
     invite: r.signupWithoutInviteRefused === true,
@@ -385,7 +490,7 @@ try {
     share: typeof share === "string" ? !!remote : share.sha256Ok === true && share.revokedStopsNew === true && share.linkHasKeyAfterHash === true,
     pairing: (r.sas as { match: boolean }).match && r.phoneNoKitPrompt === true && r.phoneDownloadOk === true,
     names: JSON.stringify(r.deviceNamesOnLaptop) === JSON.stringify(["Laptop testowy", "Telefon testowy"]),
-    mobile: r.phoneFilesHiddenOnDevicesTab === true && r.phoneNoHorizontalScroll === true,
+    mobile: r.phoneFilesHiddenOnDevicesTab === true && r.phoneNoHorizontalScroll === true && r.phoneSidebarHiddenUntilMenu === true && r.phoneDrawerClosedAfterNav === true,
     rescue: L.of(65).test(String(r.rescueCount)),
     serverBlind: r.serverSeesNoNames !== false,
     noPageErrors: errors.length === 0,

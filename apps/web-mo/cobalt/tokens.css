@@ -1,0 +1,143 @@
+/* Cobalt (discordrive), copied 1:1 from discordrive apps/frontend/src/tokens.css + index.css
+ * (design.md: Hallmark · modern-minimal · Cobalt · app-shell + auth-card). Tailwind's @theme block is
+ * plain custom properties here; the utilities discordrive gets from Tailwind live in app.css.
+ * Fonts: Space Grotesk / Inter / JetBrains Mono, local variable woff2 (OFL, ./fonts), because the
+ * CSP allows only 'self' (discordrive loads the same families from Google Fonts). */
+
+@font-face { font-family: "Space Grotesk"; font-style: normal; font-display: swap; font-weight: 300 700; src: url(./fonts/space-grotesk-latin-ext-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: "Space Grotesk"; font-style: normal; font-display: swap; font-weight: 300 700; src: url(./fonts/space-grotesk-latin-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "Inter"; font-style: normal; font-display: swap; font-weight: 100 900; src: url(./fonts/inter-latin-ext-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: "Inter"; font-style: normal; font-display: swap; font-weight: 100 900; src: url(./fonts/inter-latin-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-display: swap; font-weight: 100 800; src: url(./fonts/jetbrains-mono-latin-ext-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-display: swap; font-weight: 100 800; src: url(./fonts/jetbrains-mono-latin-wght-normal.woff2) format("woff2-variations"); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+
+:root {
+  /* Colour — Cobalt, cool engineered near-white */
+  --color-paper: oklch(98.5% 0.004 250);
+  --color-paper-2: oklch(96% 0.006 250);
+  --color-paper-3: oklch(93% 0.008 250);
+  --color-ink: oklch(24% 0.02 258);
+  --color-ink-2: oklch(34% 0.018 257);
+  --color-rule: oklch(90% 0.006 250);
+  --color-rule-2: oklch(84% 0.008 250);
+  --color-muted: oklch(56% 0.014 255);
+  --color-accent: oklch(58% 0.2 256);
+  --color-accent-hover: oklch(52% 0.2 256);
+  --color-accent-ink: oklch(99% 0.004 250);
+  --color-focus: oklch(58% 0.2 256);
+  --color-graphite: oklch(22% 0.016 260);
+  --color-graphite-ink: oklch(96% 0.006 250);
+  --color-error: oklch(58% 0.2 25);
+  --color-error-ink: oklch(99% 0.004 250);
+  --color-success: oklch(60% 0.15 150);
+  --color-success-ink: oklch(99% 0.004 250);
+  --color-warning: oklch(70% 0.15 80);
+  --color-warning-ink: oklch(24% 0.02 258);
+
+  /* Type */
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+  --text-display: clamp(1.75rem, 2vw + 1.25rem, 2.5rem);
+
+  /* Radii — tight, ruler-drawn */
+  --radius-input: 0.375rem; /* 6px: buttons, inputs (Tailwind rounded-md) */
+  --radius-card: 0.625rem; /* 10px */
+  --radius-chip: 0.25rem; /* 4px */
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --duration-micro: 120ms;
+  --duration-short: 220ms;
+  --duration-long: 420ms;
+
+  /* Z-index — six named levels */
+  --z-base: 1;
+  --z-raised: 10;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-modal: 400;
+  --z-toast: 500;
+  --z-tooltip: 600;
+}
+
+/* Dark mode — same hue anchors as the light Cobalt palette (discordrive tokens.css). Applies when the
+ * OS prefers dark and the user did not pick light, or when the user picked dark (data-theme). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-paper: oklch(15% 0.012 258);
+    --color-paper-2: oklch(19% 0.014 258);
+    --color-paper-3: oklch(24% 0.016 258);
+    --color-ink: oklch(94% 0.006 250);
+    --color-ink-2: oklch(84% 0.008 252);
+    --color-rule: oklch(28% 0.014 258);
+    --color-rule-2: oklch(35% 0.016 258);
+    --color-muted: oklch(60% 0.014 253);
+    --color-accent: oklch(68% 0.17 256);
+    --color-accent-hover: oklch(74% 0.17 256);
+    --color-accent-ink: oklch(15% 0.012 258);
+    --color-focus: oklch(68% 0.17 256);
+    --color-graphite: oklch(9% 0.014 262);
+    --color-graphite-ink: oklch(94% 0.006 250);
+    --color-error: oklch(68% 0.18 25);
+    --color-error-ink: oklch(15% 0.012 258);
+    --color-success: oklch(70% 0.14 150);
+    --color-success-ink: oklch(15% 0.012 258);
+    --color-warning: oklch(76% 0.13 80);
+    --color-warning-ink: oklch(15% 0.012 258);
+  }
+}
+[data-theme="dark"] {
+  --color-paper: oklch(15% 0.012 258);
+  --color-paper-2: oklch(19% 0.014 258);
+  --color-paper-3: oklch(24% 0.016 258);
+  --color-ink: oklch(94% 0.006 250);
+  --color-ink-2: oklch(84% 0.008 252);
+  --color-rule: oklch(28% 0.014 258);
+  --color-rule-2: oklch(35% 0.016 258);
+  --color-muted: oklch(60% 0.014 253);
+  --color-accent: oklch(68% 0.17 256);
+  --color-accent-hover: oklch(74% 0.17 256);
+  --color-accent-ink: oklch(15% 0.012 258);
+  --color-focus: oklch(68% 0.17 256);
+  --color-graphite: oklch(9% 0.014 262);
+  --color-graphite-ink: oklch(94% 0.006 250);
+  --color-error: oklch(68% 0.18 25);
+  --color-error-ink: oklch(15% 0.012 258);
+  --color-success: oklch(70% 0.14 150);
+  --color-success-ink: oklch(15% 0.012 258);
+  --color-warning: oklch(76% 0.13 80);
+  --color-warning-ink: oklch(15% 0.012 258);
+}
+
+/* index.css of discordrive */
+html, body { overflow-x: clip; }
+body { background: var(--color-paper); color: var(--color-ink-2); font-family: var(--font-body); }
+* { scrollbar-width: thin; scrollbar-color: var(--color-rule-2) transparent; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background-color: var(--color-rule-2); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--color-muted); }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; border-radius: inherit; }
+
+/* Mono uppercase status chip — file health, storage provider, upload state */
+.chip {
+  display: inline-flex; align-items: center; gap: 0.25rem; border-radius: var(--radius-chip);
+  padding: 0.125rem 0.375rem; font-family: var(--font-mono); font-size: 0.6875rem; font-weight: 500;
+  letter-spacing: 0.06em; text-transform: uppercase; border: 1px solid var(--color-rule-2);
+  color: var(--color-muted); white-space: nowrap;
+}
+.chip--accent { border-color: color-mix(in oklch, var(--color-accent) 40%, transparent); color: var(--color-accent); }
+.chip--success { border-color: color-mix(in oklch, var(--color-success) 40%, transparent); color: var(--color-success); }
+.chip--warning { border-color: color-mix(in oklch, var(--color-warning) 50%, transparent); color: color-mix(in oklch, var(--color-warning) 70%, var(--color-ink)); }
+.chip--error { border-color: color-mix(in oklch, var(--color-error) 40%, transparent); color: var(--color-error); }
+
+/* One-shot load stagger — file table rows only, never a scroll reveal */
+.reveal { opacity: 0; transform: translateY(6px); animation: reveal var(--duration-long) var(--ease-out) forwards; animation-delay: calc(var(--i, 0) * 35ms); }
+@keyframes reveal { to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .reveal { animation-duration: 1ms; animation-delay: 0ms; opacity: 1; transform: none; }
+}

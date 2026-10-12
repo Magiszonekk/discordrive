@@ -44,6 +44,7 @@ import {
   type ArbiterApi,
   type ByteSource,
   type ChildRow,
+  type FolderStats,
   type OpenedShare,
   type PendingPairing,
 } from "@ddv4/metadata-client";
@@ -249,13 +250,43 @@ export class AppCore {
       const n = this.c().store.getNode(id);
       if (!n || n.trashed) continue;
       const k: [string, string] = [nameKey(n.name), id];
-      all.push({ id, name: n.name, kind: n.kind as "file" | "folder", size: n.content?.sizeBytes ?? null, trashed: false, cursor: JSON.stringify(k), k });
+      all.push({ id, name: n.name, kind: n.kind as "file" | "folder", size: n.content?.sizeBytes ?? null, modifiedAt: n.content?.createdAt ?? null, trashed: false, cursor: JSON.stringify(k), k });
     }
     const cmp = (x: [string, string], y: [string, string]) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : x[1] < y[1] ? -1 : x[1] > y[1] ? 1 : 0);
     all.sort((x, y) => cmp(x.k, y.k));
     const from = after ? (JSON.parse(after) as [string, string]) : null;
     const rows = (from ? all.filter((r) => cmp(r.k, from) > 0) : all).slice(0, limit).map(({ k: _k, ...r }) => r);
     return { rows, total: all.length };
+  }
+
+  /** Counters for the folder heading ("3 folders · 8 files · 72 GB"). */
+  folderStats(parentId = ROOT_ID): FolderStats {
+    const s = this.store;
+    if (s instanceof SqlIndexStore) return s.folderStats(parentId);
+    const st: FolderStats = { folders: 0, files: 0, bytes: 0 };
+    for (const id of this.c().store.childIds(parentId)) {
+      const n = this.c().store.getNode(id);
+      if (!n || n.trashed) continue;
+      if (n.kind === "folder") st.folders++;
+      else ((st.files++), (st.bytes += n.content?.sizeBytes ?? 0));
+    }
+    return st;
+  }
+
+  /**
+   * Path from the root to a folder (breadcrumb after a reload of /folder/<id>).
+   * null when the folder no longer exists or is in the trash (another device removed it).
+   */
+  folderPath(nodeId: string): { id: string; name: string }[] | null {
+    const out: { id: string; name: string }[] = [];
+    let id: string | null = nodeId;
+    for (let i = 0; id && id !== ROOT_ID && i < 256; i++) {
+      const n = this.c().store.getNode(id);
+      if (!n || n.kind !== "folder" || n.trashed) return null;
+      out.unshift({ id: n.id, name: n.name });
+      id = n.parentId;
+    }
+    return id === ROOT_ID ? out : null;
   }
 
   async mkdir(name: string, parentId = ROOT_ID) {

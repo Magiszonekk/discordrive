@@ -86,5 +86,23 @@ describe("SqliteIndexStore (koncept §4.1, tree on disk)", () => {
     expect(new Set(seen).size).toBe(N);
     const folded = seen.map((x) => x.toLowerCase());
     expect([...folded].sort()).toEqual(folded);
+    // Folder heading counters come from the same index (folders only here).
+    expect(s.folderStats(ROOT_ID)).toEqual({ folders: N, files: 0, bytes: 0 });
+  });
+
+  it("folderStats: live sub-folders, files and their bytes; trashed nodes not counted", () => {
+    const s = new SqliteIndexStore();
+    const rec = (id: string, kind: "file" | "folder", size: number | null, trashed = false) => ({
+      id, kind, name: id, parentId: ROOT_ID, trashed: trashed ? { seq: 9, at: 0 } : null,
+      created: { seq: 1, deviceId: "d" }, nameChanged: { seq: 1, deviceId: "d" }, placed: { seq: 1, deviceId: "d" },
+      content: size === null ? null : ({ sizeBytes: size, createdAt: 1_700_000_000_000 } as never), recoveredFrom: null, conflictOf: null,
+    });
+    s.putNode(rec("a", "folder", null));
+    s.putNode(rec("b", "file", 1000));
+    s.putNode(rec("c", "file", 24));
+    s.putNode(rec("d", "file", 5000, true));
+    expect(s.folderStats(ROOT_ID)).toEqual({ folders: 1, files: 2, bytes: 1024 });
+    expect(s.listChildren(ROOT_ID).find((r) => r.id === "b")!.modifiedAt).toBe(1_700_000_000_000);
+    expect(s.listChildren(ROOT_ID).find((r) => r.id === "a")!.modifiedAt).toBeNull();
   });
 });

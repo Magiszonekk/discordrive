@@ -76,7 +76,7 @@ export {
   type EncryptedEntry,
   type EncryptedLogApi,
 } from "./op-crypto.js";
-export { SqlIndexStore, type ChildRow, type SqlDriver, type SqlValue } from "./sql-store.js";
+export { SqlIndexStore, type ChildRow, type FolderStats, type SqlDriver, type SqlValue } from "./sql-store.js";
 // Node-only (node:sqlite, server): import from "@ddv4/metadata-client/node".
 export {
   clientBlobIO,
