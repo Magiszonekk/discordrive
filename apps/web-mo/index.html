@@ -338,6 +338,11 @@ dialog.sheet::backdrop { background: rgba(5, 10, 8, .5); }
 </style>
 </head>
 <body>
+<!-- Hooks the logic and tests rely on (keep them when restyling):
+     data-ddn / data-ddn-ui (elements), data-i18n / data-i18n-html / data-i18n-attr (texts come
+     from src/locales/{en,pl}.ts; put visible text on elements with these attributes),
+     [data-ddn=lang] [data-lang][aria-pressed] (EN/PL switch), [data-ddn=status][data-tab-role],
+     [data-ddn-ui=pager-btns] (hidden on one page), .tab[data-tab] (mobile tabs). -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-drive" viewBox="0 0 24 24"><path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7a2 2 0 0 1 2-2h4l2 2.2h7a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
