@@ -301,3 +301,15 @@ Decyzje wykonawcze, których koncept i zlecenie nie przesądzały. Żadna nie zm
   SIGINT), kursor przywrócony. Ctrl+C po starcie dysku w oknie dalej zatrzymuje dysk (kod 0).
 - **`DISCORDRIVE_NO_SYSTEMD=1`** wyłącza pytanie o usługę systemd (testy i demo na maszynie,
   na której działa już instancja jako usługa: kreator z testu nie może nadpisać jej unitu).
+
+### Decyzja właściciela 2026-10-12: akceptacja ryzyka w `setup`
+- Pierwszy krok po wyborze języka: ramka z dwoma punktami (niezgodność z regulaminem Discorda;
+  brak gwarancji wg licencji MIT) i wybór `○ I understand and accept / ◉ Cancel`, domyślnie
+  **Cancel**: sam Enter nie akceptuje (wyjście 130, nic nie zapisane). W trybie tekstowym to samo
+  jako numer (`2) Cancel (default)`, akceptacja = `1`).
+- Zapis `acceptedRisk: { version, at }` w `config.json`; `RISK_VERSION` (dziś 1) podbijamy przy
+  zmianie treści, wtedy kreator pyta ponownie. `start`/`doctor` bez aktualnej akceptacji:
+  błąd z „npm run setup” (doctor: FAIL i koniec sprawdzania).
+- `--yes` nie akceptuje: potrzebne `--accept-risk` albo `"acceptRisk": true` w pliku odpowiedzi;
+  bez tego `setup --yes` kończy się błędem, zanim cokolwiek zapisze.
+- Ostrzeżenie w aplikacji webowej (Settings → Channels, onboarding) zostaje bez zmian.

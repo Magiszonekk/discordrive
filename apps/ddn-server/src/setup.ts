@@ -5,7 +5,11 @@
 // explains every Discord step, and ends with what to open and what to run.
 // Re-running edits the existing config (current values are the defaults; the
 // bot token is kept unless you choose otherwise).
-// Non-interactive: --yes plus flags or --answers <file.json>.
+// Non-interactive: --yes plus flags or --answers <file.json>; --yes does NOT accept the risk
+// notice, that needs --accept-risk (or "acceptRisk": true in the answers file).
+// First step after the language: the risk notice (Discord's Terms of Service, no warranty) with
+// "Cancel" preselected; Enter alone cancels. The acceptance is saved in config.json and asked
+// again only when RISK_VERSION changes; `start` and `doctor` refuse to run without it.
 // Interface: arrow keys (tui.ts) on an interactive terminal, plain numbered
 // questions otherwise (prompt.ts); the wizard logic below is the same for both.
 
@@ -16,12 +20,14 @@ import { health, hostUrl, isLocalAddress, isLoopback, localAddresses, nextFreePo
 import {
   DEFAULT_PORT,
   REPO_DIR,
+  RISK_VERSION,
   checkWritable,
   configPath,
   dbPath,
   defaultDataDir,
   defaults,
   isLocalUrl,
+  riskAccepted,
   saveConfig,
   tryLoadConfig,
   validate,
@@ -51,6 +57,8 @@ export interface SetupFlags {
   /** Start the server in this terminal after setup (foreground). */
   start?: boolean;
   selfTest?: boolean;
+  /** Accept the risk notice without the question (required with --yes, see RISK_VERSION). */
+  acceptRisk?: boolean;
   /** Language of the wizard and the instance default (skips the first question). */
   lang?: CliLang;
   /** Tests: Discord API on a fake. */
@@ -114,6 +122,46 @@ export const COMMANDS = {
   invite: "npm run invite",
 };
 
+/** Word-wrap for the framed risk notice (the frame does not wrap by itself on narrow terminals). */
+export function wrap(text: string, width = Math.max(40, Math.min(76, (process.stdout.columns || 80) - 8))): string[] {
+  const out: string[] = [];
+  for (const para of text.split("\n")) {
+    let line = "";
+    const indent = /^\d+\. /.test(para) ? "   " : "";
+    for (const w of para.split(" ")) {
+      if (line && (line + " " + w).length > width) {
+        out.push(line);
+        line = indent + w;
+      } else line = line ? `${line} ${w}` : w;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+/**
+ * The risk notice, first step after the language. Default = Cancel: Enter alone does not accept.
+ * Resolves with the acceptance to save, or throws Cancelled (nothing is saved).
+ */
+export async function acceptRisk(p: Prompter, yes: boolean, flag: boolean | undefined, saved: InstanceConfig["acceptedRisk"]): Promise<NonNullable<InstanceConfig["acceptedRisk"]>> {
+  if (saved && riskAccepted({ acceptedRisk: saved })) return saved;
+  if (flag) return { version: RISK_VERSION, at: new Date().toISOString() };
+  if (yes) throw new Error(t("r.yesNeedsFlag"));
+  const text = [...wrap(t("r.tos")), "", ...wrap(t("r.warranty"))];
+  p.note(t("r.title"), text);
+  if (!p.tui) p.say(t("r.plainHelp"));
+  const v = await p.choose(
+    t("r.q"),
+    [
+      { value: "accept", label: t("r.accept") },
+      { value: "cancel", label: t("r.cancel") },
+    ],
+    "cancel",
+  );
+  if (v !== "accept") throw new Cancelled(t("r.declined"));
+  return { version: RISK_VERSION, at: new Date().toISOString() };
+}
+
 export const botGuide = (): string[] => [t("s.guide0"), t("s.guide1"), t("s.guide2"), t("s.guide3"), t("s.guide4"), t("s.guide5")];
 
 export async function setup(f: SetupFlags, p0?: Prompter): Promise<SetupResult> {
@@ -142,6 +190,11 @@ export async function setup(f: SetupFlags, p0?: Prompter): Promise<SetupResult> 
     );
     setCliLang(c.language);
   }
+
+  // Risk notice (Discord's Terms of Service + no warranty): before anything else is checked or asked.
+  const wasAccepted = !!old && riskAccepted(old);
+  c.acceptedRisk = await acceptRisk(p, yes, f.acceptRisk, old?.acceptedRisk);
+  if (!wasAccepted && !yes) p.ok(t("r.accepted", { date: c.acceptedRisk.at.slice(0, 10) }));
 
   if (p.tui) p.info([t("s.title"), t("s.intro1"), t("s.intro2"), t("s.intro3"), t("tui.intro4")].join("\n"));
   else p.intro(t("s.title"), [t("s.intro1"), t("s.intro2"), t("s.intro3"), t("s.intro4")]);

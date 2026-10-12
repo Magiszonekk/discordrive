@@ -49,6 +49,21 @@ export const en = {
   "tui.textKeys": "Enter: confirm",
   "tui.textDefault": "Enter = {v}",
   "tui.validating": "checking…",
+  // risk acceptance (first step of setup)
+  "r.title": "Before you start: read and accept",
+  "r.tos": "1. Storing files on Discord is against Discord's Terms of Service. Discord may delete the messages and attachments, or block the webhooks or the account, at any time and without warning.",
+  "r.warranty": "2. This software is provided \"as is\", without warranty of any kind (MIT licence, LICENSE file). Data can be lost. Keep a copy of important files somewhere else.",
+  "r.q": "Do you understand and accept this?",
+  "r.accept": "I understand and accept",
+  "r.cancel": "Cancel",
+  "r.plainHelp": "Type 1 and Enter to accept. Enter alone cancels.",
+  "r.declined": "Not accepted. Setup stopped; nothing was saved.",
+  "r.accepted": "risk accepted ({date})",
+  "r.yesNeedsFlag": "--yes does not accept the risk. Read the README (Discord's Terms of Service, no warranty) and add --accept-risk (or \"acceptRisk\": true in the answers file).",
+  "r.needed": "The risk notice of this version was not accepted yet (Discord's Terms of Service, no warranty).\nRun the wizard first: npm run setup",
+  "c.v.risk": "acceptedRisk: { version, at } or null",
+  "d.risk": "risk accepted",
+  "d.riskOk": "version {version}, {at}",
   // language
   "lang.q": "Language / Język",
   "lang.en": "English",
@@ -238,6 +253,7 @@ Common: --data-dir DIR (default {dir}), --lang en|pl (or DISCORDRIVE_LANG=pl)
 setup without questions: --yes [--answers file.json] [--public-url URL] [--host H] [--port N]
   [--trust-proxy A,B] [--signup invite|open|closed] [--bot-token-file FILE | --no-bot]
   [--replace-bot] [--systemd|--no-systemd] [--start] [--no-invite] [--no-self-test]
+  --accept-risk is required with --yes (Discord's Terms of Service, no warranty: see README)
 The bot token is only accepted interactively or from a file (never on the command line).`,
   "cli.badArg": "unknown argument: {a}",
   "cli.badLang": "--lang: en or pl",
@@ -334,6 +350,20 @@ export const pl: Record<CliKey, string> = {
   "tui.textKeys": "Enter: zatwierdź",
   "tui.textDefault": "Enter = {v}",
   "tui.validating": "sprawdzam…",
+  "r.title": "Zanim zaczniesz: przeczytaj i zaakceptuj",
+  "r.tos": "1. Przechowywanie plików na Discordzie jest niezgodne z regulaminem Discorda. Discord może w każdej chwili i bez ostrzeżenia usunąć wiadomości i załączniki albo zablokować webhooki lub konto.",
+  "r.warranty": "2. Oprogramowanie jest dostarczane \"tak jak jest\", bez żadnej gwarancji (licencja MIT, plik LICENSE). Dane mogą zostać utracone. Trzymaj kopię ważnych plików gdzie indziej.",
+  "r.q": "Czy rozumiesz i akceptujesz?",
+  "r.accept": "Rozumiem i akceptuję",
+  "r.cancel": "Anuluj",
+  "r.plainHelp": "Wpisz 1 i Enter, żeby zaakceptować. Sam Enter anuluje.",
+  "r.declined": "Brak akceptacji. Kreator przerwany, nic nie zostało zapisane.",
+  "r.accepted": "ryzyko zaakceptowane ({date})",
+  "r.yesNeedsFlag": "--yes nie akceptuje ryzyka. Przeczytaj README (regulamin Discorda, brak gwarancji) i dodaj --accept-risk (albo \"acceptRisk\": true w pliku odpowiedzi).",
+  "r.needed": "Ostrzeżenie w tej wersji nie zostało jeszcze zaakceptowane (regulamin Discorda, brak gwarancji).\nNajpierw uruchom kreator: npm run setup",
+  "c.v.risk": "acceptedRisk: { version, at } albo null",
+  "d.risk": "akceptacja ryzyka",
+  "d.riskOk": "wersja {version}, {at}",
   "lang.q": "Language / Język",
   "lang.en": "English",
   "lang.pl": "Polski",
@@ -512,6 +542,7 @@ Wspólne: --data-dir DIR (domyślnie {dir}), --lang en|pl (albo DISCORDRIVE_LANG
 setup bez pytań: --yes [--answers plik.json] [--public-url URL] [--host H] [--port N]
   [--trust-proxy A,B] [--signup invite|open|closed] [--bot-token-file PLIK | --no-bot]
   [--replace-bot] [--systemd|--no-systemd] [--start] [--no-invite] [--no-self-test]
+  z --yes wymagane --accept-risk (regulamin Discorda, brak gwarancji: zob. README)
 Token bota podaje się tylko interaktywnie albo plikiem (nigdy w linii poleceń).`,
   "cli.badArg": "nieznany argument: {a}",
   "cli.badLang": "--lang: en albo pl",

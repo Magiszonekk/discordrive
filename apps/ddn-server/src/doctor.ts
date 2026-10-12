@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { InviteStore } from "@ddv4/metadata-client/node";
 import { health, hostUrl, isLocalAddress, portState, validateBotToken } from "./checks.js";
-import { POSIX_MODES, checkWritable, configPath, dbPath, fileMode, isLocalUrl, loadConfig, webDir, type InstanceConfig } from "./config.js";
+import { POSIX_MODES, checkWritable, riskAccepted, configPath, dbPath, fileMode, isLocalUrl, loadConfig, webDir, type InstanceConfig } from "./config.js";
 import { COMMANDS } from "./setup.js";
 import { t } from "./i18n.js";
 import { lingerEnabled, systemdAvailable, unitState } from "./systemd.js";
@@ -27,6 +27,12 @@ export async function doctor(dataDir: string, out: (s: string) => void = console
   try {
     c = loadConfig(dataDir);
     add("ok", t("d.config"), configPath(dataDir));
+    if (!riskAccepted(c)) {
+      add("fail", t("d.risk"), t("r.needed"));
+      out(t("d.someFail"));
+      return { checks, ok: false };
+    }
+    add("ok", t("d.risk"), t("d.riskOk", { version: c.acceptedRisk!.version, at: c.acceptedRisk!.at }));
   } catch (e) {
     add("fail", t("d.config"), (e as Error).message);
     return { checks, ok: false };

@@ -1,19 +1,19 @@
 // discordrive setup / doctor / invite: non-interactive runs, a scripted
 // interactive run through the real prompter (piped stdin), and the server
 // side of invites, limits and health.
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAccountHttp, generateDeviceKey, newAccountKey } from "@ddv4/metadata-client";
 import { FakeDiscord } from "@ddv4/metadata-client/node";
-import { configPath, loadConfig } from "../src/config.js";
+import { RISK_VERSION, configPath, loadConfig } from "../src/config.js";
 import { doctor, invite } from "../src/doctor.js";
-import { ttyPrompter } from "../src/prompt.js";
+import { Cancelled, ttyPrompter } from "../src/prompt.js";
 import { serve } from "../src/serve.js";
 import { setup } from "../src/setup.js";
-import { setupFlags } from "../src/cli.js";
+import { main, setupFlags } from "../src/cli.js";
 
 const tmp = () => mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-setup-"));
 const quiet = () => {
@@ -47,7 +47,7 @@ describe("discordrive setup (non-interactive)", () => {
     const dir = tmp();
     const port = await freePort();
     const { p, out } = quiet();
-    const r = await setup({ yes: true, dataDir: dir, port, systemd: false }, p);
+    const r = await setup({ yes: true, acceptRisk: true, dataDir: dir, port, systemd: false }, p);
     expect(r.selfTest).toMatchObject({ ok: true });
     expect(r.invite).toBeNull();
     expect(statSync(configPath(dir)).mode & 0o777).toBe(0o600);
@@ -64,7 +64,7 @@ describe("discordrive setup (non-interactive)", () => {
     const dir = tmp();
     const port = await freePort();
     const { p, out } = quiet();
-    const r = await setup({ yes: true, dataDir: dir, port, publicUrl: "https://dysk.example.com", systemd: false }, p);
+    const r = await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: "https://dysk.example.com", systemd: false }, p);
     expect(r.invite?.code).toMatch(/^ddn-inv-[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$/);
     expect(loadConfig(dir)).toMatchObject({ signup: "invite", publicUrl: "https://dysk.example.com" });
     expect(out.join("\n")).toContain("invite code: ddn-inv-");
@@ -88,7 +88,7 @@ describe("discordrive setup (non-interactive)", () => {
     mkdirSync(ro);
     chmodSync(ro, 0o500);
     cleanups.push(() => chmodSync(ro, 0o700));
-    await expect(setup({ yes: true, dataDir: join(ro, "data"), port: await freePort(), systemd: false }, quiet().p)).rejects.toThrow(/no permission to write/);
+    await expect(setup({ yes: true, acceptRisk: true, dataDir: join(ro, "data"), port: await freePort(), systemd: false }, quiet().p)).rejects.toThrow(/no permission to write/);
   });
 
   it("validates the bot token against Discord (GET /users/@me), stores it 0600 and never prints it", async () => {
@@ -101,14 +101,14 @@ describe("discordrive setup (non-interactive)", () => {
     writeFileSync(tf, fake.botToken + "\n", { mode: 0o600 });
     const port = await freePort();
     const { p, out } = quiet();
-    const r = await setup({ yes: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, botTokenFile: tf, systemd: false, discordApiOrigin: fake.origin }, p);
+    const r = await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, botTokenFile: tf, systemd: false, discordApiOrigin: fake.origin }, p);
     expect(r.config.bot).toEqual({ id: "1550000000000000001", username: "fake-bot" });
     expect(readFileSync(configPath(dir), "utf8")).toContain(fake.botToken);
     expect(out.join("\n")).not.toContain(fake.botToken);
     // A bad token is refused, the config is not written.
     writeFileSync(tf, "nope");
     const dir2 = tmp();
-    await expect(setup({ yes: true, dataDir: dir2, port, publicUrl: `http://127.0.0.1:${port}`, botTokenFile: tf, systemd: false, discordApiOrigin: fake.origin }, quiet().p)).rejects.toThrow(/token/);
+    await expect(setup({ yes: true, acceptRisk: true, dataDir: dir2, port, publicUrl: `http://127.0.0.1:${port}`, botTokenFile: tf, systemd: false, discordApiOrigin: fake.origin }, quiet().p)).rejects.toThrow(/token/);
     expect(() => loadConfig(dir2)).toThrow(/No configuration/);
   });
 
@@ -121,8 +121,8 @@ describe("discordrive setup (non-interactive)", () => {
     const tf = join(dir, "..", `tok2-${Date.now()}`);
     writeFileSync(tf, fake.botToken);
     const port = await freePort();
-    await setup({ yes: true, dataDir: dir, port, publicUrl: "https://dysk.example.com", host: "127.0.0.1", trustProxy: ["127.0.0.1"], botTokenFile: tf, systemd: false, selfTest: false, discordApiOrigin: fake.origin }, quiet().p);
-    await setup({ yes: true, dataDir: dir, signup: "closed", systemd: false, selfTest: false, discordApiOrigin: fake.origin }, quiet().p);
+    await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: "https://dysk.example.com", host: "127.0.0.1", trustProxy: ["127.0.0.1"], botTokenFile: tf, systemd: false, selfTest: false, discordApiOrigin: fake.origin }, quiet().p);
+    await setup({ yes: true, acceptRisk: true, dataDir: dir, signup: "closed", systemd: false, selfTest: false, discordApiOrigin: fake.origin }, quiet().p);
     const c = loadConfig(dir);
     expect(c).toMatchObject({ publicUrl: "https://dysk.example.com", trustProxy: ["127.0.0.1"], signup: "closed", botToken: fake.botToken, bind: { port } });
   });
@@ -136,7 +136,7 @@ describe("discordrive setup (non-interactive)", () => {
     // `discordrive start` on a busy port: a human message, not an unhandled 'error' event.
     const { main } = await import("../src/cli.js");
     const dir0 = tmp();
-    await setup({ yes: true, dataDir: dir0, port: await freePort(), systemd: false, selfTest: false }, quiet().p);
+    await setup({ yes: true, acceptRisk: true, dataDir: dir0, port: await freePort(), systemd: false, selfTest: false }, quiet().p);
     const cfg = JSON.parse(readFileSync(configPath(dir0), "utf8"));
     cfg.bind.port = busy;
     writeFileSync(configPath(dir0), JSON.stringify(cfg));
@@ -154,8 +154,8 @@ describe("discordrive setup (non-interactive)", () => {
     await new Promise((r) => s.once("listening", r));
     cleanups.push(() => void s.close());
     const port = (s.address() as { port: number }).port;
-    await expect(setup({ yes: true, dataDir: tmp(), port, systemd: false }, quiet().p)).rejects.toThrow(/in use/);
-    await expect(setup({ yes: true, dataDir: tmp(), host: "203.0.113.7", systemd: false }, quiet().p)).rejects.toThrow(/is not an address/);
+    await expect(setup({ yes: true, acceptRisk: true, dataDir: tmp(), port, systemd: false }, quiet().p)).rejects.toThrow(/in use/);
+    await expect(setup({ yes: true, acceptRisk: true, dataDir: tmp(), host: "203.0.113.7", systemd: false }, quiet().p)).rejects.toThrow(/is not an address/);
   });
 
   it("flags and answers file; --bot-token on the command line is refused", () => {
@@ -166,6 +166,79 @@ describe("discordrive setup (non-interactive)", () => {
     expect(() => setupFlags({ "bot-token": "x" })).toThrow(/not allowed/);
     expect(setupFlags({ lang: "pl" }).lang).toBe("pl");
     expect(() => setupFlags({ lang: "de" })).toThrow(/en or pl/);
+    // The risk notice: only an explicit flag / answers entry accepts it, --yes alone does not.
+    expect(setupFlags({ yes: true }).acceptRisk).toBe(false);
+    expect(setupFlags({ yes: true, "accept-risk": true }).acceptRisk).toBe(true);
+    const af2 = join(dir, "answers2.json");
+    writeFileSync(af2, JSON.stringify({ acceptRisk: true }));
+    expect(setupFlags({ yes: true, answers: af2 }).acceptRisk).toBe(true);
+  });
+});
+
+describe("risk notice (Discord's Terms of Service, no warranty)", () => {
+  it("--yes without --accept-risk: refused before anything is written", async () => {
+    const dir = tmp();
+    await expect(setup({ yes: true, dataDir: dir, port: await freePort(), systemd: false, selfTest: false }, quiet().p)).rejects.toThrow(/--accept-risk/);
+    expect(existsSync(configPath(dir))).toBe(false);
+  });
+
+  it("interactive: Enter alone = Cancel (nothing saved); 1 = accepted, saved with version and time; not asked again", async () => {
+    const dir = tmp();
+    const port = await freePort();
+    process.env.DISCORDRIVE_DATA_DIR = dir;
+    cleanups.push(() => void delete process.env.DISCORDRIVE_DATA_DIR);
+    const run = async (answers: string[]) => {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      let text = "";
+      output.on("data", (d) => (text += String(d)));
+      input.write(answers.join("\n"));
+      const p = ttyPrompter(input, output);
+      try {
+        return { r: await setup({ selfTest: false, systemd: false, start: false }, p).catch((e: Error) => e), text };
+      } finally {
+        p.close();
+      }
+    };
+    const a = await run(["", "", ""]);
+    expect(a.r).toBeInstanceOf(Cancelled);
+    expect(a.text).toContain("Storing files on Discord is against Discord's Terms of Service");
+    expect(a.text).toContain("without warranty of any kind");
+    expect(a.text).toContain("2) Cancel  (default)");
+    expect(existsSync(configPath(dir))).toBe(false);
+    const b = await run(["", "1", "", String(port), "", "", dir, "y", "", ""]);
+    expect(b.r).not.toBeInstanceOf(Error);
+    const c = loadConfig(dir);
+    expect(c.acceptedRisk).toMatchObject({ version: RISK_VERSION });
+    expect(Date.now() - Date.parse(c.acceptedRisk!.at)).toBeLessThan(60_000);
+    // Second run: no risk question (answers shift by one).
+    const d = await run(["", "", String(port), "", "", dir, "y", "", ""]);
+    expect(d.r).not.toBeInstanceOf(Error);
+    expect(d.text).not.toContain("Terms of Service");
+    expect(loadConfig(dir).acceptedRisk).toEqual(c.acceptedRisk);
+  });
+
+  it("start and doctor refuse a config without the current acceptance (old file or older text version)", async () => {
+    const dir = tmp();
+    const port = await freePort();
+    await setup({ yes: true, acceptRisk: true, dataDir: dir, port, systemd: false, selfTest: false }, quiet().p);
+    const raw = JSON.parse(readFileSync(configPath(dir), "utf8"));
+    for (const acceptedRisk of [undefined, { version: RISK_VERSION - 1, at: "2026-01-01T00:00:00.000Z" }]) {
+      writeFileSync(configPath(dir), JSON.stringify({ ...raw, acceptedRisk }));
+      const lines: string[] = [];
+      const d = await doctor(dir, (s) => lines.push(s));
+      expect(d.ok).toBe(false);
+      expect(lines.join("\n")).toMatch(/risk accepted: .*npm run setup/s);
+      const errs: string[] = [];
+      const orig = console.error;
+      console.error = (s: string) => void errs.push(s);
+      try {
+        expect(await main(["start", "--data-dir", dir])).toBe(1);
+      } finally {
+        console.error = orig;
+      }
+      expect(errs.join("\n")).toContain("npm run setup");
+    }
   });
 });
 
@@ -179,7 +252,7 @@ describe("discordrive setup (interactive, scripted stdin)", () => {
     output.on("data", (d) => (text += String(d)));
     // language (Enter = English), scenario (Enter = local), port, mode (Enter), bot (Enter = skip), data dir, save (y), [systemd: Enter = no], start now (n)
     const { systemdAvailable } = await import("../src/systemd.js");
-    input.write(["", "", String(port), "", "", dir, "y", ...(systemdAvailable() ? [""] : []), "n", ""].join("\n"));
+    input.write(["", "1", "", String(port), "", "", dir, "y", ...(systemdAvailable() ? [""] : []), "n", ""].join("\n"));
     const p = ttyPrompter(input, output);
     // The default data dir comes from DISCORDRIVE_DATA_DIR (never the real user's one in tests).
     process.env.DISCORDRIVE_DATA_DIR = join(tmp(), "default");
@@ -215,7 +288,7 @@ describe("discordrive setup (interactive, scripted stdin)", () => {
     output.on("data", (d) => (text += String(d)));
     const { systemdAvailable } = await import("../src/systemd.js");
     // language 2 = Polski, scenario, port, mode, bot, data dir, save: "x" (invalid) then "tak", [systemd: nie], start now: n
-    input.write(["2", "", String(port), "", "", dir, "x", "tak", ...(systemdAvailable() ? ["nie"] : []), "n", ""].join("\n"));
+    input.write(["2", "1", "", String(port), "", "", dir, "x", "tak", ...(systemdAvailable() ? ["nie"] : []), "n", ""].join("\n"));
     const p = ttyPrompter(input, output);
     process.env.DISCORDRIVE_DATA_DIR = join(tmp(), "default");
     cleanups.push(() => void delete process.env.DISCORDRIVE_DATA_DIR);
@@ -250,7 +323,7 @@ describe("discordrive setup (interactive, scripted stdin)", () => {
     output.on("data", (d) => (text += String(d)));
     const { systemdAvailable } = await import("../src/systemd.js");
     // scenario, port, mode, bot, data dir, save: "t" (not accepted in English) then "yes", [systemd], start: no
-    input.write(["", String(port), "", "", dir, "t", "yes", ...(systemdAvailable() ? ["no"] : []), "no", ""].join("\n"));
+    input.write(["1", "", String(port), "", "", dir, "t", "yes", ...(systemdAvailable() ? ["no"] : []), "no", ""].join("\n"));
     const p = ttyPrompter(input, output);
     process.env.DISCORDRIVE_DATA_DIR = join(tmp(), "default");
     cleanups.push(() => void delete process.env.DISCORDRIVE_DATA_DIR);
@@ -274,7 +347,7 @@ describe("discordrive setup (interactive, scripted stdin)", () => {
     output.on("data", (d) => (text += String(d)));
     const { systemdAvailable } = await import("../src/systemd.js");
     // language, scenario, port, mode, bot: 2 = now, wrong token, right token, data dir, save, [systemd], start now: n
-    input.write(["", "", String(port), "", "2", "wrong", fake.botToken, dir, "", ...(systemdAvailable() ? [""] : []), "n", ""].join("\n"));
+    input.write(["", "1", "", String(port), "", "2", "wrong", fake.botToken, dir, "", ...(systemdAvailable() ? [""] : []), "n", ""].join("\n"));
     const p = ttyPrompter(input, output);
     process.env.DISCORDRIVE_DATA_DIR = join(tmp(), "default");
     cleanups.push(() => void delete process.env.DISCORDRIVE_DATA_DIR);
@@ -292,7 +365,7 @@ describe("instance server: invites, limits, health, web app", () => {
   it("invite-only sign-up: no code / bad code 403, good code once, then used", async () => {
     const dir = tmp();
     const port = await freePort();
-    await setup({ yes: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, signup: "invite", systemd: false, selfTest: false, invite: false }, quiet().p);
+    await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, signup: "invite", systemd: false, selfTest: false, invite: false }, quiet().p);
     const srv = await serve(loadConfig(dir), () => {});
     cleanups.push(() => srv.close());
     const url = `http://127.0.0.1:${port}`;
@@ -360,7 +433,7 @@ describe("instance server: invites, limits, health, web app", () => {
   it("doctor: green on a running instance, red on a broken config file mode", async () => {
     const dir = tmp();
     const port = await freePort();
-    await setup({ yes: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, systemd: false, selfTest: false }, quiet().p);
+    await setup({ yes: true, acceptRisk: true, dataDir: dir, port, publicUrl: `http://127.0.0.1:${port}`, systemd: false, selfTest: false }, quiet().p);
     const srv = await serve(loadConfig(dir), () => {});
     cleanups.push(() => srv.close());
     const lines: string[] = [];

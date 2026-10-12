@@ -9,6 +9,11 @@ import { fileURLToPath } from "node:url";
 import { t, type CliLang } from "./i18n.js";
 
 export const CONFIG_VERSION = 1;
+/**
+ * Version of the risk text the first setup step shows (Discord's Terms of Service + no warranty).
+ * Bump it when the text changes in substance: every instance is asked again.
+ */
+export const RISK_VERSION = 1;
 export const DEFAULT_PORT = 3020;
 export const UNIT_NAME = "discordrive-next.service";
 export type SignupPolicy = "invite" | "open" | "closed";
@@ -33,6 +38,8 @@ export interface InstanceConfig {
   limits: { bodyBytes: number; opPayloadB64: number; vaultB64: number };
   /** Override where the built web app is (default: apps/web-mo/dist next to this package). */
   webDir?: string;
+  /** The operator accepted the risk text (ToS + no warranty) of this version at `at` (ISO time). */
+  acceptedRisk?: { version: number; at: string } | null;
   /** Tests only: send Discord API/CDN calls to a local fake. Never set on a real instance. */
   testing?: { discordApiOrigin?: string };
 }
@@ -116,6 +123,7 @@ export function validate(c: InstanceConfig): string[] {
   if (c.language !== "en" && c.language !== "pl") e.push(t("c.v.lang"));
   if (c.botToken !== null && typeof c.botToken !== "string") e.push(t("c.v.bot"));
   if (!Array.isArray(c.trustProxy)) e.push(t("c.v.proxy"));
+  if (c.acceptedRisk != null && (typeof c.acceptedRisk !== "object" || !Number.isInteger(c.acceptedRisk.version) || typeof c.acceptedRisk.at !== "string")) e.push(t("c.v.risk"));
   return e;
 }
 
@@ -132,6 +140,11 @@ export function loadConfig(dataDir: string): InstanceConfig {
   const errs = validate(c);
   if (errs.length) throw new ConfigError(`${p}:\n  ${errs.join("\n  ")}`);
   return c;
+}
+
+/** Did the operator accept the CURRENT risk text? `start` and `doctor` refuse to run without it. */
+export function riskAccepted(c: Pick<InstanceConfig, "acceptedRisk">): boolean {
+  return !!c.acceptedRisk && c.acceptedRisk.version === RISK_VERSION;
 }
 
 export function tryLoadConfig(dataDir: string): InstanceConfig | null {

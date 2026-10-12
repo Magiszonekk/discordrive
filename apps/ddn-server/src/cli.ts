@@ -10,7 +10,7 @@
 
 import { readFileSync } from "node:fs";
 import { cliLang, envLang, isCliLang, setCliLang, t, type CliLang } from "./i18n.js";
-import { ConfigError, configPath, defaultDataDir, loadConfig, type InstanceConfig } from "./config.js";
+import { ConfigError, configPath, defaultDataDir, loadConfig, riskAccepted, type InstanceConfig } from "./config.js";
 import type { DdnServer } from "@ddv4/metadata-client/node";
 import { doctor, invite } from "./doctor.js";
 import { serve } from "./serve.js";
@@ -74,6 +74,7 @@ export function setupFlags(opts: Record<string, string | boolean>): SetupFlags {
     start: bool("start", "start"),
     selfTest: bool("self-test", "selfTest"),
     discordApiOrigin: str(pick("discord-api-origin", "discordApiOrigin")),
+    acceptRisk: opts["accept-risk"] === true || answers.acceptRisk === true,
     lang: (lang as CliLang | undefined) ?? envLang() ?? undefined,
   };
 }
@@ -136,6 +137,7 @@ export async function main(argv: string[]): Promise<number | "running"> {
       case "start":
       case "serve": {
         const c = loadConfig(dataDir);
+        if (!riskAccepted(c)) throw new ConfigError(t("r.needed"));
         const { portState } = await import("./checks.js");
         const st = await portState(c.bind.host, c.bind.port);
         if (st.state === "ours") {

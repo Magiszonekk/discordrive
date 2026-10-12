@@ -25,6 +25,14 @@ Steps (Enter = the default):
    saved as `language` in `config.json` and used by the next `start`/`doctor`/`invite` and as
    the default language of the browser app (users can switch there; their choice wins);
    in Polish mode `t`/`tak`/`nie` are accepted too, but `y/n` is what is shown,
+0b. **risk notice** (owner decision 2026-10-12), before anything else: storing files on Discord is
+   against Discord's Terms of Service (messages, attachments, webhooks or the account can be
+   removed or blocked) and the software comes without any warranty (MIT, `LICENSE`). Choice
+   `○ I understand and accept / ◉ Cancel` with **Cancel preselected: Enter alone does not
+   accept** (exit 130, nothing saved). Saved as `acceptedRisk: { version, at }` in `config.json`
+   and asked again only when the text version (`RISK_VERSION`) changes. `start` and `doctor`
+   refuse to run without it ("run npm run setup"). `--yes` does NOT accept it: add
+   `--accept-risk` (or `"acceptRisk": true` in the answers file),
 1. checks the requirements (Node, write access to the data directory),
 2. where it runs: **this computer only** (default: `http://localhost:<port>`, bind 127.0.0.1,
    open sign-up; localhost is a secure context, so the service worker and WebCrypto work
@@ -65,9 +73,9 @@ Through npm: `npm run setup -- --lang pl`.
 Without questions (tests, automation):
 
 ```
-discordrive setup --yes --public-url https://drive.example.com --host 10.0.0.2 --port 3020 \
+discordrive setup --yes --accept-risk --public-url https://drive.example.com --host 10.0.0.2 --port 3020 \
   --trust-proxy 10.0.0.1 --signup invite --bot-token-file ~/bot.token --systemd --lang en
-discordrive setup --yes --answers answers.json      # the same keys in JSON (publicUrl, host, port, trustProxy, signup, botTokenFile, systemd, language, …)
+discordrive setup --yes --answers answers.json      # the same keys in JSON (acceptRisk, publicUrl, host, port, trustProxy, signup, botTokenFile, systemd, language, …)
 ```
 
 `--bot-token` on the command line is refused (it would end up in the shell history).

@@ -86,6 +86,13 @@ describe.skipIf(!hasScript)("discordrive setup: arrow-key wizard in a pty", () =
     const t = term([], { XDG_DATA_HOME: xdg });
     await t.until(/Language \/ Język\s+│\s+◉ English\s+│\s+○ Polski/);
     await t.send(KEY.enter);
+    // Risk notice: Cancel preselected; arrow up + Enter accepts.
+    await t.until(/Before you start: read and accept/);
+    await t.until(/Do you understand and accept this\?\s+│\s+○ I understand and accept\s+│\s+◉ Cancel/);
+    await t.send(KEY.up);
+    await t.until(/◉ I understand and accept\s+│\s+○ Cancel/);
+    await t.send(KEY.enter);
+    await t.until(/risk accepted/);
     await t.until(/Step 1\/5 · Where should the drive run\?/);
     await t.until(/◉ Only on this computer/);
     await t.send(KEY.enter);
@@ -109,7 +116,7 @@ describe.skipIf(!hasScript)("discordrive setup: arrow-key wizard in a pty", () =
     const h = (await (await fetch(`http://127.0.0.1:${port}/v1/health`)).json()) as { ok: boolean; language: string };
     expect(h).toMatchObject({ ok: true, language: "en" });
     const c = JSON.parse(readFileSync(join(xdg, "discordrive-next", "config.json"), "utf8"));
-    expect(c).toMatchObject({ language: "en", signup: "open", publicUrl: `http://localhost:${port}`, bind: { host: "127.0.0.1", port } });
+    expect(c).toMatchObject({ language: "en", signup: "open", publicUrl: `http://localhost:${port}`, bind: { host: "127.0.0.1", port }, acceptedRisk: { version: 1 } });
     await t.send(KEY.ctrlC);
     expect(await t.exit).toBe(0);
     expect(t.text()).not.toMatch(/Choose a number|\[Y\/n\]/); // the plain interface did not leak in
@@ -131,6 +138,8 @@ describe.skipIf(!hasScript)("discordrive setup: arrow-key wizard in a pty", () =
       await t.send(KEY.down);
       await t.until(/○ English\s+│\s+◉ Polski/);
       await t.send(KEY.enter);
+      await t.until(/Zanim zaczniesz: przeczytaj i zaakceptuj[\s\S]*niezgodne z regulaminem[\s\S]*◉ Anuluj/);
+      await t.send(KEY.up, KEY.enter);
       await t.until(/Krok 1\/5 · Gdzie ma działać dysk\?/);
       await t.send(KEY.down);
       await t.until(/◉ Na serwerze z własną domeną/);
@@ -183,12 +192,37 @@ describe.skipIf(!hasScript)("discordrive setup: arrow-key wizard in a pty", () =
     }
   }, 150_000);
 
+  it("risk notice: Enter alone = Cancel (exit 130, nothing saved); after acceptance a re-run does not ask again", async () => {
+    const xdg = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-tui-"));
+    const t = term([], { XDG_DATA_HOME: xdg });
+    await t.until(/◉ English/);
+    await t.send(KEY.enter);
+    await t.until(/Storing files on Discord is against Discord's[\s\S]*without warranty of any kind[\s\S]*◉ Cancel/);
+    await t.send(KEY.enter);
+    await t.until(/Not accepted\. Setup stopped; nothing was saved\./);
+    expect(await t.exit).toBe(130);
+    expect(existsSync(join(xdg, "discordrive-next", "config.json"))).toBe(false);
+    expect(t.text()).not.toMatch(/Step 1\/5/);
+    // Accept once with flags, then the interactive wizard goes straight to step 1.
+    const y = term(["--yes", "--accept-risk", "--port", String(await freePort()), "--no-self-test"], { XDG_DATA_HOME: xdg });
+    expect(await y.exit).toBe(0);
+    const t2 = term([], { XDG_DATA_HOME: xdg });
+    await t2.until(/◉ English/);
+    await t2.send(KEY.enter);
+    await t2.until(/Step 1\/5 · Where should the drive run\?/);
+    expect(t2.text()).not.toContain("Terms of Service");
+    await t2.send(KEY.ctrlC);
+    expect(await t2.exit).toBe(130);
+  }, 90_000);
+
   it("Ctrl+C and Esc stop cleanly: nothing saved, exit 130, cursor shown again", async () => {
     for (const key of [KEY.ctrlC, KEY.esc]) {
       const xdg = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-tui-"));
       const t = term([], { XDG_DATA_HOME: xdg });
       await t.until(/◉ English/);
       await t.send(KEY.enter);
+      await t.until(/◉ Cancel/);
+      await t.send(KEY.up, KEY.enter);
       await t.until(/Step 1\/5/);
       await t.send(key);
       await t.until(/Setup cancelled\. Nothing was saved\./);
@@ -205,7 +239,12 @@ describe.skipIf(!hasScript)("discordrive setup: arrow-key wizard in a pty", () =
     expect(t.raw()).not.toMatch(/\x1b\[3\dm/);
     await t.send(KEY.ctrlC);
     expect(await t.exit).toBe(130);
-    const y = term(["--yes", "--port", String(await freePort()), "--no-self-test"], { XDG_DATA_HOME: xdg });
+    // --yes alone does not accept the risk notice: refused, nothing saved.
+    const n = term(["--yes", "--port", String(await freePort()), "--no-self-test"], { XDG_DATA_HOME: xdg });
+    expect(await n.exit).toBe(1);
+    expect(n.text()).toContain("--yes does not accept the risk");
+    expect(existsSync(join(xdg, "discordrive-next", "config.json"))).toBe(false);
+    const y = term(["--yes", "--accept-risk", "--port", String(await freePort()), "--no-self-test"], { XDG_DATA_HOME: xdg });
     expect(await y.exit).toBe(0);
     expect(y.text()).toContain("Start the drive (npm start) and open:");
     expect(y.text()).not.toMatch(/[◆◇◉]/);
