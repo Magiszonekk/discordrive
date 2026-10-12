@@ -124,6 +124,20 @@ jobs:
           set -e
           cat "$RUNNER_TEMP/start-e2ee.log"
 
+      - name: setup --mode plain (pool on the fake Discord), start, health, doctor (ffmpeg found or install hint)
+        run: |
+          D="$RUNNER_TEMP/ddn-plain"
+          node apps/ddn-server/bin/discordrive.mjs setup --yes --accept-risk --no-autostart --port 3032 --data-dir "$D" --mode plain --webhooks-file "$RUNNER_TEMP/pool.txt" --discord-api-origin "$(cat $RUNNER_TEMP/fake.origin)" --no-self-test | tee "$RUNNER_TEMP/setup-plain.txt"
+          node apps/ddn-server/bin/discordrive.mjs start --data-dir "$D" > "$RUNNER_TEMP/start-plain.log" 2>&1 &
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3032/v1/health > "$RUNNER_TEMP/hp.json" && break; sleep 1; done
+          cat "$RUNNER_TEMP/hp.json"; echo
+          grep -q '"mode":"plain"' "$RUNNER_TEMP/hp.json"
+          grep -q '"rangeStreaming":true' "$RUNNER_TEMP/hp.json"
+          node apps/ddn-server/bin/discordrive.mjs doctor --data-dir "$D" | tee "$RUNNER_TEMP/doctor-plain.txt"
+          grep -q "Mode: built for plain" "$RUNNER_TEMP/doctor-plain.txt"
+          grep -E "ffmpeg \(thumbnails, previews\)" "$RUNNER_TEMP/doctor-plain.txt"
+          cat "$RUNNER_TEMP/start-plain.log"
+
       - name: Same in PowerShell (Windows console, UTF-8 and the ASCII fallback)
         if: runner.os == 'Windows'
         shell: pwsh

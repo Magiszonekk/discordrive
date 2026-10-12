@@ -108,3 +108,52 @@ describe("setup --mode e2ee", () => {
     await expect(serve(loadConfig(dir), () => {})).rejects.toThrow(/belongs to a "metadata-only" instance/);
   });
 });
+
+describe("setup --mode plain", () => {
+  it("pool, plain bundle, health shows the plain features, doctor reports ffmpeg (found or how to install)", async () => {
+    const fake = new FakeDiscord();
+    const origin = await fake.listen();
+    cleanups.push(() => fake.close());
+    const dir = tmp();
+    const port = await freePort();
+    const file = join(dir, "..", `hooks-plain-${port}.txt`);
+    writeFileSync(file, fake.addWebhook("1550000000000000501").url + "\n");
+    const { p, out } = quiet();
+    const r = await setup({ yes: true, acceptRisk: true, dataDir: dir, port, autostart: false, mode: "plain", webhooksFile: file, discordApiOrigin: origin, selfTest: false }, p);
+    expect(r.config.mode).toBe("plain");
+    expect(out.join("\n")).toMatch(/ffmpeg found|ffmpeg: |not found: thumbnails and previews are off/);
+    const srv = await serve(loadConfig(dir), () => {});
+    cleanups.push(() => srv.close());
+    const h = (await (await fetch(`http://127.0.0.1:${port}/v1/health`)).json()) as Record<string, unknown>;
+    expect(h).toMatchObject({ mode: "plain", serverBlobs: true, plain: { search: true, rangeStreaming: true }, pool: { channels: 1 } });
+    const lines: string[] = [];
+    await doctor(dir, (s) => lines.push(s));
+    expect(lines.join("\n")).toMatch(/Mode: built for plain/);
+    expect(lines.join("\n")).toMatch(/ffmpeg \(thumbnails, previews\): (found|not found)/);
+  });
+
+  it("without ffmpeg: setup and doctor say how to install it for this system, the instance still runs", async () => {
+    const saved = { a: process.env.DDN_FFMPEG, b: process.env.DDN_FFPROBE };
+    process.env.DDN_FFMPEG = "ddn-no-such-ffmpeg";
+    process.env.DDN_FFPROBE = "ddn-no-such-ffprobe";
+    cleanups.push(() => {
+      process.env.DDN_FFMPEG = saved.a ?? "";
+      process.env.DDN_FFPROBE = saved.b ?? "";
+      if (!saved.a) delete process.env.DDN_FFMPEG;
+      if (!saved.b) delete process.env.DDN_FFPROBE;
+    });
+    const dir = tmp();
+    const port = await freePort();
+    const { p, out } = quiet();
+    await setup({ yes: true, acceptRisk: true, dataDir: dir, port, autostart: false, mode: "plain", selfTest: false }, p);
+    const hint = process.platform === "win32" ? /winget install Gyan\.FFmpeg/ : process.platform === "darwin" ? /brew install ffmpeg/ : /apt install ffmpeg/;
+    expect(out.join("\n")).toMatch(hint);
+    const srv = await serve(loadConfig(dir), () => {});
+    cleanups.push(() => srv.close());
+    const h = (await (await fetch(`http://127.0.0.1:${port}/v1/health`)).json()) as { plain: { thumbnails: boolean } };
+    expect(h.plain.thumbnails).toBe(false);
+    const lines: string[] = [];
+    await doctor(dir, (s) => lines.push(s));
+    expect(lines.join("\n")).toMatch(hint);
+  });
+});
