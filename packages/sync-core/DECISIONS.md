@@ -380,3 +380,19 @@ Wariant B (decyzja właściciela 2026-10-12): tryby nowego rdzenia, nie stare `a
 - **Plain** = e2ee + jawne operacje (`PlainOpCodec`): serwer stosuje log do własnej repliki
   (sync-core), stąd nazwy, miniatury (ffmpeg opcjonalny), streaming Range i wyszukiwanie po stronie
   serwera. Fragmenty na Discordzie nadal szyfrowane kluczem pliku (jak ddrive: at-rest).
+- **Stan uploadu po stronie serwera bez czytania logu:** reguła 8 wymusza, że każda operacja
+  dotykająca uploadu U ma U w jawnym `leaseGuard`; drugi wpis z U (commit albo abort) =
+  „committed”. Serwer e2ee nie odszyfrowuje operacji, a mimo to wie, których fragmentów nie wolno
+  sprzątać. Porzucone = open/final, < 2 wpisy z U, lease wygasł, 10 min ciszy → tombstone (lease
+  U odmawiany na zawsze) + skasowanie fragmentów.
+- **Bundle trybu po stronie serwera:** `apps/ddn-server/dist/<tryb>/server-mode.mjs` (esbuild),
+  pakiety wspólne (`@ddv4/metadata-client`, `sync-core`, …) zewnętrzne, żeby w procesie był jeden
+  `DdnServer`/`HttpError`; plik trybu nie może importować modułów instancji (`../i18n` itp. —
+  build odmawia), dostaje je jako argumenty (jedna kopia stanu języka).
+- **Teksty per tryb w web-mo:** klucz `x@e2ee` (dla plain łańcuch `@plain` → `@e2ee` → bazowy),
+  wybierany przez `__DDN_MODE__` z builda; HTML i hooki `data-i18n` bez zmian.
+- **Preview e2ee:** port 3021 na 192.0.2.10 był zajęty przez inną usługę (another service),
+  więc e2ee działa na **3023** (`discordrive-next-e2ee.service`, osobny katalog danych), plain
+  pójdzie na 3022. Przeglądarka na http + adres VPN nie ma WebCrypto ani service workera
+  (brak „secure context”), więc do testów w Chromium służy lokalny proxy (`DDN_E2E_TUNNEL=1`);
+  właściciel potrzebuje domeny z HTTPS (prośba w raporcie).
