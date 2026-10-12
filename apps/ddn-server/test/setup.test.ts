@@ -268,7 +268,9 @@ describe("discordrive setup (interactive, scripted stdin)", () => {
     expect(text).toContain("1) English  (default)");
     expect(text).toContain("Checking requirements");
     expect(text).toContain("Only on this computer");
-    expect(text).toContain("e2ee: coming soon");
+    // Mode step (stage 3): e2ee selectable, metadata only stays the default (Enter).
+    expect(text).toContain("e2ee: files and names encrypted in the browser");
+    expect(r.config.mode).toBe("metadata-only");
     expect(text).toContain("Skip for now");
     expect(text).toContain("Without a bot: no link sharing");
     expect(text).toContain("To turn it on later: npm run setup");

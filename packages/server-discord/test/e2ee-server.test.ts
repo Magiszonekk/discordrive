@@ -7,7 +7,8 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ChannelPacer, DiscordWebhookTransport, DriveClient, EncryptedArbiter, HttpApi, OpCodec, ServerBlobStore, createAccountHttp, generateDeviceKey, memorySource, newAccountKey, sha256Hex, type ByteSink } from "@ddv4/metadata-client";
+import { ChannelPacer, DiscordWebhookTransport, DriveClient, EncryptedArbiter, HttpApi, OpCodec, createAccountHttp, generateDeviceKey, memorySource, newAccountKey, sha256Hex, type ByteSink } from "@ddv4/metadata-client";
+import { ServerBlobStore } from "@ddv4/metadata-client/server-blobs";
 import { DdnServer, FakeDiscord } from "@ddv4/metadata-client/node";
 import { BlobsExtension, DiscordSender, InstanceHooks, POOL, loadInstanceKey } from "../src/index.js";
 

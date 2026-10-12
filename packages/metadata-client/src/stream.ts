@@ -3,7 +3,7 @@
 // seeks while only the needed fragments are fetched from the CDN and
 // decrypted in the browser. Pure Request -> Response, testable in Node.
 
-import type { MetadataClient } from "./client.js";
+import type { DriveClient as MetadataClient } from "./drive-client.js";
 
 export const STREAM_PREFIX = "/ddn/file/";
 /** Cap for open-ended "bytes=N-" requests: about one fragment, so seeking stays cheap. */

@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "discordrive-next instance (metadata-only): one process serving the API, the notify websocket and the built web app; `discordrive setup|serve|doctor|invite`.",
+  "description": "discordrive-next instance: one process serving the API, the notify websocket and the built web app, in the mode chosen at setup (metadata-only, e2ee; plain later); `discordrive setup|serve|doctor|invite`.",
   "bin": {
     "discordrive": "./bin/discordrive.mjs"
   },
@@ -12,7 +12,8 @@
     "start": "node bin/discordrive.mjs start",
     "doctor": "node bin/discordrive.mjs doctor",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsx build-server.ts"
   },
   "dependencies": {
     "@clack/core": "1.5.1",
@@ -22,7 +23,8 @@
     "@ddv4/web-mo": "*",
     "esbuild": "~0.27.0",
     "tsx": "^4.19.0",
-    "uqr": "^0.1.3"
+    "uqr": "^0.1.3",
+    "@ddv4/server-discord": "*"
   },
   "devDependencies": {
     "vitest": "^4.1.5"

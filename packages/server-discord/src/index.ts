@@ -4,3 +4,4 @@ export { DiscordSender, DiscordUnavailableError, NoChannelError, SERVER_BLOBS_MA
 export { InstanceHooks, POOL, INSTANCE_KEY_FILE, MAX_ACCOUNT_CHANNELS, loadInstanceKey, instanceSubkey, type HookInfo } from "./instance-hooks.js";
 export { BlobsExtension, ByteBudget, MAX_BLOB_BYTES, DEFAULT_INFLIGHT_BYTES, FRAGMENT_RETENTION_MS, type BlobsExtensionOptions, type BlobRow } from "./blobs-ext.js";
 export { SnapshotsExtension, serverSnapshotKey, serverBlobIO, rebuildAccountLog, type SnapshotsExtensionOptions } from "./snapshots-ext.js";
+export { serverBlobsMode, type ServerBlobsMode, type ServerBlobsModeOptions } from "./mode.js";

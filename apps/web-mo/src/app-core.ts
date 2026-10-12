@@ -7,49 +7,40 @@
 
 import { MemoryIndexStore, ROOT_ID, nameKey, type IndexStore, type LogEntry } from "@ddv4/sync-core";
 import {
-  DiscordWebhookTransport,
-  EncryptedArbiter,
   HttpApi,
   HttpPairingMailbox,
-  MetadataClient,
-  OpCodec,
-  SnapshotScheduler,
   SqlIndexStore,
-  WebhookVault,
   accountKeyFromB64,
   acceptPairing,
-  clientBlobIO,
   createAccountHttp,
-  createPointerMessage,
-  decodeRescueKit,
   deviceKeyFromCryptoKey,
-  encodeRescueKit,
   generateDeviceKey,
   getChallenge,
   getHealth,
-  inspectForVault,
   newAccountKey,
   openDeviceName,
   openShare,
-  prepareShare,
+  prepareShareWith,
   rescueRegisterDevice,
   sealDeviceName,
   sealJson,
   shareLink,
   startPairing,
-  toWebhookRefs,
   unsealJson,
-  vaultAdvice,
   type AccountKey,
   type ArbiterApi,
   type ByteSource,
   type ChildRow,
+  type DriveClient,
   type FolderStats,
   type OpenedShare,
   type PendingPairing,
 } from "@ddv4/metadata-client";
 import { fromBase64, toBase64 } from "@ddv4/processing";
 import { claimLeadership, openOpfsIndexStore, requestPersistentStorage } from "@ddv4/metadata-client/browser";
+// Resolved at build time to ONE mode (build.ts): the other modes are not in the bundle.
+import { mode } from "ddn:mode";
+import type { ModeCtx } from "./modes/types.js";
 import { keystore, type StoredAccount } from "./keystore.js";
 
 export interface CoreConfig {
@@ -89,11 +80,11 @@ export class AppCore {
   private acct: StoredAccount | null = null;
   private key: AccountKey | null = null;
   private http: HttpApi | null = null;
-  private client: MetadataClient | null = null;
+  private client: DriveClient | null = null;
   private store: IndexStore | null = null;
-  private vault: WebhookVault | null = null;
+  private ctx: ModeCtx | null = null;
   private sub: { close(): void } | null = null;
-  private scheduler: SnapshotScheduler | null = null;
+  private uploads = new Map<string, AbortController>();
   private snapTimer: ReturnType<typeof setInterval> | null = null;
   private readonly serverTimes = new Map<number, number>();
   private pending: PendingPair | null = null;
@@ -109,14 +100,11 @@ export class AppCore {
 
   constructor(private readonly cfg: CoreConfig = {}) {}
 
-  private transport() {
-    return new DiscordWebhookTransport({ apiOrigin: this.cfg.discordApiOrigin });
-  }
-
   async status() {
     const a = this.acct ?? (await keystore.load()) ?? null;
-    const v = this.vault && this.client ? await this.vault.load().catch(() => null) : null;
     return {
+      /** Build-time mode of this app (the instance runs the same one). */
+      mode: mode.mode,
       signedIn: !!this.client,
       hasAccount: !!a,
       accountId: a?.accountId ?? null,
@@ -128,8 +116,9 @@ export class AppCore {
       version: this.version,
       /** Rescue kit confirmed on this device (forced once after the first channel). */
       kitSaved: !!a?.kitSavedAt,
-      hasPointer: !!v?.pointer,
       lastSnapshot: this.lastSnapshot,
+      /** Who writes snapshots: this browser (metadata only) or the instance (e2ee/plain). */
+      snapshotsBy: mode.clientSnapshots ? "client" : "server",
     };
   }
 
@@ -174,7 +163,16 @@ export class AppCore {
     this.key = accountKeyFromB64(a.accountKey);
     const dk = await deviceKeyFromCryptoKey(a.devicePrivateKey, a.devicePublicKey);
     this.http = new HttpApi({ baseUrl: a.serverUrl, accountId: a.accountId, deviceId: a.deviceId, key: dk, instanceId: a.instanceId });
-    this.vault = new WebhookVault(this.http, this.key, a.accountId);
+    this.ctx = {
+      acct: a,
+      key: this.key,
+      http: this.http,
+      store: this.store,
+      timed: (x) => this.timedArbiter(x),
+      leader: () => this.leader,
+      discordApiOrigin: this.cfg.discordApiOrigin,
+      serverTimeOf: (seq) => this.serverTimes.get(seq),
+    };
     await this.rebuildClient();
     this.version++;
     this.sub = this.http.subscribe(() => void this.client!.pull().then(() => (this.version++, this.onEvent({ type: "changed" }))));
@@ -204,37 +202,33 @@ export class AppCore {
     };
   }
 
-  /** (Re)build the client around the same store and log position (webhooks changed). */
+  /** (Re)build the client around the same store and log position (channels changed). */
   private async rebuildClient() {
-    const a = this.acct!;
-    const hooks = toWebhookRefs(await this.vault!.load());
-    this.client = new MetadataClient({
-      device: { id: a.deviceId, name: a.deviceName },
-      arbiter: this.timedArbiter(new EncryptedArbiter(new OpCodec(this.key!, a.accountId), this.http!)),
-      transport: this.transport(),
-      webhooks: hooks.length ? hooks : [{ id: "0", url: "unset://" }],
-      store: this.store!,
-    });
-    this.scheduler = null;
+    this.client = await mode.client(this.ctx!);
     await this.client.pull();
   }
 
-  private c(): MetadataClient {
+  private c(): DriveClient {
     if (!this.client) throw new Error("not signed in");
     return this.client;
   }
 
   async addWebhook(url: string) {
-    const w = await inspectForVault(this.transport(), url);
-    const v = await this.vault!.addWebhook(w);
+    await mode.addChannel(this.ctx!, url);
     await this.rebuildClient();
     this.startSnapshots();
-    return vaultAdvice(v);
+    return (await mode.channels(this.ctx!)).advice;
   }
 
+  /** Channels of this account: own webhooks (vault or instance) + the instance pool (e2ee/plain). */
   async webhooks() {
-    const v = await this.vault!.load();
-    return { webhooks: v.webhooks.map((w) => ({ id: w.id, channelId: w.channelId, label: w.label })), advice: vaultAdvice(v) };
+    return mode.channels(this.ctx!);
+  }
+
+  async removeWebhook(id: string) {
+    if (!mode.removeChannel) throw new Error("not supported in this mode");
+    await mode.removeChannel(this.ctx!, id);
+    await this.rebuildClient();
   }
 
   /**
@@ -296,20 +290,30 @@ export class AppCore {
     return id;
   }
 
-  /** Upload with byte progress pushed as "upload-progress" events tagged with `token`. */
+  /** Upload with byte progress pushed as "upload-progress" events tagged with `token`. Cancel: cancelUpload(token). */
   async upload(file: Blob, name: string, parentId = ROOT_ID, token = "") {
     let last = 0;
+    const ac = new AbortController();
+    if (token) this.uploads.set(token, ac);
     const r = await this.c().upload(blobSource(file), name, parentId, {
+      signal: ac.signal,
       onProgress: (done, total) => {
         const t = Date.now();
         if (done > 0 && done < total && t - last < 100) return;
         last = t;
         this.onEvent({ type: "upload-progress", token, done, total });
       },
-    });
+    }).finally(() => this.uploads.delete(token));
     this.version++;
     void this.snapshotSoon();
     return { nodeId: r.nodeId, chunks: r.chunks, sha256: r.version.plaintextSha256 };
+  }
+
+  /** Stop an upload in progress (the fragment in flight is aborted; e2ee/plain: the server deletes what was sent). */
+  cancelUpload(token: string): boolean {
+    const ac = this.uploads.get(token);
+    ac?.abort();
+    return !!ac;
   }
 
   async download(nodeId: string): Promise<Blob> {
@@ -395,7 +399,7 @@ export class AppCore {
 
   /** New device from the rescue kit (§3.5): registers this device with the rescue key. */
   async joinWithKit(serverUrl: string, kitText: string, deviceName: string): Promise<void> {
-    const kit = decodeRescueKit(kitText);
+    const kit = mode.decodeKit(kitText);
     const key = accountKeyFromB64(kit.key);
     const dk = await generateDeviceKey(false);
     const c = await getChallenge(serverUrl);
@@ -449,33 +453,12 @@ export class AppCore {
 
   // ── rescue kit + snapshots (§3.5, §6.2) ────────────────────────────
 
-  /** Make sure the pointer message exists (needs a channel); returns it. */
-  private async ensurePointer() {
-    let v = await this.vault!.load();
-    if (v.pointer) return v.pointer;
-    const hooks = toWebhookRefs(v);
-    if (!hooks.length) throw new Error("need_channel: add a channel with a webhook first");
-    const io = clientBlobIO(this.c(), this.transport());
-    const mine = await createPointerMessage(io, this.key!, this.acct!.accountId, hooks[0]!);
-    v = await this.vault!.update((x) => {
-      x.pointer ??= mine;
-      return x;
-    });
-    // Another device won the race: drop ours.
-    if (v.pointer!.messageId !== mine.messageId) await this.transport().deleteMessage(this.c().webhook(mine.webhookId), mine.messageId).catch(() => {});
-    return v.pointer!;
-  }
-
-  /** The rescue kit text (secret): account key + pointer webhook + pointer message. */
+  /** The rescue kit text (secret): metadata only = key + pointer webhook + message; e2ee/plain = key + instance. */
   async rescueKit(): Promise<{ kit: string; accountId: string }> {
-    const ptr = await this.ensurePointer();
-    const v = await this.vault!.load();
-    const hook = v.webhooks.find((w) => w.id === ptr.webhookId);
-    if (!hook) throw new Error("pointer_hook_gone: the pointer message channel was removed from the vault");
-    const a = this.acct!;
+    const kit = await mode.rescueKit(this.ctx!, this.c());
     this.startSnapshots();
     void this.snapshotSoon(true);
-    return { kit: encodeRescueKit({ v: 1, accountId: a.accountId, key: a.accountKey, webhookUrl: hook.url, pointerMessageId: ptr.messageId }), accountId: a.accountId };
+    return { kit, accountId: this.acct!.accountId };
   }
 
   async confirmKitSaved() {
@@ -485,37 +468,18 @@ export class AppCore {
   }
 
   private startSnapshots() {
-    if (this.snapTimer || !this.client) return;
+    // e2ee/plain: the instance writes snapshots in the background (no tab needed).
+    if (this.snapTimer || !this.client || !mode.clientSnapshots) return;
     this.snapTimer = setInterval(() => void this.snapshotSoon(), SNAPSHOT_TICK_MS);
   }
 
-  /** One scheduler tick (main tab only; writes when §6.2 says so, or now if forced). */
+  /** One scheduler tick (main tab only, metadata only; writes when §6.2 says so, or now if forced). */
   async snapshotSoon(force = false) {
-    if (!this.leader || !this.client) return null;
-    const v = await this.vault!.load();
-    if (!v.pointer) return null;
-    if (!this.scheduler) {
-      const nav = (globalThis as unknown as { navigator?: { userAgent?: string; connection?: { type?: string; saveData?: boolean } } }).navigator;
-      // §6.2: phones (metered) write only segments, bases come from desktops.
-      const metered = /Android|iPhone|iPad|Mobile/i.test(nav?.userAgent ?? "") || nav?.connection?.type === "cellular" || !!nav?.connection?.saveData;
-      const c = this.c();
-      this.scheduler = new SnapshotScheduler({
-        io: clientBlobIO(c, this.transport()),
-        key: this.key!,
-        accountId: this.acct!.accountId,
-        pointer: v.pointer,
-        log: this.http!,
-        store: this.store!,
-        now: () => Date.now(),
-        isPrimary: () => this.leader,
-        unmetered: () => !metered,
-        serverTimeOf: (seq) => this.serverTimes.get(seq),
-      });
-    }
+    if (!this.leader || !this.client || !mode.snapshotTick) return null;
     try {
-      const r = await this.scheduler.tick(force);
+      const r = await mode.snapshotTick(this.ctx!, this.client, force);
       if (r && r.kind !== "none") this.lastSnapshot = { at: Date.now(), kind: r.kind, written: r.written };
-      return r ? { kind: r.kind, written: r.written, toSeq: r.pointer.toSeq } : null;
+      return r;
     } catch {
       return null;
     }
@@ -527,8 +491,8 @@ export class AppCore {
     const c = this.c();
     const n = c.store.getNode(nodeId);
     if (!n || n.kind !== "file" || !n.content) throw new Error("not a file");
-    const prep = await prepareShare(
-      { transport: this.transport(), hook: (id) => c.webhook(id), loadManifest: (ref) => c.loadManifest(ref) },
+    const prep = await prepareShareWith(
+      { loadManifest: (ref) => c.loadManifest(ref), attachments: () => mode.shareAttachments(this.ctx!, c, n.content!.manifestRef) },
       n.content.manifestRef,
       { name: n.name, size: n.content.sizeBytes, sha256: n.content.plaintextSha256 ?? "", mime: mimeOf(n.name) },
     );

@@ -1,8 +1,23 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["node"]
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "ddn:mode": [
+        "./src/modes/metadata-only.ts"
+      ]
+    }
   },
-  "include": ["src", "build.ts", "check.ts"]
+  "include": [
+    "src",
+    "build.ts",
+    "check.ts"
+  ]
 }

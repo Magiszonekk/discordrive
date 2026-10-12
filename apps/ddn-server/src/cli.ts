@@ -2,6 +2,7 @@
 //   setup   [--data-dir DIR] [--yes] [--answers FILE] [--public-url URL] [--host H] [--port N]
 //           [--trust-proxy A,B] [--signup invite|open|closed] [--bot-token-file F | --no-bot]
 //           [--replace-bot] [--autostart | --no-autostart] [--accept-risk] [--no-invite] [--no-self-test]
+//           [--mode metadata-only|e2ee|plain] [--webhooks-file F]   (mode: new instances only)
 //           (--systemd / --no-systemd: older names of --autostart)
 //   start   [--data-dir DIR]   (alias: serve)
 //   doctor  [--data-dir DIR]
@@ -79,6 +80,8 @@ export function setupFlags(opts: Record<string, string | boolean>): SetupFlags {
     selfTest: bool("self-test", "selfTest"),
     discordApiOrigin: str(pick("discord-api-origin", "discordApiOrigin")),
     acceptRisk: opts["accept-risk"] === true || answers.acceptRisk === true,
+    mode: str(pick("mode", "mode")) as SetupFlags["mode"],
+    webhooksFile: str(pick("webhooks-file", "webhooksFile")),
     lang: (lang as CliLang | undefined) ?? envLang() ?? undefined,
   };
 }

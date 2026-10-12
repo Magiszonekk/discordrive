@@ -18,7 +18,7 @@ export {
 } from "./file-crypto.js";
 export { type BlobStore, type BlobPutContext, AbortedError, throwIfAborted } from "./blob-store.js";
 export { DriveClient, readVersionRange, type DriveClientOptions } from "./drive-client.js";
-export { ServerBlobStore, InstanceBusyError, SERVER_BLOB_STORE_MARKER, type ServerBlobStoreOptions } from "./server-blobs.js";
+// e2ee/plain clients: import { ServerBlobStore } from "@ddv4/metadata-client/server-blobs" (kept out of this index).
 export {
   MetadataClient,
   WebhookBlobStore,
@@ -130,7 +130,7 @@ export {
 } from "./snapshots.js";
 export { HttpApi, HttpPairingMailbox, ServerError, createAccountHttp, getChallenge, getHealth, rescueRegisterDevice, type HttpSession, type ServerDevice } from "./http-api.js";
 export { sealDeviceName, openDeviceName, cleanDeviceName, MAX_DEVICE_NAME } from "./device-names.js";
-export { prepareShare, shareLink, parseShareLink, openShare, attachmentFilename, type ShareMeta, type ShareAttachment, type OpenedShare } from "./share.js";
+export { prepareShare, prepareShareWith, shareLink, parseShareLink, openShare, attachmentFilename, type ShareMeta, type ShareAttachment, type OpenedShare } from "./share.js";
 export {
   generateDeviceKey,
   deviceKeyFromCryptoKey,

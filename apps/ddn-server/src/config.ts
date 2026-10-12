@@ -17,11 +17,18 @@ export const RISK_VERSION = 1;
 export const DEFAULT_PORT = 3020;
 export const UNIT_NAME = "discordrive-next.service";
 export type SignupPolicy = "invite" | "open" | "closed";
+/** Modes an instance can be built for (koncept §2). One instance = one mode, forever. */
+export const MODES = ["metadata-only", "e2ee", "plain"] as const;
+export type InstanceMode = (typeof MODES)[number];
+/** Modes this checkout can build (plain comes after e2ee). */
+export function availableModes(): InstanceMode[] {
+  return MODES.filter((m) => existsSync(resolve(PACKAGE_DIR, "src", "modes", `${m}.ts`)));
+}
 
 export interface InstanceConfig {
   version: 1;
-  /** Only "metadata-only" today; "e2ee" and "plain" come with stage 3. */
-  mode: "metadata-only";
+  /** Fixed when the instance is created (koncept §2); the build and the database must match it. */
+  mode: InstanceMode;
   /** Public address users open (https://… behind a reverse proxy). */
   publicUrl: string;
   bind: { host: string; port: number };
@@ -82,8 +89,9 @@ export const PACKAGE_DIR = resolve(here, "..");
 export const REPO_DIR = resolve(PACKAGE_DIR, "..", "..");
 export const WEB_DIR_DEFAULT = resolve(REPO_DIR, "apps", "web-mo", "dist");
 
+/** The built web app of this instance's mode (apps/web-mo/dist/<mode>). */
 export function webDir(c: InstanceConfig): string {
-  return c.webDir ?? WEB_DIR_DEFAULT;
+  return c.webDir ?? resolve(WEB_DIR_DEFAULT, c.mode);
 }
 
 export function defaults(dataDir = defaultDataDir()): InstanceConfig {
@@ -109,7 +117,7 @@ export class ConfigError extends Error {}
 export function validate(c: InstanceConfig): string[] {
   const e: string[] = [];
   if (c.version !== 1) e.push(t("c.v.version"));
-  if (c.mode !== "metadata-only") e.push(t("c.v.mode", { mode: c.mode }));
+  if (!availableModes().includes(c.mode)) e.push(t("c.v.mode", { mode: String(c.mode) }));
   try {
     const u = new URL(c.publicUrl);
     if (u.protocol !== "https:" && u.protocol !== "http:") e.push(t("c.v.proto"));

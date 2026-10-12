@@ -13,7 +13,7 @@
 import { fromBase64, toBase64 } from "@ddv4/processing";
 import { createSHA256 } from "hash-wasm";
 import type { ChunkManifest } from "@ddv4/sync-core";
-import { BLOB_EXT, decodeManifestRef, type ByteSink } from "./client.js";
+import { BLOB_EXT, decodeManifestRef, type ByteSink } from "./drive-client.js";
 import { decryptFragment, decryptManifest, encryptManifest, importFileKey, sha256Hex } from "./file-crypto.js";
 import type { DiscordPlacement, WebhookRef, WebhookTransport } from "./types.js";
 
@@ -48,7 +48,7 @@ export function attachmentFilename(url: string): string {
 /**
  * Everything the server needs for one file version. Fragments were posted as
  * `<blobId>` + BLOB_EXT; the manifest name is not recorded, so it is read from the
- * manifest message once (one webhook GET).
+ * manifest message once (one webhook GET). Metadata only.
  */
 export async function prepareShare(
   o: {
@@ -59,17 +59,42 @@ export async function prepareShare(
   manifestRef: string,
   meta: Omit<ShareMeta, "v">,
 ): Promise<{ attachments: ShareAttachment[]; meta: string; fileKey: string }> {
+  return prepareShareWith(
+    {
+      loadManifest: o.loadManifest,
+      attachments: async (loc, manifest) => {
+        const atts = await o.transport.getAttachments(o.hook(loc.at.locationId), loc.at.messageId);
+        const ma = atts.find((a) => a.id === loc.at.attachmentId);
+        if (!ma) throw new Error("manifest attachment missing");
+        const out: ShareAttachment[] = [{ channelId: loc.at.channelId, attachmentId: loc.at.attachmentId, filename: attachmentFilename(ma.url) }];
+        for (const c of manifest.chunks) {
+          const p = c.placements?.[0] as DiscordPlacement | undefined;
+          if (!p?.attachmentId || !p.channelId) throw new Error(`chunk ${c.index}: no placement`);
+          out.push({ channelId: p.channelId, attachmentId: p.attachmentId, filename: `${c.blobId}${BLOB_EXT}` });
+        }
+        return out;
+      },
+    },
+    manifestRef,
+    meta,
+  );
+}
+
+/**
+ * Share of one file version with the attachment addresses from any source (e2ee/plain: the
+ * instance knows the names it posted under). Manifest first, then fragments in order.
+ */
+export async function prepareShareWith(
+  o: {
+    loadManifest: (ref: string) => Promise<{ manifest: ChunkManifest }>;
+    attachments: (loc: ReturnType<typeof decodeManifestRef>, manifest: ChunkManifest) => Promise<ShareAttachment[]>;
+  },
+  manifestRef: string,
+  meta: Omit<ShareMeta, "v">,
+): Promise<{ attachments: ShareAttachment[]; meta: string; fileKey: string }> {
   const loc = decodeManifestRef(manifestRef);
   const { manifest } = await o.loadManifest(manifestRef);
-  const atts = await o.transport.getAttachments(o.hook(loc.at.locationId), loc.at.messageId);
-  const ma = atts.find((a) => a.id === loc.at.attachmentId);
-  if (!ma) throw new Error("manifest attachment missing");
-  const out: ShareAttachment[] = [{ channelId: loc.at.channelId, attachmentId: loc.at.attachmentId, filename: attachmentFilename(ma.url) }];
-  for (const c of manifest.chunks) {
-    const p = c.placements?.[0] as DiscordPlacement | undefined;
-    if (!p?.attachmentId || !p.channelId) throw new Error(`chunk ${c.index}: no placement`);
-    out.push({ channelId: p.channelId, attachmentId: p.attachmentId, filename: `${c.blobId}${BLOB_EXT}` });
-  }
+  const out = await o.attachments(loc, manifest);
   const key = await importFileKey(loc.k);
   const sealed = await encryptManifest(key, { v: 1, ...meta } as unknown as ChunkManifest);
   return { attachments: out, meta: toBase64(sealed), fileKey: b64u(loc.k) };

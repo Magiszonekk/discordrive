@@ -17,6 +17,20 @@ export const DICTS: Record<Lang, Record<string, string>> = { en, pl };
 export const isLang = (x: unknown): x is Lang => x === "en" || x === "pl";
 
 const STORE_KEY = "ddn.lang";
+
+/** Mode this bundle was built for (build.ts `define`); texts may have a `key@<mode>` variant. */
+declare const __DDN_MODE__: string | undefined;
+const MODE = typeof __DDN_MODE__ === "string" ? __DDN_MODE__ : "metadata-only";
+/** plain falls back to the e2ee text (same server role), then to the base text. */
+const MODE_CHAIN = MODE === "plain" ? ["@plain", "@e2ee", ""] : MODE === "e2ee" ? ["@e2ee", ""] : [""];
+
+function lookup(d: Record<string, string>, key: string): string | undefined {
+  for (const suf of MODE_CHAIN) {
+    const v = d[key + suf];
+    if (v !== undefined) return v;
+  }
+  return undefined;
+}
 let lang: Lang = "en";
 
 export const getLang = (): Lang => lang;
@@ -50,7 +64,7 @@ function fill(s: string, params?: Record<string, string | number>): string {
 }
 
 export function t(key: string, params?: Record<string, string | number>): string {
-  const s = DICTS[lang][key] ?? DICTS.en[key];
+  const s = lookup(DICTS[lang], key) ?? lookup(DICTS.en, key);
   if (s === undefined) {
     console.warn("i18n: missing key", key);
     return key;
@@ -62,7 +76,7 @@ export function t(key: string, params?: Record<string, string | number>): string
 export function tn(key: string, n: number, params?: Record<string, string | number>): string {
   const cat = new Intl.PluralRules(locale()).select(n);
   const d = DICTS[lang];
-  const s = d[`${key}_${cat}`] ?? d[`${key}_other`] ?? DICTS.en[`${key}_other`] ?? key;
+  const s = lookup(d, `${key}_${cat}`) ?? lookup(d, `${key}_other`) ?? lookup(DICTS.en, `${key}_other`) ?? key;
   return fill(s, { n: fmtNum(n), ...params });
 }
 

@@ -7,6 +7,7 @@ import { InviteStore } from "@ddv4/metadata-client/node";
 import { health, hostUrl, isLocalAddress, portState, validateBotToken } from "./checks.js";
 import { POSIX_MODES, checkWritable, riskAccepted, configPath, dbPath, fileMode, isLocalUrl, loadConfig, webDir, type InstanceConfig } from "./config.js";
 import { COMMANDS } from "./setup.js";
+import { loadServerMode, webBuildState } from "./serve.js";
 import { t } from "./i18n.js";
 import * as autostart from "./autostart.js";
 
@@ -55,6 +56,24 @@ export async function doctor(dataDir: string, out: (s: string) => void = console
       const fm = fileMode(f);
       if (fm !== null && fm & 0o077) add("warn", t("d.fileMode", { file: f }), t("d.fileModeBad", { mode: `0${fm.toString(8)}` }));
     }
+  }
+  // Mode (koncept §2): the build of web + server matches the config; the database agrees.
+  try {
+    const sm = await loadServerMode(c);
+    const db0 = existsSync(dbPath(c)) ? new DatabaseSync(dbPath(c), { readOnly: true }) : null;
+    let stored: string | null = null;
+    try {
+      stored = (db0?.prepare("SELECT v FROM server_meta WHERE k = 'mode'").get() as { v: string } | undefined)?.v ?? null;
+    } catch {
+      stored = null;
+    } finally {
+      db0?.close();
+    }
+    if (stored && stored !== c.mode) add("fail", t("d.mode"), t("s.mode.change", { old: stored, mode: c.mode }));
+    else add(webBuildState(c) === "ok" ? "ok" : "warn", t("d.mode"), t("d.modeBuild", { mode: sm.mode }));
+    for (const x of (await sm.doctor?.(c, t as (k: string, p?: Record<string, string | number>) => string)) ?? []) add(x.level, x.what, x.detail);
+  } catch (e) {
+    add("warn", t("d.mode"), t("d.modeBuildBad", { detail: (e as Error).message }));
   }
   add(existsSync(join(webDir(c), "index.html")) ? "ok" : "warn", t("d.web"), existsSync(join(webDir(c), "index.html")) ? webDir(c) : t("d.webMissing", { dir: webDir(c) }));
 

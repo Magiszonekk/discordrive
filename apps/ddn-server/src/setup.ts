@@ -19,7 +19,9 @@ import { InviteStore } from "@ddv4/metadata-client/node";
 import { health, hostUrl, isLocalAddress, isLoopback, localAddresses, nextFreePort, portState, validateBotToken } from "./checks.js";
 import {
   DEFAULT_PORT,
+  MODES,
   REPO_DIR,
+  availableModes,
   RISK_VERSION,
   checkWritable,
   configPath,
@@ -32,11 +34,12 @@ import {
   tryLoadConfig,
   validate,
   type InstanceConfig,
+  type InstanceMode,
   type SignupPolicy,
 } from "./config.js";
 import { setCliLang, t, type CliLang } from "./i18n.js";
 import { Cancelled, ttyPrompter, type Prompter } from "./prompt.js";
-import { buildWeb, serve } from "./serve.js";
+import { buildWeb, loadServerMode, serve } from "./serve.js";
 import { LOG_FILE, detectBackend, install as autostartInstall, lingerOff } from "./autostart.js";
 import { join } from "node:path";
 
@@ -65,6 +68,10 @@ export interface SetupFlags {
   lang?: CliLang;
   /** Tests: Discord API on a fake. */
   discordApiOrigin?: string;
+  /** Mode of a NEW instance (koncept §2); an existing instance keeps its mode. Default metadata-only. */
+  mode?: InstanceMode;
+  /** e2ee/plain: file with webhook URLs for the instance pool, one per line (never on the command line). */
+  webhooksFile?: string;
 }
 
 export interface SetupResult {
@@ -299,21 +306,46 @@ export async function setup(f: SetupFlags, p0?: Prompter): Promise<SetupResult> 
     }
   } else c.trustProxy = f.trustProxy ?? [];
 
-  // 2. Mode
-  if (yes) {
-    c.mode = "metadata-only";
+  // 2. Mode: chosen once, for a new instance only (koncept §2: one instance = one mode, forever).
+  // "Existing" = the config says so or the database was already started (it locks the mode).
+  const locked: InstanceMode | null = old?.mode ?? null;
+  const avail = availableModes();
+  let poolUrls: string[] = [];
+  if (locked) {
+    if (f.mode && f.mode !== locked) throw new Error(t("s.mode.change", { old: locked, mode: f.mode }));
+    c.mode = locked;
+    step++;
+    if (!yes) p.info(t("s.mode.locked", { mode: c.mode }));
+  } else if (f.mode || yes) {
+    c.mode = f.mode ?? "metadata-only";
+    if (!avail.includes(c.mode)) throw new Error(t("s.mode.soon", { mode: c.mode }));
     step++;
   } else {
     head(t("s.mode"));
+    const label = { "metadata-only": t("s.mode.mo"), e2ee: t("s.mode.e2ee"), plain: t("s.mode.plain") };
     c.mode = await p.choose(
       "",
-      [
-        { value: "metadata-only", label: t("s.mode.mo") },
-        { value: "e2ee" as "metadata-only", label: t("s.mode.e2ee"), disabled: true },
-        { value: "plain" as "metadata-only", label: t("s.mode.plain"), disabled: true },
-      ],
+      MODES.map((m) => ({ value: m, label: avail.includes(m) ? label[m] : t("s.mode.soon", { mode: m }), disabled: !avail.includes(m) })),
       "metadata-only",
     );
+  }
+
+  // 2b. e2ee/plain: the instance's own channels (pool); URLs go to the encrypted table, not the config.
+  if (c.mode !== "metadata-only") {
+    if (f.webhooksFile) {
+      try {
+        poolUrls = readFileSync(f.webhooksFile, "utf8").split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+      } catch (e) {
+        throw new Error(t("s.poolFileBad", { why: (e as Error).message }));
+      }
+    } else if (!yes) {
+      p.info([t("s.pool"), t("s.pool1"), t("s.pool2")].join("\n"));
+      for (;;) {
+        const u = (await p.secret(t("s.poolUrl"))).trim();
+        if (!u) break;
+        poolUrls.push(u);
+      }
+    }
   }
 
   // 3. Bot for share links
@@ -456,6 +488,7 @@ export async function setup(f: SetupFlags, p0?: Prompter): Promise<SetupResult> 
     t("s.sum.bind", { bind: `${c.bind.host}:${c.bind.port}` }),
     ...(scenario === "public" ? [t("s.sum.proxy", { list: c.trustProxy.join(", ") || t("s.sum.none") })] : []),
     t("s.sum.mode", { mode: c.mode }),
+    ...(c.mode !== "metadata-only" ? [t("s.sum.pool", { v: poolUrls.length ? String(poolUrls.length) : t("s.sum.none") })] : []),
     t("s.sum.lang", { lang: c.language === "pl" ? t("lang.pl") : t("lang.en") }),
     t("s.sum.share", { v: c.botToken ? t("s.sum.shareOn", { name: c.bot?.username ?? "?" }) : t("s.sum.shareOff") }),
     t("s.sum.signup", { v: t(`signup.${c.signup}`) }),
@@ -465,12 +498,25 @@ export async function setup(f: SetupFlags, p0?: Prompter): Promise<SetupResult> 
   const file = saveConfig(c);
   p.ok(t("s.saved", { file }));
 
-  // Browser app: built now (spinner), not at the first start.
+  // Browser app + server part of this mode: built now (spinner), not at the first start.
   await p.task(
     t("tui.building"),
     () => buildWeb(c).catch((e: Error) => Promise.reject(new Error(t("s.webFail", { msg: e.message })))),
     () => ({ level: "ok", text: t("s.webOk") }),
   );
+
+  // e2ee/plain: store the pool webhooks (checked with Discord, sealed with instance.key).
+  if (c.mode !== "metadata-only") {
+    const sm = await loadServerMode(c);
+    if (poolUrls.length && sm.addPoolWebhooks) {
+      try {
+        const r = await sm.addPoolWebhooks(c, poolUrls);
+        p.ok(t("s.poolOk", r));
+      } catch (e) {
+        throw new Error(t("s.poolBad", { why: String((e as Error).message).replace(/https?:\/\/\S+/g, "<url>") }));
+      }
+    } else if (!old) p.warn(t("s.poolNone"));
+  }
 
   // Invite code
   let invite: SetupResult["invite"] = null;

@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MemoryIndexStore, Sequencer, applyEntries, canonicalState, initIndex } from "@ddv4/sync-core";
-import { ChannelPacer, DiscordWebhookTransport, DriveClient, EncryptedArbiter, HttpApi, OpCodec, ServerBlobStore, createAccountHttp, generateDeviceKey, memorySource, newAccountKey } from "@ddv4/metadata-client";
+import { ChannelPacer, DiscordWebhookTransport, DriveClient, EncryptedArbiter, HttpApi, OpCodec, createAccountHttp, generateDeviceKey, memorySource, newAccountKey } from "@ddv4/metadata-client";
+import { ServerBlobStore } from "@ddv4/metadata-client/server-blobs";
 import { DdnServer, FakeDiscord } from "@ddv4/metadata-client/node";
 import { BlobsExtension, DiscordSender, InstanceHooks, POOL, SnapshotsExtension, loadInstanceKey, rebuildAccountLog } from "../src/index.js";
 

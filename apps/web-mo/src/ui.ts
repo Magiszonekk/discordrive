@@ -13,6 +13,9 @@ import type { CoreEvent } from "./app-core.js";
 import { applyStatic, fmtDate, fmtDateTime, fmtNum, fmtSize, getLang, isLang, setLang, storeLang, storedLang, t, tn, type Lang } from "./i18n.js";
 import { connect } from "./rpc.js";
 
+/** Mode this bundle was built for (build.ts define). */
+declare const __DDN_MODE__: string;
+
 const cfg = (window as unknown as { DDN_CONFIG?: { discordApiOrigin?: string; serverUrl?: string; language?: string } }).DDN_CONFIG ?? {};
 // Language before the first paint: this browser's choice, else the instance default, else English.
 setLang(storedLang() ?? (isLang(cfg.language) ? cfg.language : "en"));
@@ -81,7 +84,7 @@ const typeOf = (name: string) => EXT.find(([re]) => re.test(name)) ?? [null, "fi
 const VIDEO = EXT[0]![0];
 
 // ── messages and actions ────────────────────────────────────────────
-const KNOWN_ERRORS = ["invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone"];
+const KNOWN_ERRORS = ["invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone", "instance_busy", "discord_blocked", "webhook_in_use", "too_many_channels"];
 /** Readable text for an error: no technical codes in the message (the raw one goes to the console). */
 const errText = (e: unknown) => {
   const m = String((e as Error)?.message ?? e);
@@ -384,10 +387,29 @@ function renderHooks(wh: Awaited<ReturnType<typeof core.webhooks>>) {
   ui("hook-count").textContent = tn("hooks.channels", a.channels);
   ui("hook-count").className = `chip${a.ok ? " chip--success" : " chip--warning"}`;
   [...ui("slots").children].forEach((s, i) => s.classList.toggle("on", i < a.channels));
+  // e2ee/plain: the instance pool (count only, the URLs stay on the server) and removable own channels.
+  const pool = wh.pool && wh.pool.channels > 0 && wh.using !== "own" ? [h("li", { class: "pool-row", "data-ddn": "pool" }, icon("hash"), h("span", { class: "dname" }, tn("hooks.pool", wh.pool.channels)))] : [];
+  const removable = typeof wh.using === "string";
   ui("hooks").replaceChildren(
+    ...pool,
     ...(wh.webhooks.length
-      ? wh.webhooks.map((w) => h("li", {}, icon("hash"), h("span", { class: "dname", title: w.label }, w.label || "webhook"), h("span", { class: "when" }, `#…${String(w.channelId).slice(-6)}`)))
-      : [h("li", { class: "empty-row" }, t("hooks.none"))]),
+      ? wh.webhooks.map((w) => {
+          const li = h("li", {}, icon("hash"), h("span", { class: "dname", title: w.label }, w.label || "webhook"), h("span", { class: "when" }, `#…${String(w.channelId).slice(-6)}`));
+          if (removable) {
+            const rm = h("button", { class: "iconbtn danger", type: "button", "data-ddn": "remove-webhook", "aria-label": t("hooks.remove"), title: t("hooks.remove") }, icon("x"));
+            rm.onclick = () =>
+              void act(rm, async () => {
+                await core.removeWebhook(w.id);
+                await render();
+                toast(t("hooks.removed"));
+              });
+            li.append(rm);
+          }
+          return li;
+        })
+      : pool.length
+        ? []
+        : [h("li", { class: "empty-row" }, t("hooks.none"))]),
   );
 }
 
@@ -559,10 +581,18 @@ async function uploadAll(files: File[]) {
   const items = files.map((f) => {
     const state = h("span", { class: "qstate" }, t("queue.wait"));
     const bar = h("i");
-    const li = h("li", {}, h("span", { class: "qname", title: f.name }, f.name), state, h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, fmt(f.size)));
+    const token = crypto.randomUUID();
+    const cancel = h("button", { class: "iconbtn", type: "button", "data-ddn": "queue-cancel", "aria-label": t("queue.cancel"), title: t("queue.cancel") }, icon("x"));
+    const li = h("li", {}, h("span", { class: "qname", title: f.name }, f.name), state, h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, fmt(f.size)), cancel);
     li.dataset.ddn = "queue-item";
     list.append(li);
-    return { f, state, bar };
+    const item = { f, state, bar, token, cancel, cancelled: false };
+    cancel.onclick = () => {
+      item.cancelled = true;
+      cancel.hidden = true;
+      void core.cancelUpload(token);
+    };
+    return item;
   });
   box.hidden = false;
   ui("queue-close").hidden = true;
@@ -572,10 +602,17 @@ async function uploadAll(files: File[]) {
     ui("queue-meta").textContent = t("queue.meta", { sent: fmt(sent), total: fmt(total) });
   };
   meta();
-  for (const { f, state, bar } of items) {
+  for (const item of items) {
+    const { f, state, bar, token } = item;
+    if (item.cancelled) {
+      state.className = "qstate err";
+      state.textContent = t("queue.cancelled");
+      uploading.done++;
+      meta();
+      continue;
+    }
     state.className = "qstate run";
     state.textContent = t("queue.encrypting");
-    const token = crypto.randomUUID();
     const base = sent;
     progressHandlers.set(token, (done, tot) => {
       const pct = tot ? Math.floor((done / tot) * 100) : 100;
@@ -590,13 +627,17 @@ async function uploadAll(files: File[]) {
       state.textContent = t("queue.ok");
       bar.className = "done";
     } catch (e) {
-      failed++;
       state.className = "qstate err";
-      state.textContent = t("queue.err");
-      state.title = errText(e);
       bar.className = "err";
+      if (item.cancelled) state.textContent = t("queue.cancelled");
+      else {
+        failed++;
+        state.textContent = t("queue.err");
+        state.title = errText(e);
+      }
     } finally {
       progressHandlers.delete(token);
+      item.cancel.hidden = true;
     }
     sent = base + f.size;
     bar.style.width = "100%";
@@ -1008,6 +1049,7 @@ function wireLang() {
 }
 
 async function main() {
+  document.body.dataset.mode = __DDN_MODE__;
   wireLang();
   wireTheme();
   wireLinks();

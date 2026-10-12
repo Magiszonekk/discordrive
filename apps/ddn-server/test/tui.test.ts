@@ -158,7 +158,11 @@ describe.skipIf(!hasScript)("discordrive setup: arrow-key wizard in a pty", () =
       await t.until(/Adres proxy/);
       await t.send(KEY.enter);
       await t.until(/Krok 2\/5/);
-      await t.send(KEY.down); // disabled options are skipped: the cursor stays on metadata only
+      // Mode: metadata only preselected; e2ee is selectable now (stage 3), plain not yet.
+      await t.until(/◉ metadata only/);
+      await t.send(KEY.down);
+      await t.until(/◉ e2ee: pliki i nazwy szyfrowane/);
+      await t.send(KEY.up);
       await t.until(/◉ metadata only/);
       await t.send(KEY.enter);
       await t.until(/◉ Pomiń na razie/);
