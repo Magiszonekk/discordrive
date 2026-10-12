@@ -13,7 +13,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { PACKAGE_DIR, REPO_DIR } from "./config.js";
 import { installAndStart as systemdInstall, lingerEnabled, systemdAvailable, unitPath, unitState } from "./systemd.js";
 
@@ -140,7 +140,8 @@ export function launchAgentPath(home = homedir()): string {
 
 export function launchdPlist(o: { nodePath: string; dataDir: string; repoDir?: string; script?: string }): string {
   const args = [o.nodePath, o.script ?? join(PACKAGE_DIR, "bin", "discordrive.mjs"), "serve", "--data-dir", o.dataDir];
-  const log = join(o.dataDir, LOG_FILE);
+  // A macOS file: POSIX paths whatever system generates it (tests run everywhere).
+  const log = posix.join(o.dataDir, LOG_FILE);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Written by \`npm run setup\` (discordrive-next); remove with \`npm run uninstall-autostart\`. -->

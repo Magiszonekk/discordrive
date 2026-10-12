@@ -60,7 +60,9 @@ describe.runIf(process.env.DDN_CI_REAL_AUTOSTART === "1")(`background start on t
     if (backend === "windows-task") {
       const xml = execFileSync("schtasks.exe", ["/Query", "/TN", TASK_NAME, "/XML"], { encoding: "utf8" });
       expect(xml).toContain("<LogonTrigger>");
-      expect(xml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
+      // Windows exports the default LeastPrivilege by leaving RunLevel out: no elevation either way.
+      expect(xml).not.toContain("HighestAvailable");
+      expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
       expect(xml).toMatch(/conhost\.exe<\/Command>/);
       expect(xml).toMatch(/--headless/);
     }
