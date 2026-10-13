@@ -393,6 +393,9 @@ describe("instance server: invites, limits, health, web app", () => {
     const page = await fetch(`${url}/s/AAAAAAAAAAAAAAAAAAAAAA`);
     expect(page.status).toBe(200);
     expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    // File preview: PDFs in a blob: frame only; plugins stay off.
+    expect(page.headers.get("content-security-policy")).toContain("frame-src 'self' blob:;");
+    expect(page.headers.get("content-security-policy")).toContain("object-src 'none'");
     expect(await page.text()).toContain("<html");
     for (const evil of ["/..%2f..%2f..%2fetc%2fpasswd", "/%2e%2e/%2e%2e/etc/passwd.txt", "/../../package.json"]) {
       const { request } = await import("node:http");

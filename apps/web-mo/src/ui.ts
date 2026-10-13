@@ -12,6 +12,7 @@ import { renderSVG } from "uqr";
 import type { CoreEvent, OpOutcome, TrashRow, UiNotice } from "./app-core.js";
 import { applyStatic, fmtDate, fmtDateTime, fmtNum, fmtSize, getLang, isLang, setLang, storeLang, storedLang, t, tn, type Lang } from "./i18n.js";
 import { connect } from "./rpc.js";
+import { createPreview, type PreviewRow } from "./preview.js";
 
 /** Mode this bundle was built for (build.ts define). */
 declare const __DDN_MODE__: string;
@@ -366,7 +367,19 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
     const [, label, tone] = typeOf(r.name);
     const badge = h("span", { class: `badge ${tone}` }, label);
     if (features.thumbnails && tone === "media") void showThumb(badge, r.id);
-    name.append(h("span", { class: "nm" }, badge, h("span", { title: r.name }, r.name)), h("span", { class: "sub" }, [fmt(r.size), r.modifiedAt ? fmtDate(r.modifiedAt) : ""].filter(Boolean).join(" · ")));
+    const open = h("span", { title: r.name, role: "button", tabindex: "0", "data-ddn": "preview-open", "aria-label": t("pv.open.aria", { name: r.name }) }, r.name);
+    open.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        previewFile(r);
+      }
+    };
+    name.append(h("span", { class: "nm" }, badge, open), h("span", { class: "sub" }, [fmt(r.size), r.modifiedAt ? fmtDate(r.modifiedAt) : ""].filter(Boolean).join(" · ")));
+    // A click anywhere on a file row (not on its buttons / checkbox) opens the preview.
+    tr.classList.add("pv-row");
+    tr.onclick = (e) => {
+      if (!(e.target as Element | null)?.closest("button, input, a, label, .c-sel")) previewFile(r);
+    };
     if (VIDEO.test(r.name)) {
       const play = iconBtn("play", t("files.play.aria", { name: r.name }), t("files.play"));
       play.dataset.ddn = "play";
@@ -446,6 +459,13 @@ async function openPlayer(id: string, name: string, size: number) {
   v.dataset.source = direct ? "server" : "sw";
   if (!d.open) d.showModal();
   void v.play().catch(() => {});
+}
+// File preview (zlecenie 2026-10-13-webhooki p. 4): logic in preview.ts; ←/→ walk the open folder
+// (or the search hits in plain).
+let searchRows: PreviewRow[] = [];
+const preview = createPreview({ core, features: () => features, download: (id, name) => download(id, name), error: (e) => toast(errText(e), "err") });
+function previewFile(r: PreviewRow) {
+  preview.open(r, searchQ ? { rows: searchRows } : { folder: currentFolder() });
 }
 function closePlayer() {
   const v = $<HTMLVideoElement>("player");
@@ -719,6 +739,7 @@ async function renderNow() {
 /** plain: results of a server search in the file table (one page, up to 200). */
 async function renderSearch() {
   const hits = await core.search(searchQ);
+  searchRows = hits.map((x: PreviewRow) => ({ id: x.id, name: x.name, kind: x.kind, size: x.size }));
   ui("folder-meta").textContent = tn("search.results", hits.length, { q: searchQ });
   $("list").replaceChildren(...hits.map((x, i) => fileRow({ ...x, cursor: "" } as never, i, false)));
   ui("empty").hidden = true;
@@ -988,7 +1009,7 @@ function openRowMenu(btn: HTMLElement, r: { id: string; name: string; kind: "fil
     return b;
   };
   const items = [
-    ...(r.kind === "folder" ? [item("folder", t("act.open"), "open", () => openFolder(r.id))] : [item("download", t("files.download"), "download", () => void act(null, () => download(r.id, r.name)))]),
+    ...(r.kind === "folder" ? [item("folder", t("act.open"), "open", () => openFolder(r.id))] : [item("eye", t("pv.action"), "preview", () => previewFile(r)), item("download", t("files.download"), "download", () => void act(null, () => download(r.id, r.name)))]),
     item("pencil", t("act.rename"), "rename", () => openRename(r)),
     item("move", t("act.move"), "move", () => void openMove([r.id], r.name)),
     item("trash", t("act.trash"), "trash", () => void act(null, () => trashItems([r])), true),

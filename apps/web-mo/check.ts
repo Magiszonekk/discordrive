@@ -729,6 +729,153 @@ try {
   ops.pwOff = true;
   r.ops = ops;
 
+  // 10c. file preview (zlecenie 2026-10-13-webhooki p. 4) in a new root folder "Podglad" (the counts above
+  // are done): text, rendered Markdown without raw HTML, JSON, CSV table, JPEG, PDF, a hostile SVG; ←/→, Esc,
+  // the row menu entry, quick → presses (only the last file renders), blob URLs revoked; phone viewport.
+  step("preview");
+  const pv: Record<string, unknown> = {};
+  const pvDir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-pv-"));
+  writeFileSync(join(pvDir, "a.txt"), "Zażółć gęślą jaźń\nplain <b>text</b> line 2\n");
+  writeFileSync(join(pvDir, "b.md"), "# Podgląd\n\nSome **bold** and *em* text.\n\n<script>window.__pwned = 1</script>\n\n<img src=x onerror=\"window.__pwned = 2\">\n\n[evil](javascript:window.__pwned=3) and [ok](https://example.com/)\n\n- one\n- two\n\n```\ncode <i>x</i>\n```\n");
+  writeFileSync(join(pvDir, "c.json"), '{"name":"Podglad","list":[1,2,{"deep":true}],"n":12345678901234567890}');
+  writeFileSync(join(pvDir, "d.csv"), 'city,note\r\nKraków,"comma, inside"\r\nGdańsk,"line\nbreak and ""quotes"""\r\n');
+  execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=64x48", "-frames:v", "1", join(pvDir, "e.jpg")]);
+  writeFileSync(join(pvDir, "f.pdf"), (() => {
+    const stream = "BT /F1 24 Tf 20 100 Td (Hello PDF) Tj ET";
+    const objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>", `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"];
+    let out = "%PDF-1.4\n";
+    const offs: number[] = [];
+    objs.forEach((o, i) => ((offs.push(out.length)), (out += `${i + 1} 0 obj\n${o}\nendobj\n`)));
+    const x = out.length;
+    out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offs.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${x}\n%%EOF\n`;
+    return out;
+  })());
+  // Hostile SVG: a script, an onload handler and a remote image; shown as <img> none of it may run or load.
+  writeFileSync(join(pvDir, "g.svg"), '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="40" height="30" onload="window.top.__pwned = 4"><script>window.top.__pwned = 5; parent.__pwned = 5;</script><rect width="40" height="30" fill="#c33"/><image xlink:href="https://evil.example/x.png" width="1" height="1"/></svg>');
+  const pvNames = ["a.txt", "b.md", "c.json", "d.csv", "e.jpg", "f.pdf", "g.svg"];
+  const pvId = await p.evaluate(async () => (window as unknown as { ddnCore: { mkdir(n: string): Promise<string> } }).ddnCore.mkdir("Podglad"));
+  // Desktop browser with a PDF viewer (the headless shell has none: pdfViewerEnabled false), and a
+  // record of every blob URL (type, revoked) to check the Content-Types and the cleanup.
+  await p.addInitScript({
+    content: `Object.defineProperty(Navigator.prototype, "pdfViewerEnabled", { get: () => true, configurable: true });
+      window.__blobs = {}; const _c = URL.createObjectURL.bind(URL), _r = URL.revokeObjectURL.bind(URL);
+      URL.createObjectURL = (b) => { const u = _c(b); window.__blobs[u] = { type: b.type, revoked: false }; return u; };
+      URL.revokeObjectURL = (u) => { if (window.__blobs[u]) window.__blobs[u].revoked = true; _r(u); };`,
+  });
+  await p.goto(`${base}/folder/${pvId}`);
+  await p.waitForSelector("body[data-ready='1']");
+  await p.waitForFunction(() => document.querySelector("[data-ddn-ui=folder-title]")?.textContent === "Podglad");
+  await p.setInputFiles("[data-ddn=file]", pvNames.map((n) => join(pvDir, n)));
+  await p.waitForFunction((done) => document.querySelector("[data-ddn-ui=queue-title]")?.textContent === done, L.uploaded, { timeout: 120_000 });
+  await count(p, /^7 /);
+  const pvReady = async (pg: Page, name: string) => {
+    await pg.waitForSelector(`[data-ddn=preview-dialog][open][data-file="${name}"][data-state=ready]`, { timeout: 60_000 });
+    // Remember the blob URLs the preview shows (checked for revocation at the end).
+    await pg.evaluate(() => {
+      const w = window as unknown as { __pvUrls?: string[] };
+      w.__pvUrls = [...(w.__pvUrls ?? []), ...[...document.querySelectorAll<HTMLImageElement | HTMLIFrameElement>("[data-ddn=preview-body] img, [data-ddn=preview-body] iframe")].map((e) => e.src).filter((u) => u.startsWith("blob:"))];
+    });
+  };
+  // Click the row (its name), not a button: the preview opens.
+  await p.locator("[data-ddn=row]", { hasText: "a.txt" }).locator("[data-ddn=preview-open]").click();
+  await pvReady(p, "a.txt");
+  pv.text = (await p.textContent("[data-ddn=preview-text]")) === "Zażółć gęślą jaźń\nplain <b>text</b> line 2\n";
+  pv.prevDisabledAtFirst = await p.isDisabled("[data-ddn=preview-prev]");
+  await shot(p, "21-preview-text");
+  await p.keyboard.press("ArrowRight");
+  await pvReady(p, "b.md");
+  pv.md = await p.evaluate(() => {
+    const a = document.querySelector("[data-ddn=preview-md]")!;
+    return {
+      h1: a.querySelector("h1")?.textContent,
+      strong: a.querySelector("strong")?.textContent,
+      li: a.querySelectorAll("li").length,
+      noScript: !document.querySelector("[data-ddn=preview-dialog] script"),
+      noImg: a.querySelectorAll("img, iframe, object, embed, svg").length === 0,
+      noHandlers: [...a.querySelectorAll("*")].every((e) => ![...e.attributes].some((x) => /^on/i.test(x.name))),
+      noJsHref: [...a.querySelectorAll("a")].every((x) => /^(https?|mailto):/.test(x.getAttribute("href") ?? "")),
+      ok: [...a.querySelectorAll("a")].map((x) => [x.getAttribute("href"), x.getAttribute("rel"), x.getAttribute("target")]),
+      rawShownAsText: (a.textContent ?? "").includes("<script>window.__pwned = 1</script>") && (a.textContent ?? "").includes("onerror"),
+      evilAsText: (a.textContent ?? "").includes("evil"),
+      pwned: (window as unknown as { __pwned?: unknown }).__pwned ?? null,
+    };
+  });
+  await shot(p, "21b-preview-markdown");
+  await p.keyboard.press("ArrowRight");
+  await pvReady(p, "c.json");
+  pv.json = (await p.textContent("[data-ddn=preview-text]")) === '{\n  "name": "Podglad",\n  "list": [\n    1,\n    2,\n    {\n      "deep": true\n    }\n  ],\n  "n": 12345678901234567890\n}';
+  await p.click("[data-ddn=preview-next]"); // the on-screen arrow
+  await pvReady(p, "d.csv");
+  pv.csv = await p.$$eval("[data-ddn=preview-table] tr", (trs) => trs.map((tr) => [...tr.children].map((c) => c.textContent)));
+  await shot(p, "21c-preview-csv");
+  await p.keyboard.press("ArrowRight");
+  await pvReady(p, "e.jpg");
+  pv.jpg = await p.$eval("[data-ddn=preview-img]", (i) => ({ w: (i as HTMLImageElement).naturalWidth, h: (i as HTMLImageElement).naturalHeight, src: (i as HTMLImageElement).src.slice(0, 5), type: (window as unknown as { __blobs: Record<string, { type: string }> }).__blobs[(i as HTMLImageElement).src]?.type }));
+  await shot(p, "21d-preview-jpg");
+  await p.keyboard.press("ArrowRight");
+  await pvReady(p, "f.pdf");
+  pv.pdf = await p.$eval("[data-ddn=preview-pdf]", (f) => ({ tag: f.tagName, src: (f as HTMLIFrameElement).src.slice(0, 5), type: (window as unknown as { __blobs: Record<string, { type: string }> }).__blobs[(f as HTMLIFrameElement).src]?.type, sandbox: f.getAttribute("sandbox") }));
+  await shot(p, "21e-preview-pdf");
+  await p.keyboard.press("ArrowRight");
+  await pvReady(p, "g.svg");
+  await p.waitForTimeout(500);
+  pv.svg = await p.evaluate(() => {
+    const i = document.querySelector<HTMLImageElement>("[data-ddn=preview-img]")!;
+    return { tag: i.tagName, w: i.naturalWidth, src: i.src.slice(0, 5), type: (window as unknown as { __blobs: Record<string, { type: string }> }).__blobs[i.src]?.type, inline: !!document.querySelector("[data-ddn=preview-body] svg, [data-ddn=preview-body] iframe, [data-ddn=preview-body] object"), pwned: (window as unknown as { __pwned?: unknown }).__pwned ?? null };
+  });
+  await shot(p, "21f-preview-svg");
+  pv.nextDisabledAtLast = await p.isDisabled("[data-ddn=preview-next]");
+  await p.keyboard.press("ArrowRight"); // nothing after the last file
+  await p.waitForTimeout(300);
+  pv.staysAtLast = (await p.getAttribute("[data-ddn=preview-dialog]", "data-file")) === "g.svg";
+  await p.keyboard.press("ArrowLeft");
+  await pvReady(p, "f.pdf");
+  pv.arrowLeft = true;
+  await p.keyboard.press("Escape");
+  await p.waitForSelector("[data-ddn=preview-dialog][open]", { state: "detached" });
+  pv.escapeCloses = true;
+  // The row menu entry, then several quick → presses: only the last requested file renders.
+  await p.locator("[data-ddn=row]", { hasText: "a.txt" }).locator("[data-ddn=row-more]").click();
+  await p.waitForSelector("[data-ddn=row-menu]:not([hidden])");
+  await p.click("[data-ddn=menu-preview]");
+  await pvReady(p, "a.txt");
+  for (let k = 0; k < 4; k++) await p.keyboard.press("ArrowRight");
+  await pvReady(p, "e.jpg");
+  await p.waitForTimeout(800);
+  pv.quickArrows = await p.evaluate(() => ({ file: document.querySelector("[data-ddn=preview-dialog]")?.getAttribute("data-file"), bodyKids: document.querySelector("[data-ddn=preview-body]")!.children.length, img: !!document.querySelector("[data-ddn=preview-img]") }));
+  await p.keyboard.press("Escape");
+  await p.waitForSelector("[data-ddn=preview-dialog][open]", { state: "detached" });
+  pv.blobsRevoked = await p.evaluate(() => {
+    const w = window as unknown as { __blobs: Record<string, { revoked: boolean }>; __pvUrls?: string[] };
+    const shown = [...new Set(w.__pvUrls ?? [])];
+    return { shown: shown.length, open: shown.filter((u) => !w.__blobs[u]?.revoked).length };
+  });
+  pv.pwned = await p.evaluate(() => (window as unknown as { __pwned?: unknown }).__pwned ?? null);
+  // Phone (the paired device): full-screen preview, no horizontal scroll, arrows on screen; PDF -> Download.
+  await m.goto(`${base}/folder/${pvId}`);
+  await m.waitForSelector("body[data-ready='1']");
+  await count(m, /^7 /);
+  await m.locator("[data-ddn=row]", { hasText: "d.csv" }).locator("[data-ddn=preview-open]").click();
+  await pvReady(m, "d.csv");
+  pv.phone = await m.evaluate(() => {
+    const d = document.querySelector<HTMLElement>("[data-ddn=preview-dialog]")!;
+    const inView = (sel: string) => {
+      const r = document.querySelector(sel)!.getBoundingClientRect();
+      return r.width > 0 && r.left >= 0 && r.right <= window.innerWidth && r.top >= 0 && r.bottom <= window.innerHeight;
+    };
+    return { noHScroll: document.documentElement.scrollWidth <= window.innerWidth + 1 && d.scrollWidth <= d.clientWidth + 1, full: Math.abs(d.getBoundingClientRect().width - window.innerWidth) <= 1, arrows: inView("[data-ddn=preview-prev]") && inView("[data-ddn=preview-next]") && inView("[data-ddn=preview-close]") && inView("[data-ddn=preview-download]") };
+  });
+  await shot(m, "22-phone-preview");
+  await m.click("[data-ddn=preview-next]");
+  await m.click("[data-ddn=preview-next]");
+  await pvReady(m, "f.pdf");
+  pv.phonePdf = { message: await m.isVisible("[data-ddn=preview-msg] [data-ddn=preview-download-msg]"), noFrame: !(await m.$("[data-ddn=preview-pdf]")) };
+  await shot(m, "22b-phone-pdf");
+  const [pdl] = await Promise.all([m.waitForEvent("download", { timeout: 60_000 }), m.click("[data-ddn=preview-download-msg]")]);
+  (pv.phonePdf as Record<string, unknown>).download = pdl.suggestedFilename() === "f.pdf" && sha(readFileSync((await pdl.path())!)) === sha(readFileSync(join(pvDir, "f.pdf")));
+  await m.keyboard.press("Escape");
+  r.preview = pv;
+
   // 11. what the server stores: no names in clear
   if (srv) {
     const tables = ["devices", "log", "shares", "vault", "s_blobs", "s_uploads", "inst_hooks", "s_snapshots", "password_keys"].filter((t) => srv!.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t));
@@ -810,6 +957,25 @@ try {
           ? /encrypted in this tab and go through the server|szyfrowane w tej karcie i trafiają przez serwer/.test(String(r.queueNote))
           : /^(Encryption and upload only run|Szyfrowanie i wysyłanie trwa)/.test(String(r.queueNote)),
     serverBlind: MODE === "plain" ? true : r.serverSeesNoNames !== false,
+    preview: (() => {
+      const o = r.preview as Record<string, any> | undefined;
+      if (!o) return false;
+      const md = o.md as Record<string, unknown>;
+      return (
+        o.text === true && o.prevDisabledAtFirst === true &&
+        md.h1 === "Podgląd" && md.strong === "bold" && md.li === 2 && md.noScript === true && md.noImg === true && md.noHandlers === true && md.noJsHref === true && md.rawShownAsText === true && md.evilAsText === true && md.pwned === null &&
+        JSON.stringify(md.ok) === JSON.stringify([["https://example.com/", "noopener noreferrer", "_blank"]]) &&
+        o.json === true &&
+        JSON.stringify(o.csv) === JSON.stringify([["city", "note"], ["Kraków", "comma, inside"], ["Gdańsk", 'line\nbreak and "quotes"']]) &&
+        o.jpg.w === 64 && o.jpg.h === 48 && o.jpg.src === "blob:" && o.jpg.type === "image/jpeg" &&
+        o.pdf.tag === "IFRAME" && o.pdf.src === "blob:" && o.pdf.type === "application/pdf" &&
+        o.svg.tag === "IMG" && o.svg.w === 40 && o.svg.src === "blob:" && o.svg.type === "image/svg+xml" && o.svg.inline === false && o.svg.pwned === null &&
+        o.nextDisabledAtLast === true && o.staysAtLast === true && o.arrowLeft === true && o.escapeCloses === true &&
+        o.quickArrows.file === "e.jpg" && o.quickArrows.bodyKids === 1 && o.quickArrows.img === true &&
+        o.blobsRevoked.shown >= 4 && o.blobsRevoked.open === 0 && o.pwned === null &&
+        o.phone.noHScroll === true && o.phone.full === true && o.phone.arrows === true && o.phonePdf.message === true && o.phonePdf.noFrame === true && o.phonePdf.download === true
+      );
+    })(),
     noPageErrors: errors.length === 0,
   };
   r.mode = MODE;

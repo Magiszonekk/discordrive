@@ -450,3 +450,44 @@ dialog.player { width: min(1000px, 96vw); padding: 0; border: 1px solid var(--co
 .strength[data-score="3"] i:nth-child(-n+2) { background: var(--color-success); }
 .strength[data-score="4"] i { background: var(--color-success); }
 .strength[data-score="1"] span { color: var(--color-error); }
+
+/* ── file preview (zlecenie 2026-10-13-webhooki p. 4): the player dialog on paper; full screen on a phone ── */
+dialog.preview { width: min(1100px, 96vw); height: min(90dvh, 900px); max-width: 100vw; max-height: 100dvh; background: var(--color-paper); color: var(--color-ink-2); flex-direction: column; }
+dialog.preview[open] { display: flex; }
+.preview .player-h { gap: .25rem; }
+.preview .player-h b { margin-right: .5rem; }
+.preview .player-h .iconbtn { padding: .5rem; }
+.preview .player-h .iconbtn svg.i { width: 18px; height: 18px; }
+.preview .player-h .iconbtn:disabled { cursor: not-allowed; opacity: .3; }
+.pv-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: auto; }
+.pv-loading { margin: auto; font-size: .875rem; }
+.pv-msg { margin: auto; display: grid; justify-items: center; gap: 1rem; max-width: 28rem; padding: 2rem 1rem; text-align: center; font-size: .875rem; line-height: 1.5; }
+.pv-note { padding: .5rem 1rem; border-bottom: 1px solid var(--color-rule); font-size: .8125rem; }
+.pv-text { margin: 0; padding: 1rem; font: 400 .8125rem/1.5 var(--font-mono); color: var(--color-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.preview[data-kind="image"] .pv-body, .preview[data-kind="video"] .pv-body { background: var(--color-paper-2); }
+.pv-img { display: block; margin: auto; max-width: 100%; max-height: 100%; object-fit: contain; }
+.pv-img[data-placeholder] { width: 100%; height: 100%; filter: blur(6px); }
+.pv-pdf { flex: 1; width: 100%; min-height: 0; border: 0; background: var(--color-paper-2); }
+.pv-video { display: block; width: 100%; max-height: 100%; margin: auto; background: #000; }
+.pv-audio { width: min(32rem, calc(100% - 2rem)); margin: auto; }
+.pv-scroll { max-width: 100%; overflow: auto; }
+.pv-table, .pv-md table { border-collapse: collapse; font-size: .8125rem; }
+.pv-table th, .pv-table td, .pv-md th, .pv-md td { max-width: 40ch; padding: .25rem .5rem; border: 1px solid var(--color-rule); text-align: left; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pv-table th, .pv-md th { background: var(--color-paper-2); color: var(--color-ink); font-weight: 600; }
+.pv-table thead th { position: sticky; top: 0; }
+.pv-md { width: 100%; max-width: 52rem; margin: 0 auto; padding: 1rem 1.25rem 2rem; font-size: .9375rem; line-height: 1.6; color: var(--color-ink); overflow-wrap: anywhere; }
+.pv-md :is(h1, h2, h3, h4, h5, h6) { margin: 1.25em 0 .5em; font-family: var(--font-display); line-height: 1.3; color: var(--color-ink); }
+.pv-md h1 { font-size: 1.5rem; } .pv-md h2 { font-size: 1.25rem; } .pv-md h3 { font-size: 1.125rem; } .pv-md :is(h4, h5, h6) { font-size: 1rem; }
+.pv-md :is(p, ul, ol, pre, blockquote, table) { margin: 0 0 .875em; }
+.pv-md :is(ul, ol) { padding-left: 1.5em; }
+.pv-md code { padding: .1em .3em; border-radius: var(--radius-chip); background: var(--color-paper-2); font: .85em var(--font-mono); }
+.pv-md pre { padding: .75rem 1rem; border-radius: var(--radius-input); background: var(--color-paper-2); overflow: auto; }
+.pv-md pre code { padding: 0; background: none; }
+.pv-md blockquote { padding-left: 1rem; border-left: 2px solid var(--color-rule); color: var(--color-muted); }
+.pv-md a { color: var(--color-accent); }
+.pv-md hr { margin: 1.5em 0; border: 0; border-top: 1px solid var(--color-rule); }
+.pv-md .md-img { color: var(--color-muted); font-style: italic; }
+.ftable tbody tr.pv-row { cursor: pointer; }
+@media (max-width: 767.98px) {
+  dialog.preview { width: 100vw; height: 100dvh; margin: 0; border: 0; border-radius: 0; }
+}

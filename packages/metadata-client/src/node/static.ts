@@ -41,6 +41,11 @@ export function securityHeaders(connectSrc: string[]): Record<string, string> {
     `connect-src 'self' ${connectSrc.join(" ")}`,
     "img-src 'self' blob: data:",
     "media-src 'self' blob:",
+    // File preview (apps/web-mo/src/preview.ts): PDFs open in the browser's own viewer in an
+    // <iframe src="blob:…">. Without this line frame-src falls back to default-src 'self', which
+    // blocks blob: frames. blob: URLs belong to the origin that created them and hold only bytes
+    // this app fetched and typed application/pdf; object-src stays 'none'; frame-ancestors 'none'.
+    "frame-src 'self' blob:",
     "worker-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",
