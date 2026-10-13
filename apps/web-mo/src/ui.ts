@@ -102,18 +102,24 @@ const errText = (e: unknown) => {
   if (/webhook/i.test(m)) return t("err.webhook");
   return /^[A-Z]/.test(m) && !/[_{}]/.test(m) ? m : t("err.generic", { msg: m.replace(/^[a-z_]+:\s*/, "") });
 };
+/** Most toasts on screen at once: older ones leave first, so a burst of operations never covers the page. */
+const MAX_TOASTS = 3;
 function toast(text: string, kind: "ok" | "err" | "info" = "ok", action?: { label: string; run: () => Promise<unknown> }) {
-  const el = h("div", { class: `toast ${kind}`, role: kind === "err" ? "alert" : "status" }, h("span", {}, text));
+  const ms = action ? 8000 : kind === "err" ? 7000 : 3500;
+  const el = h("div", { class: `toast ${kind}${action ? " has-act" : ""}`, role: kind === "err" ? "alert" : "status", style: `--toast-ms:${ms}ms` }, icon(kind === "err" ? "alert" : kind === "info" ? "info" : "check-circle"), h("span", {}, text));
   if (action) {
-    const b = h("button", { class: "link toast-act", type: "button", "data-ddn": "toast-undo" }, action.label);
+    const b = h("button", { class: "toast-act", type: "button", "data-ddn": "toast-undo" }, icon("restore"), action.label);
     b.onclick = () => {
       el.remove();
       void act(null, action.run);
     };
     el.append(b);
   }
-  ui("toasts").append(el);
-  setTimeout(() => el.remove(), action ? 8000 : kind === "err" ? 7000 : 3500);
+  const box = ui("toasts");
+  box.append(el);
+  const all = box.querySelectorAll(".toast");
+  for (let i = 0; i < all.length - MAX_TOASTS; i++) all[i]!.remove();
+  setTimeout(() => el.remove(), ms);
 }
 
 /** Rule notices (sync-core) as toasts; silent ones never reach the UI (app-core drops them). */
@@ -993,7 +999,7 @@ function openRowMenu(btn: HTMLElement, r: { id: string; name: string; kind: "fil
     item("move", t("act.move"), "move", () => void openMove([r.id], r.name)),
     item("trash", t("act.trash"), "trash", () => void act(null, () => trashItems([r])), true),
   ];
-  m.replaceChildren(...items);
+  m.replaceChildren(...items.flatMap((b) => (b.classList.contains("danger") ? [h("div", { class: "menu-sep", role: "separator" }), b] : [b])));
   m.hidden = false;
   menuFor = btn;
   btn.setAttribute("aria-expanded", "true");
@@ -1318,14 +1324,14 @@ function trashRow(x: TrashRow, i: number) {
     h("span", { class: "sub" }, [x.kind === "file" ? fmt(x.size) : t("files.folder"), t("trash.from", { path: where }), tn("trash.left", days)].filter(Boolean).join(" · ")),
   );
   const left = h("span", { class: `chip${days <= 3 ? " chip--warning" : ""}`, "data-ddn": "trash-left", title: fmtDate(x.purgeAt) }, tn("trash.left", days));
-  const restore = h("button", { class: "iconbtn accent", type: "button", "data-ddn": "trash-restore", "aria-label": t("trash.restore.aria", { name: x.name }), title: t("trash.restore") }, icon("restore"));
+  const restore = h("button", { class: "btn sm", type: "button", "data-ddn": "trash-restore", "aria-label": t("trash.restore.aria", { name: x.name }), title: t("trash.restore") }, icon("restore"), h("span", { class: "lbl-md" }, t("trash.restore")));
   restore.onclick = () =>
     void act(restore, async () => {
       const r = await core.restore([x.id]);
       await render();
       report(r, t("trash.restored", { name: x.name }));
     });
-  const del = h("button", { class: "iconbtn danger", type: "button", "data-ddn": "trash-purge", "aria-label": t("trash.purge.aria", { name: x.name }), title: t("trash.purge") }, icon("x"));
+  const del = h("button", { class: "iconbtn danger quiet", type: "button", "data-ddn": "trash-purge", "aria-label": t("trash.purge.aria", { name: x.name }), title: t("trash.purge") }, icon("x"));
   del.onclick = () =>
     void act(del, async () => {
       if (!(await confirmDanger(t("trash.purge.h"), t("trash.purge.q", { name: x.name }), t("trash.purge")))) return;
@@ -1336,7 +1342,8 @@ function trashRow(x: TrashRow, i: number) {
   tr.append(
     name,
     h("td", { class: "size" }, x.kind === "file" ? fmt(x.size) : ""),
-    h("td", { class: "c-date" }, h("span", { class: "when-del" }, fmtDate(x.trashedAt, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })), left),
+    h("td", { class: "c-date" }, fmtDate(x.trashedAt, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })),
+    h("td", { class: "c-left" }, left),
     h("td", { class: "c-acts" }, h("span", { class: "acts" }, restore, del)),
   );
   return tr;

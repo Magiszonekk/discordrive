@@ -351,11 +351,20 @@ dialog.player { width: min(1000px, 96vw); padding: 0; border: 1px solid var(--co
 .player-h b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; font-weight: 500; color: var(--color-ink); }
 .player video { display: block; width: 100%; max-height: 76vh; background: #000; }
 
-/* NotificationToasts: fixed right-4 top-4 max-w-sm; rounded-card border border-l-2 bg-paper px-4 py-3 text-sm shadow-lg */
-.toasts { position: fixed; z-index: var(--z-toast); top: 1rem; right: 1rem; display: flex; flex-direction: column; gap: .5rem; width: min(24rem, calc(100vw - 2rem)); pointer-events: none; }
-.toast { pointer-events: auto; padding: .75rem 1rem; border: 1px solid var(--color-rule); border-left: 2px solid var(--color-success); border-radius: var(--radius-card); background: var(--color-paper); color: var(--color-ink-2); font-size: .875rem; line-height: 1.25rem; box-shadow: 0 10px 15px -3px oklch(24% 0.02 258 / 0.1), 0 4px 6px -4px oklch(24% 0.02 258 / 0.1); }
+/* NotificationToasts (rounded-card border border-l-2 bg-paper px-4 py-3 text-sm shadow-lg), stacked bottom-right:
+ * Undo toasts are snackbars, so they sit away from the page header (Upload, Empty trash) and at most 3 show (ui.ts). */
+.toasts { position: fixed; z-index: var(--z-toast); right: 1rem; bottom: 1rem; display: flex; flex-direction: column; justify-content: flex-end; gap: .5rem; width: min(24rem, calc(100vw - 2rem)); pointer-events: none; }
+.toast { position: relative; overflow: hidden; pointer-events: auto; display: flex; align-items: flex-start; gap: .625rem; padding: .75rem 1rem; border: 1px solid var(--color-rule); border-left: 2px solid var(--color-success); border-radius: var(--radius-card); background: var(--color-paper); color: var(--color-ink-2); font-size: .875rem; line-height: 1.25rem; box-shadow: 0 10px 15px -3px oklch(24% 0.02 258 / 0.1), 0 4px 6px -4px oklch(24% 0.02 258 / 0.1); animation: toast-in var(--duration-short) var(--ease-out); }
+.toast > svg.i { margin-top: 2px; color: var(--color-success); }
+.toast > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .toast.err { border-left-color: var(--color-error); }
+.toast.err > svg.i { color: var(--color-error); }
 .toast.info { border-left-color: var(--color-accent); }
+.toast.info > svg.i { color: var(--color-accent); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
+@media (max-width: 767.98px) {
+  .toasts { left: 1rem; right: 1rem; bottom: calc(1rem + env(safe-area-inset-bottom)); width: auto; }
+}
 
 @media print {
   body > *:not(dialog[open]) { display: none !important; }
@@ -401,52 +410,127 @@ dialog.player { width: min(1000px, 96vw); padding: 0; border: 1px solid var(--co
   .ftable .c-name .nm > .thumb { grid-row: span 2; align-self: start; width: 3.25rem; height: 2rem; border-radius: var(--radius-input); }
 }
 
-/* ── trash, row menu, selection, move picker (zlecenie 2026-10-13; on existing Cobalt tokens) ── */
-/* Selection column: checkbox like discordrive's bulk select (accent-color, 16px) */
+/* ── trash, row menu, selection, modals, toasts, Storage/Security, password sign-in (2026-10-13) ──
+ * Everything on the Cobalt tokens; patterns from discordrive's FileTable / FolderActionMenu / RenameFolderModal. */
+
+/* Small button (Restore in the trash): h-8, text-sm, like the row actions of FileTable */
+.btn.sm { padding: .3125rem .625rem; font-size: .8125rem; line-height: 1.25rem; }
+.btn.sm svg.i { width: 14px; height: 14px; }
+.btn.danger.solid { border-color: var(--color-error); background: var(--color-error); color: var(--color-error-ink); }
+.btn.danger.solid:hover { border-color: color-mix(in oklch, var(--color-error) 85%, var(--color-ink)); background: color-mix(in oklch, var(--color-error) 85%, var(--color-ink)); }
+.btn.danger.solid:active { transform: translateY(1px); }
+/* quiet destructive icon: muted at rest, error on hover (same as channel/share removal) */
+.iconbtn.danger.quiet { color: var(--color-muted); }
+.iconbtn.danger.quiet:hover, .iconbtn.danger.quiet:focus-visible { background: color-mix(in oklch, var(--color-error) 10%, transparent); color: var(--color-error); }
+
+/* Selection column: discordrive bulk select (accent-color checkbox, 16px) */
 .ftable th.c-sel, .ftable td.c-sel { width: 1%; padding-right: 0; }
 .ftable input[type="checkbox"] { width: 1rem; height: 1rem; margin: 0; accent-color: var(--color-accent); cursor: pointer; vertical-align: middle; }
-.ftable tbody tr.sel { background: color-mix(in oklch, var(--color-accent) 6%, transparent); }
+.ftable tbody tr.sel, .ftable tbody tr.sel:hover { background: color-mix(in oklch, var(--color-accent) 8%, transparent); }
+.ftable tbody tr.sel td:first-child { box-shadow: inset 2px 0 0 var(--color-accent); }
 .ftable tbody tr.drop-over, .crumbs a.drop-over { outline: 2px dashed var(--color-accent); outline-offset: -2px; background: color-mix(in oklch, var(--color-accent) 10%, transparent); }
-/* Bulk bar: hairline card with the count left and the actions right */
-.bulk { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem .75rem; margin-bottom: .75rem; padding: .5rem .5rem .5rem 1rem; border: 1px solid color-mix(in oklch, var(--color-accent) 40%, transparent); border-radius: var(--radius-card); background: color-mix(in oklch, var(--color-accent) 6%, var(--color-paper)); }
+
+/* Bulk bar: replaces the table head while something is selected; clear (×) and the count left, actions right */
+.bulk { position: sticky; top: .5rem; z-index: calc(var(--z-dropdown) - 1); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem .75rem; margin-bottom: .75rem; padding: .375rem .5rem; border: 1px solid color-mix(in oklch, var(--color-accent) 40%, transparent); border-radius: var(--radius-card); background: color-mix(in oklch, var(--color-accent) 7%, var(--color-paper)); box-shadow: 0 1px 2px oklch(24% 0.02 258 / 0.08); animation: toast-in var(--duration-short) var(--ease-out); }
+.bulk-l { display: flex; align-items: center; gap: .25rem; }
 .bulk-n { font: 500 .875rem/1.25rem var(--font-mono); color: var(--color-ink); font-variant-numeric: tabular-nums; }
 .bulk .row-btns { align-items: center; }
-/* Row menu (FileActionMenu): absolute card, min-w-44, rows px-4 py-3 text-sm, danger in error */
-.menu { position: fixed; z-index: var(--z-dropdown); min-width: 11rem; overflow: hidden; border: 1px solid var(--color-rule); border-radius: var(--radius-card); background: var(--color-paper); box-shadow: 0 10px 15px -3px oklch(24% 0.02 258 / 0.1), 0 4px 6px -4px oklch(24% 0.02 258 / 0.1); }
-.menu button { display: flex; width: 100%; align-items: center; gap: .75rem; padding: .625rem 1rem; border: 0; background: none; text-align: left; font: 400 .875rem/1.25rem var(--font-body); color: var(--color-ink-2); cursor: pointer; }
+.bulk .btn { padding-top: .375rem; padding-bottom: .375rem; }
+
+/* Row menu (FolderActionMenu): min-w-44 card, rows px-4 py-3 text-sm, icon 16, danger in error after a hairline */
+.menu { position: fixed; z-index: var(--z-dropdown); min-width: 11rem; padding: .25rem 0; overflow: hidden; border: 1px solid var(--color-rule); border-radius: var(--radius-card); background: var(--color-paper); box-shadow: 0 10px 15px -3px oklch(24% 0.02 258 / 0.1), 0 4px 6px -4px oklch(24% 0.02 258 / 0.1); animation: menu-in var(--duration-micro, 120ms) var(--ease-out); }
+@keyframes menu-in { from { opacity: 0; transform: translateY(-4px); } }
+.menu button { display: flex; width: 100%; align-items: center; gap: .75rem; padding: .625rem 1rem; border: 0; background: none; text-align: left; font: 400 .875rem/1.25rem var(--font-body); color: var(--color-ink-2); cursor: pointer; transition: background-color var(--duration-short) var(--ease-out); }
+.menu button svg.i { color: var(--color-muted); }
 .menu button:hover, .menu button:focus-visible { background: var(--color-paper-2); color: var(--color-ink); outline: none; }
-.menu button.danger { color: var(--color-error); }
+.menu button:hover svg.i, .menu button:focus-visible svg.i { color: var(--color-ink-2); }
+.menu button.danger, .menu button.danger svg.i { color: var(--color-error); }
 .menu button.danger:hover, .menu button.danger:focus-visible { background: color-mix(in oklch, var(--color-error) 10%, transparent); color: var(--color-error); }
-/* Toast with an action (Undo) */
-.toast { display: flex; align-items: baseline; gap: .75rem; }
-.toast > span { flex: 1; min-width: 0; }
-.toast .toast-act { flex: none; font-size: .875rem; }
-/* Move picker: folder list as buttons */
-.picker { max-height: 18rem; overflow: auto; }
+.menu-sep { height: 1px; margin: .25rem 0; background: var(--color-rule); }
+@media (max-width: 767.98px) { .menu button { min-height: 2.75rem; } }
+
+/* Toast action (Undo): a real button, separated from the text; the hairline at the bottom counts the time down */
+.toast-act { flex: none; display: inline-flex; align-items: center; gap: .3125rem; margin: -.25rem -.5rem -.25rem 0; padding: .25rem .5rem; border: 0; border-radius: var(--radius-input); background: none; color: var(--color-accent); font: 500 .875rem/1.25rem var(--font-body); cursor: pointer; }
+.toast-act svg.i { width: 14px; height: 14px; }
+.toast-act:hover, .toast-act:focus-visible { background: color-mix(in oklch, var(--color-accent) 10%, transparent); }
+.toast.has-act::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: color-mix(in oklch, var(--color-accent) 35%, transparent); transform-origin: left; animation: toast-time var(--toast-ms, 8000ms) linear forwards; }
+@keyframes toast-time { to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) { .toast.has-act::after { display: none; } }
+
+/* Rename / Move / New folder modals: RenameFolderModal = max-w-sm p-6 */
+.modal-b > .input { font-size: .9375rem; }
+/* Move picker: crumbs in a strip, folder rows as buttons, destination line above the actions */
+.picker-crumbs { flex-wrap: wrap; padding: .5rem .75rem; border-radius: var(--radius-input); background: var(--color-paper-2); }
+.picker-crumbs .link { font-size: .875rem; font-weight: 400; color: var(--color-muted); }
+.picker-crumbs .link:hover { color: var(--color-ink); text-decoration: none; }
+.picker { max-height: min(18rem, 45dvh); overflow: auto; }
 .picker li { padding: 0; min-height: 0; }
-.picker li > button { display: flex; width: 100%; align-items: center; gap: .75rem; min-height: 2.75rem; padding: .5rem 1rem; border: 0; background: none; text-align: left; font: inherit; color: var(--color-ink); cursor: pointer; }
-.picker li > button:hover, .picker li > button:focus-visible { background: var(--color-paper-2); }
+.picker li > button { display: flex; width: 100%; align-items: center; gap: .75rem; min-height: 2.75rem; padding: .5rem .75rem .5rem 1rem; border: 0; background: none; text-align: left; font: 400 .875rem/1.25rem var(--font-body); color: var(--color-ink); cursor: pointer; transition: background-color var(--duration-short) var(--ease-out); }
+.picker li > button:hover, .picker li > button:focus-visible { background: var(--color-paper-2); outline: none; }
 .picker li > button svg.i { color: var(--color-muted); }
-.picker li > button svg.i:last-child { margin-left: auto; }
-.picker li.empty-row { padding: .75rem 1rem; }
-.picker-crumbs { flex-wrap: wrap; }
-.picker-crumbs .link { font-size: .875rem; }
-/* Trash list: date + days-left chip in one cell */
+.picker li > button svg.i:last-child { margin-left: auto; width: 14px; height: 14px; }
+.picker li.empty-row { padding: 1rem; justify-content: center; font-size: .8125rem; }
+.picker-dest { font-size: .8125rem; line-height: 1.25rem; color: var(--color-muted); }
+
+/* Confirmation (cannot be undone): error icon in a soft circle, solid danger button (discordrive delete confirm) */
+dialog.modal.confirm { width: min(24rem, calc(100vw - 2rem)); }
+.confirm-h { display: flex; align-items: center; gap: .75rem; margin-bottom: .75rem; }
+.confirm-ic { display: grid; place-items: center; width: 2.5rem; height: 2.5rem; flex: none; border-radius: 9999px; background: color-mix(in oklch, var(--color-error) 12%, transparent); color: var(--color-error); }
+.confirm-ic svg.i { width: 18px; height: 18px; }
+.confirm-h h2 { font: 600 1rem/1.5rem var(--font-display); color: var(--color-ink); }
+dialog.modal.confirm .modal-b { gap: 1.25rem; }
+
+/* Trash: Deleted (date, mono) and Time left (chip) in their own columns; Restore with a label, delete quiet */
 .trash-wrap { margin-top: 1rem; }
-.ftable td.c-date .when-del { margin-right: .5rem; }
+/* no column heads over an empty state */
+.ftable:has(tbody:empty) thead { display: none; }
+.ftable td.c-left { white-space: nowrap; }
+.ftable td.c-left .chip { font-variant-numeric: tabular-nums; }
+.trash-wrap .ftable .acts { align-items: center; gap: .375rem; }
 .files-h .acts .btn:disabled { cursor: not-allowed; opacity: .5; }
+
 @media (max-width: 767.98px) {
-  .ftable td.c-sel { display: flex; align-items: center; padding: 1rem 0 1rem 1rem; }
+  .ftable td.c-sel { display: flex; align-items: center; align-self: stretch; padding: 0 0 0 .75rem; }
+  .ftable td.c-sel input[type="checkbox"] { width: 1.125rem; height: 1.125rem; }
   .ftable tr:has(td.c-sel) { grid-template-columns: auto minmax(0, 1fr) auto; }
   .ftable th.c-sel { display: none; }
+  .ftable tbody tr.sel, .ftable tbody tr.sel:hover { border-color: color-mix(in oklch, var(--color-accent) 45%, transparent); }
+  .ftable tbody tr.sel td:first-child { box-shadow: none; }
+  .ftable td.c-left { display: none; }
+  .trash-wrap .btn.sm .lbl-md { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .trash-wrap .btn.sm { padding: .5rem; }
+  .bulk { top: 4rem; }
+  .bulk .row-btns { flex: 1; justify-content: flex-end; }
+  /* icon-only on a phone; the label stays for screen readers */
+  .bulk .btn span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .bulk .btn { padding: .5rem .625rem; }
 }
 
-/* Settings → Security: password strength meter (3 segments like the channel slots) */
-.strength { display: grid; grid-template-columns: repeat(3, 1fr) auto; align-items: center; gap: .25rem .5rem; margin-top: -.5rem; }
-.strength i { height: .375rem; border-radius: 9999px; background: var(--color-paper-3); }
-.strength span { font: 500 .75rem/1rem var(--font-mono); color: var(--color-muted); min-width: 6ch; text-align: right; }
-.strength[data-score="1"] i:nth-child(-n+1) { background: var(--color-error); }
-.strength[data-score="2"] i:nth-child(-n+1), .strength[data-score="2"] i:nth-child(2) { background: var(--color-warning); }
-.strength[data-score="3"] i:nth-child(-n+2) { background: var(--color-success); }
-.strength[data-score="4"] i { background: var(--color-success); }
-.strength[data-score="1"] span { color: var(--color-error); }
+/* Settings → Storage: the result of the last run as a note with a success rule */
+.result { display: block; padding: .75rem 1rem; border: 1px solid var(--color-rule); border-left: 2px solid var(--color-success); border-radius: var(--radius-card); font-size: .8125rem; line-height: 1.5; color: var(--color-ink-2); }
+.result:empty { display: none; }
+
+/* Settings → Security */
+.pw-current { display: flex; align-items: center; gap: .5rem; padding: .625rem 1rem; border-radius: var(--radius-input); background: var(--color-paper-2); font: 400 .8125rem/1.25rem var(--font-mono); color: var(--color-ink-2); overflow-wrap: anywhere; }
+/* strength meter: label + verdict over 4 segments (like the channel slots), tone of the verdict */
+.strength { display: grid; gap: .375rem; margin-top: -.25rem; }
+.strength-h { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; }
+.strength-t { font: 500 .75rem/1rem var(--font-mono); text-transform: uppercase; letter-spacing: .025em; color: var(--color-muted); }
+.strength-bars { display: grid; grid-template-columns: repeat(4, 1fr); gap: .25rem; }
+.strength-bars i { height: .375rem; border-radius: 9999px; background: var(--color-paper-3); transition: background-color var(--duration-short) var(--ease-out); }
+.strength[data-score="1"] .strength-bars i:nth-child(-n+1) { background: var(--color-error); }
+.strength[data-score="2"] .strength-bars i:nth-child(-n+2) { background: var(--color-warning); }
+.strength[data-score="3"] .strength-bars i:nth-child(-n+3) { background: var(--color-success); }
+.strength[data-score="4"] .strength-bars i { background: var(--color-success); }
+.strength[data-score="1"] .strength-t { color: var(--color-error); }
+.strength[data-score="2"] .strength-t { color: color-mix(in oklch, var(--color-warning) 70%, var(--color-ink)); }
+.strength[data-score="3"] .strength-t, .strength[data-score="4"] .strength-t { color: var(--color-success); }
+/* risk acknowledgement: plain hairline box (the warning above stays the only amber block); amber once ticked off is needed */
+.ack.plain { border-left-width: 1px; border-left-color: var(--color-rule); background: var(--color-paper-2); cursor: pointer; }
+.ack.plain:has(input:checked) { border-color: color-mix(in oklch, var(--color-accent) 40%, transparent); background: color-mix(in oklch, var(--color-accent) 6%, var(--color-paper)); }
+
+/* Sign-in screens: the three other ways in (pairing, rescue kit, password) as one column of equal buttons;
+ * three in a row do not fit the 28rem card and wrapped 2 + 1. */
+.signin-hint { margin-top: 0; text-align: center; }
+.auth-foot .alt-ways { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; max-width: 20rem; }
+.auth-foot .alt-ways .btn { width: 100%; padding-top: .625rem; padding-bottom: .625rem; }

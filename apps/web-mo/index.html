@@ -49,6 +49,9 @@
   <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></symbol>
   <symbol id="i-restore" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
   <symbol id="i-recovered" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v4M12 17h.01"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/></symbol>
   <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/></symbol>
 </svg>
 
@@ -74,7 +77,7 @@
     </div>
     <div class="auth-foot">
       <span data-i18n="create.have">Already have an account on another device?</span>
-      <div class="row-btns"><a class="btn" href="/join" data-ddn="join-pair" data-link><svg class="i"><use href="#i-phone"/></svg><span data-i18n="join.pair">Join this device</span></a><a class="btn" href="/restore" data-ddn="join-kit-open" data-link><svg class="i"><use href="#i-lock"/></svg><span data-i18n="join.kit">I have a rescue kit</span></a><a class="btn" href="/signin" data-ddn="signin-open" data-link><svg class="i"><use href="#i-key"/></svg><span data-i18n="join.password">Sign in with password</span></a></div>
+      <div class="row-btns alt-ways"><a class="btn" href="/join" data-ddn="join-pair" data-link><svg class="i"><use href="#i-phone"/></svg><span data-i18n="join.pair">Join this device</span></a><a class="btn" href="/restore" data-ddn="join-kit-open" data-link><svg class="i"><use href="#i-lock"/></svg><span data-i18n="join.kit">I have a rescue kit</span></a><a class="btn" href="/signin" data-ddn="signin-open" data-link><svg class="i"><use href="#i-key"/></svg><span data-i18n="join.password">Sign in with password</span></a></div>
     </div>
   </section>
 
@@ -112,7 +115,7 @@
       <label class="field"><span class="lab" data-i18n="signin.password">Password</span><input class="input" type="password" data-ddn="signin-password" name="password" autocomplete="current-password"></label>
       <label class="field"><span class="lab" data-i18n="joinD.name">Name of this device</span><input class="input" data-ddn="signin-name" data-i18n-attr="placeholder=create.device.ph" autocomplete="off"></label>
       <button class="btn primary block" data-ddn="signin-go" type="submit" data-i18n="signin.go">Sign in</button>
-      <p class="hint" data-i18n="signin.hint"></p>
+      <p class="hint signin-hint" data-i18n="signin.hint"></p>
     </form>
     <div class="auth-foot"><a class="link" href="/" data-link data-i18n="auth.back">Back to sign-up</a></div>
   </section>
@@ -214,12 +217,11 @@
 
       <!-- Selection (checkboxes, like discordrive's bulk selection): actions for every selected item. -->
       <div class="bulk" data-ddn="bulk" role="toolbar" data-i18n-attr="aria-label=bulk.label" hidden>
-        <span class="bulk-n" data-ddn="bulk-count"></span>
+        <div class="bulk-l"><button class="iconbtn" type="button" data-ddn="bulk-clear" data-i18n-attr="aria-label=bulk.clear, title=bulk.clear"><svg class="i"><use href="#i-x"/></svg></button><span class="bulk-n" data-ddn="bulk-count"></span></div>
         <div class="row-btns">
           <button class="btn" type="button" data-ddn="bulk-move"><svg class="i"><use href="#i-move"/></svg><span data-i18n="act.move">Move to…</span></button>
           <button class="btn" type="button" data-ddn="bulk-download"><svg class="i"><use href="#i-download"/></svg><span data-i18n="files.download">Download</span></button>
           <button class="btn danger" type="button" data-ddn="bulk-trash"><svg class="i"><use href="#i-trash"/></svg><span data-i18n="act.trash">Move to trash</span></button>
-          <button class="iconbtn" type="button" data-ddn="bulk-clear" data-i18n-attr="aria-label=bulk.clear, title=bulk.clear"><svg class="i"><use href="#i-x"/></svg></button>
         </div>
       </div>
 
@@ -252,7 +254,7 @@
       <div class="note"><svg class="i"><use href="#i-info"/></svg><p data-i18n="trash.lead"></p></div>
       <div class="ftable-wrap trash-wrap">
         <table class="ftable">
-          <thead><tr><th data-i18n="files.col.name">Name</th><th class="r" data-i18n="files.col.size">Size</th><th data-i18n="trash.col.deleted">Deleted</th><th><span class="sr" data-i18n="files.col.actions">Actions</span></th></tr></thead>
+          <thead><tr><th data-i18n="files.col.name">Name</th><th class="r" data-i18n="files.col.size">Size</th><th data-i18n="trash.col.deleted">Deleted</th><th data-i18n="trash.col.left">Time left</th><th><span class="sr" data-i18n="files.col.actions">Actions</span></th></tr></thead>
           <tbody data-ddn="trash-list"></tbody>
         </table>
         <div class="empty" data-ddn-ui="trash-none" hidden><span class="ic"><svg class="i"><use href="#i-trash"/></svg></span><b data-i18n="trash.none.b"></b><span data-i18n="trash.none.s"></span></div>
@@ -347,7 +349,7 @@
               <div><dt class="label-mono" data-i18n="st.waiting">Waiting</dt><dd><span class="val mono" data-ddn="storage-waiting"></span><p data-ddn-ui="storage-waiting-t"></p></dd></div>
             </dl>
             <div class="row-btns"><button class="btn" type="button" data-ddn="cleanup-now"><svg class="i"><use href="#i-trash"/></svg><span data-i18n="st.run">Clean up now</span></button></div>
-            <p class="hint" data-ddn="cleanup-result" role="status" aria-live="polite"></p>
+            <p class="result" data-ddn="cleanup-result" role="status" aria-live="polite"></p>
           </div>
         </section>
 
@@ -356,13 +358,13 @@
           <p class="sec-lead" data-i18n="pw.lead"></p>
           <div class="sec-body">
             <div class="note warn"><svg class="i"><use href="#i-info"/></svg><p data-i18n-html="pw.warn"></p></div>
-            <p class="hint" data-ddn="pw-current" hidden></p>
+            <p class="pw-current" data-ddn="pw-current" hidden></p>
             <form class="stack" data-ddn-ui="pw-form">
               <label class="field"><span class="lab" data-i18n="signin.login">Login</span><input class="input" data-ddn="pw-login" name="username" autocomplete="username" autocapitalize="none" spellcheck="false"><span class="hint" data-i18n="pw.login.hint"></span></label>
               <label class="field"><span class="lab" data-i18n="signin.password">Password</span><input class="input" type="password" data-ddn="pw-password" name="new-password" autocomplete="new-password"></label>
-              <div class="strength" data-ddn="pw-strength" data-score="0"><i></i><i></i><i></i><span data-ddn-ui="pw-strength-t"></span></div>
+              <div class="strength" data-ddn="pw-strength" data-score="0"><div class="strength-h"><span class="label-mono" data-i18n="pw.strength">Password strength</span><span class="strength-t" data-ddn-ui="pw-strength-t"></span></div><div class="strength-bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div></div>
               <label class="field"><span class="lab" data-i18n="pw.repeat">Repeat password</span><input class="input" type="password" data-ddn="pw-password2" autocomplete="new-password"></label>
-              <label class="ack"><input type="checkbox" data-ddn="pw-ack"><span data-i18n="pw.ack"></span></label>
+              <label class="ack plain"><input type="checkbox" data-ddn="pw-ack"><span data-i18n="pw.ack"></span></label>
               <div class="row-btns"><button class="btn primary" type="submit" data-ddn="pw-save" data-i18n="pw.on">Turn on</button><button class="btn danger" type="button" data-ddn="pw-off" data-i18n="pw.off" hidden>Turn off</button></div>
             </form>
           </div>
@@ -434,17 +436,17 @@
   <div class="modal-b">
     <nav class="crumbs picker-crumbs" data-ddn="move-crumbs" data-i18n-attr="aria-label=files.crumbs"></nav>
     <ul class="list picker" data-ddn="move-list"></ul>
-    <p class="hint" data-ddn-ui="mv-hint"></p>
+    <p class="picker-dest" data-ddn-ui="mv-hint"></p>
     <div class="modal-acts"><button class="btn" type="button" data-ddn-ui="mv-cancel" data-i18n="nf.cancel">Cancel</button><button class="btn primary" type="button" data-ddn="move-here" data-i18n="mv.here">Move here</button></div>
   </div>
 </dialog>
 
 <!-- Confirmation (delete for good, empty trash) -->
-<dialog class="modal" data-ddn="confirm-dialog" aria-labelledby="cf-h">
-  <div class="modal-h"><h2 id="cf-h"><svg class="i"><use href="#i-trash"/></svg><span data-ddn-ui="cf-title"></span></h2></div>
+<dialog class="modal confirm" data-ddn="confirm-dialog" aria-labelledby="cf-h" aria-describedby="cf-text">
+  <div class="confirm-h"><span class="confirm-ic" aria-hidden="true"><svg class="i"><use href="#i-alert"/></svg></span><h2 id="cf-h" data-ddn-ui="cf-title"></h2></div>
   <div class="modal-b">
-    <p class="muted" data-ddn-ui="cf-text"></p>
-    <div class="modal-acts"><button class="btn" type="button" data-ddn-ui="cf-no" data-i18n="nf.cancel">Cancel</button><button class="btn danger" type="button" data-ddn="confirm-yes"></button></div>
+    <p class="muted" id="cf-text" data-ddn-ui="cf-text"></p>
+    <div class="modal-acts"><button class="btn" type="button" data-ddn-ui="cf-no" data-i18n="nf.cancel">Cancel</button><button class="btn danger solid" type="button" data-ddn="confirm-yes"></button></div>
   </div>
 </dialog>
 
