@@ -12,7 +12,9 @@ export async function serverChannels(ctx: ModeCtx): Promise<ChannelsView> {
   const n = r.body.using === "own" ? chans : r.body.using === "pool" ? r.body.pool.channels : 0;
   const shared = r.body.using === "own" ? [...new Set(own.map((w) => w.channelId))].filter((c) => own.filter((w) => w.channelId === c).length > 1) : [];
   return {
-    webhooks: own,
+    webhooks: own.map((w) => ({ ...w, retired: false, critical: false, criticalWhat: [], files: 0, bytes: 0, dependent: 0 })),
+    removed: [],
+    move: null,
     pool: r.body.pool,
     using: r.body.using,
     advice: { ok: n >= REQUIRED_CHANNELS, channels: n, suggestMore: n < RECOMMENDED_CHANNELS && r.body.using === "own", sharedChannels: shared },

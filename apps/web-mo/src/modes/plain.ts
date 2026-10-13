@@ -40,6 +40,23 @@ export const mode: ModeImpl = {
     await ctx.http.json("DELETE", `/v1/channels/${id}`);
   },
 
+  // zlecenie 2026-10-13-webhooki p. 1: stubs, replaced by the implementation (kept so every mode typechecks meanwhile).
+  async removalImpact() {
+    throw new Error("not_implemented");
+  },
+  async retireChannel() {
+    throw new Error("not_implemented");
+  },
+  async moveChannel() {
+    throw new Error("not_implemented");
+  },
+  async moveStatus() {
+    return null;
+  },
+  async unavailable() {
+    return [];
+  },
+
   async rescueKit(ctx) {
     return encodeServerRescueKit({ v: 2, accountId: ctx.acct.accountId, key: ctx.acct.accountKey, server: ctx.acct.serverUrl });
   },

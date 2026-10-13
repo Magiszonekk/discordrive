@@ -73,12 +73,32 @@ export const mode: ModeImpl = {
 
   async channels(ctx) {
     const v = await vault(ctx).load();
-    return { webhooks: v.webhooks.map((w) => ({ id: w.id, channelId: w.channelId, label: w.label })), advice: vaultAdvice(v) };
+    return { webhooks: v.webhooks.map((w) => ({ id: w.id, channelId: w.channelId, label: w.label, retired: false, critical: false, criticalWhat: [], files: 0, bytes: 0, dependent: 0 })), advice: vaultAdvice(v), removed: [], move: null };
   },
 
   async addChannel(ctx, url) {
     const w = await inspectForVault(transport(ctx), url);
     await vault(ctx).addWebhook(w);
+  },
+
+  // zlecenie 2026-10-13-webhooki p. 1: stubs, replaced by the implementation (kept so every mode typechecks meanwhile).
+  async removalImpact() {
+    throw new Error("not_implemented");
+  },
+  async retireChannel() {
+    throw new Error("not_implemented");
+  },
+  async moveChannel() {
+    throw new Error("not_implemented");
+  },
+  async moveStatus() {
+    return null;
+  },
+  async unavailable() {
+    return [];
+  },
+  async removeChannel() {
+    throw new Error("not_implemented");
   },
 
   async rescueKit(ctx, c) {
