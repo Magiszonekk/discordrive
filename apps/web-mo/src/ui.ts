@@ -638,7 +638,7 @@ async function renderNow() {
   }
   if (route.name === "join" || route.name === "restore" || route.name === "signin") return navigate("/", true);
 
-  const wh = await core.webhooks();
+  const wh = await core.webhooks(route.name === "settings");
   channelsOk = wh.advice.ok;
   renderHooks(wh);
   // First run: no channel and no saved kit yet -> onboarding (unless skipped in this tab).

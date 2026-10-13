@@ -41,7 +41,7 @@ const mc = (c: DriveClient) => c as MetadataClient;
 async function ensurePointer(ctx: ModeCtx, c: DriveClient) {
   let v = await vault(ctx).load();
   if (v.pointer) return v.pointer;
-  const hooks = toWebhookRefs(v);
+  const hooks = toWebhookRefs(v).filter((h) => !h.retired);
   if (!hooks.length) throw new Error("need_channel: add a channel with a webhook first");
   const io = clientBlobIO(mc(c), transport(ctx));
   const mine = await createPointerMessage(io, ctx.key, ctx.acct.accountId, hooks[0]!);
@@ -86,11 +86,23 @@ function mover(ctx: ModeCtx, c: DriveClient): ChannelMover {
   if (!m) movers.set(c, (m = new ChannelMover({ client: mc(c), store: s, vault: vault(ctx), key: ctx.key, accountId: ctx.acct.accountId, transport: transport(ctx), log: this_arbiter(ctx) })));
   return m;
 }
-async function critical(ctx: ModeCtx, c: DriveClient) {
+/**
+ * Which channels hold snapshot data. Reading the pointer is a Discord GET, so the answer is kept for
+ * CRITICAL_TTL_MS per pointer message (it only changes with new segments, which go to the pointer's own
+ * channel, or with a move, which drops the cache).
+ */
+const CRITICAL_TTL_MS = 5 * 60_000;
+const critCache = new WeakMap<ModeCtx, { key: string; at: number; v: { what: Map<string, ("pointer" | "snapshots")[]>; bytes: Map<string, number> } }>();
+async function critical(ctx: ModeCtx, c: DriveClient, fresh = false) {
   const v = await vault(ctx).load();
-  return chainOf(ctx)
+  const key = v.pointer ? `${v.pointer.webhookId}/${v.pointer.messageId}` : "";
+  const hit = critCache.get(ctx);
+  if (!fresh && hit && hit.key === key && Date.now() - hit.at < CRITICAL_TTL_MS) return hit.v;
+  const r = await chainOf(ctx)
     .hooks(clientBlobIO(mc(c), transport(ctx)), ctx.key, ctx.acct.accountId, v)
     .catch(() => ({ what: new Map<string, ("pointer" | "snapshots")[]>(v.pointer ? [[v.pointer.webhookId, ["pointer"]]] : []), bytes: new Map<string, number>() }));
+  critCache.set(ctx, { key, at: Date.now(), v: r });
+  return r;
 }
 
 export const mode: ModeImpl = {
@@ -147,7 +159,7 @@ export const mode: ModeImpl = {
     if (!w) throw new Error("no_such_channel");
     const s = sqlOf(ctx);
     const at = s ? s.filesAt(id, 1000) : { total: 0, bytes: 0, rows: [] };
-    const crit = await critical(ctx, c);
+    const crit = await critical(ctx, c, true);
     const what = crit.what.get(id) ?? [];
     const others = v.webhooks.filter((x) => x.id !== id && !x.retired && !x.drain).length;
     const pieceBytes = s?.locationStats().get(id)?.bytes ?? 0;
@@ -176,14 +188,16 @@ export const mode: ModeImpl = {
     const w = v.webhooks.find((x) => x.id === id);
     if (!w || w.drain) throw new Error("no_such_channel");
     if (retired) {
-      if (v.pointer?.webhookId === id) throw new Error("channel_critical");
+      if (v.pointer?.webhookId === id || (critCache.get(ctx)?.v.what.get(id)?.length ?? 0) > 0) throw new Error("channel_critical");
       if (!v.webhooks.some((x) => x.id !== id && !x.retired && !x.drain)) throw new Error("need_other_channel");
     }
     await vault(ctx).setRetired(id, retired);
   },
 
   async moveChannel(ctx, c, id, onProgress) {
-    return mover(ctx, c).run(id, onProgress);
+    const r = await mover(ctx, c).run(id, onProgress);
+    critCache.delete(ctx);
+    return r;
   },
 
   async moveStatus(ctx, c) {
@@ -197,7 +211,7 @@ export const mode: ModeImpl = {
     if (!w) throw new Error("no_such_channel");
     if (w.drain) throw new Error("channel_draining");
     if (!v.webhooks.some((x) => x.id !== id && !x.retired && !x.drain)) throw new Error("need_other_channel");
-    const crit = c ? (await critical(ctx, c)).what.get(id) : v.pointer?.webhookId === id ? ["pointer"] : [];
+    const crit = c ? (await critical(ctx, c, true)).what.get(id) : v.pointer?.webhookId === id ? ["pointer"] : [];
     if (crit?.length) throw new Error("channel_critical");
     await vault(ctx).removeWebhook(id, "removed");
     const s = sqlOf(ctx);
@@ -244,8 +258,11 @@ export const mode: ModeImpl = {
       // §6.2: phones (metered) write only segments, bases come from desktops.
       const nav = (globalThis as unknown as { navigator?: { userAgent?: string; connection?: { type?: string; saveData?: boolean } } }).navigator;
       const metered = /Android|iPhone|iPad|Mobile/i.test(nav?.userAgent ?? "") || nav?.connection?.type === "cellular" || !!nav?.connection?.saveData;
+      // Snapshot objects only on the pointer's channel (zlecenie 2026-10-13-webhooki): one critical
+      // channel instead of all of them; the others can be retired or removed freely.
+      const ptrHook = v.pointer.webhookId;
       s = new SnapshotScheduler({
-        io: clientBlobIO(mc(c), transport(ctx)),
+        io: { ...clientBlobIO(mc(c), transport(ctx)), post: (d, f) => mc(c).postBlobTo(ptrHook, d, f) },
         key: ctx.key,
         accountId: ctx.acct.accountId,
         pointer: v.pointer,

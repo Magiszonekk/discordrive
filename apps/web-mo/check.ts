@@ -69,6 +69,8 @@ if (remote) {
     },
   };
   hookUrls = [fake.addWebhook("1550000000000000101").url, fake.addWebhook("1550000000000000102").url];
+  // Third webhook for the channel step (move / remove anyway / paste again).
+  hookUrls.push(fake.addWebhook("1550000000000000103").url);
   let extensions: ConstructorParameters<typeof DdnServer>[0] extends infer O ? (O extends { extensions?: infer X } ? X : never) : never = [];
   let shareBot: BotRefresher = refresher;
   let poolInit: (() => Promise<void>) | null = null;
@@ -205,6 +207,12 @@ async function nav(p: Page, name: "files" | "trash" | "devices" | "settings") {
   await p.click(`a[data-nav=${name}]`);
   await p.waitForSelector(`[data-page=${name}]:not([hidden])`);
 }
+/** Settings → Channels is folded when there are channels (zlecenie 2026-10-13-webhooki p. 3): unfold it. */
+async function openChannels(p: Page) {
+  await p.waitForSelector("[data-ddn=channels-toggle]");
+  if ((await p.getAttribute("[data-ddn=channels-toggle]", "aria-expanded")) !== "true") await p.click("[data-ddn=channels-toggle]");
+  await p.waitForSelector("[data-ddn=channels-body]:not([hidden])");
+}
 const count = (p: Page, re: RegExp) => p.waitForFunction((src) => new RegExp(src).test(document.querySelector("[data-ddn=count]")?.textContent ?? ""), re.source, { timeout: 30_000 });
 
 let ok = false;
@@ -293,7 +301,8 @@ try {
   await nav(p, "settings");
   await p.reload();
   await p.waitForSelector("body[data-ready='1']");
-  r.settingsSurvivesReload = new URL(p.url()).pathname === "/settings" && (await p.isVisible("[data-page=settings] [data-ddn=webhook-url]"));
+  r.settingsSurvivesReload = new URL(p.url()).pathname === "/settings" && (await p.isVisible("[data-page=settings] [data-ddn=channels-toggle]"));
+  await openChannels(p);
   if (!SERVER_SIDE && hookUrls[1]) {
     // Type the second one key by key (not paste) and add with the button.
     await typeInto(p, "[data-ddn=webhook-url]", hookUrls[1]);
@@ -312,7 +321,12 @@ try {
       await p.click("[data-ddn=add-webhook]");
       await p.waitForSelector("[data-ddn=remove-webhook]", { timeout: 30_000 });
       r.ownChannel = { poolHidden: await p.isHidden("[data-ddn=pool]"), count: await p.textContent("[data-ddn-ui=hook-count]") };
+      // The remove dialog (zlecenie 2026-10-13-webhooki): an empty own channel, "remove anyway" needs no acknowledgement.
       await p.click("[data-ddn=remove-webhook]");
+      await p.waitForSelector("[data-ddn=channel-dialog][open]");
+      await p.waitForFunction(() => !document.querySelector<HTMLInputElement>("[data-ddn=chd-opt-remove]")!.disabled, null, { timeout: 30_000 });
+      await p.check("[data-ddn=chd-opt-remove]");
+      await p.click("[data-ddn=chd-go]");
       await p.waitForSelector("[data-ddn=pool]", { timeout: 30_000 });
       (r.ownChannel as Record<string, unknown>).backToPool = (await p.textContent("[data-ddn-ui=hook-count]")) === poolCount;
     } else r.pastedWebhook = true;
@@ -876,6 +890,148 @@ try {
   await m.keyboard.press("Escape");
   r.preview = pv;
 
+
+  // 10d. channels (zlecenie 2026-10-13-webhooki p. 1-3): the section folds (folded with channels, the
+  // choice kept), per-channel stats, the remove dialog (impact list, options), retire + undo, a critical
+  // channel offers only "move", remove anyway -> files unavailable: hidden by default, shown + explained
+  // with the Settings switch, Storage totals count them; pasting the same webhook again brings them back;
+  // move and remove (metadata only: in this tab; e2ee/plain: the instance job) -> files still download.
+  step("channels");
+  const ch: Record<string, unknown> = {};
+  const extraHook = SERVER_SIDE ? hookUrls[0] : hookUrls[2];
+  if (extraHook) {
+    // Forget the fold choice the earlier steps made (they opened the section), as on a first visit.
+    await p.evaluate(() => localStorage.removeItem("ddn.channels.open"));
+    await nav(p, "settings");
+    await p.reload();
+    await p.waitForSelector("body[data-ready='1']");
+    await p.waitForSelector("[data-ddn=channels-toggle]");
+    // Folded by default when there are channels.
+    ch.foldedByDefault = (await p.getAttribute("[data-ddn=channels-toggle]", "aria-expanded")) === "false" && (await p.isHidden("[data-ddn=channels-body]"));
+    ch.summary = await p.textContent("[data-ddn=channels-summary]");
+    await p.click("[data-ddn=channels-toggle]");
+    await p.waitForSelector("[data-ddn=channels-body]:not([hidden])");
+    await p.reload();
+    await p.waitForSelector("body[data-ready='1']");
+    await p.waitForSelector("[data-ddn=channels-toggle]");
+    ch.foldKept = (await p.getAttribute("[data-ddn=channels-toggle]", "aria-expanded")) === "true";
+    // A new channel with one file on it only (the step's own folder).
+    await pasteInto(p, "[data-ddn=webhook-url]", extraHook);
+    await p.click("[data-ddn=add-webhook]");
+    const extraId = /webhooks\/(\d+)\//.exec(extraHook)![1]!;
+    await p.waitForSelector(`[data-ddn=channel-row][data-id="${extraId}"]`, { timeout: 30_000 });
+    // Retire every other own channel for a moment (metadata only), so the next upload lands on the new one only.
+    const others = SERVER_SIDE ? [] : (await p.$$eval("[data-ddn=channel-row]", (e) => e.map((x) => x.getAttribute("data-id")!))).filter((x) => x !== extraId);
+    const critOf = async (id: string) => (await p.locator(`[data-ddn=channel-row][data-id="${id}"] [data-ddn=channel-critical]`).count()) > 0;
+    for (const id of others) if (!(await critOf(id))) await p.evaluate((x) => (window as unknown as { ddnCore: { retireWebhook(i: string, r: boolean): Promise<void> } }).ddnCore.retireWebhook(x, true), id);
+    const chDir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-ch-"));
+    writeFileSync(join(chDir, "kanal.txt"), "only on the new channel\n".repeat(2000));
+    const chFolder = await p.evaluate(async () => (window as unknown as { ddnCore: { mkdir(n: string): Promise<string> } }).ddnCore.mkdir("Kanaly"));
+    await p.goto(`${base}/folder/${chFolder}`);
+    await p.waitForSelector("body[data-ready='1']");
+    // metadata only: the pointer channel is critical and still takes pieces; e2ee/plain: own channel only.
+    const nonCrit = SERVER_SIDE ? [] : (await Promise.all(others.map(async (id) => ((await p.evaluate((x) => (window as unknown as { ddnCore: { webhooks(s: boolean): Promise<{ webhooks: { id: string; critical: boolean }[] }> } }).ddnCore.webhooks(true).then((w) => w.webhooks.find((y) => y.id === x)?.critical), id)) ? null : id)))).filter(Boolean);
+    void nonCrit;
+    await p.setInputFiles("[data-ddn=file]", [join(chDir, "kanal.txt")]);
+    await p.waitForFunction((done) => document.querySelector("[data-ddn-ui=queue-title]")?.textContent === done, L.uploaded, { timeout: 120_000 });
+    await count(p, L.one);
+    for (const id of others) await p.evaluate((x) => (window as unknown as { ddnCore: { retireWebhook(i: string, r: boolean): Promise<void> } }).ddnCore.retireWebhook(x, false).catch(() => {}), id);
+    await nav(p, "settings");
+    await p.waitForSelector(`[data-ddn=channel-row][data-id="${extraId}"]`);
+    ch.stats = await p.textContent(`[data-ddn=channel-row][data-id="${extraId}"] [data-ddn=channel-stats]`);
+    // Storage totals.
+    await p.waitForFunction(() => /\d/.test(document.querySelector("[data-ddn=st-all]")?.textContent ?? ""));
+    ch.totals = { all: await p.textContent("[data-ddn=st-all]"), trash: await p.textContent("[data-ddn=st-trash]"), unavail: await p.textContent("[data-ddn=st-unavail]"), discord: await p.textContent("[data-ddn=st-discord]"), tookMs: Number(await p.getAttribute("[data-ddn=st-all]", "data-took-ms")) };
+    // The remove dialog of the new channel: impact by name, retire is the default.
+    await p.click(`[data-ddn=channel-row][data-id="${extraId}"] [data-ddn=remove-webhook]`);
+    await p.waitForSelector("[data-ddn=channel-dialog][open]");
+    await p.waitForFunction(() => document.querySelector("[data-ddn=chd-impact]")?.getAttribute("data-files") !== null, null, { timeout: 30_000 });
+    ch.impact = { text: await p.textContent("[data-ddn=chd-impact]"), files: await p.$$eval("[data-ddn=chd-file] .dname", (e) => e.map((x) => x.textContent)), retireDefault: await p.isChecked("[data-ddn=chd-opt-retire]") };
+    await shot(p, "23-channel-remove-dialog");
+    await p.click("[data-ddn=chd-go]");
+    await p.waitForSelector(`[data-ddn=channel-row][data-id="${extraId}"] [data-ddn=channel-retired]`, { timeout: 30_000 });
+    ch.retired = true;
+    await p.click(`[data-ddn=channel-row][data-id="${extraId}"] [data-ddn=channel-unretire]`);
+    await p.waitForSelector(`[data-ddn=channel-row][data-id="${extraId}"] [data-ddn=channel-retired]`, { state: "detached", timeout: 30_000 });
+    ch.unretired = true;
+    // A critical channel offers only "move".
+    const crit = await p.locator("[data-ddn=channel-row]:has([data-ddn=channel-critical])").first();
+    if ((await crit.count()) > 0) {
+      await crit.locator("[data-ddn=remove-webhook]").click();
+      await p.waitForSelector("[data-ddn=channel-dialog][open]");
+      await p.waitForFunction(() => !document.querySelector<HTMLElement>("[data-ddn=chd-critical]")!.hidden, null, { timeout: 30_000 });
+      ch.critical = { retire: await p.isDisabled("[data-ddn=chd-opt-retire]"), remove: await p.isDisabled("[data-ddn=chd-opt-remove]"), move: await p.isEnabled("[data-ddn=chd-opt-move]"), note: await p.textContent("[data-ddn=chd-critical]") };
+      await shot(p, "24-channel-critical");
+      await p.click("[data-ddn-ui=chd-cancel]");
+    } else ch.critical = SERVER_SIDE ? "none-own" : "missing";
+    // Remove anyway: needs the acknowledgement; the file becomes unavailable (hidden by default).
+    await p.click(`[data-ddn=channel-row][data-id="${extraId}"] [data-ddn=remove-webhook]`);
+    await p.waitForSelector("[data-ddn=channel-dialog][open]");
+    await p.waitForFunction(() => !document.querySelector<HTMLInputElement>("[data-ddn=chd-opt-remove]")!.disabled, null, { timeout: 30_000 });
+    await p.check("[data-ddn=chd-opt-remove]");
+    ch.ackNeeded = await p.isDisabled("[data-ddn=chd-go]");
+    await p.check("[data-ddn=chd-ack]");
+    await p.click("[data-ddn=chd-go]");
+    await p.waitForSelector("[data-ddn=removed-row]", { timeout: 30_000 });
+    ch.removedRow = await p.textContent("[data-ddn=removed-row]");
+    await p.waitForFunction(() => /\d/.test(document.querySelector("[data-ddn=st-unavail]")?.textContent ?? "") , null, { timeout: 30_000 });
+    ch.unavailTotal = await p.textContent("[data-ddn=st-unavail]");
+    await p.goto(`${base}/folder/${chFolder}`);
+    await p.waitForSelector("body[data-ready='1']");
+    await p.waitForSelector("[data-ddn-ui=empty]:not([hidden])", { timeout: 30_000 });
+    ch.hiddenByDefault = (await p.locator("[data-ddn=row]").count()) === 0;
+    ch.folderCountHidden = await p.textContent("[data-ddn-ui=folder-meta]");
+    // The switch shows them, marked, with the reason.
+    await nav(p, "settings");
+    await p.check("[data-ddn=show-unavailable]");
+    await p.goto(`${base}/folder/${chFolder}`);
+    await p.waitForSelector("body[data-ready='1']");
+    await p.waitForSelector("[data-ddn=row][data-unavailable]", { timeout: 30_000 });
+    ch.shown = { chip: await p.textContent("[data-ddn=unavailable-chip]"), why: await p.textContent("[data-ddn=unavailable-why]"), noDownload: (await p.locator("[data-ddn=row][data-unavailable] [data-ddn=share]").count()) === 0 };
+    await shot(p, "25-unavailable-shown");
+    // Paste the same webhook again: available at once.
+    await nav(p, "settings");
+    await openChannels(p);
+    await pasteInto(p, "[data-ddn=webhook-url]", extraHook);
+    await p.click("[data-ddn=add-webhook]");
+    await p.waitForSelector(`[data-ddn=channel-row][data-id="${extraId}"]`, { timeout: 30_000 });
+    await p.waitForFunction(() => !/\d/.test(document.querySelector("[data-ddn=st-unavail]")?.textContent ?? "0"), null, { timeout: 30_000 }).catch(() => {});
+    ch.unavailAfterPaste = await p.textContent("[data-ddn=st-unavail]");
+    await p.uncheck("[data-ddn=show-unavailable]");
+    await p.goto(`${base}/folder/${chFolder}`);
+    await p.waitForSelector("body[data-ready='1']");
+    await count(p, L.one);
+    ch.backAfterPaste = (await p.locator("[data-ddn=row][data-unavailable]").count()) === 0;
+    // Move and remove the new channel: everything ends up on the others, the file still downloads.
+    await nav(p, "settings");
+    await openChannels(p);
+    await p.click(`[data-ddn=channel-row][data-id="${extraId}"] [data-ddn=remove-webhook]`);
+    await p.waitForSelector("[data-ddn=channel-dialog][open]");
+    await p.waitForFunction(() => !document.querySelector<HTMLInputElement>("[data-ddn=chd-opt-move]")!.disabled, null, { timeout: 30_000 });
+    await p.check("[data-ddn=chd-opt-move]");
+    ch.moveText = await p.textContent("[data-ddn-ui=chd-opt-move-t]");
+    await p.click("[data-ddn=chd-go]");
+    await p.waitForSelector("[data-ddn=channel-move]:not([hidden])", { timeout: 30_000 });
+    await p.waitForFunction(() => document.querySelector<HTMLElement>("[data-ddn=channel-move]")?.dataset.state === "done", null, { timeout: 180_000 });
+    ch.moveDone = await p.textContent("[data-ddn=channel-move-text]");
+    await shot(p, "26-channel-moved");
+    await p.waitForFunction((id) => !document.querySelector(`[data-ddn=channel-row][data-id="${id}"]`), extraId, { timeout: 60_000 });
+    ch.goneAfterMove = true;
+    await p.goto(`${base}/folder/${chFolder}`);
+    await p.waitForSelector("body[data-ready='1']");
+    await count(p, L.one);
+    const [cdl] = await Promise.all([p.waitForEvent("download", { timeout: 120_000 }), p.locator("[data-ddn=row]", { hasText: "kanal.txt" }).locator("[data-ddn=download]").click()]);
+    ch.downloadAfterMove = sha(readFileSync((await cdl.path())!)) === sha(readFileSync(join(chDir, "kanal.txt")));
+    // Phone: the Settings section folds and has no horizontal scroll.
+    await m.reload();
+    await m.waitForSelector("body[data-ready='1']");
+    await nav(m, "settings");
+    await m.waitForSelector("[data-ddn=channels-toggle]");
+    ch.phone = { folded: (await m.getAttribute("[data-ddn=channels-toggle]", "aria-expanded")) === "false", noHScroll: await m.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1) };
+    await shot(m, "27-phone-settings-channels");
+  } else ch.skipped = "no extra webhook";
+  r.channels = ch;
+
   // 11. what the server stores: no names in clear
   if (srv) {
     const tables = ["devices", "log", "shares", "vault", "s_blobs", "s_uploads", "inst_hooks", "s_snapshots", "password_keys"].filter((t) => srv!.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t));
@@ -957,6 +1113,22 @@ try {
           ? /encrypted in this tab and go through the server|szyfrowane w tej karcie i trafiają przez serwer/.test(String(r.queueNote))
           : /^(Encryption and upload only run|Szyfrowanie i wysyłanie trwa)/.test(String(r.queueNote)),
     serverBlind: MODE === "plain" ? true : r.serverSeesNoNames !== false,
+    channels: (() => {
+      const c = r.channels as Record<string, unknown> | undefined;
+      if (!c || c.skipped) return !!remote && !!c?.skipped;
+      const crit = c.critical as { retire: boolean; remove: boolean; move: boolean } | string;
+      const imp = c.impact as { text: string; files: string[]; retireDefault: boolean };
+      const sh = c.shown as { chip: string; why: string };
+      return (
+        c.foldedByDefault === true && c.foldKept === true && /\d/.test(String(c.summary)) &&
+        /1 (file|plik)/.test(String(c.stats)) && /\d/.test(String((c.totals as { all: string }).all)) &&
+        JSON.stringify(imp.files) === JSON.stringify(["kanal.txt"]) && imp.retireDefault && c.retired === true && c.unretired === true &&
+        (typeof crit === "string" ? (SERVER_SIDE && crit === "none-own") : crit.retire && crit.remove && crit.move) &&
+        c.ackNeeded === true && /1/.test(String(c.unavailTotal)) && c.hiddenByDefault === true && /Unavailable|Niedostępny/.test(sh.chip) && /#…/.test(sh.why) &&
+        c.backAfterPaste === true && /moved|przeniesiony/i.test(String(c.moveDone)) && c.goneAfterMove === true && c.downloadAfterMove === true &&
+        (c.phone as { folded: boolean; noHScroll: boolean }).folded && (c.phone as { noHScroll: boolean }).noHScroll
+      );
+    })(),
     preview: (() => {
       const o = r.preview as Record<string, any> | undefined;
       if (!o) return false;

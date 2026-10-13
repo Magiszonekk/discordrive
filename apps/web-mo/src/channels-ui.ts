@@ -106,10 +106,16 @@ export function createChannelsUi(d: ChannelsUiDeps) {
 
   function row(w: ChannelRow, removable: boolean): HTMLLIElement {
     const li = h("li", { "data-ddn": "channel-row", "data-id": w.id }, icon("hash"), h("span", { class: "dname", title: w.label }, w.label || "webhook"));
-    if (w.critical) li.append(chip(t("ch.critical"), "accent", `${t("ch.critical.t")} (${w.criticalWhat.map((x) => t(`ch.what.${x}`)).join(", ")})`));
-    if (w.critical) li.lastElementChild!.setAttribute("data-ddn", "channel-critical");
-    if (w.retired) li.append(Object.assign(chip(t("ch.retired"), "warning", t("ch.retired.t")), { dataset: { ddn: "channel-retired" } }));
-    if (w.retired) li.lastElementChild!.setAttribute("data-ddn", "channel-retired");
+    if (w.critical) {
+      const c = chip(t("ch.critical"), "accent", `${t("ch.critical.t")} (${w.criticalWhat.map((x) => t(`ch.what.${x}`)).join(", ")})`);
+      c.dataset.ddn = "channel-critical";
+      li.append(c);
+    }
+    if (w.retired) {
+      const c = chip(t("ch.retired"), "warning", t("ch.retired.t"));
+      c.dataset.ddn = "channel-retired";
+      li.append(c);
+    }
     li.append(h("span", { class: "when", "data-ddn": "channel-stats" }, `${tn("files.meta.files", w.files)} · ${fmtSize(w.bytes)} · #…${String(w.channelId).slice(-6)}`));
     if (removable) {
       const acts = h("span", { class: "acts2" });

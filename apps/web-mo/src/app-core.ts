@@ -359,8 +359,9 @@ export class AppCore {
   }
 
   /** Channels of this account: own webhooks (vault or instance) + the instance pool (e2ee/plain), with stats and flags. */
-  async webhooks(): Promise<ChannelsView> {
-    return mode.channels(this.ctx!, this.client ?? undefined);
+  async webhooks(stats = false): Promise<ChannelsView> {
+    // Stats and the critical flag (local SQL, a pointer read) only for Settings, not on every render.
+    return mode.channels(this.ctx!, stats ? (this.client ?? undefined) : undefined);
   }
 
   // ── removing a channel (zlecenie 2026-10-13-webhooki p. 1) ─────────
