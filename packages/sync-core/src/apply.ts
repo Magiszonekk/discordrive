@@ -963,23 +963,23 @@ function opUploadAbort(ctx: Ctx, op: UploadAbortOp): Outcome {
  * Rules v3: the bound version's bytes now live elsewhere (a storage location was moved away).
  * Only the locator changes: version ID, seq, author and plaintext hash stay, so it is never a
  * conflict and never "unseen content" (Q2/Q3 look at the version's seq). Stale (the upload is no
- * longer bound to that version: purged or superseded meanwhile) = skipped silently; the mover
- * deletes its copies.
+ * longer bound to that version: purged or superseded meanwhile, or another relocate changed the
+ * locator first: `from` no longer matches) = skipped silently; the mover deletes its copies.
  */
 function opRelocate(ctx: Ctx, op: RelocateOp): Outcome {
   if (!isClientId(op.uploadId)) return ctx.reject("bad_upload_id");
   if (!isClientId(op.versionId)) return ctx.reject("bad_version_id");
-  if (!isRef(op.manifestRef)) return ctx.reject("bad_manifest_ref");
+  if (!isRef(op.manifestRef) || !isRef(op.from)) return ctx.reject("bad_manifest_ref");
   if (op.pieces !== undefined && !validPieces(op.pieces)) return ctx.reject("bad_pieces");
   const u = ctx.s.getUpload(op.uploadId);
   const node = u?.status === "bound" && u.boundTo?.versionId === op.versionId ? ctx.s.getNode(u.boundTo.nodeId) : undefined;
-  if (!u || !node || node.content?.versionId !== op.versionId || node.content.uploadId !== op.uploadId) {
+  if (!u || !node || node.content?.versionId !== op.versionId || node.content.uploadId !== op.uploadId || node.content.manifestRef !== op.from) {
     ctx.notice({ code: "relocate_stale", reason: op.uploadId });
     return "skipped";
   }
   const c = node.content;
   const pieces = op.pieces ? copyPieces(op.pieces) : undefined;
-  if (c.manifestRef === op.manifestRef && JSON.stringify(c.pieces ?? null) === JSON.stringify(pieces ?? null)) return "noop";
+  if (op.from === op.manifestRef && JSON.stringify(c.pieces ?? null) === JSON.stringify(pieces ?? null)) return "noop";
   const { pieces: _old, ...rest } = c;
   ctx.s.putNode({ ...node, content: { ...rest, manifestRef: op.manifestRef, ...(pieces ? { pieces } : {}) } });
   ctx.s.putUpload({ ...u, relocated: { seq: ctx.e.seq } });

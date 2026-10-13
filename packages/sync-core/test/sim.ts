@@ -405,7 +405,9 @@ export function runCase(actions: Action[], stats: Stats): void {
         // Sometimes on an old (superseded/purged) version: must be skipped silently.
         const all = [...d.r.store.allUploads()].filter((u) => u.boundTo);
         const u = pick(all, a.x);
-        if (u?.boundTo) d.r.enqueue({ type: "relocate", uploadId: u.id, versionId: u.boundTo.versionId, manifestRef: `mf-${u.id}-r${a.y % 97}`, ...(a.z % 2 ? { pieces: [{ loc: `w${a.y % 3}`, n: 1 + (a.z % 4), bytes: a.y % 9000 }] } : {}) });
+        const cur = u?.boundTo ? d.r.store.getNode(u.boundTo.nodeId)?.content : undefined;
+        // `from` as this device sees it: may be stale by the time the op is sequenced (CAS -> skipped).
+        if (u?.boundTo) d.r.enqueue({ type: "relocate", uploadId: u.id, versionId: u.boundTo.versionId, from: cur?.versionId === u.boundTo.versionId ? cur.manifestRef : `mf-${u.id}`, manifestRef: `mf-${u.id}-r${a.y % 97}`, ...(a.z % 2 ? { pieces: [{ loc: `w${a.y % 3}`, n: 1 + (a.z % 4), bytes: a.y % 9000 }] } : {}) });
         break;
       }
       case "gc":

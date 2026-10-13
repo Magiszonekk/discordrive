@@ -13,7 +13,7 @@ describe("relocate (rules v3)", () => {
     const s = new Scenario();
     s.file(A, "file0001", ROOT_ID, "a.txt");
     const before = s.node("file0001").content!;
-    const r = s.op(B, { type: "relocate", uploadId: before.uploadId, versionId: before.versionId, manifestRef: "mf-moved", pieces: P2 }, { baseSeq: 0 });
+    const r = s.op(B, { type: "relocate", uploadId: before.uploadId, versionId: before.versionId, from: before.manifestRef, manifestRef: "mf-moved", pieces: P2 }, { baseSeq: 0 });
     expect(r.outcome).toBe("applied");
     expect(codes(r)).toEqual([]);
     const after = s.node("file0001").content!;
@@ -30,7 +30,7 @@ describe("relocate (rules v3)", () => {
     s.file(A, "file0001", ROOT_ID, "a.txt");
     const base = s.seq;
     const c = s.node("file0001").content!;
-    s.op(B, { type: "relocate", uploadId: c.uploadId, versionId: c.versionId, manifestRef: "mf-moved" });
+    s.op(B, { type: "relocate", uploadId: c.uploadId, versionId: c.versionId, from: c.manifestRef, manifestRef: "mf-moved" });
     const t = s.op(A, { type: "trash", nodeId: "file0001" }, { baseSeq: base });
     expect(t.outcome).toBe("applied");
     // ...and a purge by A (who never saw the relocate) deletes it: Q3 looks at placed/content seq.
@@ -46,11 +46,11 @@ describe("relocate (rules v3)", () => {
     s.file(A, "file0001", ROOT_ID, "a.txt");
     const v1 = s.node("file0001").content!;
     s.op(A, { type: "trash", nodeId: "file0001" });
-    expect(s.op(B, { type: "relocate", uploadId: v1.uploadId, versionId: v1.versionId, manifestRef: "mf-t" }).outcome).toBe("applied");
+    expect(s.op(B, { type: "relocate", uploadId: v1.uploadId, versionId: v1.versionId, from: v1.manifestRef, manifestRef: "mf-t" }).outcome).toBe("applied");
     expect(s.node("file0001").content!.manifestRef).toBe("mf-t");
     s.op(A, { type: "restore", nodeId: "file0001" });
     s.edit(A, "file0001", v1.versionId);
-    const stale = s.op(B, { type: "relocate", uploadId: v1.uploadId, versionId: v1.versionId, manifestRef: "mf-late" });
+    const stale = s.op(B, { type: "relocate", uploadId: v1.uploadId, versionId: v1.versionId, from: "mf-t", manifestRef: "mf-late" });
     expect(stale.outcome).toBe("skipped");
     expect(visibleCodes(stale)).toEqual([]);
     expect(codes(stale)).toEqual(["relocate_stale"]);
@@ -58,7 +58,7 @@ describe("relocate (rules v3)", () => {
     const v2 = s.node("file0001").content!;
     s.op(A, { type: "trash", nodeId: "file0001" });
     s.op(A, { type: "purge", nodeId: "file0001" });
-    expect(s.op(B, { type: "relocate", uploadId: v2.uploadId, versionId: v2.versionId, manifestRef: "mf-x" }).outcome).toBe("skipped");
+    expect(s.op(B, { type: "relocate", uploadId: v2.uploadId, versionId: v2.versionId, from: v2.manifestRef, manifestRef: "mf-x" }).outcome).toBe("skipped");
     s.expectValid();
   });
 
@@ -66,13 +66,20 @@ describe("relocate (rules v3)", () => {
     const s = new Scenario();
     s.file(A, "file0001", ROOT_ID, "a.txt");
     const c = s.node("file0001").content!;
-    const op = { type: "relocate" as const, uploadId: c.uploadId, versionId: c.versionId, manifestRef: "mf-2", pieces: P1 };
+    const op = { type: "relocate" as const, uploadId: c.uploadId, versionId: c.versionId, from: c.manifestRef, manifestRef: "mf-2", pieces: P1 };
     expect(s.op(A, op).outcome).toBe("applied");
-    expect(s.op(A, op).outcome).toBe("noop");
-    expect(s.op(A, { ...op, versionId: "ver-zzzzzz" }).outcome).toBe("skipped");
-    expect(s.op(A, { ...op, manifestRef: "" }).outcome).toBe("rejected");
-    expect(s.op(A, { ...op, pieces: [...P2, ...P1] }).outcome).toBe("rejected"); // not sorted
-    expect(s.op(A, { ...op, pieces: [{ loc: "1", n: 0, bytes: 1 }] }).outcome).toBe("rejected");
+    // The same op again: `from` no longer matches (CAS) -> stale, skipped; a no-op relocate is a noop.
+    expect(s.op(A, op).outcome).toBe("skipped");
+    expect(s.op(A, { ...op, from: "mf-2", manifestRef: "mf-2" }).outcome).toBe("noop");
+    // Two devices move the same version at once: the second one is stale and changes nothing.
+    const b = s.op(B, { ...op, from: c.manifestRef, manifestRef: "mf-b" });
+    expect(b.outcome).toBe("skipped");
+    expect(s.node("file0001").content!.manifestRef).toBe("mf-2");
+    const cur = { ...op, from: "mf-2" };
+    expect(s.op(A, { ...cur, versionId: "ver-zzzzzz" }).outcome).toBe("skipped");
+    expect(s.op(A, { ...cur, manifestRef: "" }).outcome).toBe("rejected");
+    expect(s.op(A, { ...cur, pieces: [...P2, ...P1] }).outcome).toBe("rejected"); // not sorted
+    expect(s.op(A, { ...cur, pieces: [{ loc: "1", n: 0, bytes: 1 }] }).outcome).toBe("rejected");
     s.expectValid();
   });
 
@@ -87,8 +94,8 @@ describe("relocate (rules v3)", () => {
     const r = s.add(B, {
       type: "group",
       ops: [
-        { type: "relocate", uploadId: c1.uploadId, versionId: c1.versionId, manifestRef: "mf-g1" },
-        { type: "relocate", uploadId: c2.uploadId, versionId: c2.versionId, manifestRef: "mf-g2" },
+        { type: "relocate", uploadId: c1.uploadId, versionId: c1.versionId, from: c1.manifestRef, manifestRef: "mf-g1" },
+        { type: "relocate", uploadId: c2.uploadId, versionId: c2.versionId, from: c2.manifestRef, manifestRef: "mf-g2" },
       ],
     });
     expect(r.outcome).toBe("applied");
@@ -129,7 +136,7 @@ describe("rules 2 entries replay unchanged under rules 3", () => {
     const r = applyEntry(st, v2(2, { type: "group", ops: [{ type: "upload_commit", uploadId: c.uploadId }, { type: "create", kind: "file", nodeId: "file0001", parentId: ROOT_ID, name: "a", content: c }] }, [c.uploadId]));
     expect(r.outcome).toBe("applied");
     expect(st.getNode("file0001")!.content!.pieces).toBeUndefined();
-    const rel = applyEntry(st, v2(3, { type: "relocate", uploadId: c.uploadId, versionId: c.versionId, manifestRef: "mf-2" }));
+    const rel = applyEntry(st, v2(3, { type: "relocate", uploadId: c.uploadId, versionId: c.versionId, from: "mf-1", manifestRef: "mf-2" }));
     expect(rel.outcome).toBe("rejected");
     expect(rel.notices[0]!.reason).toBe("unknown_type");
     expect(st.getNode("file0001")!.content!.manifestRef).toBe("mf-1");

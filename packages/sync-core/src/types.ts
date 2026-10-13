@@ -230,6 +230,12 @@ export interface RelocateOp {
   type: "relocate";
   uploadId: UploadId;
   versionId: VersionId;
+  /**
+   * The manifestRef the mover copied from. Compare-and-swap: when the version has another one by
+   * now (a concurrent relocate won), this one is stale. Also what cleanup deletes later: the old
+   * copies (pieces of `from` not reused by `manifestRef`), once no kept snapshot base predates it.
+   */
+  from: string;
   manifestRef: string;
   pieces?: PieceLoc[];
 }
