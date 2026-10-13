@@ -300,8 +300,9 @@
           </dl>
         </section>
 
-        <section id="channels" aria-labelledby="hooks-h">
-          <h2 class="sec-h"><span id="hooks-h" data-i18n="hooks.h">Channels &amp; webhooks</span><span class="chip" data-ddn-ui="hook-count"></span></h2>
+        <section id="channels" aria-labelledby="hooks-h" data-ddn="channels-sec">
+          <h2 class="sec-h"><button class="sec-toggle" type="button" data-ddn="channels-toggle" aria-expanded="true" aria-controls="channels-body"><svg class="i"><use href="#i-right"/></svg><span id="hooks-h" data-i18n="hooks.h">Channels &amp; webhooks</span></button><span class="chip" data-ddn-ui="hook-count"></span><span class="sec-sum" data-ddn="channels-summary"></span></h2>
+          <div id="channels-body" data-ddn="channels-body">
           <p class="sec-lead" data-i18n="hooks.lead"></p>
           <div class="sec-body" data-ddn-ui="hooks-slot">
             <!-- moved into the onboarding card on the first run (one set of hooks for both places) -->
@@ -328,6 +329,15 @@
               <div class="note"><svg class="i"><use href="#i-lock"/></svg><p data-i18n-html="hooks.secret"></p></div>
               <div class="note warn"><svg class="i"><use href="#i-info"/></svg><p data-i18n-html="hooks.tos"></p></div>
             </div>
+            <div class="stack" data-ddn="channel-move" hidden>
+              <p class="hint" data-ddn="channel-move-text" role="status" aria-live="polite"></p>
+              <div class="bar"><i data-ddn="channel-move-bar"></i></div>
+            </div>
+            <div data-ddn="removed-block" hidden>
+              <h3 class="label-mono" data-i18n="ch.removed.h">Removed channels</h3>
+              <ul class="list" data-ddn="removed-list"></ul>
+            </div>
+          </div>
           </div>
         </section>
 
@@ -341,6 +351,15 @@
           <h2 class="sec-h"><span id="st-h" data-i18n="st.h">Storage</span><span class="chip" data-ddn="storage-state"></span></h2>
           <p class="sec-lead" data-i18n="st.lead"></p>
           <div class="sec-body">
+            <dl class="about" data-ddn="storage-totals">
+              <div><dt class="label-mono" data-i18n="st.all">All files</dt><dd><span class="val mono" data-ddn="st-all"></span></dd></div>
+              <div><dt class="label-mono" data-i18n="st.trash">Trash</dt><dd><span class="val mono" data-ddn="st-trash"></span></dd></div>
+              <div><dt class="label-mono" data-i18n="st.unavail">Unavailable</dt><dd><span class="val mono" data-ddn="st-unavail"></span><p data-ddn-ui="st-unavail-t"></p></dd></div>
+              <div><dt class="label-mono" data-i18n="st.discord">On Discord</dt><dd><span class="val mono" data-ddn="st-discord"></span><p data-ddn-ui="st-discord-t" data-i18n="st.discord.t"></p></dd></div>
+            </dl>
+            <ul class="list" data-ddn="st-channels"></ul>
+            <label class="ack"><input type="checkbox" data-ddn="show-unavailable"><span data-i18n="st.showUnavail">Show unavailable files</span></label>
+            <p class="hint" data-i18n="st.showUnavail.t"></p>
             <dl class="about" data-ddn="storage">
               <div><dt class="label-mono" data-i18n="st.last">Last cleanup</dt><dd><span class="val" data-ddn="storage-last"></span></dd></div>
               <div><dt class="label-mono" data-i18n="st.expired">Trash over 30 days</dt><dd><span class="val mono" data-ddn="storage-expired"></span></dd></div>
@@ -446,6 +465,24 @@
   <div class="modal-b">
     <p class="muted" data-ddn-ui="cf-text"></p>
     <div class="modal-acts"><button class="btn" type="button" data-ddn-ui="cf-no" data-i18n="nf.cancel">Cancel</button><button class="btn danger" type="button" data-ddn="confirm-yes"></button></div>
+  </div>
+</dialog>
+
+<!-- Remove a channel (zlecenie 2026-10-13-webhooki p. 1): impact + three options -->
+<dialog class="modal lg" data-ddn="channel-dialog" aria-labelledby="chd-h">
+  <div class="modal-h"><h2 id="chd-h"><svg class="i"><use href="#i-hash"/></svg><span data-ddn-ui="chd-title"></span></h2><button class="iconbtn" type="button" data-ddn-ui="chd-close" data-i18n-attr="aria-label=nf.cancel"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <div class="modal-b">
+    <p class="muted" data-ddn="chd-impact" role="status"></p>
+    <div class="note warn" data-ddn="chd-critical" hidden><svg class="i"><use href="#i-info"/></svg><p data-ddn-ui="chd-critical-t"></p></div>
+    <div class="note warn" data-ddn="chd-last" hidden><svg class="i"><use href="#i-info"/></svg><p data-i18n="ch.last"></p></div>
+    <ul class="list scroll" data-ddn="chd-files"></ul>
+    <fieldset class="choices" data-ddn="chd-options">
+      <label class="choice"><input type="radio" name="chd-opt" value="retire" data-ddn="chd-opt-retire"><span><b data-i18n="ch.opt.retire">Retire</b><small data-ddn-ui="chd-opt-retire-t" data-i18n="ch.opt.retire.t"></small></span></label>
+      <label class="choice"><input type="radio" name="chd-opt" value="move" data-ddn="chd-opt-move"><span><b data-i18n="ch.opt.move">Move and remove</b><small data-ddn-ui="chd-opt-move-t"></small></span></label>
+      <label class="choice"><input type="radio" name="chd-opt" value="remove" data-ddn="chd-opt-remove"><span><b data-i18n="ch.opt.remove">Remove anyway</b><small data-ddn-ui="chd-opt-remove-t"></small></span></label>
+    </fieldset>
+    <label class="ack" data-ddn="chd-ack-row" hidden><input type="checkbox" data-ddn="chd-ack"><span data-ddn-ui="chd-ack-t"></span></label>
+    <div class="modal-acts"><button class="btn" type="button" data-ddn-ui="chd-cancel" data-i18n="nf.cancel">Cancel</button><button class="btn primary" type="button" data-ddn="chd-go"></button></div>
   </div>
 </dialog>
 

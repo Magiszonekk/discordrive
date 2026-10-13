@@ -491,3 +491,19 @@ dialog.preview[open] { display: flex; }
 @media (max-width: 767.98px) {
   dialog.preview { width: 100vw; height: 100dvh; margin: 0; border: 0; border-radius: 0; }
 }
+
+/* ── channels: collapsible section, remove dialog, storage stats (zlecenie 2026-10-13-webhooki; on Cobalt classes, polish by the frontend profile) ── */
+.sec-toggle { display: inline-flex; align-items: center; gap: .375rem; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
+.sec-toggle svg.i { transition: transform var(--duration-short) var(--ease-out); color: var(--color-muted); }
+.sec-toggle[aria-expanded="true"] svg.i { transform: rotate(90deg); }
+.sec-sum { margin-left: .5rem; font: 400 .8125rem/1.25rem var(--font-body, inherit); color: var(--color-muted); }
+.list.scroll { max-height: 14rem; overflow: auto; }
+.list li .tag { flex: none; }
+.list li .acts2 { margin-left: auto; display: flex; gap: .25rem; flex: none; }
+fieldset.choices { margin: 0; padding: 0; border: 0; display: grid; gap: .5rem; }
+.choice { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .625rem; align-items: start; padding: .625rem .75rem; border: 1px solid var(--color-rule); border-radius: var(--radius-card); cursor: pointer; }
+.choice:has(input:checked) { border-color: var(--color-accent); }
+.choice:has(input:disabled) { opacity: .55; cursor: not-allowed; }
+.choice b { display: block; font-size: .875rem; color: var(--color-ink); font-weight: 600; }
+.choice small { display: block; font-size: .8125rem; line-height: 1.4; color: var(--color-ink-2); }
+tr.unavail .nm, tr.unavail .sub { opacity: .6; }

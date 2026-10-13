@@ -4,6 +4,7 @@ import {
   ChainIndex,
   ChannelMover,
   Cleaner,
+  backfillPieces,
   DiscordWebhookTransport,
   SqlIndexStore,
   estimateMs,
@@ -201,6 +202,11 @@ export const mode: ModeImpl = {
     await vault(ctx).removeWebhook(id, "removed");
     const s = sqlOf(ctx);
     if (s) refreshUnavailable(s, await vault(ctx).load());
+  },
+
+  async upkeep(ctx, c) {
+    const s = sqlOf(ctx);
+    if (s) await backfillPieces(mc(c), s, 50);
   },
 
   async unavailable(ctx) {

@@ -13,6 +13,7 @@ import type { CoreEvent, OpOutcome, TrashRow, UiNotice } from "./app-core.js";
 import { applyStatic, fmtDate, fmtDateTime, fmtNum, fmtSize, getLang, isLang, setLang, storeLang, storedLang, t, tn, type Lang } from "./i18n.js";
 import { connect } from "./rpc.js";
 import { createPreview, type PreviewRow } from "./preview.js";
+import { createChannelsUi, storedShowUnavailable } from "./channels-ui.js";
 
 /** Mode this bundle was built for (build.ts define). */
 declare const __DDN_MODE__: string;
@@ -36,6 +37,7 @@ function onCoreEvent(e: CoreEvent) {
   else if (e.type === "changed") void render();
   else if (e.type === "notices") showNotices(e.notices);
   else if (e.type === "cleanup" && route.name === "settings") void renderStorage();
+  else if (e.type === "channel-move") channelsUi.onMoveEvent(e.status);
 }
 export const core = connect(worker, onCoreEvent);
 (window as unknown as { ddnCore: typeof core }).ddnCore = core;
@@ -91,7 +93,7 @@ const typeOf = (name: string) => EXT.find(([re]) => re.test(name)) ?? [null, "fi
 const VIDEO = EXT[0]![0];
 
 // ── messages and actions ────────────────────────────────────────────
-const KNOWN_ERRORS = ["bad_password", "login_taken", "bad_login", "password_too_short", "invalid_name", "invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone", "instance_busy", "discord_blocked", "webhook_in_use", "too_many_channels"];
+const KNOWN_ERRORS = ["channel_critical", "need_other_channel", "file_unavailable", "main_tab_only", "move_running", "bad_password", "login_taken", "bad_login", "password_too_short", "invalid_name", "invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone", "instance_busy", "discord_blocked", "webhook_in_use", "too_many_channels"];
 /** Readable text for an error: no technical codes in the message (the raw one goes to the console). */
 const errText = (e: unknown) => {
   const m = String((e as Error)?.message ?? e);
@@ -330,11 +332,15 @@ function renderShellStatus(st: Status) {
  * discordrive's one-shot load (render() also runs after every upload and sync, and the rows must not fade again). */
 let shownList = "";
 
-function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: number | null; modifiedAt?: number | null }, i: number, enter = false) {
+function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: number | null; modifiedAt?: number | null; unavailable?: string[] }, i: number, enter = false) {
   const tr = enter ? h("tr", { class: "reveal", style: `--i:${Math.min(i, 12)}` }) : h("tr");
   tr.dataset.ddn = "row";
   tr.dataset.id = r.id;
   tr.dataset.kind = r.kind;
+  if (r.unavailable?.length) {
+    tr.classList.add("unavail");
+    tr.dataset.unavailable = r.unavailable.join(",");
+  }
   const box = h("input", { type: "checkbox", "data-ddn": "select", "aria-label": t("bulk.one", { name: r.name }) }) as HTMLInputElement;
   box.checked = selected.has(r.id);
   box.onchange = () => {
@@ -375,12 +381,30 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
       }
     };
     name.append(h("span", { class: "nm" }, badge, open), h("span", { class: "sub" }, [fmt(r.size), r.modifiedAt ? fmtDate(r.modifiedAt) : ""].filter(Boolean).join(" · ")));
+    if (r.unavailable?.length) {
+      // Shown only with "Show unavailable files" on: why, and what to do (paste the webhook again / delete).
+      const why = t("un.why", { ch: r.unavailable.map((x) => `#…${x.slice(-6)}`).join(", ") });
+      name.querySelector(".nm")!.append(chip(t("un.chip"), "warning", why));
+      name.querySelector(".nm")!.lastElementChild!.setAttribute("data-ddn", "unavailable-chip");
+      name.append(h("span", { class: "sub", "data-ddn": "unavailable-why" }, why));
+      const del = iconBtn("trash", t("un.delete"), t("un.delete"), "danger");
+      del.dataset.ddn = "unavailable-delete";
+      del.onclick = () =>
+        void act(del, async () => {
+          if (!(await confirmDanger(t("un.delete"), why, t("un.delete")))) return;
+          await core.trash([r.id]);
+          await core.purge([r.id]);
+          toast(t("un.deleted"));
+          await render();
+        });
+      acts.append(del);
+    }
     // A click anywhere on a file row (not on its buttons / checkbox) opens the preview.
     tr.classList.add("pv-row");
     tr.onclick = (e) => {
       if (!(e.target as Element | null)?.closest("button, input, a, label, .c-sel")) previewFile(r);
     };
-    if (VIDEO.test(r.name)) {
+    if (VIDEO.test(r.name) && !r.unavailable?.length) {
       const play = iconBtn("play", t("files.play.aria", { name: r.name }), t("files.play"));
       play.dataset.ddn = "play";
       play.onclick = () => void openPlayer(r.id, r.name, r.size ?? 0);
@@ -398,7 +422,7 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
         setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
       });
     acts.append(dl);
-    if (sharesOn && !inRecovered()) {
+    if (sharesOn && !inRecovered() && !r.unavailable?.length) {
       const sh = iconBtn("share", t("files.share.aria", { name: r.name }), t("files.share"));
       sh.dataset.ddn = "share";
       sh.onclick = () =>
@@ -463,6 +487,17 @@ async function openPlayer(id: string, name: string, size: number) {
 // File preview (zlecenie 2026-10-13-webhooki p. 4): logic in preview.ts; ←/→ walk the open folder
 // (or the search hits in plain).
 let searchRows: PreviewRow[] = [];
+const channelsUi = createChannelsUi({
+  core,
+  mode: __DDN_MODE__,
+  h,
+  icon,
+  chip,
+  act,
+  toast,
+  render: () => render(),
+  openKit: (forced) => openKit(forced),
+});
 const preview = createPreview({ core, features: () => features, download: (id, name) => download(id, name), error: (e) => toast(errText(e), "err") });
 function previewFile(r: PreviewRow) {
   preview.open(r, searchQ ? { rows: searchRows } : { folder: currentFolder() });
@@ -549,28 +584,9 @@ function renderHooks(wh: Awaited<ReturnType<typeof core.webhooks>>) {
   [...ui("slots").children].forEach((s, i) => s.classList.toggle("on", i < a.channels));
   // e2ee/plain: the instance pool (count only, the URLs stay on the server) and removable own channels.
   const pool = wh.pool && wh.pool.channels > 0 && wh.using !== "own" ? [h("li", { class: "pool-row", "data-ddn": "pool" }, icon("hash"), h("span", { class: "ptext" }, tn("hooks.pool", wh.pool.channels)), chip(t("hooks.pool.chip"), "accent"))] : [];
-  const removable = typeof wh.using === "string";
-  ui("hooks").replaceChildren(
-    ...pool,
-    ...(wh.webhooks.length
-      ? wh.webhooks.map((w) => {
-          const li = h("li", {}, icon("hash"), h("span", { class: "dname", title: w.label }, w.label || "webhook"), h("span", { class: "when" }, `#…${String(w.channelId).slice(-6)}`));
-          if (removable) {
-            const rm = h("button", { class: "iconbtn danger", type: "button", "data-ddn": "remove-webhook", "aria-label": t("hooks.remove"), title: t("hooks.remove") }, icon("x"));
-            rm.onclick = () =>
-              void act(rm, async () => {
-                await core.removeWebhook(w.id);
-                await render();
-                toast(t("hooks.removed"));
-              });
-            li.append(rm);
-          }
-          return li;
-        })
-      : pool.length
-        ? []
-        : [h("li", { class: "empty-row" }, t("hooks.none"))]),
-  );
+  // Own channels with stats, Critical / Retired chips and the remove dialog (channels-ui.ts).
+  const rows = channelsUi.paint(wh, route.name === "welcome");
+  ui("hooks").replaceChildren(...pool, ...(rows.length ? rows : pool.length ? [] : [h("li", { class: "empty-row" }, t("hooks.none"))]));
 }
 
 /** One copy of the channel form: in the onboarding card on the first run, in Settings otherwise. */
@@ -680,7 +696,7 @@ async function renderNow() {
     ui("about-storage").textContent = st.persistent ? t("status.persistent") : t("status.cache");
     ui("about-storage-t").textContent = st.persistent ? t("status.persistent.t") : t("status.cache.t");
     ui("about-device").textContent = st.deviceId ?? "-";
-    await Promise.all([renderShares(), renderStorage(), renderSecurity()]);
+    await Promise.all([renderShares(), renderStorage(), renderSecurity(), channelsUi.paintStorage(wh)]);
     return;
   }
 
@@ -1752,10 +1768,12 @@ async function main() {
   const pre = new URLSearchParams(location.search).get("invite");
   if (pre) $<HTMLInputElement>("invite").value = pre;
   features = await core.features();
+  await core.setShowUnavailable(storedShowUnavailable());
   wireSearch();
   wireSignedOut(server);
   wireKit();
   wireHooks();
+  channelsUi.wire();
   wireFilesPage();
   wireDevices();
   wireRowMenu();

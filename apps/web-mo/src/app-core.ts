@@ -332,12 +332,11 @@ export class AppCore {
     if (this.unavailTimer) return;
     const tick = async () => {
       if (!this.client) return;
-      if (this.leader && mode.mode === "metadata-only") {
-        const { backfillPieces } = await import("@ddv4/metadata-client");
-        const s = this.store;
-        if (s instanceof SqlIndexStore) await backfillPieces(this.client as never, s, 50).catch(() => null);
+      if (this.leader && mode.upkeep) {
+        await mode.upkeep(this.ctx!, this.client).catch(() => null);
         const st = await mode.moveStatus(this.ctx!, this.client).catch(() => null);
-        if (st && (st.state === "paused" || st.state === "running") && st.error !== "cancelled") void this.moveWebhook(st.webhookId).catch(() => {});
+        // metadata only: a move this tab started and an interruption stopped continues here.
+        if (mode.clientSnapshots && st && (st.state === "paused" || st.state === "running")) void this.moveWebhook(st.webhookId).catch(() => {});
       }
       await this.refreshUnavailable().catch(() => {});
     };

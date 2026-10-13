@@ -211,6 +211,8 @@ export interface ModeImpl {
    * again makes them available at once on every device.
    */
   unavailable(ctx: ModeCtx, client: DriveClient): Promise<{ uploadId: string; webhookIds: string[] }[]>;
+  /** Background upkeep in the main tab (metadata only: piece locations of older versions from their manifests). */
+  upkeep?(ctx: ModeCtx, client: DriveClient): Promise<void>;
   /** Real bytes of the account on Discord (pieces incl. encryption overhead, manifests, snapshot objects); null = unknown. */
   discordUsage?(ctx: ModeCtx, client: DriveClient): Promise<number | null>;
   /** The rescue kit text (secret) of this account. */

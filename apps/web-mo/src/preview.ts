@@ -222,6 +222,8 @@ export interface PreviewRow {
   kind: "file" | "folder";
   size: number | null;
   cursor?: string;
+  /** Unavailable file (a piece on a removed channel): no preview, an explanation instead. */
+  unavailable?: string[];
 }
 /** The part of the worker core the preview uses (structural: no import of app-core here). */
 export interface PreviewCore {
@@ -463,6 +465,10 @@ export function createPreview(deps: PreviewDeps): Preview {
     dlg!.dataset.state = "loading";
     body.replaceChildren(h("p", { class: "pv-loading muted" }, t("pv.loading")));
     void navState();
+    if (f.unavailable?.length) {
+      dlg!.dataset.kind = "unavailable";
+      return message(t("un.noPreview"), false, "warn");
+    }
     const done = (...kids: (Node | string)[]) => {
       if (my !== seq) return false;
       body.replaceChildren(...kids);
