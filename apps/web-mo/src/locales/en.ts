@@ -296,6 +296,7 @@ export const en: Record<string, string> = {
   "hooks.own": "Your own channels",
   "hooks.remove": "Remove",
   "hooks.removed": "Channel removed.",
+  "hooks.pool.chip": "Shared",
   "advice.ok@e2ee": "All set: the instance spreads uploads over the channels in parallel.",
   "kit.lead@e2ee": "This is the only way back to your files when you lose all devices: it holds the account key (the server does not know it). Keep it like a password: on paper or in a password manager, not in a chat.",
   "rescueD.code@e2ee": "Kit code (<span class=\"mono\">ddn-kit2:…</span>)",
@@ -314,4 +315,6 @@ export const en: Record<string, string> = {
   "search.results_one": "{n} result for “{q}”",
   "search.results_other": "{n} results for “{q}”",
   "search.clear": "Clear search",
+  "search.none": "No files match your search",
+  "search.none.s": "Search looks at file names in every folder.",
 };

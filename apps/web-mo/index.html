@@ -24,6 +24,7 @@
   <symbol id="i-phone" viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></symbol>
   <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
   <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 12h16M4 6h16M4 18h16"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
   <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
   <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
@@ -163,8 +164,6 @@
           </div>
         </div>
         <div class="acts">
-          <!-- plain mode only (server-side search); hidden in the other modes -->
-          <form class="search" data-ddn-ui="search" role="search" hidden><input class="input" type="search" data-ddn="search" autocomplete="off" spellcheck="false" data-i18n-attr="placeholder=search.ph, aria-label=search.ph"></form>
           <button class="btn" type="button" data-ddn="new-folder"><svg class="i"><use href="#i-folder-plus"/></svg><span class="lbl-md" data-i18n="files.newFolder">New folder</span></button>
           <label class="btn primary upload-btn" data-ddn-ui="upload-btn"><span data-i18n="files.upload">Upload files</span><input type="file" multiple data-ddn="file" data-i18n-attr="aria-label=files.upload.aria"></label>
         </div>
@@ -181,12 +180,21 @@
         <p class="hint" data-i18n="queue.note"></p>
       </section>
 
+      <!-- plain mode only (server-side search); hidden in the other modes. Full-width bar over the table like
+           discordrive's FileTable filter: search icon on the left, clear button on the right. -->
+      <form class="search" data-ddn-ui="search" role="search" hidden>
+        <svg class="i"><use href="#i-search"/></svg>
+        <input class="input" type="search" data-ddn="search" autocomplete="off" spellcheck="false" data-i18n-attr="placeholder=search.ph, aria-label=search.ph">
+        <button class="iconbtn" type="button" data-ddn-ui="search-clear" data-i18n-attr="aria-label=search.clear, title=search.clear" hidden><svg class="i"><use href="#i-x"/></svg></button>
+      </form>
+
       <div class="ftable-wrap">
         <table class="ftable">
           <thead><tr><th data-i18n="files.col.name">Name</th><th class="r" data-i18n="files.col.size">Size</th><th data-i18n="files.col.date">Date</th><th><span class="sr" data-i18n="files.col.actions">Actions</span></th></tr></thead>
           <tbody data-ddn="list" data-i18n-attr="aria-label=files.list"></tbody>
         </table>
         <div class="empty" data-ddn-ui="empty" hidden><span class="ic"><svg class="i"><use href="#i-folder"/></svg></span><b data-i18n="files.empty.b"></b><span data-i18n="files.empty.s"></span></div>
+        <div class="empty" data-ddn-ui="search-empty" hidden><span class="ic"><svg class="i"><use href="#i-search"/></svg></span><b data-i18n="search.none"></b><span data-i18n="search.none.s"></span></div>
       </div>
       <div class="pager" data-ddn-ui="pager-btns">
         <button class="iconbtn" type="button" data-ddn="prev" data-i18n-attr="aria-label=files.prev"><svg class="i"><use href="#i-left"/></svg></button>
