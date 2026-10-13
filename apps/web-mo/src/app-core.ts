@@ -61,7 +61,7 @@ import { fromBase64, toBase64 } from "@ddv4/processing";
 import { claimLeadership, openOpfsIndexStore, requestPersistentStorage } from "@ddv4/metadata-client/browser";
 // Resolved at build time to ONE mode (build.ts): the other modes are not in the bundle.
 import { mode } from "ddn:mode";
-import type { ModeCleanup, ModeCtx, StorageRun, StorageStatus } from "./modes/types.js";
+import type { ChannelsView, ModeCleanup, ModeCtx, MoveStatus, RemovalImpact, StorageRun, StorageStatus, StorageTotals } from "./modes/types.js";
 import { keystore, type StoredAccount } from "./keystore.js";
 
 export interface CoreConfig {
@@ -103,6 +103,8 @@ export type CoreEvent =
   | { type: "share-progress"; done: number; total: number }
   | { type: "changed" }
   | { type: "cleanup"; running: boolean }
+  /** Moving a channel (zlecenie 2026-10-13-webhooki): progress of the job (this tab in metadata only, the instance in e2ee/plain). */
+  | { type: "channel-move"; status: MoveStatus }
   /** Rule notices about changes of OTHER devices addressed to this one (Q1: your file went to the trash with a folder). */
   | { type: "notices"; notices: UiNotice[] };
 
@@ -158,6 +160,10 @@ export class AppCore {
   persistent = false;
   /** Bumped on every applied batch; the UI polls it to refresh. */
   version = 0;
+  /** Settings: show files that cannot be read now (default off: hidden from lists, search, counters, preview, sharing). */
+  showUnavailable = false;
+  private unavailTimer: ReturnType<typeof setInterval> | null = null;
+  private unavailSeen = "";
   /** Last snapshot outcome, for the status line. */
   lastSnapshot: { at: number; kind: string; written: string } | null = null;
   /** Set by the worker host: push events to the UI. */
@@ -252,6 +258,7 @@ export class AppCore {
     void this.ensureOwnName().catch(() => {});
     this.startSnapshots();
     this.scheduleCleanup(CLEANUP_FIRST_MS);
+    this.startUpkeep();
   }
 
   // ── cleanup (§6.2, Q4; zlecenie 2026-10-13 p. 2) ────────────────────
@@ -316,6 +323,28 @@ export class AppCore {
     await this.client.pull();
   }
 
+  /**
+   * Background upkeep of the derived tables (main tab): versions written without piece locations get
+   * them from their manifests (metadata only, a few per minute), unavailability is recomputed (e2ee/plain:
+   * the instance may have removed or got back a channel), an interrupted channel move resumes.
+   */
+  private startUpkeep() {
+    if (this.unavailTimer) return;
+    const tick = async () => {
+      if (!this.client) return;
+      if (this.leader && mode.mode === "metadata-only") {
+        const { backfillPieces } = await import("@ddv4/metadata-client");
+        const s = this.store;
+        if (s instanceof SqlIndexStore) await backfillPieces(this.client as never, s, 50).catch(() => null);
+        const st = await mode.moveStatus(this.ctx!, this.client).catch(() => null);
+        if (st && (st.state === "paused" || st.state === "running") && st.error !== "cancelled") void this.moveWebhook(st.webhookId).catch(() => {});
+      }
+      await this.refreshUnavailable().catch(() => {});
+    };
+    void tick();
+    this.unavailTimer = setInterval(() => void tick(), 60_000);
+  }
+
   private c(): DriveClient {
     if (!this.client) throw new Error("not signed in");
     return this.client;
@@ -325,18 +354,134 @@ export class AppCore {
     await mode.addChannel(this.ctx!, url);
     await this.rebuildClient();
     this.startSnapshots();
-    return (await mode.channels(this.ctx!)).advice;
+    // Pasting a removed webhook again makes its files readable at once.
+    await this.refreshUnavailable().catch(() => {});
+    return (await mode.channels(this.ctx!, this.client ?? undefined)).advice;
   }
 
-  /** Channels of this account: own webhooks (vault or instance) + the instance pool (e2ee/plain). */
-  async webhooks() {
-    return mode.channels(this.ctx!);
+  /** Channels of this account: own webhooks (vault or instance) + the instance pool (e2ee/plain), with stats and flags. */
+  async webhooks(): Promise<ChannelsView> {
+    return mode.channels(this.ctx!, this.client ?? undefined);
   }
 
-  async removeWebhook(id: string) {
-    if (!mode.removeChannel) throw new Error("not supported in this mode");
-    await mode.removeChannel(this.ctx!, id);
+  // ── removing a channel (zlecenie 2026-10-13-webhooki p. 1) ─────────
+
+  /** The remove dialog: what lies on the channel, whether it is critical, whether a move is possible. */
+  async channelImpact(id: string): Promise<RemovalImpact> {
+    await this.c().pull();
+    return mode.removalImpact(this.ctx!, this.c(), id);
+  }
+
+  /** Option 1 and its undo. */
+  async retireWebhook(id: string, retired = true) {
+    await mode.retireChannel(this.ctx!, id, retired);
     await this.rebuildClient();
+  }
+
+  /** Option 2: move everything off it, then remove it. Progress as "channel-move" events. */
+  async moveWebhook(id: string): Promise<MoveStatus> {
+    const push = (status: MoveStatus) => this.onEvent({ type: "channel-move", status });
+    const r = await mode.moveChannel(this.ctx!, this.c(), id, push);
+    if (r.state === "done") {
+      await this.rebuildClient();
+      this.startSnapshots();
+    }
+    // e2ee/plain: the instance runs it; poll until it ends (the UI also asks moveStatus()).
+    if (!mode.clientSnapshots && r.state === "running") void this.pollMove();
+    this.version++;
+    return r;
+  }
+
+  private polling = false;
+  private async pollMove() {
+    if (this.polling) return;
+    this.polling = true;
+    try {
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const st = await mode.moveStatus(this.ctx!, this.c()).catch(() => null);
+        if (!st) return;
+        this.onEvent({ type: "channel-move", status: st });
+        if (st.state !== "running") {
+          await this.refreshUnavailable().catch(() => {});
+          this.version++;
+          return;
+        }
+      }
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  async moveStatus(): Promise<MoveStatus | null> {
+    return mode.moveStatus(this.ctx!, this.c());
+  }
+
+  /** Option 3: remove anyway (refused for a critical channel and for the last one). */
+  async removeWebhook(id: string) {
+    await mode.removeChannel(this.ctx!, id, this.c());
+    await this.rebuildClient();
+    await this.refreshUnavailable().catch(() => {});
+    this.version++;
+  }
+
+  /** e2ee/plain with an instance bot: read the files of a removed channel with the bot and move them to active channels. */
+  async recoverWebhook(id: string): Promise<MoveStatus> {
+    if (!mode.recoverWithBot) throw new Error("not supported in this mode");
+    const r = await mode.recoverWithBot(this.ctx!, this.c(), id);
+    void this.pollMove();
+    return r;
+  }
+
+  /**
+   * Recompute which files cannot be read now and store it in the local index (lists hide them by
+   * default). metadata only: from the vault and the piece locations (local, instant); e2ee/plain:
+   * asks the instance. Never written to the log.
+   */
+  async refreshUnavailable(): Promise<number> {
+    const rows = await mode.unavailable(this.ctx!, this.c());
+    const s = this.store;
+    if (s instanceof SqlIndexStore) s.setUnavailable(rows.map((r) => ({ uploadId: r.uploadId, locs: r.webhookIds })));
+    const key = rows.map((r) => r.uploadId).sort().join(",");
+    if (key !== this.unavailSeen) {
+      this.unavailSeen = key;
+      this.version++;
+      this.onEvent({ type: "changed" });
+    }
+    return rows.length;
+  }
+
+  /** Settings switch "Show unavailable files" (kept in the browser by the UI). */
+  setShowUnavailable(on: boolean) {
+    this.showUnavailable = !!on;
+    this.version++;
+  }
+
+  /** Unavailable files with the channel(s) they wait for (the explanation in the list and the preview). */
+  unavailableInfo(nodeId: string): { webhookIds: string[]; labels: string[] } | null {
+    const s = this.store;
+    const ids = s instanceof SqlIndexStore ? s.isUnavailable(nodeId) : null;
+    return ids ? { webhookIds: ids, labels: ids.map((x) => `#…${x.slice(-6)}`) } : null;
+  }
+
+  /** Settings → Storage: totals from the local index (SQL; measured on 50 000 files / 2 M pieces in storage-stats.test.ts). */
+  async storageTotals(): Promise<StorageTotals> {
+    const t0 = performance.now();
+    const s = this.store;
+    if (!(s instanceof SqlIndexStore)) {
+      // Secondary tab (in memory): a plain pass over the tree.
+      const st: StorageTotals = { files: 0, bytes: 0, trashFiles: 0, trashBytes: 0, unavailableFiles: 0, unavailableBytes: 0, discordBytes: null, tookMs: 0 };
+      for (const n of this.c().store.allNodes()) {
+        if (n.kind !== "file" || !n.content) continue;
+        if (inTrash(this.c().store, n.id)) ((st.trashFiles++), (st.trashBytes += n.content.sizeBytes));
+        else ((st.files++), (st.bytes += n.content.sizeBytes));
+      }
+      st.tookMs = Math.round(performance.now() - t0);
+      return st;
+    }
+    const t = s.storageTotals();
+    const discord = mode.discordUsage ? await mode.discordUsage(this.ctx!, this.c()).catch(() => null) : null;
+    return { files: t.files, bytes: t.bytes, trashFiles: t.trashFiles, trashBytes: t.trashBytes, unavailableFiles: t.unavailableFiles, unavailableBytes: t.unavailableBytes, discordBytes: discord, tookMs: Math.round(performance.now() - t0) };
   }
 
   /**
@@ -346,7 +491,8 @@ export class AppCore {
    */
   list(parentId = ROOT_ID, after?: string, limit = 200): { rows: ChildRow[]; total: number } {
     const s = this.store;
-    if (s instanceof SqlIndexStore) return { rows: s.listChildren(parentId, { after, limit }), total: s.countChildren(parentId) };
+    const hide = !this.showUnavailable;
+    if (s instanceof SqlIndexStore) return { rows: s.listChildren(parentId, { after, limit, hideUnavailable: hide }), total: s.countChildren(parentId, hide) };
     const all: (ChildRow & { k: [string, string] })[] = [];
     for (const id of this.c().store.childIds(parentId)) {
       const n = this.c().store.getNode(id);
@@ -364,7 +510,7 @@ export class AppCore {
   /** Counters for the folder heading ("3 folders · 8 files · 72 GB"). */
   folderStats(parentId = ROOT_ID): FolderStats {
     const s = this.store;
-    if (s instanceof SqlIndexStore) return s.folderStats(parentId);
+    if (s instanceof SqlIndexStore) return s.folderStats(parentId, !this.showUnavailable);
     const st: FolderStats = { folders: 0, files: 0, bytes: 0 };
     for (const id of this.c().store.childIds(parentId)) {
       const n = this.c().store.getNode(id);
@@ -432,7 +578,10 @@ export class AppCore {
   /** plain: search by name on the server. */
   async search(q: string) {
     if (!mode.search) throw new Error("not supported in this mode");
-    return mode.search(this.ctx!, q);
+    const hits = await mode.search(this.ctx!, q);
+    // Unavailable files are hidden from search too unless the Settings switch is on.
+    if (this.showUnavailable) return hits.map((h) => ({ ...h, unavailable: this.unavailableInfo(h.id)?.webhookIds }));
+    return hits.filter((h) => h.kind !== "file" || !this.unavailableInfo(h.id));
   }
 
   /** plain: a URL the <video> element can play straight from the server (Range, ticket in the URL). */
@@ -590,7 +739,7 @@ export class AppCore {
   /** Number of items in „Recovered” (the sidebar shows the folder only when it has something). */
   recoveredCount(): number {
     const s = this.store;
-    if (s instanceof SqlIndexStore) return s.countChildren(RECOVERED_ID);
+    if (s instanceof SqlIndexStore) return s.countChildren(RECOVERED_ID, !this.showUnavailable);
     let n = 0;
     for (const id of this.c().store.childIds(RECOVERED_ID)) if (!this.c().store.getNode(id)?.trashed) n++;
     return n;
@@ -795,6 +944,7 @@ export class AppCore {
   // ── sharing (§3.7) ─────────────────────────────────────────────────
 
   async shareFile(nodeId: string, origin: string): Promise<{ link: string; shareId: string }> {
+    if (this.unavailableInfo(nodeId)) throw new Error("file_unavailable");
     const c = this.c();
     const n = c.store.getNode(nodeId);
     if (!n || n.kind !== "file" || !n.content) throw new Error("not a file");
@@ -857,5 +1007,6 @@ export class AppCore {
     this.sub?.close();
     if (this.snapTimer) clearInterval(this.snapTimer);
     if (this.gcTimer) clearTimeout(this.gcTimer);
+    if (this.unavailTimer) clearInterval(this.unavailTimer);
   }
 }

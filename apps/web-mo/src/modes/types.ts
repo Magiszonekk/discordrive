@@ -185,7 +185,8 @@ export interface ModeImpl {
   readonly marker: string;
   /** Client around ctx.store (rebuilt when channels change). */
   client(ctx: ModeCtx): Promise<DriveClient>;
-  channels(ctx: ModeCtx): Promise<ChannelsView>;
+  /** `client` (when signed in): per-channel stats and the critical flag need the local index / snapshot chain. */
+  channels(ctx: ModeCtx, client?: DriveClient): Promise<ChannelsView>;
   addChannel(ctx: ModeCtx, url: string): Promise<void>;
   /** The remove dialog: what removing this channel affects. Names come from the local index. */
   removalImpact(ctx: ModeCtx, client: DriveClient, id: string): Promise<RemovalImpact>;
@@ -200,7 +201,7 @@ export interface ModeImpl {
   /** The move in progress or the last one, null = none. */
   moveStatus(ctx: ModeCtx, client: DriveClient): Promise<MoveStatus | null>;
   /** Option 3: remove anyway (files with pieces only there become unavailable, nothing is deleted). Refused for a critical channel. */
-  removeChannel(ctx: ModeCtx, id: string): Promise<void>;
+  removeChannel(ctx: ModeCtx, id: string, client?: DriveClient): Promise<void>;
   /** e2ee/plain with an instance bot: read the files of a removed channel through the bot and move them to active channels. */
   recoverWithBot?(ctx: ModeCtx, client: DriveClient, id: string): Promise<MoveStatus>;
   /**

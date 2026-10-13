@@ -1,8 +1,13 @@
 // Metadata-only mode of the browser app (koncept §3): webhooks in the encrypted vault, blobs
 // straight to Discord, snapshots written by the main tab, rescue kit with the pointer webhook.
 import {
+  ChainIndex,
+  ChannelMover,
   Cleaner,
   DiscordWebhookTransport,
+  SqlIndexStore,
+  estimateMs,
+  refreshUnavailable,
   EncryptedArbiter,
   MetadataClient,
   OpCodec,
@@ -19,7 +24,7 @@ import {
   vaultAdvice,
   type DriveClient,
 } from "@ddv4/metadata-client";
-import type { ModeCtx, ModeImpl } from "./types.js";
+import type { ChannelRow, ModeCtx, ModeImpl, MoveStatus, RemovalImpact } from "./types.js";
 
 export const MODE_MARKER = "ddn-mode-marker:metadata-only";
 
@@ -50,6 +55,43 @@ async function ensurePointer(ctx: ModeCtx, c: DriveClient) {
 
 const schedulers = new WeakMap<DriveClient, SnapshotScheduler>();
 
+// ── channels (zlecenie 2026-10-13-webhooki p. 1–2) ─────────────────────
+const sqlOf = (ctx: ModeCtx) => (ctx.store instanceof SqlIndexStore ? ctx.store : null);
+const chains = new WeakMap<ModeCtx, ChainIndex>();
+const chainOf = (ctx: ModeCtx) => {
+  let c = chains.get(ctx);
+  if (!c) {
+    const s = sqlOf(ctx);
+    // Kept in the local index database (main tab); a secondary tab keeps it in memory.
+    c = new ChainIndex(
+      s
+        ? {
+            get: () => s.sql.get<{ v: string }>("SELECT v FROM meta WHERE k = 'chain_index'", [])?.v ?? null,
+            set: (v) => void s.sql.run("INSERT INTO meta (k, v) VALUES ('chain_index', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", [v]),
+          }
+        : undefined,
+    );
+    chains.set(ctx, c);
+  }
+  return c;
+};
+const movers = new WeakMap<DriveClient, ChannelMover>();
+/** The decrypted log (the drain reads relocate entries). */
+const this_arbiter = (ctx: ModeCtx) => new EncryptedArbiter(new OpCodec(ctx.key, ctx.acct.accountId), ctx.http);
+function mover(ctx: ModeCtx, c: DriveClient): ChannelMover {
+  let m = movers.get(c);
+  const s = sqlOf(ctx);
+  if (!s) throw new Error("main_tab_only: moving a channel runs in the main tab (it keeps its progress in the local database)");
+  if (!m) movers.set(c, (m = new ChannelMover({ client: mc(c), store: s, vault: vault(ctx), key: ctx.key, accountId: ctx.acct.accountId, transport: transport(ctx), log: this_arbiter(ctx) })));
+  return m;
+}
+async function critical(ctx: ModeCtx, c: DriveClient) {
+  const v = await vault(ctx).load();
+  return chainOf(ctx)
+    .hooks(clientBlobIO(mc(c), transport(ctx)), ctx.key, ctx.acct.accountId, v)
+    .catch(() => ({ what: new Map<string, ("pointer" | "snapshots")[]>(v.pointer ? [[v.pointer.webhookId, ["pointer"]]] : []), bytes: new Map<string, number>() }));
+}
+
 export const mode: ModeImpl = {
   mode: "metadata-only",
   marker: MODE_MARKER,
@@ -71,9 +113,26 @@ export const mode: ModeImpl = {
     });
   },
 
-  async channels(ctx) {
+  async channels(ctx, c) {
     const v = await vault(ctx).load();
-    return { webhooks: v.webhooks.map((w) => ({ id: w.id, channelId: w.channelId, label: w.label, retired: false, critical: false, criticalWhat: [], files: 0, bytes: 0, dependent: 0 })), advice: vaultAdvice(v), removed: [], move: null };
+    const s = sqlOf(ctx);
+    const stats = s?.locationStats() ?? new Map<string, { files: number; bytes: number }>();
+    const crit = c ? await critical(ctx, c) : { what: new Map<string, ("pointer" | "snapshots")[]>(), bytes: new Map<string, number>() };
+    const unav = s ? s.unavailable() : [];
+    const rows: ChannelRow[] = v.webhooks
+      .filter((w) => !w.drain)
+      .map((w) => {
+        const st = stats.get(w.id) ?? { files: 0, bytes: 0 };
+        const what = crit.what.get(w.id) ?? [];
+        return { id: w.id, channelId: w.channelId, label: w.label, retired: !!w.retired, critical: what.length > 0, criticalWhat: what, files: st.files, bytes: st.bytes + (crit.bytes.get(w.id) ?? 0), dependent: st.files };
+      });
+    const m = c && s ? (movers.get(c)?.state() ?? (s.sql.get<{ v: string }>("SELECT v FROM meta WHERE k = 'channel_move'", [])?.v ? (JSON.parse(s.sql.get<{ v: string }>("SELECT v FROM meta WHERE k = 'channel_move'", [])!.v) as MoveStatus) : null)) : null;
+    return {
+      webhooks: rows,
+      advice: vaultAdvice(v),
+      removed: (v.removed ?? []).map((r) => ({ ...r, unavailableFiles: unav.filter((u) => u.locs.includes(r.id)).length })),
+      move: m,
+    };
   },
 
   async addChannel(ctx, url) {
@@ -81,24 +140,80 @@ export const mode: ModeImpl = {
     await vault(ctx).addWebhook(w);
   },
 
-  // zlecenie 2026-10-13-webhooki p. 1: stubs, replaced by the implementation (kept so every mode typechecks meanwhile).
-  async removalImpact() {
-    throw new Error("not_implemented");
+  async removalImpact(ctx, c, id) {
+    const v = await vault(ctx).load();
+    const w = v.webhooks.find((x) => x.id === id);
+    if (!w) throw new Error("no_such_channel");
+    const s = sqlOf(ctx);
+    const at = s ? s.filesAt(id, 1000) : { total: 0, bytes: 0, rows: [] };
+    const crit = await critical(ctx, c);
+    const what = crit.what.get(id) ?? [];
+    const others = v.webhooks.filter((x) => x.id !== id && !x.retired && !x.drain).length;
+    const pieceBytes = s?.locationStats().get(id)?.bytes ?? 0;
+    const moveBytes = pieceBytes + (crit.bytes.get(id) ?? 0);
+    const impact: RemovalImpact = {
+      webhookId: id,
+      label: w.label,
+      critical: what.length > 0,
+      criticalWhat: what,
+      files: at.total,
+      bytes: at.bytes,
+      list: at.rows,
+      more: Math.max(0, at.total - at.rows.length),
+      otherActive: others,
+      moveBytes,
+      moveEtaMs: estimateMs(moveBytes, others),
+      retired: !!w.retired,
+      checking: s ? s.versionsWithoutPieces(10_000).length : 0,
+      last: others === 0,
+    };
+    return impact;
   },
-  async retireChannel() {
-    throw new Error("not_implemented");
+
+  async retireChannel(ctx, id, retired) {
+    const v = await vault(ctx).load();
+    const w = v.webhooks.find((x) => x.id === id);
+    if (!w || w.drain) throw new Error("no_such_channel");
+    if (retired) {
+      if (v.pointer?.webhookId === id) throw new Error("channel_critical");
+      if (!v.webhooks.some((x) => x.id !== id && !x.retired && !x.drain)) throw new Error("need_other_channel");
+    }
+    await vault(ctx).setRetired(id, retired);
   },
-  async moveChannel() {
-    throw new Error("not_implemented");
+
+  async moveChannel(ctx, c, id, onProgress) {
+    return mover(ctx, c).run(id, onProgress);
   },
-  async moveStatus() {
-    return null;
+
+  async moveStatus(ctx, c) {
+    const s = sqlOf(ctx);
+    return s ? mover(ctx, c).state() : null;
   },
-  async unavailable() {
-    return [];
+
+  async removeChannel(ctx, id, c?: DriveClient) {
+    const v = await vault(ctx).load();
+    const w = v.webhooks.find((x) => x.id === id);
+    if (!w) throw new Error("no_such_channel");
+    if (w.drain) throw new Error("channel_draining");
+    if (!v.webhooks.some((x) => x.id !== id && !x.retired && !x.drain)) throw new Error("need_other_channel");
+    const crit = c ? (await critical(ctx, c)).what.get(id) : v.pointer?.webhookId === id ? ["pointer"] : [];
+    if (crit?.length) throw new Error("channel_critical");
+    await vault(ctx).removeWebhook(id, "removed");
+    const s = sqlOf(ctx);
+    if (s) refreshUnavailable(s, await vault(ctx).load());
   },
-  async removeChannel() {
-    throw new Error("not_implemented");
+
+  async unavailable(ctx) {
+    const s = sqlOf(ctx);
+    if (!s) return [];
+    return refreshUnavailable(s, await vault(ctx).load());
+  },
+
+  async discordUsage(ctx, c) {
+    const s = sqlOf(ctx);
+    if (!s) return null;
+    const crit = await critical(ctx, c);
+    return s.storageTotals().pieceBytes + [...crit.bytes.values()].reduce((a, b) => a + b, 0);
   },
 
   async rescueKit(ctx, c) {
