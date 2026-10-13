@@ -12,6 +12,8 @@ export interface WebhookRef {
    * response when unknown.
    */
   channelId?: string;
+  /** Retired (zlecenie 2026-10-13-webhooki): read from, never posted to. */
+  retired?: boolean;
 }
 
 /** Result of posting one attachment through a webhook. */

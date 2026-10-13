@@ -37,6 +37,22 @@ export interface VaultWebhook {
   /** Display only (webhook name in Discord). */
   label: string;
   addedAt: number;
+  /**
+   * Retired (zlecenie 2026-10-13-webhooki, option 1): gets no new pieces, still read. Optional
+   * field next to the old ones (no format bump): a tab on the previous bundle keeps it when it
+   * edits the vault (update() clones the whole content) and simply ignores it.
+   */
+  retired?: boolean;
+}
+
+/** A webhook that left the vault (no URL kept: it is a secret the user removed). */
+export interface RemovedWebhook {
+  id: string;
+  channelId: string;
+  label: string;
+  removedAt: number;
+  /** "moved": its data was moved off first; "removed": removed anyway (files with pieces there are unavailable). */
+  how: "moved" | "removed";
 }
 
 export interface VaultContent {
@@ -45,6 +61,8 @@ export interface VaultContent {
   webhooks: VaultWebhook[];
   /** The account's snapshot pointer message (§6.2), once created. Part of the rescue kit. */
   pointer?: { webhookId: string; messageId: string };
+  /** Webhooks removed from the account, newest first (optional, like `retired`). */
+  removed?: RemovedWebhook[];
 }
 
 /** What the server stores. `revision` 0 = no vault yet. */
@@ -115,10 +133,10 @@ export interface VaultAdvice {
   message: string;
 }
 
-/** Wizard text (decision #12). */
+/** Wizard text (decision #12). Counts the channels that take new pieces (a retired one only keeps what it has). */
 export function vaultAdvice(v: VaultContent): VaultAdvice {
   const perChan = new Map<string, number>();
-  for (const w of v.webhooks) perChan.set(w.channelId, (perChan.get(w.channelId) ?? 0) + 1);
+  for (const w of v.webhooks) if (!w.retired) perChan.set(w.channelId, (perChan.get(w.channelId) ?? 0) + 1);
   const channels = perChan.size;
   const sharedChannels = [...perChan].filter(([, n]) => n > 1).map(([c]) => c).sort();
   const ok = channels >= REQUIRED_CHANNELS;
@@ -133,8 +151,9 @@ export function vaultAdvice(v: VaultContent): VaultAdvice {
   return { webhooks: v.webhooks.length, channels, ok, suggestMore, sharedChannels, message };
 }
 
+/** Every webhook of the vault (reading needs the retired ones too). */
 export function toWebhookRefs(v: VaultContent): WebhookRef[] {
-  return v.webhooks.map((w) => ({ id: w.id, url: w.url, channelId: w.channelId }));
+  return v.webhooks.map((w) => ({ id: w.id, url: w.url, channelId: w.channelId, ...(w.retired ? { retired: true } : {}) }));
 }
 
 /** Client view of the vault: decrypts, edits with CAS + retry, guards against rollback. */
@@ -189,18 +208,30 @@ export class WebhookVault {
     throw new Error("vault update: too many concurrent edits");
   }
 
+  /** Add (or paste again: same ID = the same webhook, its removed entry goes, its files are readable again). */
   async addWebhook(w: VaultWebhook): Promise<VaultContent> {
     return this.update((v) => {
       v.webhooks = v.webhooks.filter((x) => x.id !== w.id);
       v.webhooks.push(w);
       v.webhooks.sort((a, b) => (a.addedAt - b.addedAt) || (a.id < b.id ? -1 : 1));
+      if (v.removed) v.removed = v.removed.filter((x) => x.id !== w.id);
       return v;
     });
   }
 
-  async removeWebhook(id: string): Promise<VaultContent> {
+  /** Remove; `how` is remembered in `removed` (no URL) so Settings can say what happened to its files. */
+  async removeWebhook(id: string, how: RemovedWebhook["how"] = "removed", now = Date.now()): Promise<VaultContent> {
     return this.update((v) => {
+      const w = v.webhooks.find((x) => x.id === id);
       v.webhooks = v.webhooks.filter((x) => x.id !== id);
+      if (w) v.removed = [{ id: w.id, channelId: w.channelId, label: w.label, removedAt: now, how }, ...(v.removed ?? []).filter((x) => x.id !== id)].slice(0, 50);
+      return v;
+    });
+  }
+
+  async setRetired(id: string, retired: boolean): Promise<VaultContent> {
+    return this.update((v) => {
+      for (const w of v.webhooks) if (w.id === id) (retired ? (w.retired = true) : delete w.retired);
       return v;
     });
   }

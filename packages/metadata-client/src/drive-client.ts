@@ -23,6 +23,7 @@ import {
   type FileVersion,
   type NodeId,
   type Operation,
+  type PieceLoc,
   Replica,
   type IndexStore,
 } from "@ddv4/sync-core";
@@ -299,6 +300,8 @@ export class DriveClient {
         manifestRef: encodeManifestRef({ v: 1, f: FRAGMENT_FORMAT_VERSION, k: key.rawB64, at: mplaced }),
         chunkCount: count,
         plaintextSha256,
+        // Rules v3: where the pieces are, per location (per-channel stats without manifests).
+        pieces: piecesOf(manifest, mplaced, mct.byteLength),
       };
       throwIfAborted(signal);
       await renew();
@@ -416,6 +419,23 @@ export class DriveClient {
     }
     return out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   }
+}
+
+/** Piece locations of a version (rules v3 PieceLoc): fragments per placement location + the manifest. Sorted, unique. */
+export function piecesOf(manifest: ChunkManifest, manifestAt: DiscordPlacement, manifestBytes: number): PieceLoc[] {
+  const m = new Map<string, { n: number; bytes: number }>();
+  const add = (loc: string, bytes: number) => {
+    const x = m.get(loc) ?? { n: 0, bytes: 0 };
+    x.n++;
+    x.bytes += bytes;
+    m.set(loc, x);
+  };
+  for (const c of manifest.chunks) {
+    const p = c.placements?.[0] as DiscordPlacement | undefined;
+    if (p?.locationId) add(p.locationId, c.ciphertextSizeBytes);
+  }
+  add(manifestAt.locationId, manifestBytes);
+  return [...m].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([loc, x]) => ({ loc, n: x.n, bytes: x.bytes }));
 }
 
 /** Range read of one file version (shared by the client and, in plain mode, the server). */

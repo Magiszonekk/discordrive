@@ -73,9 +73,17 @@ export class WebhookBlobStore implements BlobStore {
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
 
-  private nextHook(): WebhookRef {
-    const all = [...this.hooks.values()];
+  /** Webhooks that take new pieces: not retired, not excluded by the caller (a move posts only to the targets). */
+  private nextHook(exclude?: ReadonlySet<string>): WebhookRef {
+    const all = [...this.hooks.values()].filter((h) => !h.retired && !exclude?.has(h.id));
+    if (!all.length) throw new Error("need_channel: no active channel to post to");
     return all[this.rr++ % all.length]!;
+  }
+
+  /** Post to one given webhook (snapshot objects go to the pointer's channel only). */
+  async postTo(hookId: string, data: Uint8Array, filename: string): Promise<DiscordPlacement> {
+    const hook = this.hook(hookId);
+    return placementOf(await this.postOn(() => hook, data, filename, { posts: 0 }));
   }
 
   hook(id: string): WebhookRef {
@@ -88,11 +96,15 @@ export class WebhookBlobStore implements BlobStore {
     return placementOf(await this.post(data, filename, ctx.stats ?? { posts: 0 }));
   }
 
-  /** Post one blob with pacing per channel and retries. */
-  async post(data: Uint8Array, filename: string, stats: { posts: number }): Promise<PostedAttachment> {
+  /** Post one blob with pacing per channel and retries (round-robin over the active webhooks, minus `exclude`). */
+  async post(data: Uint8Array, filename: string, stats: { posts: number }, exclude?: ReadonlySet<string>): Promise<PostedAttachment> {
+    return this.postOn(() => this.nextHook(exclude), data, filename, stats);
+  }
+
+  private async postOn(pick: () => WebhookRef, data: Uint8Array, filename: string, stats: { posts: number }): Promise<PostedAttachment> {
     let attempt = 0;
     for (;;) {
-      const hook = this.nextHook();
+      const hook = pick();
       const key = hook.channelId ?? `hook:${hook.id}`;
       await this.pacer.acquire(key);
       stats.posts++;
@@ -149,6 +161,20 @@ export class MetadataClient extends DriveClient {
   /** Post one blob (any kind: fragment, manifest, snapshot part) with per-channel pacing and retries. */
   async postBlob(data: Uint8Array, filename: string): Promise<DiscordPlacement> {
     return this.wh.put(data, filename);
+  }
+
+  /** Post one blob to the active webhooks except `exclude` (moving a channel's data away). */
+  async postBlobExcept(data: Uint8Array, filename: string, exclude: ReadonlySet<string>): Promise<DiscordPlacement> {
+    return placementOf(await this.wh.post(data, filename, { posts: 0 }, exclude));
+  }
+
+  /** Post one blob to one given webhook (snapshot objects: only on the pointer's channel). */
+  async postBlobTo(hookId: string, data: Uint8Array, filename: string): Promise<DiscordPlacement> {
+    return this.wh.postTo(hookId, data, filename);
+  }
+
+  get transport(): WebhookTransport {
+    return this.wh.transport;
   }
 
   /** Webhook from the vault by ID (throws if unknown). */

@@ -17,7 +17,7 @@ export {
   type FileKey,
 } from "./file-crypto.js";
 export { type BlobStore, type BlobPutContext, AbortedError, throwIfAborted } from "./blob-store.js";
-export { DriveClient, readVersionRange, type DriveClientOptions } from "./drive-client.js";
+export { DriveClient, piecesOf, readVersionRange, type DriveClientOptions } from "./drive-client.js";
 // e2ee/plain clients: import { ServerBlobStore } from "@ddv4/metadata-client/server-blobs" (kept out of this index).
 export {
   MetadataClient,
@@ -82,7 +82,7 @@ export {
   type EncryptedEntry,
   type EncryptedLogApi,
 } from "./op-crypto.js";
-export { SqlIndexStore, type ChildRow, type FolderStats, type SqlDriver, type SqlValue } from "./sql-store.js";
+export { SqlIndexStore, manifestLoc, type ChildRow, type FolderStats, type SqlDriver, type SqlValue } from "./sql-store.js";
 // Node-only (node:sqlite, server): import from "@ddv4/metadata-client/node".
 export {
   clientBlobIO,

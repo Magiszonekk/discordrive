@@ -15,7 +15,7 @@
 // Keyset cursor is a JSON pair, never a NUL-joined string: node:sqlite truncates
 // TEXT at U+0000.
 
-import { nameKey, type IndexMeta, type IndexStore, type NodeId, type NodeRecord, type UploadId, type UploadRecord } from "@ddv4/sync-core";
+import { nameKey, type IndexMeta, type IndexStore, type NodeId, type NodeRecord, type PieceLoc, type UploadId, type UploadRecord } from "@ddv4/sync-core";
 
 export type SqlValue = string | number | null;
 
@@ -28,7 +28,20 @@ export interface SqlDriver {
   close(): void;
 }
 
-const SCHEMA_VERSION = 1;
+/**
+ * 1: tree + uploads. 2 (zlecenie 2026-10-13-webhooki): derived tables next to it, migrated in place
+ * (a schema-1 database is opened and extended, nothing is rebuilt):
+ *   pieces       where the pieces of each version are, per location (from content.pieces, rules v3,
+ *                or filled by the client from the manifest: setPieces) - per-channel stats, the
+ *                remove-channel impact and unavailability without loading manifests;
+ *   piece_src    for which manifestRef the rows of an upload were made, and whether they are complete
+ *                (only the manifest's own location is known until the manifest was read);
+ *   unavail      uploads that cannot be read now (a piece on a channel no longer in the account);
+ *                computed by the client (metadata only: vault + pieces; e2ee/plain: the instance),
+ *                never an operation, so re-pasting a webhook makes them readable at once everywhere.
+ * The derived rows never feed back into the tree (apply() does not read them).
+ */
+const SCHEMA_VERSION = 2;
 
 export interface ChildRow {
   id: NodeId;
@@ -40,6 +53,8 @@ export interface ChildRow {
   trashed: boolean;
   /** Opaque keyset cursor for the next page. */
   cursor: string;
+  /** Unavailable file: the locations (webhook IDs) its missing pieces are on. */
+  unavailable?: string[];
 }
 
 export interface FolderStats {
@@ -48,8 +63,21 @@ export interface FolderStats {
   bytes: number;
 }
 
+/** Location (webhook ID) of a version's manifest, from its manifestRef ("ddn1:[v,f,k,loc,…]"), without importing the client. */
+export function manifestLoc(ref: string): string | null {
+  if (!ref.startsWith("ddn1:")) return null;
+  try {
+    const a = JSON.parse(ref.slice(5)) as unknown[];
+    return Array.isArray(a) && a.length === 7 ? String(a[3]) : null;
+  } catch {
+    return null;
+  }
+}
+
 export class SqlIndexStore implements IndexStore {
   private depth = 0;
+  /** files.trashed may be stale for nodes inside a folder whose trash state changed (refreshTrash before reading it). */
+  private trashDirty = true;
 
   constructor(readonly sql: SqlDriver) {
     sql.exec(`
@@ -67,7 +95,190 @@ export class SqlIndexStore implements IndexStore {
     `);
     const ver = sql.get<{ v: string }>("SELECT v FROM meta WHERE k = 'schema'", []);
     if (!ver) sql.run("INSERT INTO meta (k, v) VALUES ('schema', ?)", [String(SCHEMA_VERSION)]);
-    else if (Number(ver.v) !== SCHEMA_VERSION) throw new Error(`index schema ${ver.v} not supported (want ${SCHEMA_VERSION}); rebuild from log`);
+    else if (Number(ver.v) > SCHEMA_VERSION || Number(ver.v) < 1) throw new Error(`index schema ${ver.v} not supported (want ${SCHEMA_VERSION}); rebuild from log`);
+    this.migrate(Number(ver?.v ?? SCHEMA_VERSION));
+  }
+
+  /** Schema 1 -> 2: derived tables; the files table is filled from the tree once. */
+  private migrate(from: number): void {
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS files (
+        upload_id TEXT PRIMARY KEY,
+        node_id TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        manifest_ref TEXT NOT NULL,
+        chunks INTEGER NOT NULL,
+        trashed INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS files_node ON files(node_id);
+      CREATE TABLE IF NOT EXISTS pieces (upload_id TEXT NOT NULL, loc TEXT NOT NULL, n INTEGER NOT NULL, bytes INTEGER NOT NULL, PRIMARY KEY (upload_id, loc));
+      CREATE INDEX IF NOT EXISTS pieces_loc ON pieces(loc, upload_id);
+      CREATE TABLE IF NOT EXISTS piece_src (upload_id TEXT PRIMARY KEY, manifest_ref TEXT NOT NULL, complete INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS unavail (upload_id TEXT PRIMARY KEY, locs TEXT NOT NULL);
+    `);
+    if (from < 2) {
+      this.atomically(() => {
+        for (const r of this.sql.all<{ rec: string }>("SELECT rec FROM nodes WHERE json_extract(rec, '$.kind') = 'file'", [])) this.indexFile(JSON.parse(r.rec) as NodeRecord);
+        this.sql.run("UPDATE meta SET v = ? WHERE k = 'schema'", [String(SCHEMA_VERSION)]);
+      });
+    }
+  }
+
+  /**
+   * files: one row per CURRENT version (upload bound to a file node), with the node's own trash
+   * flag resolved lazily (trashed = node or ancestor, recomputed by refreshTrash; the tree has no
+   * cheap "inside a trashed folder" column). Kept in step by putNode/deleteNode.
+   */
+  private indexFile(n: NodeRecord): void {
+    this.sql.run("DELETE FROM files WHERE node_id = ?", [n.id]);
+    if (n.kind !== "file" || !n.content || typeof n.content.uploadId !== "string" || typeof n.content.manifestRef !== "string") return;
+    const c = n.content;
+    this.sql.run("INSERT OR REPLACE INTO files (upload_id, node_id, size, manifest_ref, chunks, trashed) VALUES (?, ?, ?, ?, ?, ?)", [
+      c.uploadId,
+      n.id,
+      c.sizeBytes,
+      c.manifestRef,
+      c.chunkCount,
+      n.trashed ? 1 : 0,
+    ]);
+    // Piece rows follow the version's locator: a new manifestRef (new version, relocate) drops the old rows.
+    const src = this.sql.get<{ manifest_ref: string }>("SELECT manifest_ref FROM piece_src WHERE upload_id = ?", [c.uploadId]);
+    if (c.pieces) {
+      if (src?.manifest_ref !== c.manifestRef || !this.sql.get("SELECT 1 FROM piece_src WHERE upload_id = ? AND complete = 1", [c.uploadId])) this.setPieces(c.uploadId, c.manifestRef, c.pieces, true);
+    } else if (!src || src.manifest_ref !== c.manifestRef) {
+      // Version without piece locations (rules 2, or an older client): only the manifest's own place
+      // is known from its locator; the client reads the manifest later and completes the rows.
+      const loc = manifestLoc(c.manifestRef);
+      if (loc) this.setPieces(c.uploadId, c.manifestRef, [{ loc, n: 1, bytes: 0 }], false);
+      else {
+        this.sql.run("DELETE FROM pieces WHERE upload_id = ?", [c.uploadId]);
+        this.sql.run("DELETE FROM piece_src WHERE upload_id = ?", [c.uploadId]);
+      }
+    }
+  }
+
+  /** Piece locations of a version (rules v3 content, or read from its manifest by the client). */
+  setPieces(uploadId: string, manifestRef: string, pieces: PieceLoc[], complete: boolean): void {
+    this.sql.run("DELETE FROM pieces WHERE upload_id = ?", [uploadId]);
+    for (const p of pieces) this.sql.run("INSERT INTO pieces (upload_id, loc, n, bytes) VALUES (?, ?, ?, ?)", [uploadId, p.loc, p.n, p.bytes]);
+    this.sql.run("INSERT INTO piece_src (upload_id, manifest_ref, complete) VALUES (?, ?, ?) ON CONFLICT(upload_id) DO UPDATE SET manifest_ref = excluded.manifest_ref, complete = excluded.complete", [uploadId, manifestRef, complete ? 1 : 0]);
+  }
+
+  /** Current versions whose piece locations are not known completely yet (the client reads their manifests). */
+  versionsWithoutPieces(limit = 500): { uploadId: string; manifestRef: string }[] {
+    return this.sql
+      .all<{ upload_id: string; manifest_ref: string }>(
+        "SELECT f.upload_id, f.manifest_ref FROM files f LEFT JOIN piece_src s ON s.upload_id = f.upload_id AND s.manifest_ref = f.manifest_ref AND s.complete = 1 WHERE s.upload_id IS NULL ORDER BY f.upload_id LIMIT ?",
+        [limit],
+      )
+      .map((r) => ({ uploadId: r.upload_id, manifestRef: r.manifest_ref }));
+  }
+
+  /**
+   * "Inside the trash" for every current version (node or an ancestor trashed), refreshed in one
+   * pass over the trashed nodes: a recursive walk down from each top-level trashed node. Called
+   * after a pull that changed something; cheap when the trash is small (the usual case).
+   */
+  refreshTrash(): void {
+    if (!this.trashDirty) return;
+    this.trashDirty = false;
+    this.atomically(() => {
+      this.sql.run("UPDATE files SET trashed = 0 WHERE trashed = 1", []);
+      this.sql.run(
+        `WITH RECURSIVE t(id) AS (SELECT id FROM nodes WHERE live = 0 AND parent_id IS NOT NULL
+           UNION SELECT n.id FROM nodes n JOIN t ON n.parent_id = t.id)
+         UPDATE files SET trashed = 1 WHERE node_id IN (SELECT id FROM t)`,
+        [],
+      );
+    });
+  }
+
+  /** Replace the set of unavailable uploads (computed by the mode; see the schema comment). */
+  setUnavailable(rows: { uploadId: string; locs: string[] }[]): void {
+    this.atomically(() => {
+      this.sql.run("DELETE FROM unavail", []);
+      for (const r of rows) this.sql.run("INSERT OR REPLACE INTO unavail (upload_id, locs) VALUES (?, ?)", [r.uploadId, JSON.stringify(r.locs)]);
+    });
+  }
+
+  /**
+   * metadata only: uploads with a piece on a location that is not in `known` (the vault's webhooks).
+   * Pure SQL over the pieces table, so it is instant also for 50 000 files / 2 M pieces.
+   */
+  uploadsOutside(known: string[]): { uploadId: string; locs: string[] }[] {
+    const ph = known.map(() => "?").join(",");
+    const rows = this.sql.all<{ upload_id: string; loc: string }>(
+      `SELECT p.upload_id, p.loc FROM pieces p JOIN files f ON f.upload_id = p.upload_id${known.length ? ` WHERE p.loc NOT IN (${ph})` : ""} ORDER BY p.upload_id, p.loc`,
+      known,
+    );
+    const out = new Map<string, string[]>();
+    for (const r of rows) (out.get(r.upload_id) ?? out.set(r.upload_id, []).get(r.upload_id)!).push(r.loc);
+    return [...out].map(([uploadId, locs]) => ({ uploadId, locs }));
+  }
+
+  unavailable(): { uploadId: string; nodeId: string; locs: string[] }[] {
+    return this.sql
+      .all<{ upload_id: string; node_id: string; locs: string }>("SELECT u.upload_id, f.node_id, u.locs FROM unavail u JOIN files f ON f.upload_id = u.upload_id", [])
+      .map((r) => ({ uploadId: r.upload_id, nodeId: r.node_id, locs: JSON.parse(r.locs) as string[] }));
+  }
+
+  isUnavailable(nodeId: NodeId): string[] | null {
+    const r = this.sql.get<{ locs: string }>("SELECT u.locs FROM unavail u JOIN files f ON f.upload_id = u.upload_id WHERE f.node_id = ?", [nodeId]);
+    return r ? (JSON.parse(r.locs) as string[]) : null;
+  }
+
+  /**
+   * Settings → Storage (zlecenie 2026-10-13-webhooki p. 2): all files (not in the trash), the trash,
+   * the unavailable ones (any place; they are counted in their group too). One indexed pass each.
+   */
+  storageTotals(): { files: number; bytes: number; trashFiles: number; trashBytes: number; unavailableFiles: number; unavailableBytes: number; pieceBytes: number; piecesKnown: number } {
+    this.refreshTrash();
+    const g = this.sql.all<{ t: number; n: number; b: number | null }>("SELECT trashed AS t, count(*) AS n, sum(size) AS b FROM files GROUP BY trashed", []);
+    const live = g.find((x) => Number(x.t) === 0);
+    const tr = g.find((x) => Number(x.t) === 1);
+    const u = this.sql.get<{ n: number; b: number | null }>("SELECT count(*) AS n, sum(f.size) AS b FROM unavail u JOIN files f ON f.upload_id = u.upload_id", [])!;
+    const p = this.sql.get<{ b: number | null; k: number }>("SELECT sum(p.bytes) AS b, count(DISTINCT p.upload_id) AS k FROM pieces p JOIN files f ON f.upload_id = p.upload_id", [])!;
+    return {
+      files: Number(live?.n ?? 0),
+      bytes: Number(live?.b ?? 0),
+      trashFiles: Number(tr?.n ?? 0),
+      trashBytes: Number(tr?.b ?? 0),
+      unavailableFiles: Number(u.n ?? 0),
+      unavailableBytes: Number(u.b ?? 0),
+      pieceBytes: Number(p.b ?? 0),
+      piecesKnown: Number(p.k ?? 0),
+    };
+  }
+
+  /** Per location: files with a piece there and the bytes stored there (current versions, trash included). */
+  locationStats(): Map<string, { files: number; bytes: number }> {
+    const rows = this.sql.all<{ loc: string; n: number; b: number }>("SELECT p.loc, count(*) AS n, sum(p.bytes) AS b FROM pieces p JOIN files f ON f.upload_id = p.upload_id GROUP BY p.loc", []);
+    return new Map(rows.map((r) => [r.loc, { files: Number(r.n), bytes: Number(r.b) }]));
+  }
+
+  /** Files with a piece on `loc` (the remove dialog), by name: node, name, size, trash. */
+  filesAt(loc: string, limit = 1000): { total: number; bytes: number; rows: { id: string; name: string; size: number; trashed: boolean }[] } {
+    this.refreshTrash();
+    const t = this.sql.get<{ n: number; b: number | null }>("SELECT count(*) AS n, sum(f.size) AS b FROM pieces p JOIN files f ON f.upload_id = p.upload_id WHERE p.loc = ?", [loc])!;
+    const rows = this.sql.all<{ id: string; rec: string; size: number; trashed: number }>(
+      "SELECT n.id, n.rec, f.size, f.trashed FROM pieces p JOIN files f ON f.upload_id = p.upload_id JOIN nodes n ON n.id = f.node_id WHERE p.loc = ? ORDER BY f.trashed, n.name_key, n.id LIMIT ?",
+      [loc, limit],
+    );
+    return {
+      total: Number(t.n ?? 0),
+      bytes: Number(t.b ?? 0),
+      rows: rows.map((r) => ({ id: r.id, name: (JSON.parse(r.rec) as NodeRecord).name, size: Number(r.size), trashed: !!r.trashed })),
+    };
+  }
+
+  /** Current versions with a piece on `loc` (the mover's work list), in a stable order. */
+  versionsAt(loc: string, after = "", limit = 200): { uploadId: string; nodeId: string; manifestRef: string; size: number }[] {
+    return this.sql
+      .all<{ upload_id: string; node_id: string; manifest_ref: string; size: number }>(
+        "SELECT f.upload_id, f.node_id, f.manifest_ref, f.size FROM pieces p JOIN files f ON f.upload_id = p.upload_id WHERE p.loc = ? AND f.upload_id > ? ORDER BY f.upload_id LIMIT ?",
+        [loc, after, limit],
+      )
+      .map((r) => ({ uploadId: r.upload_id, nodeId: r.node_id, manifestRef: r.manifest_ref, size: Number(r.size) }));
   }
 
   close(): void {
@@ -97,9 +308,27 @@ export class SqlIndexStore implements IndexStore {
       if (String((e as Error)?.message ?? e).includes("UNIQUE")) throw new Error(`unique name violation in ${rec.parentId}: ${rec.name}`);
       throw e;
     }
+    this.trashDirty = true;
+    if (rec.kind === "file") this.indexFile(rec);
   }
   deleteNode(id: NodeId): void {
     this.sql.run("DELETE FROM nodes WHERE id = ?", [id]);
+    // OverlayStore.commit deletes every touched node before putting it back, so only the files row
+    // goes here (putNode re-adds it). Piece and unavailability rows are keyed by upload and stay:
+    // they are only read joined with files (current versions), and a manifest read is not repeated.
+    this.sql.run("DELETE FROM files WHERE node_id = ?", [id]);
+    this.trashDirty = true;
+  }
+
+  /** Drop derived rows of uploads that are no current version any more (purged / superseded). */
+  prunePieces(): number {
+    let n = 0;
+    this.atomically(() => {
+      n = this.sql.run("DELETE FROM pieces WHERE upload_id NOT IN (SELECT upload_id FROM files)", []).changes;
+      this.sql.run("DELETE FROM piece_src WHERE upload_id NOT IN (SELECT upload_id FROM files)", []);
+      this.sql.run("DELETE FROM unavail WHERE upload_id NOT IN (SELECT upload_id FROM files)", []);
+    });
+    return n;
   }
   childIds(parentId: NodeId): Iterable<NodeId> {
     return this.sql.all<{ id: string }>("SELECT id FROM nodes WHERE parent_id = ?", [parentId]).map((r) => r.id);
@@ -143,20 +372,35 @@ export class SqlIndexStore implements IndexStore {
    * One page of a folder, sorted by case-folded name (then ID), keyset paging
    * (koncept §4.1: no OFFSET, only the visible rows in RAM).
    */
-  listChildren(parentId: NodeId, opts: { after?: string; limit?: number; includeTrashed?: boolean } = {}): ChildRow[] {
+  listChildren(parentId: NodeId, opts: { after?: string; limit?: number; includeTrashed?: boolean; hideUnavailable?: boolean } = {}): ChildRow[] {
     const [afterKey, afterId] = opts.after ? (JSON.parse(opts.after) as [string, string]) : ["", ""];
-    const rows = this.sql.all<{ id: string; name_key: string; rec: string }>(
-      "SELECT id, name_key, rec FROM nodes WHERE parent_id = ? AND (name_key, id) > (?, ?) AND (live = 1 OR ? = 1) ORDER BY name_key, id LIMIT ?",
-      [parentId, afterKey, afterId, opts.includeTrashed ? 1 : 0, opts.limit ?? 200],
+    const rows = this.sql.all<{ id: string; name_key: string; rec: string; unav: string | null }>(
+      `SELECT n.id, n.name_key, n.rec, u.locs AS unav FROM nodes n LEFT JOIN files f ON f.node_id = n.id LEFT JOIN unavail u ON u.upload_id = f.upload_id
+       WHERE n.parent_id = ? AND (n.name_key, n.id) > (?, ?) AND (n.live = 1 OR ? = 1) AND (? = 0 OR u.upload_id IS NULL) ORDER BY n.name_key, n.id LIMIT ?`,
+      [parentId, afterKey, afterId, opts.includeTrashed ? 1 : 0, opts.hideUnavailable ? 1 : 0, opts.limit ?? 200],
     );
     return rows.map((r) => {
       const n = JSON.parse(r.rec) as NodeRecord;
-      return { id: n.id, name: n.name, kind: n.kind, size: n.content?.sizeBytes ?? null, modifiedAt: n.content?.createdAt ?? null, trashed: n.trashed !== null, cursor: JSON.stringify([r.name_key, r.id]) };
+      return {
+        id: n.id,
+        name: n.name,
+        kind: n.kind,
+        size: n.content?.sizeBytes ?? null,
+        modifiedAt: n.content?.createdAt ?? null,
+        trashed: n.trashed !== null,
+        cursor: JSON.stringify([r.name_key, r.id]),
+        ...(r.unav ? { unavailable: JSON.parse(r.unav) as string[] } : {}),
+      };
     });
   }
 
-  countChildren(parentId: NodeId): number {
-    return Number(this.sql.get<{ n: number }>("SELECT count(*) AS n FROM nodes WHERE parent_id = ? AND live = 1", [parentId])!.n);
+  countChildren(parentId: NodeId, hideUnavailable = false): number {
+    return Number(
+      this.sql.get<{ n: number }>(
+        "SELECT count(*) AS n FROM nodes n LEFT JOIN files f ON f.node_id = n.id LEFT JOIN unavail u ON u.upload_id = f.upload_id WHERE n.parent_id = ? AND n.live = 1 AND (? = 0 OR u.upload_id IS NULL)",
+        [parentId, hideUnavailable ? 1 : 0],
+      )!.n,
+    );
   }
 
   /**
@@ -178,10 +422,12 @@ export class SqlIndexStore implements IndexStore {
   }
 
   /** Folder heading counters: direct sub-folders, files and the bytes of those files (one indexed pass). */
-  folderStats(parentId: NodeId): FolderStats {
+  folderStats(parentId: NodeId, hideUnavailable = false): FolderStats {
     const rows = this.sql.all<{ k: string; n: number; b: number | null }>(
-      "SELECT json_extract(rec, '$.kind') AS k, count(*) AS n, sum(json_extract(rec, '$.content.sizeBytes')) AS b FROM nodes WHERE parent_id = ? AND live = 1 GROUP BY k",
-      [parentId],
+      `SELECT json_extract(n.rec, '$.kind') AS k, count(*) AS n, sum(json_extract(n.rec, '$.content.sizeBytes')) AS b FROM nodes n
+       LEFT JOIN files f ON f.node_id = n.id LEFT JOIN unavail u ON u.upload_id = f.upload_id
+       WHERE n.parent_id = ? AND n.live = 1 AND (? = 0 OR u.upload_id IS NULL) GROUP BY k`,
+      [parentId, hideUnavailable ? 1 : 0],
     );
     const f = rows.find((r) => r.k === "file");
     return { folders: Number(rows.find((r) => r.k === "folder")?.n ?? 0), files: Number(f?.n ?? 0), bytes: Number(f?.b ?? 0) };
