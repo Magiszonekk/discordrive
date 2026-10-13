@@ -795,7 +795,8 @@ try {
       // Who cleans matches the mode; before the first run "not yet", after it a time; the purged
       // notatki.txt version waits for the retention (the purged folder had no upload).
       const by = SERVER_SIDE ? /server|serwer/ : /browser|przeglądarka/;
-      return by.test(o.before.by) && /not yet|jeszcze nie/.test(o.before.last) && !/not yet|jeszcze nie/.test(o.after.last) && /\d/.test(o.after.result) && /^1 /.test(o.after.waiting);
+      // e2ee/plain: "last cleanup" is the instance's background pass (every 30 s on a live server), so it may be set already.
+      return by.test(o.before.by) && (SERVER_SIDE || /not yet|jeszcze nie/.test(o.before.last)) && !/not yet|jeszcze nie/.test(o.after.last) && /\d/.test(o.after.result) && /^1 /.test(o.after.waiting);
     })(),
     passwordSignIn: (() => {
       const o = r.ops as Record<string, unknown> | undefined;

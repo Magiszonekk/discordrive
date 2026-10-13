@@ -402,8 +402,8 @@ Wariant B (decyzja właściciela 2026-10-12): tryby nowego rdzenia, nie stare `a
 ### Kontrakt §3.3 (co serwer widzi) przy włączonym logowaniu hasłem (koncept §3.8, model Bitwarden)
 Domyślnie wyłączone; bez włączenia kontrakt §3.3 bez zmian. Po świadomym włączeniu w Settings → Security
 serwer trzyma dodatkowo, dla tego jednego konta:
-- **login** (jawny, unikalny na instancji, bez rozróżniania wielkości liter; pytanie do właściciela #26,
-  tymczasowo wariant „nazwa logowania”, bo losowego ID konta nikt nie zapamięta),
+- **login** (jawny, unikalny na instancji, bez rozróżniania wielkości liter; decyzja właściciela #26
+  2026-10-13: nazwa logowania wybierana przy włączaniu, bo losowego ID konta nikt nie zapamięta),
 - **zaszyfrowany klucz konta**: AES-256-GCM kluczem z Argon2id(hasło) przez HKDF (`ddn-pw-wrap-v1`),
   AAD = ID konta; parametry jak w discordrive (`@ddv4/config` argon2: 64 MiB, 3 przebiegi, 4 tory),
   sól 16 B i parametry jawnie,
