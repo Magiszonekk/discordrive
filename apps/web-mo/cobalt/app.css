@@ -543,52 +543,161 @@ dialog.preview[open] { display: flex; }
 .preview .player-h .iconbtn { padding: .5rem; }
 .preview .player-h .iconbtn svg.i { width: 18px; height: 18px; }
 .preview .player-h .iconbtn:disabled { cursor: not-allowed; opacity: .3; }
+.preview .player-h .iconbtn:disabled:hover { background: none; }
+/* prev / next as one pair, a hairline before download + close */
+.preview .player-h [data-ddn="preview-download"] { margin-left: .5rem; position: relative; }
+.preview .player-h [data-ddn="preview-download"]::before { content: ""; position: absolute; left: -.3125rem; top: .5rem; bottom: .5rem; width: 1px; background: var(--color-rule); }
 .pv-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: auto; }
-.pv-loading { margin: auto; font-size: .875rem; }
-.pv-msg { margin: auto; display: grid; justify-items: center; gap: 1rem; max-width: 28rem; padding: 2rem 1rem; text-align: center; font-size: .875rem; line-height: 1.5; }
-.pv-note { padding: .5rem 1rem; border-bottom: 1px solid var(--color-rule); font-size: .8125rem; }
-.pv-text { margin: 0; padding: 1rem; font: 400 .8125rem/1.5 var(--font-mono); color: var(--color-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pv-loading { margin: auto; font: 400 .8125rem/1.25rem var(--font-mono); animation: pv-pulse 1.2s var(--ease-out) infinite alternate; }
+@keyframes pv-pulse { from { opacity: .45; } }
+.pv-msg { margin: auto; display: grid; justify-items: center; gap: 1rem; max-width: 28rem; padding: 2rem 1rem; text-align: center; font-size: .875rem; line-height: 1.5; color: var(--color-ink-2); }
+/* tone mark over the message, the confirm dialog's soft circle: i = neutral (too big, no viewer), ! = warn / err */
+.pv-msg::before { content: "i"; display: grid; place-items: center; width: 2.5rem; height: 2.5rem; border-radius: 9999px; background: color-mix(in oklch, var(--color-accent) 12%, transparent); color: var(--color-accent); font: 600 1rem/1 var(--font-mono); }
+.pv-msg.warn::before { content: "!"; background: color-mix(in oklch, var(--color-warning) 18%, transparent); color: color-mix(in oklab, var(--color-warning) 55%, var(--color-ink)); }
+.pv-msg.err::before { content: "!"; background: color-mix(in oklch, var(--color-error) 12%, transparent); color: var(--color-error); }
+.pv-note { flex: none; padding: .5rem 1rem; border-bottom: 1px solid var(--color-rule); background: var(--color-paper-2); font-size: .8125rem; line-height: 1.25rem; }
+.pv-text { margin: 0; padding: 1.25rem 1.5rem 2rem; font: 400 .8125rem/1.6 var(--font-mono); color: var(--color-ink); white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
 .preview[data-kind="image"] .pv-body, .preview[data-kind="video"] .pv-body { background: var(--color-paper-2); }
-.pv-img { display: block; margin: auto; max-width: 100%; max-height: 100%; object-fit: contain; }
+.pv-img { display: block; margin: auto; max-width: calc(100% - 2rem); max-height: calc(100% - 2rem); object-fit: contain; outline: 1px solid var(--color-rule); }
 .pv-img[data-placeholder] { width: 100%; height: 100%; filter: blur(6px); }
 .pv-pdf { flex: 1; width: 100%; min-height: 0; border: 0; background: var(--color-paper-2); }
 .pv-video { display: block; width: 100%; max-height: 100%; margin: auto; background: #000; }
 .pv-audio { width: min(32rem, calc(100% - 2rem)); margin: auto; }
-.pv-scroll { max-width: 100%; overflow: auto; }
-.pv-table, .pv-md table { border-collapse: collapse; font-size: .8125rem; }
-.pv-table th, .pv-table td, .pv-md th, .pv-md td { max-width: 40ch; padding: .25rem .5rem; border: 1px solid var(--color-rule); text-align: left; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* CSV / TSV: the table in a hairline card with breathing room, like the file table */
+.pv-scroll { flex: none; align-self: flex-start; max-width: calc(100% - 2rem); margin: 1rem; overflow: auto; border: 1px solid var(--color-rule); border-radius: var(--radius-card); }
+.pv-table, .pv-md table { border-collapse: collapse; font-size: .8125rem; line-height: 1.25rem; }
+.pv-table { border-style: hidden; }
+.pv-table td { color: var(--color-ink); }
+.pv-table tbody tr:hover td { background: var(--color-paper-2); }
+.pv-table th, .pv-table td, .pv-md th, .pv-md td { max-width: 40ch; padding: .375rem .75rem; border: 1px solid var(--color-rule); text-align: left; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pv-table th, .pv-md th { background: var(--color-paper-2); color: var(--color-ink); font-weight: 600; }
 .pv-table thead th { position: sticky; top: 0; }
-.pv-md { width: 100%; max-width: 52rem; margin: 0 auto; padding: 1rem 1.25rem 2rem; font-size: .9375rem; line-height: 1.6; color: var(--color-ink); overflow-wrap: anywhere; }
-.pv-md :is(h1, h2, h3, h4, h5, h6) { margin: 1.25em 0 .5em; font-family: var(--font-display); line-height: 1.3; color: var(--color-ink); }
+.pv-md { width: 100%; max-width: 46rem; margin: 0 auto; padding: 1.5rem 1.5rem 3rem; font-size: .9375rem; line-height: 1.6; color: var(--color-ink); overflow-wrap: anywhere; }
+.pv-md :is(h1, h2, h3, h4, h5, h6) { margin: 1.25em 0 .5em; font-family: var(--font-display); font-weight: 600; line-height: 1.3; color: var(--color-ink); }
+.pv-md > :first-child { margin-top: 0; }
 .pv-md h1 { font-size: 1.5rem; } .pv-md h2 { font-size: 1.25rem; } .pv-md h3 { font-size: 1.125rem; } .pv-md :is(h4, h5, h6) { font-size: 1rem; }
 .pv-md :is(p, ul, ol, pre, blockquote, table) { margin: 0 0 .875em; }
 .pv-md :is(ul, ol) { padding-left: 1.5em; }
 .pv-md code { padding: .1em .3em; border-radius: var(--radius-chip); background: var(--color-paper-2); font: .85em var(--font-mono); }
 .pv-md pre { padding: .75rem 1rem; border-radius: var(--radius-input); background: var(--color-paper-2); overflow: auto; }
 .pv-md pre code { padding: 0; background: none; }
-.pv-md blockquote { padding-left: 1rem; border-left: 2px solid var(--color-rule); color: var(--color-muted); }
+.pv-md blockquote { padding-left: 1rem; border-left: 2px solid var(--color-rule-2); color: var(--color-ink-2); }
 .pv-md a { color: var(--color-accent); }
 .pv-md hr { margin: 1.5em 0; border: 0; border-top: 1px solid var(--color-rule); }
 .pv-md .md-img { color: var(--color-muted); font-style: italic; }
 .ftable tbody tr.pv-row { cursor: pointer; }
 @media (max-width: 767.98px) {
   dialog.preview { width: 100vw; height: 100dvh; margin: 0; border: 0; border-radius: 0; }
+  .preview .player-h { padding-top: max(.5rem, env(safe-area-inset-top)); }
+  .pv-text { padding: 1rem; font-size: .75rem; }
+  .pv-md { padding: 1.25rem 1rem 2.5rem; }
 }
 
-/* ── channels: collapsible section, remove dialog, storage stats (zlecenie 2026-10-13-webhooki; on Cobalt classes, polish by the frontend profile) ── */
-.sec-toggle { display: inline-flex; align-items: center; gap: .375rem; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
-.sec-toggle svg.i { transition: transform var(--duration-short) var(--ease-out); color: var(--color-muted); }
+/* ── channels: collapsible section, remove dialog, storage stats, unavailable rows (zlecenie 2026-10-13-webhooki;
+ * polish by the frontend profile on the existing Cobalt tokens: list, chip, note, modal, ack, bar) ── */
+/* Heading: chevron + title + count chip on the left, the one-line summary on the right (under the title on a phone).
+ * The summary repeats the count, so the chip steps back while the summary is there; it stays when the summary is
+ * empty (not set up yet: the warning-toned chip is then the only signal). */
+.sec-h:has(.sec-toggle) { flex-wrap: wrap; align-items: center; justify-content: flex-start; column-gap: .625rem; row-gap: .125rem; }
+.sec-h:has(.sec-sum:not(:empty)) [data-ddn-ui="hook-count"] { display: none; }
+.sec-toggle { display: inline-flex; align-items: center; gap: .5rem; margin-left: -.375rem; padding: .125rem .5rem .125rem .375rem; border: 0; border-radius: var(--radius-input); background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; transition: background-color var(--duration-short) var(--ease-out); }
+.sec-toggle:hover { background: var(--color-paper-2); }
+.sec-toggle svg.i { width: 16px; height: 16px; color: var(--color-muted); transition: transform var(--duration-short) var(--ease-out), color var(--duration-short) var(--ease-out); }
+.sec-toggle:hover svg.i { color: var(--color-ink); }
 .sec-toggle[aria-expanded="true"] svg.i { transform: rotate(90deg); }
-.sec-sum { margin-left: .5rem; font: 400 .8125rem/1.25rem var(--font-body, inherit); color: var(--color-muted); }
-.list.scroll { max-height: 14rem; overflow: auto; }
-.list li .tag { flex: none; }
-.list li .acts2 { margin-left: auto; display: flex; gap: .25rem; flex: none; }
-fieldset.choices { margin: 0; padding: 0; border: 0; display: grid; gap: .5rem; }
-.choice { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .625rem; align-items: start; padding: .625rem .75rem; border: 1px solid var(--color-rule); border-radius: var(--radius-card); cursor: pointer; }
-.choice:has(input:checked) { border-color: var(--color-accent); }
-.choice:has(input:disabled) { opacity: .55; cursor: not-allowed; }
-.choice b { display: block; font-size: .875rem; color: var(--color-ink); font-weight: 600; }
-.choice small { display: block; font-size: .8125rem; line-height: 1.4; color: var(--color-ink-2); }
-tr.unavail .nm, tr.unavail .sub { opacity: .6; }
-.unav-why { display: block; margin-top: .125rem; font-size: .75rem; line-height: 1.125rem; color: color-mix(in oklch, var(--color-warning) 70%, var(--color-ink)); white-space: normal; }
+.sec-sum { margin-left: auto; font: 400 .75rem/1.25rem var(--font-mono); color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.sec-sum:empty { display: none; }
+@media (max-width: 559.98px) {
+  .sec-sum { flex-basis: 100%; margin-left: 1.625rem; }
+}
+
+/* Channel rows: # name, chips, then stats and actions together on the right */
+.list li [data-ddn="channel-critical"], .list li [data-ddn="channel-retired"] { flex: none; }
+.list li .acts2 { margin-left: auto; display: inline-flex; align-items: center; gap: .25rem; flex: none; }
+@media (min-width: 560px) { .list li .when + .acts2 { margin-left: .25rem; } }
+/* a row with a text button (Use again) has no room for name + stats + actions on one line: the name keeps its
+ * width and the stats go under it (as on a phone) instead of cutting the name to "ddn-st…" */
+.list li[data-ddn="channel-row"]:has(.acts2 .btn) { flex-wrap: wrap; row-gap: .125rem; padding-top: .625rem; padding-bottom: .625rem; }
+.list li[data-ddn="channel-row"]:has(.acts2 .btn) .when { order: 9; flex-basis: calc(100% - 1.75rem); margin-left: 1.75rem; }
+.list li[data-ddn="channel-row"]:has(.acts2 .btn) .acts2 { margin-left: auto; }
+.list li:has([data-ddn="channel-retired"]) .dname { color: var(--color-ink-2); font-weight: 400; }
+.list li:has([data-ddn="channel-retired"]) > svg.i { opacity: .6; }
+
+/* Move progress: a card with a rule in the state's tone, text over the bar */
+[data-ddn="channel-move"] { gap: .625rem; padding: .875rem 1rem 1rem; border: 1px solid var(--color-rule); border-left: 2px solid var(--color-accent); border-radius: var(--radius-card); background: var(--color-paper); }
+[data-ddn="channel-move"] .hint { margin: 0; font: 400 .8125rem/1.25rem var(--font-body); color: var(--color-ink-2); font-variant-numeric: tabular-nums; }
+[data-ddn="channel-move"][data-state="done"] { border-left-color: var(--color-success); }
+/* paused: continues by itself, so amber (the script paints the bar as an error for every non-running state) */
+[data-ddn="channel-move"][data-state="paused"] { border-left-color: var(--color-warning); }
+[data-ddn="channel-move"][data-state="paused"] .bar > i { background: var(--color-warning); }
+[data-ddn="channel-move"][data-state="failed"] { border-left-color: var(--color-error); }
+/* native radios / checkboxes of the new dialogs follow the dark palette (white discs on dark paper otherwise) */
+[data-theme="dark"] :is(.choices input, label.ack input) { color-scheme: dark; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) :is(.choices input, label.ack input) { color-scheme: dark; } }
+
+/* Removed channels: what they hold under the name, recovery on the right */
+[data-ddn="removed-block"] { display: grid; gap: .5rem; }
+[data-ddn="removed-list"] li { flex-wrap: wrap; row-gap: .125rem; padding-top: .625rem; padding-bottom: .625rem; }
+[data-ddn="removed-list"] li .dname { color: var(--color-ink-2); }
+[data-ddn="removed-list"] li > svg.i { opacity: .6; }
+[data-ddn="removed-list"] li .btn { order: 2; margin-left: auto; }
+[data-ddn="removed-list"] li .when { order: 3; flex-basis: calc(100% - 1.75rem); margin-left: 1.75rem; white-space: normal; font: 400 .75rem/1.125rem var(--font-body); }
+
+/* Remove dialog: impact sentence in ink, file list dense and scrollable, options as cards */
+[data-ddn="channel-dialog"] [data-ddn="chd-impact"] { color: var(--color-ink-2); }
+.list.scroll { max-height: min(14rem, 30dvh); overflow: auto; overscroll-behavior: contain; }
+.list.scroll li { min-height: 2.5rem; padding-top: .375rem; padding-bottom: .375rem; padding-right: 1rem; }
+.list.scroll li > svg.i { width: 14px; height: 14px; }
+.list.scroll li.empty-row { min-height: 2.25rem; padding-left: calc(1rem + 14px + .75rem); font-size: .8125rem; }
+fieldset.choices { min-width: 0; margin: 0; padding: 0; border: 0; display: grid; gap: .5rem; }
+.choices .choice { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .75rem; align-items: start; padding: .75rem 1rem; border: 1px solid var(--color-rule); border-radius: var(--radius-card); background: var(--color-paper); cursor: pointer; transition: border-color var(--duration-short) var(--ease-out), background-color var(--duration-short) var(--ease-out); }
+.choices .choice input { width: 1rem; height: 1rem; margin: .125rem 0 0; accent-color: var(--color-accent); cursor: inherit; }
+.choices .choice:hover { border-color: var(--color-rule-2); background: var(--color-paper-2); }
+.choices .choice:has(input:checked) { border-color: var(--color-accent); background: color-mix(in oklch, var(--color-accent) 6%, var(--color-paper)); }
+.choices .choice:has(input[value="remove"]:checked) { border-color: var(--color-error); background: color-mix(in oklch, var(--color-error) 6%, var(--color-paper)); }
+.choices .choice:has(input[value="remove"]) input { accent-color: var(--color-error); }
+.choices .choice:has(input:focus-visible) { outline: 2px solid var(--color-focus); outline-offset: 1px; }
+.choices .choice:has(input:disabled) { border-style: dashed; background: none; cursor: not-allowed; }
+.choices .choice:has(input:disabled) b, .choices .choice:has(input:disabled) small { color: var(--color-muted); }
+.choices .choice b { display: block; font-size: .875rem; line-height: 1.25rem; color: var(--color-ink); font-weight: 600; }
+.choices .choice small { display: block; margin-top: .125rem; font-size: .8125rem; line-height: 1.4; color: var(--color-ink-2); }
+/* "Remove anyway" cannot be undone without the webhook: solid error, like the other irreversible confirmations */
+[data-ddn="chd-go"].danger { border-color: var(--color-error); background: var(--color-error); color: var(--color-error-ink); }
+[data-ddn="chd-go"].danger:hover { border-color: color-mix(in oklch, var(--color-error) 85%, var(--color-ink)); background: color-mix(in oklch, var(--color-error) 85%, var(--color-ink)); }
+[data-ddn="chd-ack-row"] { cursor: pointer; }
+
+/* Settings → Storage: an amber value when files are unavailable; the switch is a switch, not a warning box */
+.about dd p:empty { display: none; }
+.about dd:has([data-ddn-ui="st-unavail-t"]:not(:empty)) .val { color: color-mix(in oklab, var(--color-warning) 55%, var(--color-ink)); font-weight: 500; }
+[data-ddn="st-channels"] li .chip { flex: none; }
+label.ack:has([data-ddn="show-unavailable"]) { align-items: center; gap: .75rem; border-left-width: 1px; border-left-color: var(--color-rule); font-size: .875rem; color: var(--color-ink); cursor: pointer; }
+label.ack:has([data-ddn="show-unavailable"]) + .hint { margin-top: -.5rem; }
+input[data-ddn="show-unavailable"] { -webkit-appearance: none; appearance: none; position: relative; width: 2.25rem; height: 1.25rem; margin: 0; flex: none; border-radius: 9999px; background: var(--color-paper-3); outline: 1px solid var(--color-rule-2); outline-offset: -1px; cursor: pointer; transition: background-color var(--duration-short) var(--ease-out); }
+input[data-ddn="show-unavailable"]::before { content: ""; position: absolute; top: .1875rem; left: .1875rem; width: .875rem; height: .875rem; border-radius: 9999px; background: var(--color-paper); box-shadow: 0 1px 2px oklch(24% 0.02 258 / 0.25); transition: transform var(--duration-short) var(--ease-out); }
+input[data-ddn="show-unavailable"]:checked { background: var(--color-accent); outline-color: var(--color-accent); }
+input[data-ddn="show-unavailable"]:checked::before { transform: translateX(1rem); }
+input[data-ddn="show-unavailable"]:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+
+/* File list: an unavailable file. The name and type step back (not the chip); a faint amber wash on the row;
+ * the reason on its own line with an amber dot (a plain amber-ink mix reads olive green in oklch). */
+.ftable tbody tr.unavail { background: color-mix(in oklch, var(--color-warning) 5%, transparent); }
+.ftable tbody tr.unavail:hover { background: color-mix(in oklch, var(--color-warning) 9%, transparent); }
+tr.unavail .nm > .badge, tr.unavail .nm > .thumb { opacity: .55; }
+tr.unavail .nm > [data-ddn="preview-open"] { color: var(--color-ink-2); }
+tr.unavail .nm > [data-ddn="unavailable-chip"] { flex: none; }
+/* with the chip after it the name is no longer the last span: it keeps its ellipsis */
+.ftable .c-name .nm > span[data-ddn="preview-open"] { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unav-why { display: block; max-width: 60ch; margin-top: .25rem; padding-left: .875rem; text-indent: -.875rem; font: 400 .75rem/1.125rem var(--font-body); color: var(--color-ink-2); white-space: normal; }
+.unav-why::before { content: ""; display: inline-block; width: .375rem; height: .375rem; margin-right: .5rem; border-radius: 9999px; background: var(--color-warning); vertical-align: .0625rem; }
+@media (max-width: 767.98px) {
+  /* the chip is the last span of .nm here, so the card's "name = last span" rule would land on it: give the
+   * name its card type back and keep the chip a chip */
+  .ftable .c-name .nm > span[data-ddn="preview-open"] { grid-column: 2; font-size: .875rem; line-height: 1.25rem; font-weight: 500; }
+  .ftable .c-name .nm > span[data-ddn="unavailable-chip"] { grid-column: 2; justify-self: start; margin-top: .25rem; font-size: .6875rem; line-height: 1rem; font-weight: 500; }
+  .ftable .c-name .unav-why { grid-column: 2; }
+  .ftable tbody tr.unavail { border-color: color-mix(in oklab, var(--color-warning) 45%, var(--color-rule)); }
+}
+/* Warning chips (Retired, Unavailable, a channel count that is not enough yet): mixed in oklab. In oklch the
+ * amber (hue 80) and the blue ink (hue 258) meet halfway round the wheel and the text reads olive green. */
+.chip--warning { color: color-mix(in oklab, var(--color-warning) 62%, var(--color-ink)); border-color: color-mix(in oklab, var(--color-warning) 55%, transparent); }
+.note.warn svg.i, .advice.need { color: color-mix(in oklab, var(--color-warning) 62%, var(--color-ink)); }
