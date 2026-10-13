@@ -23,7 +23,7 @@ import { checkNoSilentLoss, checkTrashSawContent } from "./oracles.js";
 
 describe("rules version (§5.4)", () => {
   it("decisions bumped the rules version; v1 logs are no longer replayable", () => {
-    expect(RULES_VERSION).toBe(2);
+    expect(RULES_VERSION).toBe(3);
     expect(MIN_REPLAY_RULES_VERSION).toBe(2);
     const st = initIndex(new MemoryIndexStore());
     const e: LogEntry = {

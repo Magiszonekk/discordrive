@@ -110,7 +110,8 @@ const KINDS: [string, number][] = [
   ["pull", 12],
   ["time", 3],
   ["cleaner", 3],
-  ["invalid", 2],
+  ["invalid", 1],
+  ["relocate", 1],
   ["gc", 2],
   ["join", 2],
 ];
@@ -397,6 +398,14 @@ export function runCase(actions: Action[], stats: Stats): void {
           { type: "upload_commit", uploadId: `up-9-${pad(a.y % 100)}` },
         ];
         d.r.enqueue(pick(bad, a.y)!);
+        break;
+      }
+      case "relocate": {
+        // Rules v3: a channel was moved away; the version keeps its content, new locator.
+        // Sometimes on an old (superseded/purged) version: must be skipped silently.
+        const all = [...d.r.store.allUploads()].filter((u) => u.boundTo);
+        const u = pick(all, a.x);
+        if (u?.boundTo) d.r.enqueue({ type: "relocate", uploadId: u.id, versionId: u.boundTo.versionId, manifestRef: `mf-${u.id}-r${a.y % 97}`, ...(a.z % 2 ? { pieces: [{ loc: `w${a.y % 3}`, n: 1 + (a.z % 4), bytes: a.y % 9000 }] } : {}) });
         break;
       }
       case "gc":

@@ -15,12 +15,17 @@ export type NodeKind = "file" | "folder";
  *      nodes along (Q1), silent trash skip (Q2), partial purge keeping unseen
  *      nodes (Q3), conflict copy in the author's local time (Q6), identical
  *      content is not a conflict (Q7), group ops skip only "skipped" members (Q9).
+ *  3 - zlecenie 2026-10-13-webhooki: `relocate` (the same content of a version moved
+ *      to other storage locations: new manifestRef, no conflict, no content change)
+ *      and optional piece locations (`pieces`) in content. Entries of rules 2 replay
+ *      exactly as before (applyEntry branches on entry.rulesVersion).
  */
-export const RULES_VERSION = 2;
+export const RULES_VERSION = 3;
 /**
  * Oldest rules version this build can still replay. Version 1 logs are not
  * replayable: no v1 log exists outside tests (stage 1 never ran against a
  * real server), so keeping a second rule set would be cost without data.
+ * Version 2 logs exist (previews since 2026-10-06) and replay unchanged.
  */
 export const MIN_REPLAY_RULES_VERSION = 2;
 
@@ -39,6 +44,20 @@ export interface DeviceInfo {
 
 // ---------------------------------------------------------------------------
 // Content (tree layer only keeps a pointer; the chunk list lives in the manifest layer)
+
+/**
+ * Where the pieces (fragments + manifest) of one version are, summed per location (zlecenie 2026-10-13-webhooki:
+ * per-channel stats, unavailable files and the remove-channel impact come from the local index, without loading
+ * manifests). Backend-neutral: `loc` is the placement's locationId (the webhook ID on Discord). Sorted by `loc`,
+ * unique. Optional: versions written before rules v3 have none (a device backfills them locally from the manifests).
+ */
+export interface PieceLoc {
+  loc: string;
+  /** Pieces stored there (fragments, plus 1 for the manifest when it is there). */
+  n: number;
+  /** Their stored (ciphertext) bytes. */
+  bytes: number;
+}
 
 /** Content payload carried by create/new_content_version. */
 export interface ContentRef {
@@ -62,11 +81,15 @@ export interface ContentRef {
    * without it a concurrent version is always a conflict.
    */
   plaintextSha256?: string;
+  /** Rules v3: piece locations (see PieceLoc). */
+  pieces?: PieceLoc[];
 }
 
 /** A version as stored in the tree. */
-export interface FileVersion extends Omit<ContentRef, "plaintextSha256"> {
+export interface FileVersion extends Omit<ContentRef, "plaintextSha256" | "pieces"> {
   plaintextSha256: string | null;
+  /** Rules v3: piece locations; absent for versions written before (or by a client that did not send them). */
+  pieces?: PieceLoc[];
   /** Who wrote it and when (device clock, display only: rule 7 copy label). */
   device: DeviceInfo;
   createdAt: number;
@@ -126,6 +149,11 @@ export interface UploadRecord {
   boundTo: { nodeId: NodeId; versionId: VersionId; seq: number; deviceId: string } | null;
   /** For released/aborted. */
   ended: { seq: number; at: number; reason: "purged" | "superseded" | "aborted"; opId: OpId } | null;
+  /**
+   * Rules v3: last `relocate` applied to the bound version (its entry holds the manifestRef the
+   * version had when it was released; cleanup reads it from there). Absent = never relocated.
+   */
+  relocated?: { seq: number };
 }
 
 export interface IndexMeta {
@@ -191,6 +219,21 @@ export interface UploadAbortOp {
   uploadId: UploadId;
 }
 /**
+ * Rules v3: the version bound to `uploadId` now lives elsewhere (same bytes, copied to other
+ * storage locations: a channel was moved away). Replaces its manifestRef (and pieces). Not a
+ * content change: no conflict, no "unseen content" mark, the version ID and seq stay. Applies
+ * only while the upload is bound to that version (current version of a file, trash included);
+ * otherwise skipped silently (the version was purged or superseded meanwhile: the copies are
+ * garbage the mover deletes). Not in leaseGuard: it does not change the upload's state (rule 8).
+ */
+export interface RelocateOp {
+  type: "relocate";
+  uploadId: UploadId;
+  versionId: VersionId;
+  manifestRef: string;
+  pieces?: PieceLoc[];
+}
+/**
  * Group operation (Q9): members skipped by a conflict rule are left out and
  * the rest applies; a rejected (invalid) member rolls back the whole group.
  */
@@ -209,7 +252,8 @@ export type SingleOp =
   | NewContentVersionOp
   | UploadBeginOp
   | UploadCommitOp
-  | UploadAbortOp;
+  | UploadAbortOp
+  | RelocateOp;
 
 export type Operation = SingleOp | GroupOp;
 

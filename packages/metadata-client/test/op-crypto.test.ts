@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canonicalState, checkInvariants, replay, ROOT_ID } from "@ddv4/sync-core";
+import { canonicalState, checkInvariants, replay, ROOT_ID, RULES_VERSION } from "@ddv4/sync-core";
 import {
   EncryptedArbiter,
   InProcessLogServer,
@@ -81,7 +81,7 @@ describe("encrypted operation log (koncept §3.3)", () => {
     expect(await server.session("dev-A").renewLease("upload-0001")).toBe(true);
     const r = await intruder.submit({
       opId: "op-000000001",
-      rulesVersion: 2,
+      rulesVersion: RULES_VERSION,
       baseSeq: 0,
       device: { id: "dev-A", name: "spoofed" },
       createdAt: 0,
@@ -106,7 +106,7 @@ describe("encrypted operation log (koncept §3.3)", () => {
     ];
     const foreign = await new OpCodec(newAccountKey(), "acct-1").encrypt({
       opId: "op-foreign01",
-      rulesVersion: 2,
+      rulesVersion: RULES_VERSION,
       baseSeq: 0,
       device: { id: "dev-X", name: "x" },
       createdAt: 0,

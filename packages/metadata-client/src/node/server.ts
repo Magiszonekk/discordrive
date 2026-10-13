@@ -13,7 +13,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { RULES_VERSION, Sequencer, isClientId } from "@ddv4/sync-core";
+import { MIN_REPLAY_RULES_VERSION, RULES_VERSION, Sequencer, isClientId } from "@ddv4/sync-core";
 import type { EncryptedEntry, EncryptedEnvelope } from "../op-crypto.js";
 import { PAIRING_TTL_MS } from "../pairing.js";
 import { AuthError, Ed25519Authenticator, type Authenticator, type Session } from "./auth.js";
@@ -255,7 +255,10 @@ export class DdnServer {
       s = new Sequencer<EncryptedEnvelope>({
         now: this.now,
         leaseMs: this.opts.leaseMs,
-        minRulesVersion: this.opts.minRulesVersion ?? RULES_VERSION,
+        // Accept every rules version this build replays (2..3): a tab still running the previous bundle
+        // writes valid rules-2 entries until it reloads; it cannot read a rules-3 entry, so it never
+        // writes after one (rule 10: it pulls before it sends).
+        minRulesVersion: this.opts.minRulesVersion ?? MIN_REPLAY_RULES_VERSION,
         maxRulesVersion: this.opts.maxRulesVersion ?? RULES_VERSION,
         initialLog: rows.map((r) => JSON.parse(r.entry) as EncryptedEntry),
       });

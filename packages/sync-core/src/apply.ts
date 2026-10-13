@@ -39,7 +39,9 @@ import {
   type NodeKind,
   type NodeRecord,
   type Operation,
+  type PieceLoc,
   type PurgeOp,
+  type RelocateOp,
   type RenameOp,
   type RestoreOp,
   type SingleOp,
@@ -97,6 +99,8 @@ export type NoticeCode =
   | "group_rolled_back"
   /** Group op applied without the members a conflict rule skipped; `items` lists their indexes (Q9). */
   | "group_members_skipped"
+  /** Rules v3: relocate of a version that is no longer current (purged/superseded meanwhile). Silent. */
+  | "relocate_stale"
   /** Invalid operation (client bug or malicious client), consumed as no-op. */
   | "invalid_op";
 
@@ -127,6 +131,7 @@ export interface Notice {
 export const SILENT_NOTICE_CODES: ReadonlySet<NoticeCode> = new Set<NoticeCode>([
   "trash_skipped_unseen_content",
   "content_identical",
+  "relocate_stale",
 ]);
 
 export type Outcome =
@@ -220,9 +225,9 @@ export function applyEntry(store: IndexStore, entry: LogEntry): ApplyResult {
   ) {
     throw new UnsupportedRulesVersionError(entry.seq, entry.rulesVersion);
   }
-  // Only one rule set is replayable (MIN_REPLAY_RULES_VERSION ==
-  // RULES_VERSION, see types.ts). A future version that keeps older logs
-  // replayable dispatches here on entry.rulesVersion.
+  // Rules 2 and 3 are replayable. They differ only in what v3 added (relocate, content
+  // pieces), and those branch on entry.rulesVersion where they are read (applySingle,
+  // validateContent, toVersion), so a rules-2 entry gives exactly its old result.
 
   const ov = new OverlayStore(store);
   const ctx = new Ctx(ov, entry);
@@ -315,6 +320,11 @@ function applySingle(ctx: Ctx, op: SingleOp, sub: number): Outcome {
       return opUploadCommit(ctx, op);
     case "upload_abort":
       return opUploadAbort(ctx, op);
+    case "relocate":
+      // Rules v3 only: in an entry of rules 2 it stays what it was then, an unknown type.
+      if (ctx.e.rulesVersion >= 3) return opRelocate(ctx, op);
+      ctx.notice({ code: "invalid_op", reason: "unknown_type" });
+      return "rejected";
     default:
       ctx.notice({ code: "invalid_op", reason: "unknown_type" });
       return "rejected";
@@ -395,7 +405,7 @@ export function isTzOffset(v: unknown): v is number {
 
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
-function validateContent(c: unknown): string | null {
+function validateContent(c: unknown, rulesVersion: number): string | null {
   if (!c || typeof c !== "object") return "content_missing";
   const x = c as ContentRef;
   if (!isClientId(x.versionId)) return "bad_version_id";
@@ -406,8 +416,24 @@ function validateContent(c: unknown): string | null {
   if (x.plaintextSha256 !== undefined && (typeof x.plaintextSha256 !== "string" || !SHA256_HEX_RE.test(x.plaintextSha256))) {
     return "bad_plaintext_hash";
   }
+  // Rules 2 ignored unknown fields (toVersion copies known ones only): keep it so for old entries.
+  if (rulesVersion >= 3 && x.pieces !== undefined && !validPieces(x.pieces)) return "bad_pieces";
   return null;
 }
+
+/** Piece locations (rules v3): sorted by loc, unique, at most 64 entries, counts and bytes non-negative integers. */
+function validPieces(p: unknown): p is PieceLoc[] {
+  if (!Array.isArray(p) || p.length > 64) return false;
+  let prev = "";
+  for (const x of p as PieceLoc[]) {
+    if (!x || typeof x !== "object" || !isRef(x.loc) || x.loc.length > 64 || x.loc <= prev) return false;
+    if (!Number.isSafeInteger(x.n) || x.n < 1 || !Number.isSafeInteger(x.bytes) || x.bytes < 0) return false;
+    prev = x.loc;
+  }
+  return true;
+}
+
+const copyPieces = (p: PieceLoc[]): PieceLoc[] => p.map((x) => ({ loc: x.loc, n: x.n, bytes: x.bytes }));
 
 /** Copy only known fields: payloads come from other clients and are replicated as-is. */
 function toVersion(ctx: Ctx, c: ContentRef): FileVersion {
@@ -418,6 +444,8 @@ function toVersion(ctx: Ctx, c: ContentRef): FileVersion {
     manifestRef: c.manifestRef,
     chunkCount: c.chunkCount,
     plaintextSha256: c.plaintextSha256 ?? null,
+    // Rules v3 field; an entry of rules 2 builds exactly the version it built then.
+    ...(ctx.e.rulesVersion >= 3 && c.pieces ? { pieces: copyPieces(c.pieces) } : {}),
     device: { id: ctx.e.device.id, name: ctx.e.device.name },
     createdAt: ctx.e.createdAt,
     tzOffsetMin: ctx.e.tzOffsetMin ?? 0,
@@ -556,7 +584,7 @@ function opCreate(ctx: Ctx, op: CreateOp): Outcome {
 
   let content: FileVersion | null = null;
   if (op.kind === "file") {
-    const cErr = validateContent(op.content) ?? checkUploadUsable(ctx, op.content!.uploadId);
+    const cErr = validateContent(op.content, ctx.e.rulesVersion) ?? checkUploadUsable(ctx, op.content!.uploadId);
     if (cErr) return ctx.reject(cErr, op.nodeId);
     content = toVersion(ctx, op.content!);
   } else if (op.content !== undefined) {
@@ -812,7 +840,7 @@ function opNewContent(ctx: Ctx, op: NewContentVersionOp): Outcome {
   if (!isRef(op.nodeId)) return ctx.reject("bad_node_id");
   if (SYSTEM_IDS.has(op.nodeId)) return ctx.reject("system_node", op.nodeId);
   if (op.baseVersionId !== null && !isRef(op.baseVersionId)) return ctx.reject("bad_base_version", op.nodeId);
-  const cErr = validateContent(op.content) ?? checkUploadUsable(ctx, op.content.uploadId);
+  const cErr = validateContent(op.content, ctx.e.rulesVersion) ?? checkUploadUsable(ctx, op.content.uploadId);
   if (cErr) return ctx.reject(cErr, op.nodeId);
   const version = toVersion(ctx, op.content);
 
@@ -928,6 +956,33 @@ function opUploadAbort(ctx: Ctx, op: UploadAbortOp): Outcome {
     status: "aborted",
     ended: { seq: ctx.e.seq, at: ctx.e.serverTime, reason: "aborted", opId: ctx.e.opId },
   });
+  return "applied";
+}
+
+/**
+ * Rules v3: the bound version's bytes now live elsewhere (a storage location was moved away).
+ * Only the locator changes: version ID, seq, author and plaintext hash stay, so it is never a
+ * conflict and never "unseen content" (Q2/Q3 look at the version's seq). Stale (the upload is no
+ * longer bound to that version: purged or superseded meanwhile) = skipped silently; the mover
+ * deletes its copies.
+ */
+function opRelocate(ctx: Ctx, op: RelocateOp): Outcome {
+  if (!isClientId(op.uploadId)) return ctx.reject("bad_upload_id");
+  if (!isClientId(op.versionId)) return ctx.reject("bad_version_id");
+  if (!isRef(op.manifestRef)) return ctx.reject("bad_manifest_ref");
+  if (op.pieces !== undefined && !validPieces(op.pieces)) return ctx.reject("bad_pieces");
+  const u = ctx.s.getUpload(op.uploadId);
+  const node = u?.status === "bound" && u.boundTo?.versionId === op.versionId ? ctx.s.getNode(u.boundTo.nodeId) : undefined;
+  if (!u || !node || node.content?.versionId !== op.versionId || node.content.uploadId !== op.uploadId) {
+    ctx.notice({ code: "relocate_stale", reason: op.uploadId });
+    return "skipped";
+  }
+  const c = node.content;
+  const pieces = op.pieces ? copyPieces(op.pieces) : undefined;
+  if (c.manifestRef === op.manifestRef && JSON.stringify(c.pieces ?? null) === JSON.stringify(pieces ?? null)) return "noop";
+  const { pieces: _old, ...rest } = c;
+  ctx.s.putNode({ ...node, content: { ...rest, manifestRef: op.manifestRef, ...(pieces ? { pieces } : {}) } });
+  ctx.s.putUpload({ ...u, relocated: { seq: ctx.e.seq } });
   return "applied";
 }
 

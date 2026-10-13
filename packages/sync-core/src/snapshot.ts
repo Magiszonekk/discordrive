@@ -93,6 +93,8 @@ function canonicalNode(n: NodeRecord): NodeRecord {
           manifestRef: n.content.manifestRef,
           chunkCount: n.content.chunkCount,
           plaintextSha256: n.content.plaintextSha256,
+          // Rules v3, optional: absent keeps a rules-2 state byte-identical (format version unchanged).
+          ...(n.content.pieces ? { pieces: n.content.pieces.map((p) => ({ loc: p.loc, n: p.n, bytes: p.bytes })) } : {}),
           device: { id: n.content.device.id, name: n.content.device.name },
           createdAt: n.content.createdAt,
           tzOffsetMin: n.content.tzOffsetMin,
@@ -119,5 +121,6 @@ function canonicalUpload(u: UploadRecord): UploadRecord {
       ? { nodeId: u.boundTo.nodeId, versionId: u.boundTo.versionId, seq: u.boundTo.seq, deviceId: u.boundTo.deviceId }
       : null,
     ended: u.ended ? { seq: u.ended.seq, at: u.ended.at, reason: u.ended.reason, opId: u.ended.opId } : null,
+    ...(u.relocated ? { relocated: { seq: u.relocated.seq } } : {}),
   };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DAY_MS, MemoryIndexStore, ROOT_ID, Sequencer, applyEntry, initIndex, type LogEntry, type Operation } from "@ddv4/sync-core";
+import { DAY_MS, MemoryIndexStore, ROOT_ID, RULES_VERSION, Sequencer, applyEntry, initIndex, type LogEntry, type Operation } from "@ddv4/sync-core";
 import { LogObserver, decideTrashCleanup, trashCleanupOp, ANY_DEVICE_CLEANS_AFTER_MS } from "../src/index.js";
 
 const T0 = Date.UTC(2026, 9, 1);
@@ -12,7 +12,7 @@ function harness() {
   let n = 0;
   const alerts: unknown[] = [];
   const run = (op: Operation, dev = "dev-A", extra: Partial<LogEntry> = {}) => {
-    const r = seq.submit({ opId: `op-${String(++n).padStart(8, "0")}`, rulesVersion: 2, baseSeq: store.getMeta().headSeq, device: { id: dev, name: dev }, createdAt: now, op, ...extra });
+    const r = seq.submit({ opId: `op-${String(++n).padStart(8, "0")}`, rulesVersion: RULES_VERSION, baseSeq: store.getMeta().headSeq, device: { id: dev, name: dev }, createdAt: now, op, ...extra });
     if (r.status !== "accepted") throw new Error(r.status);
     const res = applyEntry(store, r.entry);
     const a = obs.observe(r.entry, res);
@@ -96,7 +96,7 @@ describe("MetadataClient wires the log observer", () => {
     const seq = new Sequencer();
     const alerts: string[] = [];
     const c = new MetadataClient({ device: { id: "dev-me", name: "me" }, arbiter: new LocalArbiter(seq), transport: new MemoryTransport(), webhooks: [{ id: "1", url: "mem://" }], onInvalidOps: (a) => alerts.push(a.deviceId) });
-    for (let i = 0; i < 6; i++) seq.submit({ opId: `op-bad${String(i).padStart(5, "0")}`, rulesVersion: 2, baseSeq: 0, device: { id: "dev-old", name: "old" }, createdAt: 0, op: { type: "trash", nodeId: "root" } });
+    for (let i = 0; i < 6; i++) seq.submit({ opId: `op-bad${String(i).padStart(5, "0")}`, rulesVersion: RULES_VERSION, baseSeq: 0, device: { id: "dev-old", name: "old" }, createdAt: 0, op: { type: "trash", nodeId: "root" } });
     await c.pull();
     expect(alerts).toEqual(["dev-old"]);
     await c.commitOp({ type: "create", kind: "folder", nodeId: "fold-00001", parentId: ROOT_ID, name: "x" }, "mk");
