@@ -426,3 +426,63 @@ serwer trzyma dodatkowo, dla tego jednego konta:
 - e2ee/plain: kosz czyści klient (serwer w e2ee nie może pisać operacji), zwolnione uploady klient zgłasza,
   fragmenty kasuje serwer w tle po 30 dniach. W e2ee/plain nie ma baz po stronie klienta do ochrony (serwer
   pisze sam łańcuch segmentów, §6 stage3-modes.md), więc retencja = 30 dni od zwolnienia.
+
+## Zlecenie 2026-10-13 (2): usuwanie webhooków, pliki niedostępne, statystyki, podgląd
+
+### Reguły v3: `relocate` i rozmieszczenie kawałków (rozstrzygnięte samodzielnie)
+- `RULES_VERSION = 3`, `MIN_REPLAY_RULES_VERSION = 2`. Wpisy reguł 2 odtwarzają się bajt w bajt (gałęzie
+  po `entry.rulesVersion` w `applySingle`, `validateContent`, `toVersion`; test „rules 2 entries replay
+  unchanged”). Serwer przyjmuje 2..3, więc karta na starym bundlu działa do przeładowania.
+- `relocate {uploadId, versionId, from, manifestRef, pieces?}`: ta sama treść wersji pod innym adresem
+  (kanał przeniesiony). Nie zmienia ID wersji, `seq`, autora ani hasha, więc nigdy nie jest konfliktem ani
+  „niewidzianą treścią” (Q2/Q3). `from` = CAS: dwa urządzenia przenoszące ten sam plik nie wygrają obie;
+  spóźniony / nieaktualny (wersja wyczyszczona lub zastąpiona) = `skipped`, po cichu (`relocate_stale`).
+  Nie trafia do `leaseGuard` (nie zmienia stanu uploadu, reguła 8). `UploadRecord.relocated` wskazuje
+  ostatni wpis relocate (sprzątanie bierze z niego aktualny adres zwolnionej wersji).
+- `ContentRef.pieces` (opcjonalne): gdzie leżą kawałki wersji, zsumowane per lokalizacja (`loc` = ID
+  webhooka). Zapisywane przy uploadzie; dla starszych wersji klient uzupełnia je lokalnie z manifestów.
+  Dzięki temu statystyki per kanał, wpływ usunięcia i „niedostępne” liczą się z lokalnej bazy bez
+  pobierania manifestów. Format snapshotu bez zmian (pole opcjonalne, nieobecne = stan reguł 2 identyczny).
+- W metadata only serwer dalej nie widzi nic nowego: `relocate` jest zaszyfrowane jak każda operacja.
+
+### Webhook krytyczny (decyzja właściciela + rozstrzygnięcie samodzielne, pytanie #31 w inboxie)
+- Krytyczny = trzyma wiadomość wskaźnikową albo obiekty łańcucha snapshotów, do których sięga bieżący
+  wskaźnik (segmenty od `prunedUpTo`, części baz trzymanych przez retencję). Tylko „Przenieś i usuń”;
+  dla ostatniego aktywnego kanału żadna opcja („dodaj najpierw inny kanał”).
+- Manifesty plików NIE czynią kanału krytycznym (przyjęte tymczasowo, pytanie #31): manifest idzie
+  round-robin jak fragmenty, więc wtedy każdy kanał z plikami byłby krytyczny, a opcje 1 i 3 nigdy
+  niedostępne. Manifest jest liczony jak fragment (plik z manifestem na kanale = w liście wpływu).
+- Od teraz segmenty i bazy snapshotów idą tylko na kanał wskaźnika (metadata only: `postBlobTo`; e2ee/plain:
+  webhook wskaźnika konta), więc zwykle krytyczny jest jeden kanał.
+- Przeniesienie krytycznego w metadata only kopiuje cały łańcuch z historią (`rehomeChain`: segmenty
+  ponownie zapieczętowane z nowym `prev`, części baz bajt w bajt, nowa wiadomość wskaźnikowa) i wymusza zapis
+  nowego zestawu ratunkowego; stary zestaw wskazuje na wskaźnik, który przestaje być aktualizowany.
+
+### Przenieś i usuń: kiedy kasować stare wiadomości (rozstrzygnięte samodzielnie)
+- metadata only: po przeniesieniu webhook zostaje w sejfie jako `drain` (wycofany, tylko do odczytu, poza
+  licznikami), bo stare wpisy logu i bazy trzymane 30 dni (§6.2) wskazują na jego wiadomości. Po retencji
+  (30 dni + 1 dzień i żadna trzymana baza sprzed przeniesienia) `finishDrain` kasuje to, co relocate
+  zastąpiły, i stary łańcuch, a webhook znika z sejfu („moved”).
+- e2ee/plain: serwer kasuje stare wiadomości od razu po potwierdzeniu kopii, bo w e2ee nie ma baz
+  wskazujących na rozmieszczenia blobów; stare ID załączników z manifestów klientów działają dalej przez
+  aliasy (`s_blob_alias`), bo serwer nie może przepisać zaszyfrowanych manifestów.
+
+### Pliki niedostępne (decyzja właściciela)
+- Stan liczony, nigdy operacja w logu: metadata only z sejfu + tabeli `pieces` (kawałek na webhooku spoza
+  sejfu), e2ee/plain z serwera (blob na webhooku, którego instancja już nie ma). Ponowne wklejenie tego
+  samego webhooka (to samo ID) przywraca pliki od razu na każdym urządzeniu.
+- Domyślnie ukryte w listach, wyszukiwaniu, licznikach folderów, „Odzyskanych”; podgląd i udostępnianie
+  odmawiają. Przełącznik w Settings → Storage (pamiętany w przeglądarce) pokazuje je z oznaczeniem i
+  wyjaśnieniem; stamtąd „Usuń na stałe”. Licznik w Storage widoczny zawsze.
+
+### Lokalna baza, schemat 2
+- Tabele pochodne obok drzewa, migrowane w miejscu (baza schematu 1 jest otwierana i uzupełniana):
+  `files` (bieżące wersje, kosz także w usuniętym folderze), `pieces`, `piece_src`, `unavail`. Pomiar
+  (storage-stats.test.ts): 50 000 plików, 2 050 000 kawałków, 4 kanały: sumy 81 ms, per kanał 99 ms, lista
+  plików usuwanego kanału 62 ms, przeliczenie niedostępnych 214 ms.
+
+### Podgląd plików: CSP
+- Dodane dokładnie `frame-src 'self' blob:` (wbudowana przeglądarka PDF w `<iframe>` z blob: URL). Chrome
+  odmawia PDF w ramce z `sandbox` (każdy wariant), więc ramka PDF jest bez `sandbox`; blob: jest związany
+  z naszym originem i zawiera tylko to, co utworzyła aplikacja. `object-src 'none'` i `frame-ancestors
+  'none'` bez zmian. SVG wyłącznie jako `<img>`, Markdown własnym rendererem do węzłów DOM (bez innerHTML).
