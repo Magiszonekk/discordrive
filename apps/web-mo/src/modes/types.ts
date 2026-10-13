@@ -43,6 +43,41 @@ export interface ChannelsView {
   using?: "own" | "pool" | "none";
 }
 
+/** Settings → Storage: what the trash/fragment cleanup did and what waits (zlecenie 2026-10-13 p. 2). */
+export interface StorageStatus {
+  /** Who deletes fragments: this browser (metadata only) or the instance in the background. */
+  by: "client" | "server";
+  lastRunAt: number | null;
+  /** Trash items older than 30 days (purged by the next run). */
+  expired: number;
+  /** Released uploads still in their 30-day window (or held by a kept snapshot). */
+  waiting: number;
+  /** Released uploads the next run deletes. */
+  due: number;
+  /** Bytes the next run frees (metadata only: plaintext sizes; server: stored ciphertext of the due ones). */
+  dueBytes: number;
+  /** When the oldest waiting upload becomes deletable (server clock), null = nothing waits. */
+  nextAt: number | null;
+}
+export interface StorageRun {
+  purged: number;
+  kept: number;
+  uploads: number;
+  messages: number;
+  bytes: number;
+  left: number;
+  trashSkipped: string | null;
+}
+export interface ModeCleanup {
+  status(): Promise<StorageStatus>;
+  /** One run; manual = "Clean up now" on this device (main-device / metered gates off). */
+  run(manual: boolean): Promise<StorageRun>;
+}
+export interface CleanupCtx {
+  primary(): boolean;
+  metered(): boolean;
+}
+
 export interface ModeImpl {
   readonly mode: ModeName;
   /** Build-time check marker (grep in bundles): "ddn-mode-marker:<mode>". */
@@ -68,6 +103,8 @@ export interface ModeImpl {
   thumbnail?(ctx: ModeCtx, nodeId: string): Promise<Blob | null>;
   search?(ctx: ModeCtx, q: string): Promise<{ id: string; name: string; kind: "file" | "folder"; parentId: string | null; size: number | null }[]>;
   streamUrl?(ctx: ModeCtx, nodeId: string): Promise<string | null>;
+  /** Trash + fragment cleanup (metadata only: this client deletes; e2ee/plain: the instance does). */
+  cleanup(ctx: ModeCtx, client: DriveClient, c: CleanupCtx): ModeCleanup;
   /** Codec of the operation log (encrypted, or plain JSON in plain mode). */
   arbiter(ctx: ModeCtx): ArbiterApi;
 }

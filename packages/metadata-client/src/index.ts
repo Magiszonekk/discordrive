@@ -144,6 +144,7 @@ export {
   type Challenge,
   type DeviceKey,
 } from "./device-key.js";
+export { Cleaner, CLEANUP_MAX_UPLOADS, findUploadContent, purgeExpiredTrash, releasedUploads, type CleanupApi, type CleanupDeps, type CleanupPreview, type CleanupReport, type CleanupServerStatus } from "./cleanup.js";
 export {
   LogObserver,
   decideTrashCleanup,

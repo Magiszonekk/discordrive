@@ -1,6 +1,7 @@
 // Metadata-only mode of the browser app (koncept §3): webhooks in the encrypted vault, blobs
 // straight to Discord, snapshots written by the main tab, rescue kit with the pointer webhook.
 import {
+  Cleaner,
   DiscordWebhookTransport,
   EncryptedArbiter,
   MetadataClient,
@@ -13,6 +14,7 @@ import {
   encodeRescueKit,
   inspectForVault,
   prepareShare,
+  readPointer,
   toWebhookRefs,
   vaultAdvice,
   type DriveClient,
@@ -98,8 +100,8 @@ export const mode: ModeImpl = {
     if (!v.pointer) return null;
     let s = schedulers.get(c);
     if (!s) {
-      const nav = (globalThis as unknown as { navigator?: { userAgent?: string; connection?: { type?: string; saveData?: boolean } } }).navigator;
       // §6.2: phones (metered) write only segments, bases come from desktops.
+      const nav = (globalThis as unknown as { navigator?: { userAgent?: string; connection?: { type?: string; saveData?: boolean } } }).navigator;
       const metered = /Android|iPhone|iPad|Mobile/i.test(nav?.userAgent ?? "") || nav?.connection?.type === "cellular" || !!nav?.connection?.saveData;
       s = new SnapshotScheduler({
         io: clientBlobIO(mc(c), transport(ctx)),
@@ -117,6 +119,29 @@ export const mode: ModeImpl = {
     }
     const r = await s.tick(force);
     return r ? { kind: r.kind, written: r.written, toSeq: r.pointer.toSeq } : null;
+  },
+
+  cleanup(ctx, c, cc) {
+    const cleaner = new Cleaner({
+      client: c,
+      log: this.arbiter(ctx),
+      api: ctx.http.gc(),
+      transport: transport(ctx),
+      webhook: (id) => mc(c).webhook(id),
+      pointer: async () => {
+        const v = await vault(ctx).load();
+        return v.pointer ? readPointer(clientBlobIO(mc(c), transport(ctx)), ctx.key, ctx.acct.accountId, v.pointer) : null;
+      },
+      isPrimary: () => cc.primary(),
+      metered: () => cc.metered(),
+    });
+    return {
+      async status() {
+        const p = await cleaner.preview();
+        return { by: "client", lastRunAt: p.lastRunAt, expired: p.expired, waiting: p.waiting, due: p.deletable, dueBytes: p.deletableBytes, nextAt: p.nextAt };
+      },
+      run: (manual) => cleaner.run(manual),
+    };
   },
 
   async shareAttachments(ctx, c, manifestRef) {

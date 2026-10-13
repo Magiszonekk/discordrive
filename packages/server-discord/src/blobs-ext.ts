@@ -423,6 +423,13 @@ export class BlobsExtension implements ServerExtension {
     const ub = /^\/v1\/uploads\/([A-Za-z0-9_-]{8,64})\/blobs\/(m|\d{1,6})$/.exec(path);
     if (ub && method === "PUT") return (await this.putBlob(r, ub[1]!, ub[2]!), true);
     if (method === "POST" && path === "/v1/uploads/released") return (this.released(r, await r.json()), true);
+    // Cleanup state for Settings → Storage (the instance cleans in the background) and "Clean up now".
+    if (method === "GET" && path === "/v1/gc") return (r.send(200, this.gcStatus(r.session().accountId)), true);
+    if (method === "POST" && path === "/v1/gc/run") {
+      const s = r.session();
+      const res = await this.tick();
+      return (r.send(200, { ...res, ...this.gcStatus(s.accountId) }), true);
+    }
     const up = /^\/v1\/uploads\/([A-Za-z0-9_-]{8,64})(\/final)?$/.exec(path);
     if (up) {
       const s = r.session();
@@ -512,6 +519,31 @@ export class BlobsExtension implements ServerExtension {
     return n;
   }
 
+  /** What waits for the background cleanup of one account (Settings → Storage). */
+  gcStatus(acct: string) {
+    const ret = this.o.retentionMs ?? FRAGMENT_RETENTION_MS;
+    const now = this.now;
+    const w = this.db
+      .prepare("SELECT count(*) AS n, min(released_at) AS first FROM s_uploads WHERE account_id = ? AND state = 'released'")
+      .get(acct) as { n: number; first: number | null };
+    const due = this.db.prepare("SELECT count(*) AS n FROM s_uploads WHERE account_id = ? AND state = 'released' AND released_at <= ?").get(acct, now - ret) as { n: number };
+    const bytes = this.db
+      .prepare("SELECT coalesce(sum(b.size), 0) AS b FROM s_blobs b JOIN s_uploads u USING (account_id, upload_id) WHERE b.account_id = ? AND u.state = 'released' AND b.deleted_at IS NULL")
+      .get(acct) as { b: number };
+    const done = this.db.prepare("SELECT count(*) AS n FROM s_uploads WHERE account_id = ? AND state = 'purged'").get(acct) as { n: number };
+    const last = this.db.prepare("SELECT v FROM server_meta WHERE k = 'gc_last_tick'").get() as { v: string } | undefined;
+    return {
+      by: "server" as const,
+      now,
+      lastRunAt: last ? Number(last.v) : null,
+      waiting: Number(w.n),
+      waitingBytes: Number(bytes.b),
+      due: Number(due.n),
+      deletedUploads: Number(done.n),
+      nextAt: w.first === null ? null : Number(w.first) + ret,
+    };
+  }
+
   /**
    * One background pass: abandoned uploads, released uploads past retention, aborted leftovers,
    * webhook health. Safe to run any time; tests call it with a driven clock.
@@ -554,6 +586,7 @@ export class BlobsExtension implements ServerExtension {
           if (st !== "unknown") this.o.hooks.setAlive(h.id, st === "alive");
         }
       }
+      this.db.prepare("INSERT INTO server_meta (k, v) VALUES ('gc_last_tick', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").run(String(now));
       return { reaped, purged };
     } finally {
       this.ticking = false;

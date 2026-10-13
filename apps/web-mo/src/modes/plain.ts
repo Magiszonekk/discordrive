@@ -5,7 +5,7 @@
 import { DriveClient, decodeManifestRef, decodeServerRescueKit, encodeServerRescueKit } from "@ddv4/metadata-client";
 import { ServerBlobStore } from "@ddv4/metadata-client/server-blobs";
 import { PlainArbiter, PlainOpCodec } from "@ddv4/metadata-client/plain-ops";
-import { serverChannels, serverShareAttachments } from "./server-common.js";
+import { serverChannels, serverCleanup, serverShareAttachments } from "./server-common.js";
 import type { ModeImpl } from "./types.js";
 
 export const MODE_MARKER = "ddn-mode-marker:plain";
@@ -30,6 +30,7 @@ export const mode: ModeImpl = {
   },
 
   channels: serverChannels,
+  cleanup: serverCleanup,
 
   async addChannel(ctx, url) {
     await ctx.http.json("POST", "/v1/channels", { url: url.trim() });

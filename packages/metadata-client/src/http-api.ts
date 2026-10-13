@@ -248,6 +248,21 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     await this.call("PUT", `/v1/devices/${deviceId}/name`, { nameSealed });
   }
 
+  // --- cleanup bookkeeping (metadata only; cleanup.ts CleanupApi)
+  gc(): { status(): Promise<{ now: number; lastRunAt: number | null; firstEntryAt: number | null; doneCount: number }>; done(ids: string[]): Promise<string[]>; record(r: { uploads: string[]; run: boolean }): Promise<void> } {
+    return {
+      status: async () => (await this.call<{ now: number; lastRunAt: number | null; firstEntryAt: number | null; doneCount: number }>("GET", "/v1/gc")).body,
+      done: async (ids) => {
+        const out: string[] = [];
+        for (let i = 0; i < ids.length; i += 5000) out.push(...(await this.call<{ done: string[] }>("POST", "/v1/gc/done", { uploads: ids.slice(i, i + 5000) })).body.done);
+        return out;
+      },
+      record: async (r) => {
+        for (let i = 0; i < Math.max(1, r.uploads.length); i += 5000) await this.call("POST", "/v1/gc", { uploads: r.uploads.slice(i, i + 5000), run: r.run && i + 5000 >= r.uploads.length });
+      },
+    };
+  }
+
   // --- shares (§3.7)
   async createShare(body: { attachments: { channelId: string; attachmentId: string; filename: string }[]; meta: string; ownerNote: string }): Promise<{ shareId: string }> {
     return (await this.call<{ shareId: string }>("POST", "/v1/shares", body)).body;

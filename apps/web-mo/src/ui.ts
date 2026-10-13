@@ -34,6 +34,7 @@ function onCoreEvent(e: CoreEvent) {
   else if (e.type === "share-progress") onShareProgress(e.done, e.total);
   else if (e.type === "changed") void render();
   else if (e.type === "notices") showNotices(e.notices);
+  else if (e.type === "cleanup" && route.name === "settings") void renderStorage();
 }
 export const core = connect(worker, onCoreEvent);
 (window as unknown as { ddnCore: typeof core }).ddnCore = core;
@@ -657,7 +658,7 @@ async function renderNow() {
     ui("about-storage").textContent = st.persistent ? t("status.persistent") : t("status.cache");
     ui("about-storage-t").textContent = st.persistent ? t("status.persistent.t") : t("status.cache.t");
     ui("about-device").textContent = st.deviceId ?? "-";
-    await renderShares();
+    await Promise.all([renderShares(), renderStorage()]);
     return;
   }
 
@@ -1207,6 +1208,47 @@ function wireSelection() {
   });
 }
 
+// ── Settings → Storage (cleanup of the trash and of old fragments, §6.2 / Q4) ──
+let storageSeq = 0;
+async function renderStorage() {
+  // Calls overlap (cleanup start/end events, renders): only the newest answer is painted.
+  const seq = ++storageSeq;
+  const st = await core.storageStatus().catch(() => null);
+  if (!st || seq !== storageSeq) return;
+  const chip = $("storage-state");
+  chip.textContent = st.running ? t("st.running") : st.by === "server" ? t("st.byServer") : t("st.byBrowser");
+  chip.className = `chip${st.running ? " chip--accent" : ""}`;
+  $("storage-last").textContent = st.lastRunAt ? fmtDateTime(st.lastRunAt) : t("st.never");
+  $("storage-expired").textContent = tn("files.count", st.expired);
+  $("storage-due").textContent = st.due ? `${tn("st.uploads", st.due)} · ${fmt(st.dueBytes)}` : tn("st.uploads", 0);
+  $("storage-waiting").textContent = tn("st.uploads", st.waiting);
+  ui("storage-waiting-t").textContent = st.nextAt ? t("st.nextAt", { date: fmtDate(st.nextAt) }) : t("st.waiting.t");
+  $<HTMLButtonElement>("cleanup-now").disabled = st.running;
+  const res = $("cleanup-result");
+  const l = st.last;
+  res.textContent = l
+    ? [
+        t(l.manual ? "st.res.manual" : "st.res.auto", { date: fmtDateTime(l.at) }),
+        tn("st.res.purged", l.purged),
+        l.kept ? tn("notice.keptUnseen", l.kept) : "",
+        st.by === "client" ? tn("st.res.frag", l.messages, { size: fmt(l.bytes) }) : tn("st.res.uploads", l.uploads),
+        l.left ? tn("st.res.left", l.left) : "",
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : st.metered && st.by === "client"
+      ? t("st.metered")
+      : "";
+}
+function wireStorage() {
+  $("cleanup-now").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      const r = await core.cleanup(true);
+      await render();
+      toast(t("st.done", { n: r.purged + r.uploads }));
+    });
+}
+
 // ── Trash page ──────────────────────────────────────────────────────
 function trashRow(x: TrashRow, i: number) {
   const tr = h("tr", { class: "reveal", style: `--i:${Math.min(i, 12)}`, "data-ddn": "trash-row", "data-id": x.id });
@@ -1635,6 +1677,7 @@ async function main() {
   wireMove();
   wireSelection();
   wireTrash();
+  wireStorage();
   $("share-copy").onclick = () => void copy($<HTMLTextAreaElement>("share-link").value, t("shareD.copied"));
   $("share-close").onclick = () => $<HTMLDialogElement>("share-dialog").close();
   $<HTMLDialogElement>("share-dialog").addEventListener("close", () => {

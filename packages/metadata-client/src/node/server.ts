@@ -154,6 +154,10 @@ export class DdnServer {
         PRIMARY KEY (account_id, seq), UNIQUE (account_id, op_id));
       CREATE TABLE IF NOT EXISTS vault (account_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, blob TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS pairing (id TEXT PRIMARY KEY, msg TEXT NOT NULL, created_at INTEGER NOT NULL);
+      -- Cleanup bookkeeping (metadata only: the client deletes fragments, the server remembers
+      -- which uploads are done and when the account was last cleaned; upload IDs are plaintext, §3.3).
+      CREATE TABLE IF NOT EXISTS gc_runs (account_id TEXT PRIMARY KEY, last_run_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS gc_done (account_id TEXT NOT NULL, upload_id TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (account_id, upload_id));
     `);
     this.auth = new Ed25519Authenticator(this.db, this.now, opts.sessionTtlMs);
     this.notify = new NotifyHub(this.now);
@@ -323,6 +327,30 @@ export class DdnServer {
     return out;
   }
 
+  // --- cleanup bookkeeping (metadata only, zlecenie 2026-10-13 p. 2)
+
+  gcStatus(s: Session): { now: number; lastRunAt: number | null; firstEntryAt: number | null; doneCount: number } {
+    const run = this.db.prepare("SELECT last_run_at FROM gc_runs WHERE account_id = ?").get(s.accountId) as { last_run_at: number } | undefined;
+    const first = this.seq(s.accountId).read(0, 1)[0];
+    const done = this.db.prepare("SELECT count(*) AS n FROM gc_done WHERE account_id = ?").get(s.accountId) as { n: number };
+    return { now: this.now(), lastRunAt: run?.last_run_at ?? null, firstEntryAt: first?.serverTime ?? null, doneCount: Number(done.n) };
+  }
+
+  gcDone(s: Session, body: unknown): string[] {
+    const ids = (body as { uploads?: unknown })?.uploads;
+    if (!Array.isArray(ids) || ids.length > 5000 || !ids.every(isClientId)) throw new HttpError(400, "bad_uploads");
+    const q = this.db.prepare("SELECT 1 FROM gc_done WHERE account_id = ? AND upload_id = ?");
+    return (ids as string[]).filter((u) => q.get(s.accountId, u));
+  }
+
+  gcRecord(s: Session, body: unknown): void {
+    const b = body as { uploads?: unknown; run?: unknown };
+    if (!Array.isArray(b?.uploads) || b.uploads.length > 5000 || !b.uploads.every(isClientId)) throw new HttpError(400, "bad_uploads");
+    const ins = this.db.prepare("INSERT OR IGNORE INTO gc_done (account_id, upload_id, at) VALUES (?, ?, ?)");
+    for (const u of b.uploads as string[]) ins.run(s.accountId, u, this.now());
+    if (b.run === true) this.db.prepare("INSERT INTO gc_runs (account_id, last_run_at) VALUES (?, ?) ON CONFLICT(account_id) DO UPDATE SET last_run_at = excluded.last_run_at").run(s.accountId, this.now());
+  }
+
   // --- pairing mailbox (§3.8): one opaque message per pairingId, deleted on read, 10 min TTL.
   // Writing needs a session (an existing device); reading does not (the new
   // device has no credential yet; the pairingId is a 128-bit secret from the QR).
@@ -488,6 +516,9 @@ export class DdnServer {
         return send(res, r.status === "ok" ? 200 : 409, r);
       }
     }
+    if (path === "/v1/gc" && method === "GET") return send(res, 200, this.gcStatus(s));
+    if (path === "/v1/gc/done" && method === "POST") return send(res, 200, { done: this.gcDone(s, await json()) });
+    if (path === "/v1/gc" && method === "POST") return (this.gcRecord(s, await json()), send(res, 200, { ok: true }));
     if (method === "POST" && path === "/v1/devices") return send(res, 201, await this.auth.addDevice(s, await json()));
     if (method === "GET" && path === "/v1/devices") return send(res, 200, { devices: this.auth.listDevices(s) });
     if (pair && method === "PUT") return (this.pairingPut(s, pair[1]!, await json()), send(res, 201, { ok: true }));

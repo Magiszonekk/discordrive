@@ -675,6 +675,16 @@ try {
   await p.click("[data-ddn=confirm-yes]");
   await p.waitForSelector("[data-ddn-ui=trash-none]:not([hidden])");
   ops.emptied = true;
+  // Settings → Storage: state + "Clean up now" (the 30-day windows cannot pass in a browser run; the
+  // retention itself is covered by metadata-client cleanup.test.ts and server-discord e2ee-server.test.ts).
+  await nav(p, "settings");
+  await p.waitForFunction(() => (document.querySelector("[data-ddn=storage-last]")?.textContent ?? "") !== "");
+  const st0 = { by: await p.textContent("[data-ddn=storage-state]"), last: await p.textContent("[data-ddn=storage-last]"), waiting: await p.textContent("[data-ddn=storage-waiting]") };
+  await p.click("[data-ddn=cleanup-now]");
+  await p.waitForFunction(() => /\d/.test(document.querySelector("[data-ddn=cleanup-result]")?.textContent ?? "") && !/not yet|jeszcze nie/.test(document.querySelector("[data-ddn=storage-last]")?.textContent ?? ""), null, { timeout: 60_000 });
+  ops.storage = { before: st0, after: { last: await p.textContent("[data-ddn=storage-last]"), result: await p.textContent("[data-ddn=cleanup-result]"), waiting: await p.textContent("[data-ddn=storage-waiting]") } };
+  await p.locator("#storage").scrollIntoViewIfNeeded();
+  await shot(p, "18-settings-storage");
   r.ops = ops;
 
   // 11. what the server stores: no names in clear
@@ -736,6 +746,14 @@ try {
         JSON.stringify(o.rule5) === JSON.stringify(["move_target_in_trash"]) && /Archiwum/.test(String((o.trashRow as { name: string }).name)) &&
         /30/.test(String((o.trashRow as { left: string }).left)) && o.restored === true && /2/.test(String(o.selectAll)) && o.emptied === true
       );
+    })(),
+    storage: (() => {
+      const o = (r.ops as { storage?: { before: { by: string; last: string; waiting: string }; after: { last: string; result: string; waiting: string } } } | undefined)?.storage;
+      if (!o) return false;
+      // Who cleans matches the mode; before the first run "not yet", after it a time; the purged
+      // notatki.txt version waits for the retention (the purged folder had no upload).
+      const by = SERVER_SIDE ? /server|serwer/ : /browser|przeglądarka/;
+      return by.test(o.before.by) && /not yet|jeszcze nie/.test(o.before.last) && !/not yet|jeszcze nie/.test(o.after.last) && /\d/.test(o.after.result) && /^1 /.test(o.after.waiting);
     })(),
     serverBlind: MODE === "plain" ? true : r.serverSeesNoNames !== false,
     noPageErrors: errors.length === 0,

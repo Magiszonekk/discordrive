@@ -1,7 +1,8 @@
 // Shared by the e2ee and plain browser modes: channels and share addresses come from the
 // instance (it holds the webhooks and named the attachments). Never imported by metadata only.
-import { REQUIRED_CHANNELS, RECOMMENDED_CHANNELS, type DiscordPlacement, type DriveClient, type ShareAttachment } from "@ddv4/metadata-client";
-import type { ChannelsView, ModeCtx } from "./types.js";
+import { REQUIRED_CHANNELS, RECOMMENDED_CHANNELS, purgeExpiredTrash, releasedUploads, type DiscordPlacement, type DriveClient, type ShareAttachment } from "@ddv4/metadata-client";
+import { expiredTrash } from "@ddv4/sync-core";
+import type { ChannelsView, CleanupCtx, ModeCleanup, ModeCtx, StorageStatus } from "./types.js";
 
 /** Channels as the instance reports them (GET /v1/channels): own channels or the pool. */
 export async function serverChannels(ctx: ModeCtx): Promise<ChannelsView> {
@@ -26,3 +27,43 @@ export async function serverShareAttachments(ctx: ModeCtx, c: DriveClient, manif
   return r.body.attachments;
 }
 
+
+interface ServerGc {
+  now: number;
+  lastRunAt: number | null;
+  waiting: number;
+  waitingBytes: number;
+  due: number;
+  deletedUploads: number;
+  nextAt: number | null;
+}
+
+/**
+ * e2ee/plain: the instance deletes fragments in the background (30 days after a release). The
+ * client still does the trash step (Q4; the server cannot write operations in e2ee) and tells the
+ * instance which uploads its index released (POST /v1/uploads/released, idempotent).
+ */
+export function serverCleanup(ctx: ModeCtx, client: DriveClient, cc: CleanupCtx): ModeCleanup {
+  let reportedUpTo = 0;
+  const report = async () => {
+    const list = releasedUploads(client.store, reportedUpTo);
+    for (let i = 0; i < list.length; i += 1000) await ctx.http.json("POST", "/v1/uploads/released", { uploads: list.slice(i, i + 1000).map(({ uploadId, at }) => ({ uploadId, at })) });
+    if (list.length) reportedUpTo = list.at(-1)!.seq;
+  };
+  const gc = async () => (await ctx.http.json<ServerGc>("GET", "/v1/gc")).body;
+  return {
+    async status(): Promise<StorageStatus> {
+      const g = await gc();
+      return { by: "server", lastRunAt: g.lastRunAt, expired: expiredTrash(client.store, g.now).length, waiting: g.waiting - g.due, due: g.due, dueBytes: g.waitingBytes, nextAt: g.nextAt };
+    },
+    async run(manual) {
+      await client.pull();
+      const before = await gc();
+      const t = await purgeExpiredTrash(client, { now: before.now, lastRunAt: null, firstEntryAt: null }, { primary: cc.primary(), metered: cc.metered(), manual });
+      await report();
+      if (!manual) return { ...t, uploads: 0, messages: 0, bytes: 0, left: 0 };
+      const after = (await ctx.http.json<ServerGc>("POST", "/v1/gc/run", {})).body;
+      return { ...t, uploads: after.deletedUploads - before.deletedUploads, messages: 0, bytes: Math.max(0, before.waitingBytes - after.waitingBytes), left: after.due };
+    },
+  };
+}

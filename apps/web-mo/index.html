@@ -321,6 +321,21 @@
           <div class="row-btns"><button class="btn" type="button" data-ddn="kit-show"><svg class="i"><use href="#i-lock"/></svg><span data-i18n="dev.kitShow">Show rescue kit</span></button></div>
         </section>
 
+        <section id="storage" aria-labelledby="st-h">
+          <h2 class="sec-h"><span id="st-h" data-i18n="st.h">Storage</span><span class="chip" data-ddn="storage-state"></span></h2>
+          <p class="sec-lead" data-i18n="st.lead"></p>
+          <div class="sec-body">
+            <dl class="about" data-ddn="storage">
+              <div><dt class="label-mono" data-i18n="st.last">Last cleanup</dt><dd><span class="val" data-ddn="storage-last"></span></dd></div>
+              <div><dt class="label-mono" data-i18n="st.expired">Trash over 30 days</dt><dd><span class="val mono" data-ddn="storage-expired"></span></dd></div>
+              <div><dt class="label-mono" data-i18n="st.due">Ready to delete</dt><dd><span class="val mono" data-ddn="storage-due"></span></dd></div>
+              <div><dt class="label-mono" data-i18n="st.waiting">Waiting</dt><dd><span class="val mono" data-ddn="storage-waiting"></span><p data-ddn-ui="storage-waiting-t"></p></dd></div>
+            </dl>
+            <div class="row-btns"><button class="btn" type="button" data-ddn="cleanup-now"><svg class="i"><use href="#i-trash"/></svg><span data-i18n="st.run">Clean up now</span></button></div>
+            <p class="hint" data-ddn="cleanup-result" role="status" aria-live="polite"></p>
+          </div>
+        </section>
+
         <section id="sharing" aria-labelledby="sh-h">
           <h2 class="sec-h"><span id="sh-h" data-i18n="sh.h">Sharing</span><span class="chip" data-ddn-ui="share-state"></span></h2>
           <p class="sec-lead" data-ddn-ui="share-lead"></p>

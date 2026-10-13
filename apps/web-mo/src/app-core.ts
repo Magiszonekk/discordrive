@@ -58,7 +58,7 @@ import { fromBase64, toBase64 } from "@ddv4/processing";
 import { claimLeadership, openOpfsIndexStore, requestPersistentStorage } from "@ddv4/metadata-client/browser";
 // Resolved at build time to ONE mode (build.ts): the other modes are not in the bundle.
 import { mode } from "ddn:mode";
-import type { ModeCtx } from "./modes/types.js";
+import type { ModeCleanup, ModeCtx, StorageRun, StorageStatus } from "./modes/types.js";
 import { keystore, type StoredAccount } from "./keystore.js";
 
 export interface CoreConfig {
@@ -99,6 +99,7 @@ export type CoreEvent =
   | { type: "upload-progress"; token: string; done: number; total: number }
   | { type: "share-progress"; done: number; total: number }
   | { type: "changed" }
+  | { type: "cleanup"; running: boolean }
   /** Rule notices about changes of OTHER devices addressed to this one (Q1: your file went to the trash with a folder). */
   | { type: "notices"; notices: UiNotice[] };
 
@@ -114,6 +115,15 @@ const MIME: Record<string, string> = {
 const mimeOf = (name: string) => MIME[name.split(".").pop()?.toLowerCase() ?? ""] ?? "application/octet-stream";
 
 const SNAPSHOT_TICK_MS = 15_000;
+/** Automatic cleanup (Q4) in the main tab: first check shortly after opening, then hourly. */
+const CLEANUP_FIRST_MS = 60_000;
+const CLEANUP_EVERY_MS = 60 * 60_000;
+
+/** Phone or metered link (§6.2, Q4: no bases, no automatic cleanup). */
+function meteredLink(): boolean {
+  const nav = (globalThis as unknown as { navigator?: { userAgent?: string; connection?: { type?: string; saveData?: boolean } } }).navigator;
+  return /Android|iPhone|iPad|Mobile/i.test(nav?.userAgent ?? "") || nav?.connection?.type === "cellular" || !!nav?.connection?.saveData;
+}
 
 type PendingPair = {
   p: PendingPairing;
@@ -133,6 +143,11 @@ export class AppCore {
   private sub: { close(): void } | null = null;
   private uploads = new Map<string, AbortController>();
   private snapTimer: ReturnType<typeof setInterval> | null = null;
+  private gcTimer: ReturnType<typeof setTimeout> | null = null;
+  private gc: ModeCleanup | null = null;
+  /** Last cleanup run of this tab (automatic or manual), for Settings → Storage. */
+  lastCleanup: (StorageRun & { at: number; manual: boolean }) | null = null;
+  cleaning = false;
   private readonly serverTimes = new Map<number, number>();
   private pending: PendingPair | null = null;
   private shared: { opened: OpenedShare } | null = null;
@@ -233,6 +248,40 @@ export class AppCore {
     );
     void this.ensureOwnName().catch(() => {});
     this.startSnapshots();
+    this.scheduleCleanup(CLEANUP_FIRST_MS);
+  }
+
+  // ── cleanup (§6.2, Q4; zlecenie 2026-10-13 p. 2) ────────────────────
+
+  /** Automatic run in the main tab (the Q4 gates decide inside; other tabs only when nobody cleaned for 7 days). */
+  private scheduleCleanup(ms: number) {
+    if (this.gcTimer) clearTimeout(this.gcTimer);
+    this.gcTimer = setTimeout(() => {
+      void this.cleanup(false)
+        .catch(() => null)
+        .finally(() => this.scheduleCleanup(CLEANUP_EVERY_MS));
+    }, ms);
+  }
+
+  async storageStatus(): Promise<StorageStatus & { last: AppCore["lastCleanup"]; running: boolean; metered: boolean }> {
+    const st = await this.gc!.status();
+    return { ...st, last: this.lastCleanup, running: this.cleaning, metered: meteredLink() };
+  }
+
+  /** One cleanup run; manual = "Clean up now". Pushes "cleanup" events (start/end) for the progress. */
+  async cleanup(manual = true): Promise<StorageRun> {
+    if (!this.gc) throw new Error("not signed in");
+    this.cleaning = true;
+    this.onEvent({ type: "cleanup", running: true });
+    try {
+      const r = await this.gc.run(manual);
+      this.lastCleanup = { ...r, at: Date.now(), manual };
+      if (r.purged) this.version++;
+      return r;
+    } finally {
+      this.cleaning = false;
+      this.onEvent({ type: "cleanup", running: false });
+    }
   }
 
   /** Arbiter that remembers server times of entries (snapshot timing, §6.2). */
@@ -260,6 +309,7 @@ export class AppCore {
   /** (Re)build the client around the same store and log position (channels changed). */
   private async rebuildClient() {
     this.client = await mode.client(this.ctx!);
+    this.gc = mode.cleanup(this.ctx!, this.client, { primary: () => this.leader, metered: meteredLink });
     await this.client.pull();
   }
 
@@ -491,6 +541,8 @@ export class AppCore {
     if (!nodeIds.length) return { outcome: "noop", notices: [] };
     const r = await this.commit(trashCleanupOp(nodeIds), "purge");
     void this.snapshotSoon();
+    // e2ee/plain: tell the instance what was released (its background cleanup waits 30 days).
+    if (!mode.clientSnapshots) void this.gc?.run(false).catch(() => {});
     return r;
   }
 
@@ -762,5 +814,6 @@ export class AppCore {
   close() {
     this.sub?.close();
     if (this.snapTimer) clearInterval(this.snapTimer);
+    if (this.gcTimer) clearTimeout(this.gcTimer);
   }
 }

@@ -7,7 +7,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ChannelPacer, DiscordWebhookTransport, DriveClient, EncryptedArbiter, HttpApi, OpCodec, createAccountHttp, generateDeviceKey, memorySource, newAccountKey, sha256Hex, type ByteSink } from "@ddv4/metadata-client";
+import { ChannelPacer, DiscordWebhookTransport, DriveClient, EncryptedArbiter, HttpApi, OpCodec, createAccountHttp, generateDeviceKey, memorySource, newAccountKey, purgeExpiredTrash, releasedUploads, sha256Hex, type ByteSink } from "@ddv4/metadata-client";
 import { ServerBlobStore } from "@ddv4/metadata-client/server-blobs";
 import { DdnServer, FakeDiscord } from "@ddv4/metadata-client/node";
 import { BlobsExtension, DiscordSender, InstanceHooks, POOL, loadInstanceKey } from "../src/index.js";
@@ -245,6 +245,39 @@ describe("e2ee: blobs through the instance", () => {
     t += 2 * 24 * 3600_000;
     expect((await I.ext.tick()).purged).toBe(1);
     expect(I.fake.messages.size).toBe(0);
+  });
+
+  it("cleanup (zlecenie 2026-10-13 p. 2): trash purged by the client after 30 days, released uploads reported, the server deletes them 30 days later; GET /v1/gc shows what waits, POST /v1/gc/run runs now", async () => {
+    let t = Date.UTC(2026, 9, 13);
+    const I = await instance({ now: () => t });
+    const A = await account(I.url, I.origin);
+    const gone = await A.client.upload(memorySource(bytes(3000, 11)), "gone.bin");
+    const stays = await A.client.upload(memorySource(bytes(3000, 12)), "stays.bin");
+    const msgs = I.fake.messages.size;
+    await A.client.commitOp({ type: "trash", nodeId: gone.nodeId }, "trash");
+    t += 31 * 24 * 3600_000;
+    const r = await purgeExpiredTrash(A.client, { now: t, lastRunAt: null, firstEntryAt: null }, { primary: true, metered: false, manual: false });
+    expect(r).toMatchObject({ purged: 1, trashSkipped: null });
+    const rel = releasedUploads(A.client.store);
+    expect(rel.map((x) => x.uploadId)).toEqual([gone.uploadId]);
+    await A.api.json("POST", "/v1/uploads/released", { uploads: rel.map(({ uploadId, at }) => ({ uploadId, at })) });
+    const g0 = (await A.api.json<{ waiting: number; due: number; waitingBytes: number; nextAt: number; lastRunAt: number | null }>("GET", "/v1/gc")).body;
+    expect(g0).toMatchObject({ waiting: 1, due: 0 });
+    expect(g0.waitingBytes).toBeGreaterThan(3000);
+    expect(g0.nextAt).toBe(rel[0]!.at + 30 * 24 * 3600_000);
+    // Inside the retention: "run now" deletes nothing.
+    const run0 = (await A.api.json<{ purged: number; due: number }>("POST", "/v1/gc/run", {})).body;
+    expect(run0.purged).toBe(0);
+    expect(I.fake.messages.size).toBe(msgs);
+    t += 30 * 24 * 3600_000 + 1;
+    const g1 = (await A.api.json<{ due: number }>("GET", "/v1/gc")).body;
+    expect(g1.due).toBe(1);
+    const run1 = (await A.api.json<{ purged: number; waiting: number; lastRunAt: number }>("POST", "/v1/gc/run", {})).body;
+    expect(run1).toMatchObject({ purged: 1, waiting: 0, lastRunAt: t });
+    expect(I.fake.messages.size).toBe(msgs - 2); // fragment + manifest of gone.bin
+    const s = sink();
+    await A.client.download(stays.nodeId, s);
+    expect(s.data().byteLength).toBe(3000);
   });
 
   it("account channels in Settings: own webhooks replace the pool for that account only; the mode is locked in the database", async () => {
