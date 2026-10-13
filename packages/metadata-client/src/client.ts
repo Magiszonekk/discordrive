@@ -186,6 +186,11 @@ export class MetadataClient extends DriveClient {
   get webhooks(): WebhookRef[] {
     return [...this.wh.hooks.values()];
   }
+
+  setHookRetired(id: string, retired: boolean): void {
+    const h = this.wh.hooks.get(id);
+    if (h) h.retired = retired || undefined;
+  }
 }
 
 export function placementOf(p: PostedAttachment): DiscordPlacement {

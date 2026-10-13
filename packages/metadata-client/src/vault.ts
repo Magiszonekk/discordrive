@@ -43,6 +43,13 @@ export interface VaultWebhook {
    * edits the vault (update() clones the whole content) and simply ignores it.
    */
   retired?: boolean;
+  /**
+   * Moved away (option 2): nothing current is on it any more, but older log entries and kept snapshot
+   * bases still name its messages, so it stays (retired, URL kept, read only) until the retention of
+   * §6.2 has passed; then the cleanup deletes what the move replaced (relocate entries fromSeq..toSeq)
+   * and the webhook leaves the vault ("moved").
+   */
+  drain?: { at: number; fromSeq: number; toSeq: number; oldPointer?: { webhookId: string; messageId: string } };
 }
 
 /** A webhook that left the vault (no URL kept: it is a secret the user removed). */
@@ -136,7 +143,7 @@ export interface VaultAdvice {
 /** Wizard text (decision #12). Counts the channels that take new pieces (a retired one only keeps what it has). */
 export function vaultAdvice(v: VaultContent): VaultAdvice {
   const perChan = new Map<string, number>();
-  for (const w of v.webhooks) if (!w.retired) perChan.set(w.channelId, (perChan.get(w.channelId) ?? 0) + 1);
+  for (const w of v.webhooks) if (!w.retired && !w.drain) perChan.set(w.channelId, (perChan.get(w.channelId) ?? 0) + 1);
   const channels = perChan.size;
   const sharedChannels = [...perChan].filter(([, n]) => n > 1).map(([c]) => c).sort();
   const ok = channels >= REQUIRED_CHANNELS;
@@ -225,6 +232,14 @@ export class WebhookVault {
       const w = v.webhooks.find((x) => x.id === id);
       v.webhooks = v.webhooks.filter((x) => x.id !== id);
       if (w) v.removed = [{ id: w.id, channelId: w.channelId, label: w.label, removedAt: now, how }, ...(v.removed ?? []).filter((x) => x.id !== id)].slice(0, 50);
+      return v;
+    });
+  }
+
+  /** The move finished: keep it retired and read-only until the cleanup's drain (see VaultWebhook.drain). */
+  async setDrain(id: string, drain: VaultWebhook["drain"]): Promise<VaultContent> {
+    return this.update((v) => {
+      for (const w of v.webhooks) if (w.id === id) ((w.retired = true), (w.drain = drain));
       return v;
     });
   }

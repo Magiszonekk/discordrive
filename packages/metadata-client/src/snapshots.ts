@@ -368,6 +368,81 @@ export async function pruneSnapshots(io: BlobIO, key: AccountKey, accountId: str
   return { written, basesDropped: drop.length, partsDeleted, segmentsDeleted: segDrop.length };
 }
 
+// --- moving the chain to another channel (zlecenie 2026-10-13-webhooki: critical webhook)
+
+/** Every object the current pointer can reach: kept segments (walked back to prunedUpTo), base parts, segmentAtBase. */
+export async function chainObjects(io: BlobIO, key: AccountKey, accountId: string, p: Pointer): Promise<{ segments: { ref: SegmentRef; body: SegmentBody }[]; parts: ObjRef[] }> {
+  const segments: { ref: SegmentRef; body: SegmentBody }[] = [];
+  let ref = p.lastSegment;
+  const done = p.prunedUpTo ?? 0;
+  while (ref && ref.toSeq > done) {
+    const body = await unsealObj<SegmentBody>(key, await io.fetch(toPlacement(ref)), AAD.segment(accountId, ref.fromSeq, ref.toSeq), "segment");
+    segments.push({ ref, body });
+    ref = body.prev;
+  }
+  const bases = [p.base, ...(p.history ?? [])].filter((b): b is BaseRef => !!b);
+  return { segments, parts: bases.flatMap((b) => b.parts) };
+}
+
+/**
+ * Copy the whole snapshot chain to one webhook (`post` posts there) and write a new pointer message
+ * there: kept history preserved (§6.2: point-in-time restore keeps working). Segments are re-sealed
+ * (their body names the previous segment's message), base parts are copied byte for byte (their AAD
+ * does not name a location). Returns the new pointer location and the old objects, which the caller
+ * deletes once the vault points at the new pointer (the old rescue kit then stops working).
+ */
+export async function rehomeChain(
+  io: BlobIO,
+  key: AccountKey,
+  accountId: string,
+  oldLoc: PointerLocation,
+  hook: WebhookRef,
+  post: (data: Uint8Array, filename: string) => Promise<DiscordPlacement>,
+  now: () => number,
+): Promise<{ loc: PointerLocation; pointer: Pointer; old: ObjRef[] }> {
+  const p = await readPointer(io, key, accountId, oldLoc);
+  const { segments } = await chainObjects(io, key, accountId, p);
+  const k = (r: { webhookId: string; messageId: string }) => `${r.webhookId}/${r.messageId}`;
+  const seg = new Map<string, SegmentRef>();
+  const old: ObjRef[] = [];
+  for (const { ref, body } of [...segments].reverse()) {
+    const prev = body.prev ? (seg.get(k(body.prev)) ?? body.prev) : null;
+    const sealed = await sealObj(key, { ...body, prev }, AAD.segment(accountId, body.fromSeq, body.toSeq));
+    const np = await post(sealed, "ddn-segment.txt");
+    seg.set(k(ref), { ...toRef(np, sealed.byteLength), fromSeq: ref.fromSeq, toSeq: ref.toSeq });
+    old.push(ref);
+  }
+  const parts = new Map<string, ObjRef>();
+  const base = async (b: BaseRef | null): Promise<BaseRef | null> => {
+    if (!b) return null;
+    const out: ObjRef[] = [];
+    for (const part of b.parts) {
+      let np = parts.get(k(part));
+      if (!np) {
+        const raw = await io.fetch(toPlacement(part));
+        np = toRef(await post(raw, "ddn-base.txt"), raw.byteLength);
+        parts.set(k(part), np);
+        old.push(part);
+      }
+      out.push(np);
+    }
+    return { ...b, parts: out, segmentAtBase: b.segmentAtBase ? (seg.get(k(b.segmentAtBase)) ?? b.segmentAtBase) : b.segmentAtBase };
+  };
+  const next: Pointer = {
+    ...p,
+    base: await base(p.base),
+    history: p.history ? await Promise.all(p.history.map((h) => base(h).then((x) => x!))) : p.history,
+    lastSegment: p.lastSegment ? (seg.get(k(p.lastSegment)) ?? p.lastSegment) : null,
+    writtenAt: now(),
+  };
+  const loc = await createPointerMessage(io, key, accountId, hook);
+  // A fresh message holds an empty pointer: write the copy unconditionally (writePointer would keep an
+  // equally empty one for an account without snapshots yet).
+  await io.transport.editMessageFile(hook, loc.messageId, await sealObj(key, next, AAD.pointer(accountId)), "ddn-pointer.txt");
+  old.push({ webhookId: oldLoc.webhookId, messageId: oldLoc.messageId, attachmentId: "", size: 0 });
+  return { loc, pointer: next, old };
+}
+
 // --- restore (§3.5): no server needed
 
 export interface RestoreResult {

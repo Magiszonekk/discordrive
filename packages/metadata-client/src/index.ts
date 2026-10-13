@@ -87,6 +87,8 @@ export { SqlIndexStore, manifestLoc, type ChildRow, type FolderStats, type SqlDr
 export {
   clientBlobIO,
   rescueBlobIO,
+  rehomeChain,
+  chainObjects,
   createPointerMessage,
   readPointer,
   writePointer,
@@ -157,6 +159,21 @@ export {
   type Challenge,
   type DeviceKey,
 } from "./device-key.js";
+export {
+  ChannelMover,
+  ChainIndex,
+  DRAIN_AFTER_MS,
+  RELOCATE_BATCH,
+  backfillPieces,
+  estimateMs,
+  finishDrain,
+  refreshUnavailable,
+  snapshotHooks,
+  type ChannelClient,
+  type ChannelsDeps,
+  type CriticalWhat,
+  type MoveState,
+} from "./channels.js";
 export { Cleaner, CLEANUP_MAX_UPLOADS, findUploadContent, purgeExpiredTrash, releasedUploads, type CleanupApi, type CleanupDeps, type CleanupPreview, type CleanupReport, type CleanupServerStatus } from "./cleanup.js";
 export {
   LogObserver,

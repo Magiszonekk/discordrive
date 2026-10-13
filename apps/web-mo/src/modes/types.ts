@@ -106,6 +106,10 @@ export interface RemovalImpact {
   /** Rough duration of a move (ms) from the per-channel limits; null = unknown. */
   moveEtaMs: number | null;
   retired: boolean;
+  /** metadata only: files whose piece locations are still being read from their manifests (the counts may grow). */
+  checking?: number;
+  /** The only place this account can post to: removing (any way) is refused until another channel is added. */
+  last?: boolean;
 }
 
 export interface MoveStatus {

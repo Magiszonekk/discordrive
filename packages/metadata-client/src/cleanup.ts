@@ -46,6 +46,8 @@ export interface CleanupDeps {
   api: CleanupApi;
   transport: WebhookTransport;
   webhook(id: string): WebhookRef;
+  /** Webhooks removed from the account (zlecenie 2026-10-13-webhooki): their messages can never be deleted by us; skipped. */
+  removedHook?(id: string): boolean;
   /** Current snapshot pointer (kept bases); null = no snapshots yet. */
   pointer(): Promise<Pointer | null>;
   isPrimary(): boolean;
@@ -92,16 +94,27 @@ export const CLEANUP_MAX_UPLOADS = 200;
  * the same upload with another manifest must never steer the deletion.
  */
 export async function findUploadContent(log: Pick<ArbiterApi, "read">, store: IndexStore, uploadId: string): Promise<ContentRef | null> {
-  const b = store.getUpload(uploadId)?.boundTo;
+  const u = store.getUpload(uploadId);
+  const b = u?.boundTo;
   if (!b) return null;
   const [e] = await log.read(b.seq - 1, 1);
   if (!e || e.seq !== b.seq) return null;
   const ops: Operation[] = e.op?.type === "group" && Array.isArray(e.op.ops) ? e.op.ops : e.op ? [e.op] : [];
+  let content: ContentRef | null = null;
   for (const o of ops) {
     const c = (o as { content?: ContentRef }).content;
-    if ((o.type === "create" || o.type === "new_content_version") && c?.uploadId === uploadId && c.versionId === b.versionId) return c;
+    if ((o.type === "create" || o.type === "new_content_version") && c?.uploadId === uploadId && c.versionId === b.versionId) content = c;
   }
-  return null;
+  // Rules v3: a relocated version's pieces are where its LAST relocate put them (the entry the upload names).
+  // What the relocate replaced is the moved channel's business (drain in channels.ts), never this.
+  if (content && u.relocated) {
+    const [r] = await log.read(u.relocated.seq - 1, 1);
+    const rops: Operation[] = r?.op?.type === "group" && Array.isArray(r.op.ops) ? r.op.ops : r?.op ? [r.op] : [];
+    const rel = r?.seq === u.relocated.seq ? rops.find((o) => o.type === "relocate" && o.uploadId === uploadId && o.versionId === b.versionId) : undefined;
+    if (!rel || rel.type !== "relocate") return null;
+    content = { ...content, manifestRef: rel.manifestRef, ...(rel.pieces ? { pieces: rel.pieces } : {}) };
+  }
+  return content;
 }
 
 function deletableAndWaiting(store: IndexStore, pointer: Pointer | null, now: number): { deletable: string[]; waiting: { id: string; at: number }[] } {
@@ -223,7 +236,9 @@ export class Cleaner {
   }
 
   private async deleteMessage(p: DiscordPlacement): Promise<boolean> {
-    const hook = this.d.webhook(p.locationId); // throws when the webhook left the vault: the upload stays for later
+    // Removed from the account ("remove anyway" or a finished drain): no URL left to delete with; the message stays on Discord.
+    if (this.d.removedHook?.(p.locationId)) return false;
+    const hook = this.d.webhook(p.locationId); // throws when the webhook is unknown: the upload stays for later
     const sleep = this.d.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
     for (let attempt = 0; ; attempt++) {
       try {
