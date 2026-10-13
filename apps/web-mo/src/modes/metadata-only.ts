@@ -5,6 +5,7 @@ import {
   ChannelMover,
   Cleaner,
   backfillPieces,
+  finishDrain,
   DiscordWebhookTransport,
   SqlIndexStore,
   estimateMs,
@@ -286,6 +287,7 @@ export const mode: ModeImpl = {
       api: ctx.http.gc(),
       transport: transport(ctx),
       webhook: (id) => mc(c).webhook(id),
+      removedHook: (id) => !mc(c).webhooks.some((h) => h.id === id),
       pointer: async () => {
         const v = await vault(ctx).load();
         return v.pointer ? readPointer(clientBlobIO(mc(c), transport(ctx)), ctx.key, ctx.acct.accountId, v.pointer) : null;
@@ -293,12 +295,29 @@ export const mode: ModeImpl = {
       isPrimary: () => cc.primary(),
       metered: () => cc.metered(),
     });
+    // Channels moved away (drain, zlecenie 2026-10-13-webhooki): after the retention their old messages go
+    // and the webhook leaves the vault. Same gates as the fragment step (main tab, unmetered, or manual).
+    const drains = async (manual: boolean) => {
+      if (!manual && (!cc.primary() || cc.metered())) return;
+      const v = await vault(ctx).load();
+      const due = v.webhooks.filter((w) => w.drain);
+      if (!due.length) return;
+      const now = (await ctx.http.gc().status()).now;
+      const p = v.pointer ? await readPointer(clientBlobIO(mc(c), transport(ctx)), ctx.key, ctx.acct.accountId, v.pointer).catch(() => null) : null;
+      const bases = p ? [p.base, ...(p.history ?? [])].filter((b) => !!b).map((b) => b!.headSeq) : [];
+      const oldest = bases.length ? Math.min(...bases) : Infinity;
+      for (const w of due) await finishDrain({ client: mc(c), vault: vault(ctx), log: this_arbiter(ctx), transport: transport(ctx), key: ctx.key, accountId: ctx.acct.accountId }, w, now, oldest).catch(() => null);
+    };
     return {
       async status() {
         const p = await cleaner.preview();
         return { by: "client", lastRunAt: p.lastRunAt, expired: p.expired, waiting: p.waiting, due: p.deletable, dueBytes: p.deletableBytes, nextAt: p.nextAt };
       },
-      run: (manual) => cleaner.run(manual),
+      run: async (manual) => {
+        const r = await cleaner.run(manual);
+        await drains(manual);
+        return r;
+      },
     };
   },
 
