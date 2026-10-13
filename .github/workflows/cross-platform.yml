@@ -7,7 +7,6 @@ on:
   push:
     branches:
       - feat/metadata-only
-      - feat/stage3-modes
   pull_request:
     paths:
       - "apps/ddn-server/**"
