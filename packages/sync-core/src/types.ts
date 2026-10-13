@@ -153,7 +153,7 @@ export interface UploadRecord {
    * Rules v3: last `relocate` applied to the bound version (its entry holds the manifestRef the
    * version had when it was released; cleanup reads it from there). Absent = never relocated.
    */
-  relocated?: { seq: number };
+  relocated?: { seq: number; at: number };
 }
 
 export interface IndexMeta {

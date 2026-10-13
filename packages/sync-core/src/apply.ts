@@ -982,7 +982,8 @@ function opRelocate(ctx: Ctx, op: RelocateOp): Outcome {
   if (op.from === op.manifestRef && JSON.stringify(c.pieces ?? null) === JSON.stringify(pieces ?? null)) return "noop";
   const { pieces: _old, ...rest } = c;
   ctx.s.putNode({ ...node, content: { ...rest, manifestRef: op.manifestRef, ...(pieces ? { pieces } : {}) } });
-  ctx.s.putUpload({ ...u, relocated: { seq: ctx.e.seq } });
+  // from == manifestRef: only the piece locations were filled in (read from the manifest); nothing moved.
+  if (op.from !== op.manifestRef) ctx.s.putUpload({ ...u, relocated: { seq: ctx.e.seq, at: ctx.e.serverTime } });
   return "applied";
 }
 

@@ -121,6 +121,6 @@ function canonicalUpload(u: UploadRecord): UploadRecord {
       ? { nodeId: u.boundTo.nodeId, versionId: u.boundTo.versionId, seq: u.boundTo.seq, deviceId: u.boundTo.deviceId }
       : null,
     ended: u.ended ? { seq: u.ended.seq, at: u.ended.at, reason: u.ended.reason, opId: u.ended.opId } : null,
-    ...(u.relocated ? { relocated: { seq: u.relocated.seq } } : {}),
+    ...(u.relocated ? { relocated: { seq: u.relocated.seq, at: u.relocated.at } } : {}),
   };
 }

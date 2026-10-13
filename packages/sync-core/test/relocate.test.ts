@@ -20,7 +20,7 @@ describe("relocate (rules v3)", () => {
     expect(after.manifestRef).toBe("mf-moved");
     expect(after.pieces).toEqual(P2);
     expect({ ...after, manifestRef: before.manifestRef, pieces: undefined }).toEqual({ ...before, pieces: undefined });
-    expect(s.store.getUpload(before.uploadId)!.relocated).toEqual({ seq: s.seq });
+    expect(s.store.getUpload(before.uploadId)!.relocated).toEqual({ seq: s.seq, at: s.entries.at(-1)!.serverTime });
     expect(s.store.getUpload(before.uploadId)!.status).toBe("bound");
     s.expectValid();
   });
@@ -71,6 +71,11 @@ describe("relocate (rules v3)", () => {
     // The same op again: `from` no longer matches (CAS) -> stale, skipped; a no-op relocate is a noop.
     expect(s.op(A, op).outcome).toBe("skipped");
     expect(s.op(A, { ...op, from: "mf-2", manifestRef: "mf-2" }).outcome).toBe("noop");
+    // from == manifestRef with new pieces: fills them in, not a move (relocated stays).
+    const rel = s.store.getUpload(c.uploadId)!.relocated;
+    expect(s.op(A, { ...op, from: "mf-2", manifestRef: "mf-2", pieces: P2 }).outcome).toBe("applied");
+    expect(s.node("file0001").content!.pieces).toEqual(P2);
+    expect(s.store.getUpload(c.uploadId)!.relocated).toEqual(rel);
     // Two devices move the same version at once: the second one is stale and changes nothing.
     const b = s.op(B, { ...op, from: c.manifestRef, manifestRef: "mf-b" });
     expect(b.outcome).toBe("skipped");
