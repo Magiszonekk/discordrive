@@ -389,7 +389,7 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
       const why = t("un.why", { ch: r.unavailable.map(channelName).join(", ") });
       name.querySelector(".nm")!.append(chip(t("un.chip"), "warning", why));
       name.querySelector(".nm")!.lastElementChild!.setAttribute("data-ddn", "unavailable-chip");
-      name.append(h("span", { class: "sub", "data-ddn": "unavailable-why" }, why));
+      name.append(h("span", { class: "unav-why", "data-ddn": "unavailable-why" }, why));
       const del = iconBtn("trash", t("un.delete"), t("un.delete"), "danger");
       del.dataset.ddn = "unavailable-delete";
       del.onclick = () =>
@@ -415,6 +415,7 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
     }
     const dl = iconBtn("download", t("files.download.aria", { name: r.name }), t("files.download"), "accent");
     dl.dataset.ddn = "download";
+    if (r.unavailable?.length) dl.hidden = true; // a piece is on a removed channel: the download could not finish
     dl.onclick = () =>
       void act(dl, async () => {
         const b = await core.download(r.id);

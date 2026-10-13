@@ -987,7 +987,7 @@ try {
     await p.goto(`${base}/folder/${chFolder}`);
     await p.waitForSelector("body[data-ready='1']");
     await p.waitForSelector("[data-ddn=row][data-unavailable]", { timeout: 30_000 });
-    ch.shown = { chip: await p.textContent("[data-ddn=unavailable-chip]"), why: await p.textContent("[data-ddn=unavailable-why]"), noDownload: (await p.locator("[data-ddn=row][data-unavailable] [data-ddn=share]").count()) === 0 };
+    ch.shown = { chip: await p.textContent("[data-ddn=unavailable-chip]"), why: await p.textContent("[data-ddn=unavailable-why]"), whyVisible: await p.isVisible("[data-ddn=unavailable-why]"), noDownload: (await p.locator("[data-ddn=row][data-unavailable] [data-ddn=share]").count()) === 0 && !(await p.isVisible("[data-ddn=row][data-unavailable] [data-ddn=download]")), deleteBtn: await p.isVisible("[data-ddn=row][data-unavailable] [data-ddn=unavailable-delete]") };
     await shot(p, "25-unavailable-shown");
     // Paste the same webhook again: available at once.
     await nav(p, "settings");
@@ -1118,13 +1118,13 @@ try {
       if (!c || c.skipped) return !!remote && !!c?.skipped;
       const crit = c.critical as { retire: boolean; remove: boolean; move: boolean } | string;
       const imp = c.impact as { text: string; files: string[]; retireDefault: boolean };
-      const sh = c.shown as { chip: string; why: string };
+      const sh = c.shown as { chip: string; why: string; whyVisible: boolean; noDownload: boolean; deleteBtn: boolean };
       return (
         c.foldedByDefault === true && c.foldKept === true && /\d/.test(String(c.summary)) &&
         /1 (file|plik)/.test(String(c.stats)) && /\d/.test(String((c.totals as { all: string }).all)) &&
         JSON.stringify(imp.files) === JSON.stringify(["kanal.txt"]) && imp.retireDefault && c.retired === true && c.unretired === true &&
         (typeof crit === "string" ? (SERVER_SIDE && crit === "none-own") : crit.retire && crit.remove && crit.move) &&
-        c.ackNeeded === true && /1/.test(String(c.unavailTotal)) && c.hiddenByDefault === true && /Unavailable|Niedostępny/.test(sh.chip) && /\(#…\d{6}\)/.test(sh.why) &&
+        c.ackNeeded === true && /1/.test(String(c.unavailTotal)) && c.hiddenByDefault === true && /Unavailable|Niedostępny/.test(sh.chip) && /\(#…\d{6}\)/.test(sh.why) && sh.whyVisible && sh.noDownload && sh.deleteBtn &&
         c.backAfterPaste === true && /moved|przeniesiony/i.test(String(c.moveDone)) && c.goneAfterMove === true && c.downloadAfterMove === true &&
         (c.phone as { folded: boolean; noHScroll: boolean }).folded && (c.phone as { noHScroll: boolean }).noHScroll
       );

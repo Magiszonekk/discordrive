@@ -507,3 +507,4 @@ fieldset.choices { margin: 0; padding: 0; border: 0; display: grid; gap: .5rem; 
 .choice b { display: block; font-size: .875rem; color: var(--color-ink); font-weight: 600; }
 .choice small { display: block; font-size: .8125rem; line-height: 1.4; color: var(--color-ink-2); }
 tr.unavail .nm, tr.unavail .sub { opacity: .6; }
+.unav-why { display: block; margin-top: .125rem; font-size: .75rem; line-height: 1.125rem; color: color-mix(in oklch, var(--color-warning) 70%, var(--color-ink)); white-space: normal; }
