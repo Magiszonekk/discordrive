@@ -15,7 +15,17 @@
 //   POST   /v1/blobs/describe         channel + filename of this account's blobs (share links)
 //   GET    /v1/blobs/<attachmentId>   the bytes through the instance (fallback when the CDN
 //                                     cannot be read from the browser)
-//   GET|POST|DELETE /v1/channels[/id] the account's own channels (Settings -> Channels)
+//   GET|POST /v1/channels             the account's own channels (Settings -> Channels) with
+//                                     files/bytes/critical per channel, removed ones, the move job
+//   GET    /v1/channels/<id>/impact   what removing it affects (upload IDs; names live in the client)
+//   POST   /v1/channels/<id>/retire   {retired}: no new blobs there (refused when critical / last)
+//   POST   /v1/channels/<id>/move     202: start "move and remove" (background job, resumable)
+//   GET    /v1/channels/move          the job in progress or the last one
+//   DELETE /v1/channels/<id>          remove anyway (refused when critical / nothing else to post to)
+//   POST   /v1/channels/<id>/recover  bot only: read a removed channel's blobs, move them to active ones
+//   GET    /v1/channels/unavailable   uploads with a blob on a webhook no longer in the instance
+//   GET    /v1/usage                  bytes of the account on Discord (blobs + snapshot objects)
+// (channels.ts has the rules and the job runner; a moved blob answers for its old attachment ID.)
 //
 // Memory (lesson of fix/upload-cancel-and-oom): a blob is read into one buffer of its
 // declared size only after a slot of the in-flight byte budget is free; until then the
@@ -32,6 +42,8 @@ import { BLOB_EXT, type DiscordPlacement } from "@ddv4/metadata-client";
 import { HttpError, type DdnServer, type ExtRequest, type ServerExtension, type BotRefresher } from "@ddv4/metadata-client/node";
 import { DiscordSender, DiscordUnavailableError, NoChannelError, type SenderHook } from "./sender.js";
 import { InstanceHooks, POOL } from "./instance-hooks.js";
+import { ChannelError, ChannelMover, ChannelStore, blobTables } from "./channels.js";
+import type { SnapshotsExtension } from "./snapshots-ext.js";
 
 /** Largest blob accepted (a fragment is 10 MiB incl. IV + tag; a manifest of 1327 fragments ~160 KB). */
 export const MAX_BLOB_BYTES = 10 * 1024 * 1024 + 64 * 1024;
@@ -97,6 +109,8 @@ export interface BlobsExtensionOptions {
   cdnOrigins?: string[];
   /** Called after a final upload's blobs are stored (plain: thumbnails). */
   log?: (s: string) => void;
+  /** Server snapshots (channel moves rewrite the chains on a moved webhook). */
+  snapshots?: () => SnapshotsExtension | null;
 }
 
 export class BlobsExtension implements ServerExtension {
@@ -105,9 +119,16 @@ export class BlobsExtension implements ServerExtension {
   private db!: DatabaseSync;
   readonly budget: ByteBudget;
   private readonly links = new Map<string, { url: string; until: number }>();
+
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastHealth = 0;
   private ticking = false;
+  /** Blob posts in flight: the webhooks each may land on (a move waits until none can hit its webhook). */
+  private readonly inflight = new Map<number, string[]>();
+  private inflightSeq = 0;
+  private store_: ChannelStore | null = null;
+  private mover_: ChannelMover | null = null;
+  private moving: Promise<number> | null = null;
   readonly stats = { blobsStored: 0, blobsReused: 0, blobsDeleted: 0, reaped: 0, purged: 0, healthChecks: 0 };
 
   constructor(readonly o: BlobsExtensionOptions) {
@@ -121,23 +142,72 @@ export class BlobsExtension implements ServerExtension {
   init(srv: DdnServer): void {
     this.srv = srv;
     this.db = srv.db;
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS s_uploads (
-        account_id TEXT NOT NULL, upload_id TEXT NOT NULL, state TEXT NOT NULL,
-        device_id TEXT NOT NULL, created_at INTEGER NOT NULL, active_at INTEGER NOT NULL,
-        final_at INTEGER, released_at INTEGER, guarded INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, upload_id));
-      CREATE INDEX IF NOT EXISTS s_uploads_state ON s_uploads(state, active_at);
-      CREATE TABLE IF NOT EXISTS s_blobs (
-        account_id TEXT NOT NULL, upload_id TEXT NOT NULL, idx TEXT NOT NULL, sha256 TEXT NOT NULL,
-        size INTEGER NOT NULL, webhook_id TEXT NOT NULL, channel_id TEXT NOT NULL, message_id TEXT NOT NULL,
-        attachment_id TEXT NOT NULL, filename TEXT NOT NULL, created_at INTEGER NOT NULL, deleted_at INTEGER,
-        PRIMARY KEY (account_id, upload_id, idx));
-      CREATE INDEX IF NOT EXISTS s_blobs_att ON s_blobs(attachment_id);
-    `);
+    // The operator CLI (`discordrive channels`) writes the same database: wait for its short locks.
+    this.db.exec("PRAGMA busy_timeout = 5000");
+    blobTables(this.db);
     if (this.o.tickMs !== 0) {
-      this.timer = setInterval(() => void this.tick().catch((e) => this.o.log?.(`background: ${(e as Error).message}`)), this.o.tickMs ?? 30_000);
+      this.timer = setInterval(() => {
+        void this.tick().catch((e) => this.o.log?.(`background: ${(e as Error).message}`));
+        // Channel moves run beside the cleanup (they can take hours; the cleanup must not wait).
+        this.kickMoves();
+      }, this.o.tickMs ?? 30_000);
       this.timer.unref?.();
     }
+  }
+
+  /** Channels: stats, rules, jobs (database side; the hooks exist only after init of the hooks extension). */
+  get channelStore(): ChannelStore {
+    return (this.store_ ??= new ChannelStore(this.db, this.o.hooks, () => this.now));
+  }
+
+  get mover(): ChannelMover {
+    return (this.mover_ ??= new ChannelMover({
+      store: this.channelStore,
+      hooks: this.o.hooks,
+      now: () => this.now,
+      // A recover job reads blobs of a removed webhook: only the bot can (refresh-urls needs no webhook).
+      readBlob: (b) => this.readBlob(b as BlobRow, undefined, !!this.o.bot),
+      post: (targets, data, filename) => this.o.sender.post(targets, data, filename),
+      deleteMessage: (hook, mid) => this.o.sender.delete(hook, mid),
+      idleFor: (w) => this.idleFor(w),
+      deleteUpload: async (acct, u) => void (await this.deleteBlobs(acct, u)),
+      remember: (att, url, old) => {
+        this.links.set(att, { url, until: this.now + 3600_000 });
+        if (old) this.links.delete(old);
+      },
+      snapshots: this.o.snapshots?.()
+        ? {
+            backfill: (only) => this.o.snapshots!()!.backfill(only),
+            rewriteChain: (acct, t) => this.o.snapshots!()!.rewriteChain(acct, t),
+            withLock: (fn) => this.o.snapshots!()!.withLock(fn),
+          }
+        : null,
+      log: this.o.log,
+    }));
+  }
+
+  /** Run due channel jobs (queued, interrupted, paused past retry); resolves when this pass ends. */
+  moves(): Promise<number> {
+    if (!this.moving) {
+      this.moving = this.mover
+        .run()
+        .then((ended) => {
+          // Old messages are gone: share links must not serve cached CDN links of them any more.
+          if (ended) this.srv.shares.dropCache?.();
+          return ended;
+        })
+        .finally(() => (this.moving = null));
+    }
+    return this.moving;
+  }
+
+  private kickMoves(): void {
+    void this.moves().catch((e) => this.o.log?.(`channel moves: ${(e as Error).message}`));
+  }
+
+  /** Resolves when no blob post in flight may land on `webhookId`. */
+  async idleFor(webhookId: string): Promise<void> {
+    while ([...this.inflight.values()].some((ids) => ids.includes(webhookId))) await new Promise((r) => setTimeout(r, 25));
   }
 
   async close(): Promise<void> {
@@ -212,6 +282,7 @@ export class BlobsExtension implements ServerExtension {
     }
 
     const release = await this.budget.acquire(len);
+    let fl = 0;
     const ac = new AbortController();
     const onClose = () => {
       if (!r.res.writableFinished) ac.abort(new Error("client went away"));
@@ -231,6 +302,9 @@ export class BlobsExtension implements ServerExtension {
       const hooks = this.o.hooks.hooksFor(s.accountId);
       const filename = `${randomBytes(16).toString("base64url")}${BLOB_EXT}`;
       let p: DiscordPlacement & { url: string };
+      // Registered before the post: a channel move waits for it (the blob may land on the webhook being moved).
+      fl = ++this.inflightSeq;
+      this.inflight.set(fl, hooks.map((h) => h.id));
       try {
         p = await this.o.sender.post(hooks, buf, filename, ac.signal);
       } catch (e) {
@@ -253,12 +327,14 @@ export class BlobsExtension implements ServerExtension {
              created_at = excluded.created_at, deleted_at = NULL`,
         )
         .run(s.accountId, u, idx, sha, len, p.locationId, p.channelId, p.messageId, p.attachmentId, filename, this.now);
+      this.inflight.delete(fl);
       this.links.set(p.attachmentId, { url: p.url, until: this.now + 3600_000 });
       this.stats.blobsStored++;
       r.send(200, { placement: { provider: "discord-webhook", locationId: p.locationId, channelId: p.channelId, messageId: p.messageId, attachmentId: p.attachmentId } });
     } finally {
       release();
       r.res.off("close", onClose);
+      if (fl) this.inflight.delete(fl);
     }
   }
 
@@ -311,19 +387,23 @@ export class BlobsExtension implements ServerExtension {
 
   // --- reading
 
+  /** A blob of this account by attachment ID; the old ID of a moved blob resolves to where it is now. */
   private ownBlob(acct: string, attachmentId: string): BlobRow {
     if (!/^\d{15,22}$/.test(attachmentId)) throw new HttpError(400, "bad_attachment");
-    const b = this.db.prepare("SELECT * FROM s_blobs WHERE attachment_id = ? AND account_id = ? AND deleted_at IS NULL").get(attachmentId, acct) as BlobRow | undefined;
+    const b = this.channelStore.resolveBlob(attachmentId, acct) as BlobRow | undefined;
     if (!b) throw new HttpError(404, "no_such_blob");
     return b;
   }
 
   /** Fresh signed links for rows (bot refresh-urls in batches of 50, else GET through the webhook). */
-  async freshUrls(rows: BlobRow[]): Promise<Map<string, string>> {
+  async freshUrls(rows: BlobRow[], allowRemoved = false): Promise<Map<string, string>> {
     const out = new Map<string, string>();
     const t = this.now;
     const need: BlobRow[] = [];
     for (const b of rows) {
+      // Removed anyway: unavailable until the webhook is pasted again (or a bot recovery moves it),
+      // even when a bot could still read it, so every path agrees with GET /v1/channels/unavailable.
+      if (!allowRemoved && !this.o.hooks.hook(b.webhook_id)) throw new HttpError(410, "webhook_removed");
       const c = this.links.get(b.attachment_id);
       if (c && c.until > t) out.set(b.attachment_id, c.url);
       else need.push(b);
@@ -376,7 +456,8 @@ export class BlobsExtension implements ServerExtension {
       refresh: async (urls) => {
         const rows = urls.map((u) => {
           const m = /\/attachments\/\d+\/(\d+)\//.exec(new URL(u).pathname);
-          const b = m ? (this.db.prepare("SELECT * FROM s_blobs WHERE attachment_id = ? AND deleted_at IS NULL").get(m[1]!) as BlobRow | undefined) : undefined;
+          // A share made before a move holds the old attachment ID: the alias finds the moved blob.
+          const b = m ? (this.channelStore.resolveBlob(m[1]!) as BlobRow | undefined) : undefined;
           if (!b) throw new Error("refresh: unknown attachment");
           return b;
         });
@@ -387,9 +468,9 @@ export class BlobsExtension implements ServerExtension {
   }
 
   /** The bytes of one blob (proxy path; plain mode reads through this too). */
-  async readBlob(b: BlobRow, signal?: AbortSignal): Promise<Uint8Array> {
+  async readBlob(b: BlobRow, signal?: AbortSignal, allowRemoved = false): Promise<Uint8Array> {
     for (let attempt = 0; ; attempt++) {
-      const url = (await this.freshUrls([b])).get(b.attachment_id)!;
+      const url = (await this.freshUrls([b], allowRemoved)).get(b.attachment_id)!;
       try {
         return await this.o.sender.transport.fetchCdn(url, signal);
       } catch (e) {
@@ -401,18 +482,30 @@ export class BlobsExtension implements ServerExtension {
 
   /** Blob row by attachment ID within an account (plain: the server reads files it indexed). */
   blobByAttachment(acct: string, attachmentId: string): BlobRow | undefined {
-    return this.db.prepare("SELECT * FROM s_blobs WHERE attachment_id = ? AND account_id = ? AND deleted_at IS NULL").get(attachmentId, acct) as BlobRow | undefined;
+    return this.channelStore.resolveBlob(attachmentId, acct) as BlobRow | undefined;
   }
 
   // --- channels of an account
 
   private channels(acct: string) {
-    const pool = this.o.hooks.list(POOL);
+    const pool = this.o.hooks.list(POOL).filter((h) => !h.retired);
+    const cs = this.channelStore;
+    const own = cs.rows(acct);
     return {
-      own: this.o.hooks.list(acct).map((h) => ({ id: h.id, channelId: h.channelId, label: h.label, alive: h.alive })),
+      own: own.map((h) => ({ id: h.id, channelId: h.channelId, label: h.label, alive: h.alive, retired: h.retired, critical: h.critical, criticalWhat: h.criticalWhat, files: h.files, bytes: h.bytes, dependent: h.dependent })),
       pool: { channels: new Set(pool.map((h) => h.channelId)).size, alive: pool.filter((h) => h.alive).length },
-      using: this.o.hooks.list(acct).length ? "own" : pool.length ? "pool" : "none",
+      // Own channels that are all retired: the account posts to the pool (hooksFor), so say so.
+      using: own.some((h) => !h.retired) ? "own" : pool.length ? "pool" : "none",
+      removed: cs.removed(acct),
+      move: cs.status(cs.lastJob(acct)),
+      botRecovery: !!this.o.bot,
+      usage: cs.usage(acct),
     };
+  }
+
+  /** Start a channel job and give the first pass a moment (tests and small moves finish here). */
+  private startJob(): void {
+    this.kickMoves();
   }
 
   // --- routing
@@ -446,9 +539,11 @@ export class BlobsExtension implements ServerExtension {
       const s = r.session();
       const list = (await r.json() as { attachments?: unknown })?.attachments;
       if (!Array.isArray(list) || list.length > 50) throw new HttpError(400, "bad_attachments");
-      const rows = list.map((x) => this.ownBlob(s.accountId, String((x as { attachmentId?: unknown })?.attachmentId)));
+      const asked = list.map((x) => String((x as { attachmentId?: unknown })?.attachmentId));
+      const rows = asked.map((a) => this.ownBlob(s.accountId, a));
       const fresh = await this.freshUrls(rows);
-      return (r.send(200, { urls: rows.map((b) => ({ attachmentId: b.attachment_id, url: fresh.get(b.attachment_id) })) }), true);
+      // Keyed by the ID the client asked for: after a move that is the old one (its manifest keeps it).
+      return (r.send(200, { urls: rows.map((b, i) => ({ attachmentId: asked[i], url: fresh.get(b.attachment_id) })) }), true);
     }
     if (method === "POST" && path === "/v1/blobs/describe") {
       const s = r.session();
@@ -483,11 +578,54 @@ export class BlobsExtension implements ServerExtension {
         }
         return (r.send(201, this.channels(s.accountId)), true);
       }
-      const one = /^\/v1\/channels\/(\d{15,22})$/.exec(path);
-      if (one && method === "DELETE") {
-        if (!this.o.hooks.remove(s.accountId, one[1]!)) throw new HttpError(404, "no_such_channel");
-        return (r.send(200, this.channels(s.accountId)), true);
+      const cs = this.channelStore;
+      const acct = s.accountId;
+      try {
+        if (method === "GET" && path === "/v1/channels/move") return (r.send(200, { move: cs.status(cs.lastJob(acct)) }), true);
+        if (method === "GET" && path === "/v1/channels/unavailable") return (r.send(200, { uploads: cs.unavailable(acct) }), true);
+        const one = /^\/v1\/channels\/(\d{15,22})(\/impact|\/retire|\/move|\/recover)?$/.exec(path);
+        if (one) {
+          const id = one[1]!;
+          const sub = one[2] ?? "";
+          if (method === "GET" && sub === "/impact") {
+            // Chains from before s_snap_objs are indexed first, so "critical" is right.
+            if (cs.unindexed(acct).length) await this.o.snapshots?.()?.backfill([acct]);
+            return (r.send(200, cs.impact(acct, id)), true);
+          }
+          if (method === "POST" && sub === "/retire") {
+            const b = (await r.json()) as { retired?: unknown };
+            if (typeof b?.retired !== "boolean") throw new HttpError(400, "bad_retired");
+            if (b.retired && cs.unindexed(acct).length) await this.o.snapshots?.()?.backfill([acct]);
+            cs.retire(acct, id, b.retired);
+            return (r.send(200, this.channels(acct)), true);
+          }
+          if (method === "POST" && sub === "/move") {
+            const j = cs.enqueueMove(acct, id);
+            this.startJob();
+            return (r.send(202, { move: cs.status(cs.job(j.id)) }), true);
+          }
+          if (method === "POST" && sub === "/recover") {
+            const j = cs.enqueueRecover(acct, id, !!this.o.bot);
+            this.startJob();
+            return (r.send(202, { move: cs.status(cs.job(j.id)) }), true);
+          }
+          if (method === "DELETE" && !sub) {
+            if (cs.unindexed(acct).length) await this.o.snapshots?.()?.backfill([acct]);
+            // A snapshot segment may be on its way to this webhook: decide under the snapshot lock.
+            const snaps = this.o.snapshots?.();
+            if (snaps) await snaps.withLock(() => cs.removeAnyway(acct, id));
+            else cs.removeAnyway(acct, id);
+            return (r.send(200, this.channels(acct)), true);
+          }
+        }
+      } catch (e) {
+        if (e instanceof ChannelError) throw new HttpError(e.status, e.code);
+        throw e;
       }
+    }
+    if (method === "GET" && path === "/v1/usage") {
+      const s = r.session();
+      return (r.send(200, { bytes: this.channelStore.usage(s.accountId) }), true);
     }
     return false;
   }

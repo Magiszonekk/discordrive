@@ -13,11 +13,20 @@
 // Pointer locations are kept in the database AND in <dataDir>/snapshots.json, so after losing
 // the database an operator can rebuild every account's log from Discord with the instance key,
 // the pool webhooks and that file (readLogChain + Sequencer initialLog; test in snapshots test).
+//
+// Removing channels (zlecenie 2026-10-13-webhooki p. 1, owner decision 3): a webhook holding an
+// account's pointer message or a segment of its chain is "critical". s_snap_objs records where
+// every object of a chain lies (written on every segment; chains from before it are walked once,
+// backfillSnapshotObjects). New segments go only to the pointer's webhook, so an account's chain
+// normally sits on ONE channel. Moving a critical channel writes a FRESH chain from the database
+// log (rewriteChain: new pointer + segments of <= 2000 entries) instead of copying old objects:
+// the server has the whole log, and e2ee has no bases that could point at old messages.
 
 import { writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { MemoryIndexStore } from "@ddv4/sync-core";
+import type { DatabaseSync as Db } from "node:sqlite";
 import {
   accountKeyFromRaw,
   readLogChain,
@@ -34,15 +43,106 @@ import {
 } from "@ddv4/metadata-client";
 import type { DdnServer, ServerExtension } from "@ddv4/metadata-client/node";
 import { instanceSubkey, type InstanceHooks } from "./instance-hooks.js";
-import type { DiscordSender, SenderHook } from "./sender.js";
+import { DiscordUnavailableError, type DiscordSender, type SenderHook } from "./sender.js";
 
 /** Key the server seals an account's snapshots with (never the account key). */
 export function serverSnapshotKey(instanceKey: Buffer, accountId: string): AccountKey {
   return accountKeyFromRaw(new Uint8Array(instanceSubkey(instanceKey, `snapshot|${accountId}`)));
 }
 
-/** BlobIO over the instance webhooks (sender: paced per channel, Cloudflare fail-fast). */
-export function serverBlobIO(hooks: InstanceHooks, sender: DiscordSender, accountId: string): BlobIO {
+/** A failed background walk of an old chain (Discord down) is retried after this long. */
+export const BACKFILL_RETRY_MS = 10 * 60_000;
+
+/** Most entries in one segment of a rewritten chain (a moved channel's chain is written anew). */
+export const REWRITE_SEGMENT_ENTRIES = 2000;
+
+/** Tables of the server snapshots (also opened by the `discordrive channels` CLI without a server). */
+export function snapshotTables(db: Db): void {
+  db.exec(`CREATE TABLE IF NOT EXISTS s_snapshots (
+    account_id TEXT PRIMARY KEY, webhook_id TEXT NOT NULL, message_id TEXT NOT NULL,
+    to_seq INTEGER NOT NULL DEFAULT 0, written_at INTEGER NOT NULL DEFAULT 0)`);
+  // objs_ok: 1 = s_snap_objs lists every object of this chain (new chains: from the start; older ones:
+  // after the backfill walk), 0 = not walked yet, 2 = the walk failed (unreadable chain; pointer known only).
+  if (!(db.prepare("PRAGMA table_info(s_snapshots)").all() as { name: string }[]).some((c) => c.name === "objs_ok")) db.exec("ALTER TABLE s_snapshots ADD COLUMN objs_ok INTEGER NOT NULL DEFAULT 0");
+  db.exec(`CREATE TABLE IF NOT EXISTS s_snap_objs (
+    account_id TEXT NOT NULL, message_id TEXT NOT NULL, webhook_id TEXT NOT NULL, attachment_id TEXT NOT NULL,
+    kind TEXT NOT NULL, size INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, message_id));
+    CREATE INDEX IF NOT EXISTS s_snap_objs_hook ON s_snap_objs(webhook_id);`);
+}
+
+export interface SnapObj {
+  account_id: string;
+  message_id: string;
+  webhook_id: string;
+  attachment_id: string;
+  kind: "pointer" | "segment";
+  size: number;
+}
+
+function recordObj(db: Db, o: SnapObj): void {
+  db.prepare("INSERT INTO s_snap_objs (account_id, message_id, webhook_id, attachment_id, kind, size) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(account_id, message_id) DO NOTHING").run(
+    o.account_id,
+    o.message_id,
+    o.webhook_id,
+    o.attachment_id,
+    o.kind,
+    o.size,
+  );
+}
+
+/**
+ * Walk the chains written before s_snap_objs existed (once per account) and record where every
+ * object lies. Needs Discord reads only (pointer GET + one CDN read per segment). Accounts whose
+ * pointer webhook is gone stay unindexed (their chain cannot be read anyway). Returns how many
+ * accounts were indexed.
+ */
+export async function backfillSnapshotObjects(db: Db, hooks: InstanceHooks, sender: DiscordSender, instanceKey: Buffer, only?: string[], log?: (s: string) => void): Promise<number> {
+  const rows = (db.prepare("SELECT account_id, webhook_id, message_id FROM s_snapshots WHERE objs_ok = 0 AND webhook_id IN (SELECT id FROM inst_hooks)").all() as { account_id: string; webhook_id: string; message_id: string }[]).filter(
+    (r) => !only || only.includes(r.account_id),
+  );
+  let n = 0;
+  for (const r of rows) {
+    if (!hooks.hook(r.webhook_id)) continue;
+    const base = serverBlobIO(hooks, sender, r.account_id);
+    const seen: SnapObj[] = [];
+    const io: BlobIO = {
+      ...base,
+      fetch: async (p) => {
+        const d = await base.fetch(p);
+        seen.push({ account_id: r.account_id, message_id: p.messageId, webhook_id: p.locationId, attachment_id: p.attachmentId, kind: "segment", size: d.byteLength });
+        return d;
+      },
+    };
+    try {
+      await readLogChain(io, serverSnapshotKey(instanceKey, r.account_id), r.account_id, { webhookId: r.webhook_id, messageId: r.message_id });
+    } catch (e) {
+      // Unreadable chain (deleted messages, wrong key): it cannot rebuild anything anyway. Mark it
+      // (objs_ok = 2) so it does not block retiring/removing forever; a move rewrites it from the log.
+      log?.(`snapshot index of ${r.account_id}: ${(e as Error).message}`);
+      const transient = e instanceof DiscordUnavailableError || e instanceof TypeError || /fetch failed|ECONN|ETIMEDOUT|timeout|HTTP 5\d\d|HTTP 429/i.test(String((e as Error)?.message));
+      if (!transient) {
+        db.prepare("UPDATE s_snapshots SET objs_ok = 2 WHERE account_id = ? AND message_id = ?").run(r.account_id, r.message_id);
+        recordObj(db, { account_id: r.account_id, message_id: r.message_id, webhook_id: r.webhook_id, attachment_id: "", kind: "pointer", size: 0 });
+      }
+      continue;
+    }
+    db.exec("BEGIN");
+    try {
+      recordObj(db, { account_id: r.account_id, message_id: r.message_id, webhook_id: r.webhook_id, attachment_id: "", kind: "pointer", size: 0 });
+      for (const o of seen) recordObj(db, o);
+      db.prepare("UPDATE s_snapshots SET objs_ok = 1 WHERE account_id = ? AND message_id = ?").run(r.account_id, r.message_id);
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+    n++;
+  }
+  return n;
+}
+
+/** BlobIO over the instance webhooks (sender: paced per channel, Cloudflare fail-fast). `targets`: where posts go (default: the account's channels). */
+export function serverBlobIO(hooks: InstanceHooks, sender: DiscordSender, accountId: string, targets?: () => SenderHook[]): BlobIO {
   const hook = (id: string): SenderHook => {
     const h = hooks.hook(id);
     if (!h) throw new Error(`webhook ${id} not in the instance`);
@@ -50,7 +150,7 @@ export function serverBlobIO(hooks: InstanceHooks, sender: DiscordSender, accoun
   };
   return {
     post: async (d, f) => {
-      const p = await sender.post(hooks.hooksFor(accountId), d, f);
+      const p = await sender.post(targets ? targets() : hooks.hooksFor(accountId), d, f);
       return { provider: "discord-webhook", locationId: p.locationId, channelId: p.channelId, messageId: p.messageId, attachmentId: p.attachmentId };
     },
     fetch: async (p) => {
@@ -85,7 +185,9 @@ export class SnapshotsExtension implements ServerExtension {
   private running = false;
   /** Server time of the first entry not covered yet, per account (from onAppend; rebuilt from the log on start). */
   private readonly pending = new Map<string, { first: number; last: number }>();
-  readonly stats = { segments: 0, errors: 0 };
+  /** Last background try to index old chains (retried every BACKFILL_RETRY_MS while some are left, not every tick). */
+  private backfillAt = -Infinity;
+  readonly stats = { segments: 0, errors: 0, rewritten: 0 };
   lastError: string | null = null;
 
   constructor(readonly o: SnapshotsExtensionOptions) {}
@@ -93,9 +195,7 @@ export class SnapshotsExtension implements ServerExtension {
   init(srv: DdnServer): void {
     this.srv = srv;
     this.db = srv.db;
-    this.db.exec(`CREATE TABLE IF NOT EXISTS s_snapshots (
-      account_id TEXT PRIMARY KEY, webhook_id TEXT NOT NULL, message_id TEXT NOT NULL,
-      to_seq INTEGER NOT NULL DEFAULT 0, written_at INTEGER NOT NULL DEFAULT 0)`);
+    snapshotTables(this.db);
     if (this.o.tickMs !== 0) {
       this.timer = setInterval(() => void this.tick().catch((e) => this.o.log?.(`snapshots: ${(e as Error).message}`)), this.o.tickMs ?? 15_000);
       this.timer.unref?.();
@@ -126,6 +226,11 @@ export class SnapshotsExtension implements ServerExtension {
     return r ? { webhookId: r.webhook_id, messageId: r.message_id } : null;
   }
 
+  /** The database handle (channels: which webhooks hold what). */
+  get database(): Db {
+    return this.db;
+  }
+
   private exportLocations(): void {
     if (!this.o.dataDir) return;
     const rows = this.db.prepare("SELECT account_id, webhook_id, message_id, to_seq FROM s_snapshots ORDER BY account_id").all();
@@ -140,7 +245,13 @@ export class SnapshotsExtension implements ServerExtension {
     if (this.running) return 0;
     this.running = true;
     let written = 0;
+    const now0 = () => this.srv.clock();
     try {
+      // Chains from before s_snap_objs: index them once (critical-channel detection needs it).
+      if (now0() - this.backfillAt >= BACKFILL_RETRY_MS && (this.db.prepare("SELECT 1 FROM s_snapshots WHERE objs_ok = 0 LIMIT 1").get() as unknown)) {
+        this.backfillAt = now0();
+        await backfillSnapshotObjects(this.db, this.o.hooks(), this.o.sender, this.o.instanceKey, undefined, this.o.log).catch((e) => this.o.log?.(`snapshot index: ${(e as Error).message}`));
+      }
       const now = this.srv.clock();
       for (const acct of this.srv.accountsWithLog()) {
         const head = this.srv.logHead(acct);
@@ -176,22 +287,122 @@ export class SnapshotsExtension implements ServerExtension {
     }
   }
 
+  /** Index chains written before s_snap_objs existed (all accounts, or `only`). */
+  async backfill(only?: string[]): Promise<number> {
+    await this.lock();
+    try {
+      return await backfillSnapshotObjects(this.db, this.o.hooks(), this.o.sender, this.o.instanceKey, only, this.o.log);
+    } finally {
+      this.running = false;
+    }
+  }
+
+
+  /**
+   * Segments go to the pointer's webhook while it takes posts (fewer critical channels: one chain
+   * = one webhook); a retired, dead or removed pointer webhook falls back to the account's channels.
+   */
+  private segmentTargets(acct: string, loc: PointerLocation): () => SenderHook[] {
+    return () => {
+      const h = this.o.hooks().hook(loc.webhookId);
+      return h && !h.retired && h.alive !== false ? [h] : this.o.hooks().hooksFor(acct);
+    };
+  }
+
+  private async lock(): Promise<void> {
+    while (this.running) await new Promise((r) => setTimeout(r, 20));
+    this.running = true;
+  }
+
+  /** Run `fn` while no segment is being written (removing a webhook a segment could be going to). */
+  async withLock<T>(fn: () => Promise<T> | T): Promise<T> {
+    await this.lock();
+    try {
+      return await fn();
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /**
+   * Write a fresh chain of `acct` from the database log on `targets` (pointer message + segments of
+   * at most REWRITE_SEGMENT_ENTRIES entries, each linked to the previous), switch s_snapshots and
+   * snapshots.json to it, and return the objects of the OLD chain: the caller deletes them once the
+   * whole move succeeded. Runs under the same lock as tick(), so no segment is written meanwhile.
+   */
+  async rewriteChain(acct: string, targets: SenderHook[]): Promise<SnapObj[]> {
+    await this.lock();
+    try {
+      const live = targets.filter((h) => h.alive !== false);
+      if (!live.length) throw new Error("need_channel");
+      const db = this.db;
+      const old = db.prepare("SELECT * FROM s_snap_objs WHERE account_id = ?").all(acct) as unknown as SnapObj[];
+      const prevLoc = this.location(acct);
+      if (prevLoc && !old.some((o) => o.message_id === prevLoc.messageId)) old.push({ account_id: acct, message_id: prevLoc.messageId, webhook_id: prevLoc.webhookId, attachment_id: "", kind: "pointer", size: 0 });
+      const key = serverSnapshotKey(this.o.instanceKey, acct);
+      const target = this.o.sender.pick(live);
+      const io = serverBlobIO(this.o.hooks(), this.o.sender, acct, () => [target]);
+      const loc = await createPointerMessage(io, key, acct, target);
+      const fresh: SnapObj[] = [{ account_id: acct, message_id: loc.messageId, webhook_id: loc.webhookId, attachment_id: "", kind: "pointer", size: 0 }];
+      const head = this.srv.logHead(acct);
+      const log = { read: async (after: number, limit?: number) => this.srv.logRead(acct, after, limit ?? 1000), submit: async () => ({ status: "rules_version_rejected" }) as never, renewLease: async () => false, releaseLease: async () => {} };
+      let toSeq = 0;
+      try {
+        while (toSeq < head) {
+          const store = new MemoryIndexStore();
+          store.setMeta({ ...store.getMeta(), headSeq: Math.min(head, toSeq + REWRITE_SEGMENT_ENTRIES) });
+          const r = await writeSnapshot({ io, key, accountId: acct, pointer: loc, log, store, now: () => this.srv.clock() }, "segment");
+          if (r.written !== "written" || !r.pointer.lastSegment) throw new Error("chain rewrite: segment not written");
+          const sg = r.pointer.lastSegment;
+          fresh.push({ account_id: acct, message_id: sg.messageId, webhook_id: sg.webhookId, attachment_id: sg.attachmentId, kind: "segment", size: sg.size });
+          toSeq = r.pointer.toSeq;
+        }
+      } catch (e) {
+        // Half-written new chain: drop it, the old one still stands.
+        for (const o of fresh) await this.o.sender.delete(this.o.hooks().hook(o.webhook_id) ?? target, o.message_id).catch(() => {});
+        throw e;
+      }
+      db.exec("BEGIN");
+      try {
+        db.prepare(
+          "INSERT INTO s_snapshots (account_id, webhook_id, message_id, to_seq, written_at, objs_ok) VALUES (?, ?, ?, ?, ?, 1) ON CONFLICT(account_id) DO UPDATE SET webhook_id = excluded.webhook_id, message_id = excluded.message_id, to_seq = excluded.to_seq, written_at = excluded.written_at, objs_ok = 1",
+        ).run(acct, loc.webhookId, loc.messageId, toSeq, this.srv.clock());
+        db.prepare("DELETE FROM s_snap_objs WHERE account_id = ?").run(acct);
+        for (const o of fresh) recordObj(db, o);
+        db.exec("COMMIT");
+      } catch (e) {
+        db.exec("ROLLBACK");
+        throw e;
+      }
+      this.exportLocations();
+      this.stats.rewritten++;
+      return old;
+    } finally {
+      this.running = false;
+    }
+  }
+
   private async segment(acct: string, head: number): Promise<Pointer> {
     const key = serverSnapshotKey(this.o.instanceKey, acct);
-    const io = serverBlobIO(this.o.hooks(), this.o.sender, acct);
     let loc = this.location(acct);
     if (!loc) {
       const hooks = this.o.hooks().hooksFor(acct).filter((h) => h.alive !== false);
       if (!hooks.length) throw new Error("need_channel");
-      loc = await createPointerMessage(io, key, acct, hooks[0]!);
-      this.db.prepare("INSERT INTO s_snapshots (account_id, webhook_id, message_id) VALUES (?, ?, ?)").run(acct, loc.webhookId, loc.messageId);
+      loc = await createPointerMessage(serverBlobIO(this.o.hooks(), this.o.sender, acct), key, acct, hooks[0]!);
+      this.db.prepare("INSERT INTO s_snapshots (account_id, webhook_id, message_id, objs_ok) VALUES (?, ?, ?, 1)").run(acct, loc.webhookId, loc.messageId);
+      recordObj(this.db, { account_id: acct, message_id: loc.messageId, webhook_id: loc.webhookId, attachment_id: "", kind: "pointer", size: 0 });
       this.exportLocations();
     }
+    const io = serverBlobIO(this.o.hooks(), this.o.sender, acct, this.segmentTargets(acct, loc));
     // writeSnapshot reads the head from a store; the server has no tree, only the head matters for a segment.
     const store = new MemoryIndexStore();
     store.setMeta({ ...store.getMeta(), headSeq: head });
     const log = { read: async (after: number, limit?: number) => this.srv.logRead(acct, after, limit ?? 1000), submit: async () => ({ status: "rules_version_rejected" }) as never, renewLease: async () => false, releaseLease: async () => {} };
     const r = await writeSnapshot({ io, key, accountId: acct, pointer: loc, log, store, now: () => this.srv.clock() }, "segment");
+    if (r.written === "written" && r.kind !== "none" && r.pointer.lastSegment) {
+      const sg = r.pointer.lastSegment;
+      recordObj(this.db, { account_id: acct, message_id: sg.messageId, webhook_id: sg.webhookId, attachment_id: sg.attachmentId, kind: "segment", size: sg.size });
+    }
     const p = r.written === "written" ? r.pointer : await readPointer(io, key, acct, loc);
     this.db.prepare("UPDATE s_snapshots SET to_seq = ?, written_at = ? WHERE account_id = ?").run(p.toSeq, this.srv.clock(), acct);
     if (p.toSeq >= head) this.pending.delete(acct);

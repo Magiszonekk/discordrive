@@ -20,7 +20,7 @@ export interface ServerBlobsModeOptions {
   transport?: WebhookTransport;
   pacer?: ChannelPacer;
   log?: (s: string) => void;
-  /** Background ticks (ms); 0 = off (tests drive tick()). */
+  /** Background ticks (ms); 0 = off (tests drive tick() and blobs.moves()). */
   cleanupTickMs?: number;
   snapshotTickMs?: number;
   inflightBytes?: number;
@@ -52,10 +52,12 @@ export function serverBlobsMode(o: ServerBlobsModeOptions): ServerBlobsMode {
       hooks = new InstanceHooks(srv.db, instanceKey, srv.clock);
     },
   };
+  let snapshots: SnapshotsExtension | null = null;
   const blobs = new BlobsExtension({
     get hooks() {
       return getHooks();
     },
+    snapshots: () => snapshots,
     sender,
     bot: o.bot ?? null,
     tickMs: o.cleanupTickMs,
@@ -63,6 +65,6 @@ export function serverBlobsMode(o: ServerBlobsModeOptions): ServerBlobsMode {
     cdnOrigins: o.discordApiOrigin ? [o.discordApiOrigin] : [],
     log: o.log,
   } as never);
-  const snapshots = new SnapshotsExtension({ instanceKey, hooks: getHooks, sender, dataDir: o.dataDir, tickMs: o.snapshotTickMs, log: o.log });
+  snapshots = new SnapshotsExtension({ instanceKey, hooks: getHooks, sender, dataDir: o.dataDir, tickMs: o.snapshotTickMs, log: o.log });
   return { extensions: [hooksExt, blobs, snapshots], shareRefresher: blobs.shareRefresher(), hooks: getHooks, blobs, snapshots, sender, instanceKey };
 }

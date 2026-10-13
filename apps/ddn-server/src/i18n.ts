@@ -301,6 +301,7 @@ export const en = {
   doctor   check what is wrong                                   npm run doctor
   invite   new single-use invite code                            npm run invite
   uninstall-autostart   remove the background start              npm run uninstall-autostart
+  channels  pool webhooks of an e2ee/plain instance: list, impact, retire, move, remove
 
 Common: --data-dir DIR (default {dir}), --lang en|pl (or DISCORDRIVE_LANG=pl)
 setup without questions: --yes [--answers file.json] [--public-url URL] [--host H] [--port N]
@@ -320,6 +321,50 @@ The bot token is only accepted interactively or from a file (never on the comman
   "cli.running": "The drive is running: open {url}\nStop: Ctrl+C. Problems: npm run doctor",
   "cli.invite": "(single use, valid until {date})",
   "cli.unknown": "Unknown command: {cmd}",
+
+  // channels (operator: pool webhooks)
+  "ch.usage": `discordrive channels [--data-dir D] <command>: the instance pool's webhooks (e2ee/plain)
+  list                     webhooks with files, bytes, retired/critical; removed ones; the last move
+  impact <id>              what removing it affects
+  retire <id>              no new pieces go there (still read); unretire <id> undoes it
+  move <id> [--wait]       copy everything to the other pool webhooks, then remove it (the running server does it)
+  status                   the last move
+  remove <id> --force      remove anyway: files with pieces on it become unavailable until it is added again`,
+  "ch.notServerMode": "this instance is {mode}: the pool and channel moves exist only in e2ee and plain",
+  "ch.noDb": "no database in {dir} (has the instance been started once?)",
+  "ch.needId": "give the webhook ID (from: discordrive channels list)",
+  "ch.none": "No webhooks in the instance pool.",
+  "ch.row": "{id}  channel {channel}  {label}  files: {files}, {bytes}",
+  "ch.retired": "[retired]",
+  "ch.critical": "[critical: {what}]",
+  "ch.dead": "[not working]",
+  "ch.removedHead": "Removed:",
+  "ch.removedRow": "  {id}  {label}  {how} {at}, unavailable files: {n}",
+  "ch.how.moved": "moved",
+  "ch.how.removed": "removed anyway",
+  "ch.indexNote": "Note: {n} snapshot chain(s) not indexed yet; the running server indexes them (critical flags may be incomplete until then).",
+  "ch.impact": "{id} ({label}): {files} file(s), {bytes} only on this webhook",
+  "ch.impactCritical": "Critical ({what}): holds snapshot data accounts need to be rebuilt; only `move` is allowed.",
+  "ch.impactMove": "Move: {n} other active webhook(s), {bytes} to copy, about {eta}",
+  "ch.impactRetired": "Retired already: no new pieces go there.",
+  "ch.retiredOk": "Retired {id}: no new pieces go there; files on it are still read.",
+  "ch.unretiredOk": "{id} takes new pieces again.",
+  "ch.removeNeedsForce": "Removing it makes {files} file(s) ({bytes}) unavailable until the same webhook is added again. Nothing is deleted. Add --force to do it, or use `move`.",
+  "ch.removedOk": "Removed {id}. Its files are unavailable until the same webhook is added again (discordrive setup).",
+  "ch.queued": "Move of {id} queued; the webhook is retired from now on.",
+  "ch.background": "The running instance does the move in the background (it holds the Discord pacing). Progress: discordrive channels status",
+  "ch.noJob": "No move yet.",
+  "ch.status": "{id} ({label}): {state}, {done}/{total} pieces, {bytes} of {bytesTotal}, about {eta} left",
+  "ch.st.queued": "waiting for the running instance",
+  "ch.st.running": "moving",
+  "ch.st.paused": "paused (retried automatically)",
+  "ch.st.done": "done",
+  "ch.st.failed": "failed",
+  "ch.e.noSuch": "no such webhook in the instance pool",
+  "ch.e.critical": "this webhook holds snapshot data (pointer or segments) of some account: only `move` is allowed",
+  "ch.e.needOther": "add another webhook to the pool first (nothing else would take new pieces)",
+  "ch.e.moveRunning": "a move is running; wait until it ends (discordrive channels status)",
+  "ch.e.indexPending": "snapshot chains are still being indexed by the running instance; try again in a minute",
   "serve.log": "discordrive-next {mode}: listening on {url}, public address {pub}, sign-up: {signup}, sharing: {share}",
   "serve.yes": "yes",
   "serve.no": "no (no bot)",
@@ -642,6 +687,7 @@ export const pl: Record<CliKey, string> = {
   doctor   sprawdź, co nie działa                                           npm run doctor
   invite   nowy jednorazowy kod zaproszenia                                 npm run invite
   uninstall-autostart   usuń start w tle                                    npm run uninstall-autostart
+  channels  webhooki puli instancji e2ee/plain: list, impact, retire, move, remove
 
 Wspólne: --data-dir DIR (domyślnie {dir}), --lang en|pl (albo DISCORDRIVE_LANG=pl)
 setup bez pytań: --yes [--answers plik.json] [--public-url URL] [--host H] [--port N]
@@ -661,6 +707,49 @@ Token bota podaje się tylko interaktywnie albo plikiem (nigdy w linii poleceń)
   "cli.running": "Dysk działa: otwórz {url}\nZatrzymanie: Ctrl+C. Problemy: npm run doctor",
   "cli.invite": "(jednorazowy, ważny do {date})",
   "cli.unknown": "Nieznane polecenie: {cmd}",
+
+  "ch.usage": `discordrive channels [--data-dir D] <polecenie>: webhooki puli instancji (e2ee/plain)
+  list                     webhooki z liczbą plików, bajtami, wycofane/krytyczne; usunięte; ostatnie przeniesienie
+  impact <id>              co zmieni usunięcie
+  retire <id>              nowe fragmenty już tam nie trafiają (nadal czytane); unretire <id> cofa
+  move <id> [--wait]       kopiuje wszystko do innych webhooków puli, potem go usuwa (robi to działający serwer)
+  status                   ostatnie przeniesienie
+  remove <id> --force      usuń mimo to: pliki z fragmentami na nim są niedostępne, dopóki nie zostanie dodany ponownie`,
+  "ch.notServerMode": "ta instancja jest w trybie {mode}: pula i przenoszenie kanałów są tylko w e2ee i plain",
+  "ch.noDb": "brak bazy danych w {dir} (czy instancja była już uruchomiona?)",
+  "ch.needId": "podaj ID webhooka (z: discordrive channels list)",
+  "ch.none": "Brak webhooków w puli instancji.",
+  "ch.row": "{id}  kanał {channel}  {label}  pliki: {files}, {bytes}",
+  "ch.retired": "[wycofany]",
+  "ch.critical": "[krytyczny: {what}]",
+  "ch.dead": "[nie działa]",
+  "ch.removedHead": "Usunięte:",
+  "ch.removedRow": "  {id}  {label}  {how} {at}, niedostępne pliki: {n}",
+  "ch.how.moved": "przeniesiony",
+  "ch.how.removed": "usunięty mimo to",
+  "ch.indexNote": "Uwaga: łańcuchy snapshotów jeszcze nieprzejrzane: {n}; działający serwer je przejrzy (do tego czasu flagi krytyczności mogą być niepełne).",
+  "ch.impact": "{id} ({label}): pliki: {files}, {bytes} tylko na tym webhooku",
+  "ch.impactCritical": "Krytyczny ({what}): trzyma dane snapshotów potrzebne do odtworzenia kont; dozwolone tylko `move`.",
+  "ch.impactMove": "Przeniesienie: inne aktywne webhooki: {n}, do skopiowania {bytes}, około {eta}",
+  "ch.impactRetired": "Już wycofany: nowe fragmenty tam nie trafiają.",
+  "ch.retiredOk": "Wycofano {id}: nowe fragmenty tam nie trafiają; pliki na nim są nadal czytane.",
+  "ch.unretiredOk": "{id} znowu przyjmuje nowe fragmenty.",
+  "ch.removeNeedsForce": "Usunięcie sprawi, że pliki ({files}, {bytes}) będą niedostępne, dopóki ten sam webhook nie zostanie dodany ponownie. Nic nie jest kasowane. Dodaj --force, żeby to zrobić, albo użyj `move`.",
+  "ch.removedOk": "Usunięto {id}. Jego pliki są niedostępne, dopóki ten sam webhook nie zostanie dodany ponownie (discordrive setup).",
+  "ch.queued": "Przeniesienie {id} w kolejce; od teraz webhook jest wycofany.",
+  "ch.background": "Działająca instancja przenosi w tle (ma tempo wysyłania do Discorda). Postęp: discordrive channels status",
+  "ch.noJob": "Jeszcze nic nie przenoszono.",
+  "ch.status": "{id} ({label}): {state}, fragmenty {done}/{total}, {bytes} z {bytesTotal}, zostało około {eta}",
+  "ch.st.queued": "czeka na działającą instancję",
+  "ch.st.running": "przenoszenie",
+  "ch.st.paused": "wstrzymane (ponowi samo)",
+  "ch.st.done": "gotowe",
+  "ch.st.failed": "nieudane",
+  "ch.e.noSuch": "nie ma takiego webhooka w puli instancji",
+  "ch.e.critical": "ten webhook trzyma dane snapshotów (wskaźnik albo segmenty) jakiegoś konta: dozwolone tylko `move`",
+  "ch.e.needOther": "najpierw dodaj do puli inny webhook (nic innego nie przyjęłoby nowych fragmentów)",
+  "ch.e.moveRunning": "trwa przenoszenie; poczekaj, aż się skończy (discordrive channels status)",
+  "ch.e.indexPending": "działająca instancja jeszcze przegląda łańcuchy snapshotów; spróbuj za minutę",
   "serve.log": "discordrive-next {mode}: nasłuch {url}, adres publiczny {pub}, rejestracja: {signup}, udostępnianie: {share}",
   "serve.yes": "tak",
   "serve.no": "nie (brak bota)",

@@ -21,7 +21,9 @@ export const serverMode: ServerMode = {
         // The webhook vault belongs to metadata only: here the instance holds the webhooks.
         { name: "no-vault", route: async (r) => (r.path === "/v1/vault" ? (r.send(404, { error: "not_in_this_mode" }), true) : false) },
       ],
-      shareRefresher: ctx.bot ?? m.shareRefresher,
+      // Always through the instance (it uses the bot when there is one): a share made before a
+      // channel move holds the old attachment IDs, which only the instance resolves (s_blob_alias).
+      shareRefresher: m.shareRefresher,
     };
   },
   async doctor(c, t) {

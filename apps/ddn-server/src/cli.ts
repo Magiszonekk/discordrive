@@ -9,6 +9,8 @@
 //   invite  [--data-dir DIR] [--days N] [--note TEXT]
 //   uninstall-autostart [--data-dir DIR]   remove the background start (any system)
 //   supervise [--data-dir DIR]   (used by the background start) serve + restart after a crash, log to a file
+//   channels [--data-dir DIR] list | impact <id> | retire <id> | unretire <id> | move <id> [--wait] | status | remove <id> --force
+//           (e2ee/plain: the instance pool's webhooks; src/channels.ts)
 // Every command: --lang en|pl (or DISCORDRIVE_LANG); default = the language
 // saved by setup in config.json, else English.
 
@@ -25,18 +27,31 @@ import { setup, type SetupFlags } from "./setup.js";
 
 const help = () => t("cli.help", { dir: defaultDataDir() });
 
-function parse(argv: string[]): { cmd: string; opts: Record<string, string | boolean> } {
+/** Flags that never take a value (so `channels remove <id> --force` does not eat the next word). */
+const SWITCHES = new Set(["force", "wait", "yes"]);
+
+function parse(argv: string[]): { cmd: string; opts: Record<string, string | boolean>; args: string[] } {
   const [cmd = "help", ...rest] = argv;
   const opts: Record<string, string | boolean> = {};
+  const args: string[] = [];
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]!;
+    // Positional words only for `channels` (sub-command + webhook ID).
+    if (!a.startsWith("--") && cmd === "channels") {
+      args.push(a);
+      continue;
+    }
     if (!a.startsWith("--")) throw new Error(t("cli.badArg", { a }));
+    if (cmd === "channels" && SWITCHES.has(a.slice(2))) {
+      opts[a.slice(2)] = true;
+      continue;
+    }
     const [k, v] = a.slice(2).split("=", 2) as [string, string | undefined];
     if (v !== undefined) opts[k] = v;
     else if (rest[i + 1] !== undefined && !rest[i + 1]!.startsWith("--")) opts[k] = rest[++i]!;
     else opts[k] = true;
   }
-  return { cmd, opts };
+  return { cmd, opts, args };
 }
 
 /** `language` saved by setup, read without validating the rest (so errors are in that language). */
@@ -173,6 +188,10 @@ export async function main(argv: string[]): Promise<number | "running"> {
       }
       case "doctor":
         return (await doctor(dataDir)).ok ? 0 : 1;
+      case "channels": {
+        const { channelsCli } = await import("./channels.js");
+        return await channelsCli(dataDir, p.args, p.opts);
+      }
       case "invite": {
         const r = invite(dataDir, Number(str(p.opts.days) ?? 7), str(p.opts.note) ?? "");
         console.log(r.code);

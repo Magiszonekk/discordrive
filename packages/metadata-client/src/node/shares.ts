@@ -161,6 +161,14 @@ export class ShareStore {
     return { from, urls: raw.map((u) => this.cache.get(u)!.url) };
   }
 
+  /**
+   * Forget cached links (e2ee/plain: after a channel move deleted the old messages, a cached link of
+   * an old attachment would 404; the next request refreshes through the instance, which resolves it).
+   */
+  dropCache(): void {
+    this.cache.clear();
+  }
+
   private allowedCdn(u: string): boolean {
     try {
       const o = new URL(u).origin;

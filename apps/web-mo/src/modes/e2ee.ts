@@ -11,7 +11,19 @@ import {
   encodeServerRescueKit,
 } from "@ddv4/metadata-client";
 import { ServerBlobStore } from "@ddv4/metadata-client/server-blobs";
-import { serverChannels, serverCleanup, serverShareAttachments } from "./server-common.js";
+import {
+  serverChannels,
+  serverCleanup,
+  serverDiscordUsage,
+  serverMoveChannel,
+  serverMoveStatus,
+  serverRecoverWithBot,
+  serverRemovalImpact,
+  serverRemoveChannel,
+  serverRetireChannel,
+  serverShareAttachments,
+  serverUnavailable,
+} from "./server-common.js";
 import type { ModeImpl } from "./types.js";
 
 export const MODE_MARKER = "ddn-mode-marker:e2ee";
@@ -42,25 +54,27 @@ export const mode: ModeImpl = {
     await ctx.http.json("POST", "/v1/channels", { url: url.trim() });
   },
 
+  // Removing a channel (zlecenie 2026-10-13-webhooki p. 1): the instance holds the webhooks and does
+  // the work; a move runs there as a background job (no tab needed), names come from this index.
   async removeChannel(ctx, id) {
-    await ctx.http.json("DELETE", `/v1/channels/${id}`);
+    await serverRemoveChannel(ctx, id);
   },
-
-  // zlecenie 2026-10-13-webhooki p. 1: stubs, replaced by the implementation (kept so every mode typechecks meanwhile).
-  async removalImpact() {
-    throw new Error("not_implemented");
+  removalImpact: serverRemovalImpact,
+  retireChannel: serverRetireChannel,
+  async moveChannel(ctx, _client, id, onProgress) {
+    return serverMoveChannel(ctx, id, onProgress);
   },
-  async retireChannel() {
-    throw new Error("not_implemented");
+  async moveStatus(ctx) {
+    return serverMoveStatus(ctx);
   },
-  async moveChannel() {
-    throw new Error("not_implemented");
+  async recoverWithBot(ctx, _client, id) {
+    return serverRecoverWithBot(ctx, id);
   },
-  async moveStatus() {
-    return null;
+  async unavailable(ctx) {
+    return serverUnavailable(ctx);
   },
-  async unavailable() {
-    return [];
+  async discordUsage(ctx) {
+    return serverDiscordUsage(ctx);
   },
 
   async rescueKit(ctx) {

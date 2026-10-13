@@ -19,7 +19,9 @@ export const serverMode: ServerMode = {
     const plain = new PlainExtension({ dataDir: c.dataDir, blobs: m.blobs, log: ctx.log });
     return {
       extensions: [...m.extensions, plain, { name: "no-vault", route: async (r) => (r.path === "/v1/vault" ? (r.send(404, { error: "not_in_this_mode" }), true) : false) }],
-      shareRefresher: ctx.bot ?? m.shareRefresher,
+      // Always through the instance (it uses the bot when there is one): a share made before a
+      // channel move holds the old attachment IDs, which only the instance resolves (s_blob_alias).
+      shareRefresher: m.shareRefresher,
     };
   },
   async doctor(c, t) {
