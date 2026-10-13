@@ -300,7 +300,8 @@ export class ChannelStore {
     if (retired && !h.retired) {
       if (this.unindexed(scope).length) throw new ChannelError(409, "index_pending");
       if (this.critical(id, scope === POOL ? undefined : scope).what.length) throw new ChannelError(409, "channel_critical");
-      if (!this.activeOthers(scope, id).length) throw new ChannelError(409, "need_other_channel");
+      // Same rule as move / remove: the account falls back to the pool when its own channels are all retired.
+      if (!this.otherActive(scope, id)) throw new ChannelError(409, "need_other_channel");
     }
     if (h.retired !== retired) this.hooks.setRetired(id, retired);
   }

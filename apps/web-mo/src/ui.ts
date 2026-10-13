@@ -331,6 +331,9 @@ function renderShellStatus(st: Status) {
 /** Folder + page of the list shown last: the row stagger (.reveal) plays only when that changes, like
  * discordrive's one-shot load (render() also runs after every upload and sync, and the rows must not fade again). */
 let shownList = "";
+/** Removed channels by webhook ID (label + channel), for the "unavailable" explanation in the file list. */
+const removedLabels = new Map<string, string>();
+const channelName = (id: string) => removedLabels.get(id) ?? `#…${id.slice(-6)}`;
 
 function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: number | null; modifiedAt?: number | null; unavailable?: string[] }, i: number, enter = false) {
   const tr = enter ? h("tr", { class: "reveal", style: `--i:${Math.min(i, 12)}` }) : h("tr");
@@ -383,7 +386,7 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
     name.append(h("span", { class: "nm" }, badge, open), h("span", { class: "sub" }, [fmt(r.size), r.modifiedAt ? fmtDate(r.modifiedAt) : ""].filter(Boolean).join(" · ")));
     if (r.unavailable?.length) {
       // Shown only with "Show unavailable files" on: why, and what to do (paste the webhook again / delete).
-      const why = t("un.why", { ch: r.unavailable.map((x) => `#…${x.slice(-6)}`).join(", ") });
+      const why = t("un.why", { ch: r.unavailable.map(channelName).join(", ") });
       name.querySelector(".nm")!.append(chip(t("un.chip"), "warning", why));
       name.querySelector(".nm")!.lastElementChild!.setAttribute("data-ddn", "unavailable-chip");
       name.append(h("span", { class: "sub", "data-ddn": "unavailable-why" }, why));
@@ -639,6 +642,8 @@ async function renderNow() {
   if (route.name === "join" || route.name === "restore" || route.name === "signin") return navigate("/", true);
 
   const wh = await core.webhooks(route.name === "settings");
+  removedLabels.clear();
+  for (const x of wh.removed) removedLabels.set(x.id, `${x.label || "webhook"} (#…${String(x.channelId).slice(-6)})`);
   channelsOk = wh.advice.ok;
   renderHooks(wh);
   // First run: no channel and no saved kit yet -> onboarding (unless skipped in this tab).

@@ -165,8 +165,11 @@ describe("channels: stats, critical, retire", () => {
     const c = await channels(A);
     expect(c.own.find((r) => r.id === Y.id)!.retired).toBe(true);
     expect(c.using).toBe("own");
-    // X is now the only active own channel: retiring it is refused (the pool is no excuse for retiring).
-    await expect(A.api.json("POST", `/v1/channels/${X.id}/retire`, { retired: true })).rejects.toMatchObject({ status: 409, code: "need_other_channel" });
+    // X is now the only active own channel: retiring it is allowed while the pool is behind it (the account then
+    // posts to the pool, the same rule as move and remove anyway); it is undone right away.
+    await A.api.json("POST", `/v1/channels/${X.id}/retire`, { retired: true });
+    expect((await channels(A)).using).toBe("pool");
+    await A.api.json("POST", `/v1/channels/${X.id}/retire`, { retired: false });
     await A.api.json("POST", `/v1/channels/${Y.id}/retire`, { retired: false });
     expect((await channels(A)).own.find((r) => r.id === Y.id)!.retired).toBe(false);
     // The pointer's webhook is critical: neither retire nor remove anyway.
@@ -188,6 +191,7 @@ describe("channels: stats, critical, retire", () => {
     await A.client.upload(memorySource(bytes(500)), "a");
     await expect(A.api.json("DELETE", `/v1/channels/${X.id}`)).rejects.toMatchObject({ status: 409, code: "need_other_channel" });
     await expect(A.api.json("POST", `/v1/channels/${X.id}/move`, {})).rejects.toMatchObject({ status: 409, code: "need_other_channel" });
+    await expect(A.api.json("POST", `/v1/channels/${X.id}/retire`, { retired: true })).rejects.toMatchObject({ status: 409, code: "need_other_channel" });
     const imp = (await A.api.json<{ otherActive: number; moveEtaMs: number | null }>("GET", `/v1/channels/${X.id}/impact`)).body;
     expect(imp).toMatchObject({ otherActive: 0, moveEtaMs: null });
     // check.ts's flow: pool present, own channel added and removed again (nothing critical on it).
