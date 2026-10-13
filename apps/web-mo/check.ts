@@ -27,8 +27,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const MODE = (process.env.DDN_E2E_MODE ?? "metadata-only") as "metadata-only" | "e2ee" | "plain";
 // plain: the server's names are readable on purpose (that is the mode); the "server blind" check applies to the others.
 const SERVER_SIDE = MODE !== "metadata-only";
-execFileSync(process.execPath, [join(here, "..", "..", "node_modules", "tsx", "dist", "cli.mjs"), join(here, "build.ts"), MODE], { stdio: "ignore" });
-const dist = join(here, "dist", MODE);
+// Own output dir: the previews of all three modes run from this checkout and serve dist/<mode>.
+const buildRoot = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-check-dist-"));
+execFileSync(process.execPath, [join(here, "..", "..", "node_modules", "tsx", "dist", "cli.mjs"), join(here, "build.ts"), MODE, buildRoot], { stdio: "ignore" });
+const dist = join(buildRoot, MODE);
 const remote = process.env.DDN_E2E_URL?.replace(/\/$/, "");
 const shotDir = process.env.DDN_E2E_SHOTS;
 const LANG = process.env.DDN_E2E_LANG === "pl" ? "pl" : "en";
@@ -195,7 +197,7 @@ async function pasteInto(p: Page, sel: string, text: string) {
   await p.keyboard.press("Control+V");
 }
 /** Click a sidebar link (opens the drawer first on a phone). */
-async function nav(p: Page, name: "files" | "devices" | "settings") {
+async function nav(p: Page, name: "files" | "trash" | "devices" | "settings") {
   if (await p.isVisible("[data-ddn-ui=nav-open]")) {
     await p.click("[data-ddn-ui=nav-open]");
     await p.waitForSelector("[data-ddn-ui=signed-in-shell][data-drawer=open]");
@@ -572,6 +574,109 @@ try {
   r.rescueCount = await t.textContent("[data-ddn=count]");
   await third.close();
 
+  // 10b. rename (rule 2 suffix + Undo), row menu, selection + Move to… picker, drag onto a breadcrumb,
+  // trash / restore / delete for good / empty trash. Inside "Wakacje", so the counts above stay as they are.
+  step("rename, move, trash");
+  const wakId = await p.evaluate(async () => {
+    const core = (window as unknown as { ddnCore: { list(f: string, a?: string, n?: number): Promise<{ rows: { id: string; name: string }[] }> } }).ddnCore;
+    return (await core.list("root", undefined, 500)).rows.find((x) => x.name === "Wakacje")!.id;
+  });
+  await p.goto(`${base}/folder/${wakId}`);
+  await p.waitForSelector("body[data-ready='1']");
+  await p.waitForFunction(() => document.querySelector("[data-ddn-ui=folder-title]")?.textContent === "Wakacje");
+  await p.click("[data-ddn=new-folder]");
+  await p.waitForSelector("[data-ddn=folder-dialog][open]");
+  await p.keyboard.type("Archiwum", { delay: 2 });
+  await p.keyboard.press("Enter");
+  await count(p, L.one);
+  await p.setInputFiles("[data-ddn=file]", [doc]);
+  await p.waitForFunction((done) => document.querySelector("[data-ddn-ui=queue-title]")?.textContent === done, L.uploaded, { timeout: 120_000 });
+  await count(p, /^2 /);
+  const ops: Record<string, unknown> = {};
+  const menu = async (row: string, action: string) => {
+    await p.locator("[data-ddn=row]", { hasText: row }).locator("[data-ddn=row-more]").click();
+    await p.waitForSelector("[data-ddn=row-menu]:not([hidden])");
+    await p.click(`[data-ddn=menu-${action}]`);
+  };
+  const rowNames = () => p.$$eval("[data-ddn=row] .nm > :last-child", (e) => e.map((x) => x.textContent));
+  // Rename onto the folder's name (case-insensitive collision): rule 2 gives "archiwum (2)" and says so.
+  await menu("notatki.txt", "rename");
+  await p.waitForSelector("[data-ddn=rename-dialog][open]");
+  ops.renameSelectsBase = await p.evaluate(() => {
+    const i = document.querySelector<HTMLInputElement>("[data-ddn=rename-name]")!;
+    return i.value.slice(i.selectionStart!, i.selectionEnd!) === "notatki";
+  });
+  await typeInto(p, "[data-ddn=rename-name]", "a/b");
+  ops.renameRejectsSlash = await p.isVisible("[data-ddn=rename-error]");
+  await typeInto(p, "[data-ddn=rename-name]", "archiwum");
+  await p.keyboard.press("Enter");
+  await p.waitForFunction(() => [...document.querySelectorAll("[data-ddn=row] .nm > :last-child")].some((x) => x.textContent === "archiwum (2)"), null, { timeout: 30_000 });
+  ops.suffixToast = await p.locator(".toast", { hasText: "archiwum (2)" }).first().textContent();
+  await p.locator("[data-ddn=toast-undo]").last().click();
+  await p.waitForFunction(() => [...document.querySelectorAll("[data-ddn=row] .nm > :last-child")].some((x) => x.textContent === "notatki.txt"), null, { timeout: 30_000 });
+  ops.renameUndo = true;
+  await shot(p, "14-rename-undo");
+  // Select the file, Move to… -> Wakacje / Archiwum in the picker.
+  await p.locator("[data-ddn=row]", { hasText: "notatki.txt" }).locator("[data-ddn=select]").check();
+  await p.waitForSelector("[data-ddn=bulk]:not([hidden])");
+  ops.bulkCount = await p.textContent("[data-ddn=bulk-count]");
+  await p.click("[data-ddn=bulk-move]");
+  await p.waitForSelector("[data-ddn=move-dialog][open]");
+  await p.click(`[data-ddn=move-folder][data-id="${wakId}"]`);
+  await p.locator("[data-ddn=move-folder]", { hasText: "Archiwum" }).click();
+  await shot(p, "15-move-picker");
+  await p.click("[data-ddn=move-here]");
+  await count(p, L.one);
+  ops.movedOut = JSON.stringify(await rowNames()) === JSON.stringify(["Archiwum"]);
+  // Drag back from Archiwum onto the "Wakacje" breadcrumb.
+  await p.locator("[data-ddn=row]", { hasText: "Archiwum" }).locator("a").click();
+  await p.waitForFunction(() => document.querySelector("[data-ddn-ui=folder-title]")?.textContent === "Archiwum");
+  await count(p, L.one);
+  await p.locator("[data-ddn=row]", { hasText: "notatki.txt" }).dragTo(p.locator(`[data-ddn-ui=crumbs] a[data-drop="${wakId}"]`));
+  await p.waitForFunction(() => document.querySelectorAll("[data-ddn=row]").length === 0, null, { timeout: 30_000 });
+  ops.dragToCrumb = true;
+  await p.goBack();
+  await p.waitForFunction(() => document.querySelector("[data-ddn-ui=folder-title]")?.textContent === "Wakacje");
+  await count(p, /^2 /);
+  // Rule 5 through the core: a move into a folder in the trash is skipped with a notice.
+  // Trash the folder from the row menu, check the Trash page, restore it, trash it again, delete it for good.
+  const archId = await p.locator("[data-ddn=row]", { hasText: "Archiwum" }).getAttribute("data-id");
+  await menu("Archiwum", "trash");
+  await count(p, L.one);
+  ops.rule5 = await p.evaluate(
+    async ([file, folder]) => (await (window as unknown as { ddnCore: { move(i: string[], t: string): Promise<{ outcome: string; notices: { code: string }[] }> } }).ddnCore.move([file!], folder!)).notices.map((n) => n.code),
+    [await p.locator("[data-ddn=row]", { hasText: "notatki.txt" }).getAttribute("data-id"), archId],
+  );
+  await nav(p, "trash" as never);
+  await p.waitForSelector("[data-ddn=trash-row]");
+  ops.trashRow = { name: await p.locator("[data-ddn=trash-row]").first().locator(".nm").textContent(), left: await p.textContent("[data-ddn=trash-left]") };
+  await shot(p, "16-trash");
+  await p.click("[data-ddn=trash-restore]");
+  await p.waitForSelector("[data-ddn-ui=trash-none]:not([hidden])");
+  await nav(p, "files");
+  await p.goto(`${base}/folder/${wakId}`);
+  await p.waitForSelector("body[data-ready='1']");
+  await count(p, /^2 /);
+  ops.restored = true;
+  // Both into the trash with the bulk bar, then delete one for good and empty the trash.
+  await p.check("[data-ddn=select-all]");
+  ops.selectAll = await p.textContent("[data-ddn=bulk-count]");
+  await p.click("[data-ddn=bulk-trash]");
+  await p.waitForSelector("[data-ddn-ui=empty]:not([hidden])");
+  await nav(p, "trash" as never);
+  await p.waitForFunction(() => document.querySelectorAll("[data-ddn=trash-row]").length === 2);
+  await p.locator("[data-ddn=trash-row]", { hasText: "Archiwum" }).locator("[data-ddn=trash-purge]").click();
+  await p.waitForSelector("[data-ddn=confirm-dialog][open]");
+  await p.click("[data-ddn=confirm-yes]");
+  await p.waitForFunction(() => document.querySelectorAll("[data-ddn=trash-row]").length === 1);
+  await p.click("[data-ddn=trash-empty]");
+  await p.waitForSelector("[data-ddn=confirm-dialog][open]");
+  await shot(p, "17-empty-trash-confirm");
+  await p.click("[data-ddn=confirm-yes]");
+  await p.waitForSelector("[data-ddn-ui=trash-none]:not([hidden])");
+  ops.emptied = true;
+  r.ops = ops;
+
   // 11. what the server stores: no names in clear
   if (srv) {
     const tables = ["devices", "log", "shares", "vault", "s_blobs", "s_uploads", "inst_hooks", "s_snapshots"].filter((t) => srv!.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t));
@@ -622,6 +727,16 @@ try {
     names: JSON.stringify(r.deviceNamesOnLaptop) === JSON.stringify(["Laptop testowy", "Telefon testowy"]),
     mobile: r.phoneFilesHiddenOnDevicesTab === true && r.phoneNoHorizontalScroll === true && r.phoneSidebarHiddenUntilMenu === true && r.phoneDrawerClosedAfterNav === true,
     rescue: L.of(65).test(String(r.rescueCount)),
+    renameMoveTrash: (() => {
+      const o = r.ops as Record<string, unknown> | undefined;
+      if (!o) return false;
+      return (
+        o.renameSelectsBase === true && o.renameRejectsSlash === true && /archiwum \(2\)/.test(String(o.suffixToast)) && o.renameUndo === true &&
+        /^(1 selected|Zaznaczono 1)$/.test(String(o.bulkCount)) && o.movedOut === true && o.dragToCrumb === true &&
+        JSON.stringify(o.rule5) === JSON.stringify(["move_target_in_trash"]) && /Archiwum/.test(String((o.trashRow as { name: string }).name)) &&
+        /30/.test(String((o.trashRow as { left: string }).left)) && o.restored === true && /2/.test(String(o.selectAll)) && o.emptied === true
+      );
+    })(),
     serverBlind: MODE === "plain" ? true : r.serverSeesNoNames !== false,
     noPageErrors: errors.length === 0,
   };

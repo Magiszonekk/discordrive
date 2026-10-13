@@ -33,8 +33,8 @@ export function serverSourceHash(): string {
   return h.digest("hex").slice(0, 32);
 }
 
-export function serverModeFile(mode: string): string {
-  return join(SERVER_DIST, mode, "server-mode.mjs");
+export function serverModeFile(mode: string, root = SERVER_DIST): string {
+  return join(root, mode, "server-mode.mjs");
 }
 
 export function serverModeState(mode: string): "ok" | "missing" | "stale" {
@@ -59,16 +59,16 @@ const sharedExternal: Plugin = {
   },
 };
 
-export async function buildServerMode(mode: ServerModeName): Promise<string> {
+export async function buildServerMode(mode: ServerModeName, root = SERVER_DIST): Promise<string> {
   const entry = join(here, "src", "modes", `${mode}.ts`);
   if (!existsSync(entry)) throw new Error(`mode ${mode}: not available yet`);
-  const out = join(SERVER_DIST, mode);
+  const out = join(root, mode);
   const hash = serverSourceHash();
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
   await build({
     entryPoints: [entry],
-    outfile: serverModeFile(mode),
+    outfile: serverModeFile(mode, root),
     bundle: true,
     platform: "node",
     format: "esm",

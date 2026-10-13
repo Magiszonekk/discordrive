@@ -8,7 +8,8 @@
 // The server bundle keeps the workspace packages shared by all modes external (one DdnServer per
 // process); what a mode pulls from them is visible as its import specifier, so the server checks
 // also look for "@ddv4/metadata-client/plain-ops" / "/server-blobs" in the bundle text.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildMode } from "../../web-mo/build.js";
@@ -36,10 +37,12 @@ describe("mode bundles: no code of the other modes", () => {
   });
   for (const mode of modes) {
     it(`${mode}: web and server bundles carry their marker and nothing that belongs to another mode`, async () => {
-      const web = jsOf(await buildMode(mode));
-      await buildServerMode(mode);
-      expect(existsSync(serverModeFile(mode))).toBe(true);
-      const server = readFileSync(serverModeFile(mode), "utf8");
+      // Own output dirs: running previews serve dist/<mode> of this checkout (never rebuilt under them).
+      const out = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-bundles-"));
+      const web = jsOf(await buildMode(mode, out));
+      await buildServerMode(mode, out);
+      expect(existsSync(serverModeFile(mode, out))).toBe(true);
+      const server = readFileSync(serverModeFile(mode, out), "utf8");
       for (const m of REQUIRED[mode].web) expect(web.includes(m), `web ${mode} has ${m}`).toBe(true);
       for (const m of REQUIRED[mode].server) expect(server.includes(m), `server ${mode} has ${m}`).toBe(true);
       for (const m of FORBIDDEN[mode]) {

@@ -43,6 +43,13 @@
   <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2m-7.07-17.07 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
   <symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M21.17 6.81a1 1 0 0 0-3.98-3.98L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/><path d="m15 5 4 4"/></symbol>
+  <symbol id="i-move" viewBox="0 0 24 24"><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10M9 16l3-3-3-3"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></symbol>
+  <symbol id="i-restore" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+  <symbol id="i-recovered" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v4M12 17h.01"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/></symbol>
 </svg>
 
 <!-- ═══ Signed out: AuthCard screens ═══ -->
@@ -140,6 +147,8 @@
     </div>
     <nav class="nav" data-i18n-attr="aria-label=nav.label">
       <a href="/" data-nav="files" data-link><svg class="i"><use href="#i-files"/></svg><span data-i18n="nav.files">Files</span></a>
+      <a href="/folder/recovered" data-nav="recovered" data-ddn-ui="nav-recovered" data-link hidden><svg class="i"><use href="#i-recovered"/></svg><span data-i18n="nav.recovered">Recovered</span></a>
+      <a href="/trash" data-nav="trash" data-ddn="nav-trash" data-link><svg class="i"><use href="#i-trash"/></svg><span data-i18n="nav.trash">Trash</span></a>
       <a href="/devices" data-nav="devices" data-link><svg class="i"><use href="#i-phone"/></svg><span data-i18n="nav.devices">Devices</span></a>
       <a href="/settings" data-nav="settings" data-link><svg class="i"><use href="#i-settings"/></svg><span data-i18n="nav.settings">Settings</span></a>
     </nav>
@@ -188,9 +197,20 @@
         <button class="iconbtn" type="button" data-ddn-ui="search-clear" data-i18n-attr="aria-label=search.clear, title=search.clear" hidden><svg class="i"><use href="#i-x"/></svg></button>
       </form>
 
+      <!-- Selection (checkboxes, like discordrive's bulk selection): actions for every selected item. -->
+      <div class="bulk" data-ddn="bulk" role="toolbar" data-i18n-attr="aria-label=bulk.label" hidden>
+        <span class="bulk-n" data-ddn="bulk-count"></span>
+        <div class="row-btns">
+          <button class="btn" type="button" data-ddn="bulk-move"><svg class="i"><use href="#i-move"/></svg><span data-i18n="act.move">Move to…</span></button>
+          <button class="btn" type="button" data-ddn="bulk-download"><svg class="i"><use href="#i-download"/></svg><span data-i18n="files.download">Download</span></button>
+          <button class="btn danger" type="button" data-ddn="bulk-trash"><svg class="i"><use href="#i-trash"/></svg><span data-i18n="act.trash">Move to trash</span></button>
+          <button class="iconbtn" type="button" data-ddn="bulk-clear" data-i18n-attr="aria-label=bulk.clear, title=bulk.clear"><svg class="i"><use href="#i-x"/></svg></button>
+        </div>
+      </div>
+
       <div class="ftable-wrap">
         <table class="ftable">
-          <thead><tr><th data-i18n="files.col.name">Name</th><th class="r" data-i18n="files.col.size">Size</th><th data-i18n="files.col.date">Date</th><th><span class="sr" data-i18n="files.col.actions">Actions</span></th></tr></thead>
+          <thead><tr><th class="c-sel"><input type="checkbox" data-ddn="select-all" data-i18n-attr="aria-label=bulk.all"></th><th data-i18n="files.col.name">Name</th><th class="r" data-i18n="files.col.size">Size</th><th data-i18n="files.col.date">Date</th><th><span class="sr" data-i18n="files.col.actions">Actions</span></th></tr></thead>
           <tbody data-ddn="list" data-i18n-attr="aria-label=files.list"></tbody>
         </table>
         <div class="empty" data-ddn-ui="empty" hidden><span class="ic"><svg class="i"><use href="#i-folder"/></svg></span><b data-i18n="files.empty.b"></b><span data-i18n="files.empty.s"></span></div>
@@ -200,6 +220,27 @@
         <button class="iconbtn" type="button" data-ddn="prev" data-i18n-attr="aria-label=files.prev"><svg class="i"><use href="#i-left"/></svg></button>
         <span data-ddn="count"></span>
         <button class="iconbtn" type="button" data-ddn="next" data-i18n-attr="aria-label=files.next"><svg class="i"><use href="#i-right"/></svg></button>
+      </div>
+    </main>
+
+    <!-- Trash: items deleted in the last 30 days (koncept §6.2); restore or delete for good. -->
+    <main class="page" data-page="trash" aria-labelledby="trash-h" hidden>
+      <div class="files-h">
+        <div class="titles">
+          <div>
+            <h1 id="trash-h" data-i18n="trash.h">Trash</h1>
+            <p class="meta" data-ddn-ui="trash-meta"></p>
+          </div>
+        </div>
+        <div class="acts"><button class="btn danger" type="button" data-ddn="trash-empty"><svg class="i"><use href="#i-trash"/></svg><span data-i18n="trash.empty">Empty trash</span></button></div>
+      </div>
+      <div class="note"><svg class="i"><use href="#i-info"/></svg><p data-i18n="trash.lead"></p></div>
+      <div class="ftable-wrap trash-wrap">
+        <table class="ftable">
+          <thead><tr><th data-i18n="files.col.name">Name</th><th class="r" data-i18n="files.col.size">Size</th><th data-i18n="trash.col.deleted">Deleted</th><th><span class="sr" data-i18n="files.col.actions">Actions</span></th></tr></thead>
+          <tbody data-ddn="trash-list"></tbody>
+        </table>
+        <div class="empty" data-ddn-ui="trash-none" hidden><span class="ic"><svg class="i"><use href="#i-trash"/></svg></span><b data-i18n="trash.none.b"></b><span data-i18n="trash.none.s"></span></div>
       </div>
     </main>
 
@@ -329,6 +370,39 @@
     <div class="modal-acts"><button class="btn" type="button" data-ddn-ui="nf-cancel" data-i18n="nf.cancel">Cancel</button><button class="btn primary" type="button" data-ddn="mkdir" data-i18n="nf.create">Create</button></div>
   </div>
 </dialog>
+
+<!-- Rename (RenameFolderModal) -->
+<dialog class="modal" data-ddn="rename-dialog" aria-labelledby="rn-h">
+  <div class="modal-h"><h2 id="rn-h"><svg class="i"><use href="#i-pencil"/></svg><span data-ddn-ui="rn-title"></span></h2><button class="iconbtn" type="button" data-ddn-ui="rn-close" data-i18n-attr="aria-label=nf.cancel"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <form class="modal-b" method="dialog" data-ddn-ui="rn-form">
+    <input class="input" data-ddn="rename-name" maxlength="1024" autocomplete="off" spellcheck="false" data-i18n-attr="aria-label=rn.ph">
+    <p class="error-text" data-ddn="rename-error" role="alert" hidden></p>
+    <div class="modal-acts"><button class="btn" type="button" data-ddn-ui="rn-cancel" data-i18n="nf.cancel">Cancel</button><button class="btn primary" type="submit" data-ddn="rename-save" data-i18n="rn.save">Rename</button></div>
+  </form>
+</dialog>
+
+<!-- Move to… (folder picker) -->
+<dialog class="modal" data-ddn="move-dialog" aria-labelledby="mv-h">
+  <div class="modal-h"><h2 id="mv-h"><svg class="i"><use href="#i-move"/></svg><span data-ddn-ui="mv-title"></span></h2><button class="iconbtn" type="button" data-ddn-ui="mv-close" data-i18n-attr="aria-label=nf.cancel"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <div class="modal-b">
+    <nav class="crumbs picker-crumbs" data-ddn="move-crumbs" data-i18n-attr="aria-label=files.crumbs"></nav>
+    <ul class="list picker" data-ddn="move-list"></ul>
+    <p class="hint" data-ddn-ui="mv-hint"></p>
+    <div class="modal-acts"><button class="btn" type="button" data-ddn-ui="mv-cancel" data-i18n="nf.cancel">Cancel</button><button class="btn primary" type="button" data-ddn="move-here" data-i18n="mv.here">Move here</button></div>
+  </div>
+</dialog>
+
+<!-- Confirmation (delete for good, empty trash) -->
+<dialog class="modal" data-ddn="confirm-dialog" aria-labelledby="cf-h">
+  <div class="modal-h"><h2 id="cf-h"><svg class="i"><use href="#i-trash"/></svg><span data-ddn-ui="cf-title"></span></h2></div>
+  <div class="modal-b">
+    <p class="muted" data-ddn-ui="cf-text"></p>
+    <div class="modal-acts"><button class="btn" type="button" data-ddn-ui="cf-no" data-i18n="nf.cancel">Cancel</button><button class="btn danger" type="button" data-ddn="confirm-yes"></button></div>
+  </div>
+</dialog>
+
+<!-- Row actions (⋯), like discordrive's FileActionMenu / FolderActionMenu -->
+<div class="menu" data-ddn="row-menu" role="menu" hidden></div>
 
 <dialog class="player" data-ddn-ui="player-dialog" aria-labelledby="player-title">
   <div class="player-h"><b id="player-title" data-ddn-ui="player-title"></b><button class="iconbtn" type="button" data-ddn-ui="player-close" data-i18n-attr="aria-label=player.close"><svg class="i"><use href="#i-x"/></svg></button></div>

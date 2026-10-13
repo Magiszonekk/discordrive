@@ -5,10 +5,27 @@
 // on an in-memory replica of the same server log (they read, the server
 // arbitrates writes, so they stay correct, only slower to start).
 
-import { MemoryIndexStore, ROOT_ID, nameKey, type IndexStore, type LogEntry } from "@ddv4/sync-core";
+import {
+  MemoryIndexStore,
+  RECOVERED_ID,
+  ROOT_ID,
+  TRASH_RETENTION_MS,
+  inTrash,
+  nameKey,
+  normalizeName,
+  pathOf,
+  validateName,
+  type ApplyResult,
+  type IndexStore,
+  type LogEntry,
+  type NoticeCode,
+  type Operation,
+  type Outcome,
+} from "@ddv4/sync-core";
 import {
   HttpApi,
   HttpPairingMailbox,
+  OpFailedError,
   SqlIndexStore,
   accountKeyFromB64,
   acceptPairing,
@@ -26,6 +43,7 @@ import {
   sealJson,
   shareLink,
   startPairing,
+  trashCleanupOp,
   unsealJson,
   type AccountKey,
   type ArbiterApi,
@@ -49,11 +67,40 @@ export interface CoreConfig {
   wasmUrl?: string;
 }
 
+/** A rule notice for the UI (sync-core Notice, with names instead of IDs). */
+export interface UiNotice {
+  code: NoticeCode;
+  /** Name of the node the notice is about (null when it is gone). */
+  name: string | null;
+  /** Second name: the wanted name (rule 2), the overwritten one (rule 1), the folder (Q1, rule 5). */
+  other: string | null;
+  /** Q3: nodes kept in the trash. */
+  count: number;
+}
+export interface OpOutcome {
+  outcome: Outcome;
+  notices: UiNotice[];
+}
+export interface TrashRow {
+  id: string;
+  name: string;
+  kind: "file" | "folder";
+  size: number | null;
+  /** Server time of the trash operation (the 30-day clock, restarted by a partial purge, Q3). */
+  trashedAt: number;
+  purgeAt: number;
+  /** Folder path it was in (names from the root), null when unknown. */
+  from: string[] | null;
+  fromRecovered: boolean;
+}
+
 /** Events pushed from the worker to the UI (not request/response). */
 export type CoreEvent =
   | { type: "upload-progress"; token: string; done: number; total: number }
   | { type: "share-progress"; done: number; total: number }
-  | { type: "changed" };
+  | { type: "changed" }
+  /** Rule notices about changes of OTHER devices addressed to this one (Q1: your file went to the trash with a folder). */
+  | { type: "notices"; notices: UiNotice[] };
 
 function blobSource(b: Blob): ByteSource {
   return { size: b.size, read: async (o, l) => new Uint8Array(await b.slice(o, o + l).arrayBuffer()) };
@@ -175,7 +222,15 @@ export class AppCore {
     };
     await this.rebuildClient();
     this.version++;
-    this.sub = this.http.subscribe(() => void this.client!.pull().then(() => (this.version++, this.onEvent({ type: "changed" }))));
+    this.sub = this.http.subscribe(
+      () =>
+        void this.client!.pull().then((rs) => {
+          this.version++;
+          this.onEvent({ type: "changed" });
+          const mine = this.uiNotices(rs, false);
+          if (mine.length) this.onEvent({ type: "notices", notices: mine });
+        }),
+    );
     void this.ensureOwnName().catch(() => {});
     this.startSnapshots();
   }
@@ -268,8 +323,9 @@ export class AppCore {
   }
 
   /**
-   * Path from the root to a folder (breadcrumb after a reload of /folder/<id>).
-   * null when the folder no longer exists or is in the trash (another device removed it).
+   * Path from the root to a folder (breadcrumb after a reload of /folder/<id>). A path under
+   * „Recovered” (rule 4) starts with { id: "recovered" }. null when the folder no longer exists
+   * or is in the trash (another device removed it).
    */
   folderPath(nodeId: string): { id: string; name: string }[] | null {
     const out: { id: string; name: string }[] = [];
@@ -278,6 +334,7 @@ export class AppCore {
       const n = this.c().store.getNode(id);
       if (!n || n.kind !== "folder" || n.trashed) return null;
       out.unshift({ id: n.id, name: n.name });
+      if (n.id === RECOVERED_ID) return out;
       id = n.parentId;
     }
     return id === ROOT_ID ? out : null;
@@ -351,14 +408,149 @@ export class AppCore {
   }
   private readonly rangeCache = new Map<string, Uint8Array>();
 
-  async trash(nodeId: string) {
-    await this.c().commitOp({ type: "trash", nodeId }, "trash");
+  // ── rename, move, trash (sync-core rules 1–6, Q1–Q3, Q9) ───────────
+
+  /**
+   * Commit one operation and translate the rule notices for the UI. A rule that skips the
+   * operation (5, 6, Q2) is an answer, not an error: the caller shows the notice.
+   */
+  private async commit(op: Operation, what: string): Promise<OpOutcome> {
+    let r: ApplyResult;
+    try {
+      r = await this.c().commitOp(op, what);
+    } catch (e) {
+      if (!(e instanceof OpFailedError) || !("outcome" in e.result) || e.result.outcome !== "skipped") throw e;
+      r = e.result;
+    }
     this.version++;
+    return { outcome: r.outcome, notices: this.uiNotices([r], true) };
   }
 
-  async rename(nodeId: string, name: string) {
-    await this.c().commitOp({ type: "rename", nodeId, name: name.normalize("NFC") }, "rename");
-    this.version++;
+  /** Rule notices this device should see: its own operations, and changes of others addressed to it (Q1). */
+  private uiNotices(results: ApplyResult[], own: boolean): UiNotice[] {
+    const me = this.acct?.deviceId;
+    const out: UiNotice[] = [];
+    const nameOf = (id?: string) => (id ? (this.client?.store.getNode(id)?.name ?? null) : null);
+    for (const r of results)
+      for (const n of r.notices) {
+        if (n.silent || n.code === "group_members_skipped") continue;
+        const forMe = n.notifyDeviceId ? n.notifyDeviceId === me : own;
+        if (!forMe) continue;
+        out.push({
+          code: n.code,
+          name: nameOf(n.nodeId),
+          // name_suffixed / rename_overrode_unseen: the wanted / overwritten name; moves: the target folder
+          other: n.code === "name_suffixed" || n.code === "rename_overrode_unseen" ? (n.reason ?? null) : (nameOf(n.relatedNodeId) ?? nameOf(n.reason) ?? null),
+          count: n.items?.length ?? 0,
+        });
+      }
+    return out;
+  }
+
+  async rename(nodeId: string, name: string): Promise<OpOutcome & { name: string | null; before: string | null }> {
+    const nfc = normalizeName(name.trim());
+    const bad = validateName(nfc);
+    if (bad) throw new Error(`invalid_name: ${bad}`);
+    const before = this.c().store.getNode(nodeId)?.name ?? null;
+    const r = await this.commit({ type: "rename", nodeId, name: nfc }, "rename");
+    return { ...r, name: this.c().store.getNode(nodeId)?.name ?? null, before };
+  }
+
+  /** Move one or more nodes into a folder (one group op, Q9: members a rule skips are left out). */
+  async move(nodeIds: string[], parentId: string): Promise<OpOutcome & { from: Record<string, string> }> {
+    const from: Record<string, string> = {};
+    for (const id of nodeIds) {
+      const n = this.c().store.getNode(id);
+      if (n?.parentId) from[id] = n.parentId;
+    }
+    const ops = nodeIds.map((nodeId) => ({ type: "move" as const, nodeId, parentId }));
+    const r = await this.commit(ops.length === 1 ? ops[0]! : { type: "group", ops }, "move");
+    return { ...r, from };
+  }
+
+  /** Undo of a move: every node back where it was. */
+  async moveBack(from: Record<string, string>): Promise<OpOutcome> {
+    const ops = Object.entries(from).map(([nodeId, parentId]) => ({ type: "move" as const, nodeId, parentId }));
+    if (!ops.length) return { outcome: "noop", notices: [] };
+    return this.commit(ops.length === 1 ? ops[0]! : { type: "group", ops }, "move back");
+  }
+
+  async trash(nodeIds: string | string[]): Promise<OpOutcome> {
+    const ops = (Array.isArray(nodeIds) ? nodeIds : [nodeIds]).map((nodeId) => ({ type: "trash" as const, nodeId }));
+    return this.commit(ops.length === 1 ? ops[0]! : { type: "group", ops }, "trash");
+  }
+
+  /** Restore from the trash; a node whose folder is still in the trash lands in „Recovered” (rule 4). */
+  async restore(nodeIds: string[]): Promise<OpOutcome> {
+    const ops = nodeIds.map((nodeId) => ({ type: "restore" as const, nodeId }));
+    return this.commit(ops.length === 1 ? ops[0]! : { type: "group", ops }, "restore");
+  }
+
+  /** Delete for good (Q3: what another device changed unseen stays in the trash, 30 days again). */
+  async purge(nodeIds: string[]): Promise<OpOutcome> {
+    if (!nodeIds.length) return { outcome: "noop", notices: [] };
+    const r = await this.commit(trashCleanupOp(nodeIds), "purge");
+    void this.snapshotSoon();
+    return r;
+  }
+
+  async emptyTrash(): Promise<OpOutcome> {
+    return this.purge(this.trashList().map((x) => x.id));
+  }
+
+  /**
+   * The trash: nodes trashed on their own whose folder is not in the trash (purging the folder
+   * covers the rest), newest first, with the day they go for good (30 days, §6.2).
+   */
+  trashList(): TrashRow[] {
+    const s = this.c().store;
+    const own = this.store instanceof SqlIndexStore ? this.store.trashedNodes() : [...s.allNodes()].filter((n) => n.trashed);
+    const out: TrashRow[] = [];
+    for (const n of own) {
+      if (!n.trashed || n.parentId === null || inTrash(s, n.parentId)) continue;
+      const from = pathOf(s, n.parentId);
+      out.push({
+        id: n.id,
+        name: n.name,
+        kind: n.kind as "file" | "folder",
+        size: n.content?.sizeBytes ?? null,
+        trashedAt: n.trashed.at,
+        purgeAt: n.trashed.at + TRASH_RETENTION_MS,
+        from: from === null ? null : from,
+        fromRecovered: this.underRecovered(n.parentId),
+      });
+    }
+    return out.sort((a, b) => b.trashedAt - a.trashedAt || (a.id < b.id ? -1 : 1));
+  }
+
+  private underRecovered(id: string): boolean {
+    let cur = this.c().store.getNode(id);
+    for (let i = 0; cur && i < 4096; i++) {
+      if (cur.parentId === null) return cur.id === RECOVERED_ID;
+      cur = this.c().store.getNode(cur.parentId);
+    }
+    return false;
+  }
+
+  /** Number of items in „Recovered” (the sidebar shows the folder only when it has something). */
+  recoveredCount(): number {
+    const s = this.store;
+    if (s instanceof SqlIndexStore) return s.countChildren(RECOVERED_ID);
+    let n = 0;
+    for (const id of this.c().store.childIds(RECOVERED_ID)) if (!this.c().store.getNode(id)?.trashed) n++;
+    return n;
+  }
+
+  /** Move to… picker: live sub-folders of a folder. */
+  subfolders(parentId = ROOT_ID): { id: string; name: string }[] {
+    const s = this.store;
+    if (s instanceof SqlIndexStore) return s.childFolders(parentId);
+    const out: { id: string; name: string; k: string }[] = [];
+    for (const id of this.c().store.childIds(parentId)) {
+      const n = this.c().store.getNode(id);
+      if (n && !n.trashed && n.kind === "folder") out.push({ id, name: n.name, k: nameKey(n.name) });
+    }
+    return out.sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : a.id < b.id ? -1 : 1)).map(({ k: _k, ...x }) => x);
   }
 
   // ── devices ────────────────────────────────────────────────────────

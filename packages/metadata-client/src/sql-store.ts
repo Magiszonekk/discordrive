@@ -159,6 +159,24 @@ export class SqlIndexStore implements IndexStore {
     return Number(this.sql.get<{ n: number }>("SELECT count(*) AS n FROM nodes WHERE parent_id = ? AND live = 1", [parentId])!.n);
   }
 
+  /**
+   * Nodes trashed on their own (the trash list): `live = 0` is exactly "trashed itself"
+   * (children of a trashed folder stay live = 1 and are hidden by the folder).
+   */
+  trashedNodes(): NodeRecord[] {
+    return this.sql.all<{ rec: string }>("SELECT rec FROM nodes WHERE live = 0", []).map((r) => JSON.parse(r.rec) as NodeRecord);
+  }
+
+  /** Live sub-folders of a folder, by name (Move to… picker). */
+  childFolders(parentId: NodeId, limit = 1000): { id: NodeId; name: string }[] {
+    return this.sql
+      .all<{ rec: string }>("SELECT rec FROM nodes WHERE parent_id = ? AND live = 1 AND json_extract(rec, '$.kind') = 'folder' ORDER BY name_key, id LIMIT ?", [parentId, limit])
+      .map((r) => {
+        const n = JSON.parse(r.rec) as NodeRecord;
+        return { id: n.id, name: n.name };
+      });
+  }
+
   /** Folder heading counters: direct sub-folders, files and the bytes of those files (one indexed pass). */
   folderStats(parentId: NodeId): FolderStats {
     const rows = this.sql.all<{ k: string; n: number; b: number | null }>(

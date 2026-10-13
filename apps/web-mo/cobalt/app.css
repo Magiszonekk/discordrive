@@ -400,3 +400,43 @@ dialog.player { width: min(1000px, 96vw); padding: 0; border: 1px solid var(--co
 @media (max-width: 767.98px) {
   .ftable .c-name .nm > .thumb { grid-row: span 2; align-self: start; width: 3.25rem; height: 2rem; border-radius: var(--radius-input); }
 }
+
+/* ── trash, row menu, selection, move picker (zlecenie 2026-10-13; on existing Cobalt tokens) ── */
+/* Selection column: checkbox like discordrive's bulk select (accent-color, 16px) */
+.ftable th.c-sel, .ftable td.c-sel { width: 1%; padding-right: 0; }
+.ftable input[type="checkbox"] { width: 1rem; height: 1rem; margin: 0; accent-color: var(--color-accent); cursor: pointer; vertical-align: middle; }
+.ftable tbody tr.sel { background: color-mix(in oklch, var(--color-accent) 6%, transparent); }
+.ftable tbody tr.drop-over, .crumbs a.drop-over { outline: 2px dashed var(--color-accent); outline-offset: -2px; background: color-mix(in oklch, var(--color-accent) 10%, transparent); }
+/* Bulk bar: hairline card with the count left and the actions right */
+.bulk { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem .75rem; margin-bottom: .75rem; padding: .5rem .5rem .5rem 1rem; border: 1px solid color-mix(in oklch, var(--color-accent) 40%, transparent); border-radius: var(--radius-card); background: color-mix(in oklch, var(--color-accent) 6%, var(--color-paper)); }
+.bulk-n { font: 500 .875rem/1.25rem var(--font-mono); color: var(--color-ink); font-variant-numeric: tabular-nums; }
+.bulk .row-btns { align-items: center; }
+/* Row menu (FileActionMenu): absolute card, min-w-44, rows px-4 py-3 text-sm, danger in error */
+.menu { position: fixed; z-index: var(--z-dropdown); min-width: 11rem; overflow: hidden; border: 1px solid var(--color-rule); border-radius: var(--radius-card); background: var(--color-paper); box-shadow: 0 10px 15px -3px oklch(24% 0.02 258 / 0.1), 0 4px 6px -4px oklch(24% 0.02 258 / 0.1); }
+.menu button { display: flex; width: 100%; align-items: center; gap: .75rem; padding: .625rem 1rem; border: 0; background: none; text-align: left; font: 400 .875rem/1.25rem var(--font-body); color: var(--color-ink-2); cursor: pointer; }
+.menu button:hover, .menu button:focus-visible { background: var(--color-paper-2); color: var(--color-ink); outline: none; }
+.menu button.danger { color: var(--color-error); }
+.menu button.danger:hover, .menu button.danger:focus-visible { background: color-mix(in oklch, var(--color-error) 10%, transparent); color: var(--color-error); }
+/* Toast with an action (Undo) */
+.toast { display: flex; align-items: baseline; gap: .75rem; }
+.toast > span { flex: 1; min-width: 0; }
+.toast .toast-act { flex: none; font-size: .875rem; }
+/* Move picker: folder list as buttons */
+.picker { max-height: 18rem; overflow: auto; }
+.picker li { padding: 0; min-height: 0; }
+.picker li > button { display: flex; width: 100%; align-items: center; gap: .75rem; min-height: 2.75rem; padding: .5rem 1rem; border: 0; background: none; text-align: left; font: inherit; color: var(--color-ink); cursor: pointer; }
+.picker li > button:hover, .picker li > button:focus-visible { background: var(--color-paper-2); }
+.picker li > button svg.i { color: var(--color-muted); }
+.picker li > button svg.i:last-child { margin-left: auto; }
+.picker li.empty-row { padding: .75rem 1rem; }
+.picker-crumbs { flex-wrap: wrap; }
+.picker-crumbs .link { font-size: .875rem; }
+/* Trash list: date + days-left chip in one cell */
+.trash-wrap { margin-top: 1rem; }
+.ftable td.c-date .when-del { margin-right: .5rem; }
+.files-h .acts .btn:disabled { cursor: not-allowed; opacity: .5; }
+@media (max-width: 767.98px) {
+  .ftable td.c-sel { display: flex; align-items: center; padding: 1rem 0 1rem 1rem; }
+  .ftable tr:has(td.c-sel) { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .ftable th.c-sel { display: none; }
+}

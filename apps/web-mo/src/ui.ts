@@ -9,7 +9,7 @@
 // on* handlers: always a block body or `void …`. An on* handler that RETURNS false cancels the event
 // (an `e.key === "Enter" && …` arrow blocked typing in the webhook field); check.ts greps for it.
 import { renderSVG } from "uqr";
-import type { CoreEvent } from "./app-core.js";
+import type { CoreEvent, OpOutcome, TrashRow, UiNotice } from "./app-core.js";
 import { applyStatic, fmtDate, fmtDateTime, fmtNum, fmtSize, getLang, isLang, setLang, storeLang, storedLang, t, tn, type Lang } from "./i18n.js";
 import { connect } from "./rpc.js";
 
@@ -33,6 +33,7 @@ function onCoreEvent(e: CoreEvent) {
   if (e.type === "upload-progress") progressHandlers.get(e.token)?.(e.done, e.total);
   else if (e.type === "share-progress") onShareProgress(e.done, e.total);
   else if (e.type === "changed") void render();
+  else if (e.type === "notices") showNotices(e.notices);
 }
 export const core = connect(worker, onCoreEvent);
 (window as unknown as { ddnCore: typeof core }).ddnCore = core;
@@ -88,7 +89,7 @@ const typeOf = (name: string) => EXT.find(([re]) => re.test(name)) ?? [null, "fi
 const VIDEO = EXT[0]![0];
 
 // ── messages and actions ────────────────────────────────────────────
-const KNOWN_ERRORS = ["invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone", "instance_busy", "discord_blocked", "webhook_in_use", "too_many_channels"];
+const KNOWN_ERRORS = ["invalid_name", "invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone", "instance_busy", "discord_blocked", "webhook_in_use", "too_many_channels"];
 /** Readable text for an error: no technical codes in the message (the raw one goes to the console). */
 const errText = (e: unknown) => {
   const m = String((e as Error)?.message ?? e);
@@ -100,10 +101,63 @@ const errText = (e: unknown) => {
   if (/webhook/i.test(m)) return t("err.webhook");
   return /^[A-Z]/.test(m) && !/[_{}]/.test(m) ? m : t("err.generic", { msg: m.replace(/^[a-z_]+:\s*/, "") });
 };
-function toast(text: string, kind: "ok" | "err" | "info" = "ok") {
-  const el = h("div", { class: `toast ${kind}`, role: kind === "err" ? "alert" : "status" }, text);
+function toast(text: string, kind: "ok" | "err" | "info" = "ok", action?: { label: string; run: () => Promise<unknown> }) {
+  const el = h("div", { class: `toast ${kind}`, role: kind === "err" ? "alert" : "status" }, h("span", {}, text));
+  if (action) {
+    const b = h("button", { class: "link toast-act", type: "button", "data-ddn": "toast-undo" }, action.label);
+    b.onclick = () => {
+      el.remove();
+      void act(null, action.run);
+    };
+    el.append(b);
+  }
   ui("toasts").append(el);
-  setTimeout(() => el.remove(), kind === "err" ? 7000 : 3500);
+  setTimeout(() => el.remove(), action ? 8000 : kind === "err" ? 7000 : 3500);
+}
+
+/** Rule notices (sync-core) as toasts; silent ones never reach the UI (app-core drops them). */
+function noticeText(n: UiNotice): string | null {
+  const name = n.name ?? t("notice.item");
+  const other = n.other ?? "";
+  switch (n.code) {
+    case "name_suffixed":
+      return t("notice.suffixed", { name, wanted: other });
+    case "move_target_in_trash":
+    case "move_target_purged":
+      return t("notice.moveTrash", { name });
+    case "move_cycle":
+      return t("notice.moveCycle", { name });
+    case "rename_overrode_unseen":
+      return t("notice.renameOver", { name, other });
+    case "unseen_trashed_with_folder":
+      return t("notice.trashedWithFolder", { name, folder: other || t("notice.item") });
+    case "purge_kept_unseen":
+      return tn("notice.keptUnseen", n.count);
+    case "purge_not_in_trash":
+      return t("notice.notInTrash", { name });
+    case "moved_to_recovered":
+      return t("notice.recovered", { name });
+    case "node_purged":
+      return t("notice.purged", { name });
+    case "restored_by_new_content":
+      return t("notice.restoredByContent", { name });
+    case "content_conflict":
+      return t("notice.conflict", { name });
+    case "group_rolled_back":
+    case "invalid_op":
+      return t("notice.invalid");
+    default:
+      return null;
+  }
+}
+function showNotices(ns: UiNotice[]) {
+  const seen = new Set<string>();
+  for (const n of ns) {
+    const text = noticeText(n);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    toast(text, n.code === "name_suffixed" || n.code === "moved_to_recovered" ? "info" : "err");
+  }
 }
 /** Run an action from a button: busy state, a readable error message instead of a silent rejection. */
 async function act(btn: HTMLElement | null, fn: () => Promise<unknown>) {
@@ -121,6 +175,7 @@ async function act(btn: HTMLElement | null, fn: () => Promise<unknown>) {
 // ── routing ─────────────────────────────────────────────────────────
 type Route =
   | { name: "files"; folder: string }
+  | { name: "trash" }
   | { name: "devices" }
   | { name: "settings" }
   | { name: "welcome" }
@@ -132,6 +187,7 @@ function parseRoute(path = location.pathname): Route {
   const p = path.replace(/\/+$/, "") || "/";
   const f = /^\/folder\/([A-Za-z0-9_-]{1,64})$/.exec(p);
   if (f) return { name: "files", folder: f[1]! };
+  if (p === "/trash") return { name: "trash" };
   if (p === "/devices") return { name: "devices" };
   if (p === "/settings") return { name: "settings" };
   if (p === "/welcome") return { name: "welcome" };
@@ -155,6 +211,7 @@ async function onRoute() {
   const seq = ++routeSeq;
   if (prev.name !== route.name || (prev.name === "files" && route.name === "files" && prev.folder !== route.folder)) {
     cursorStack = [undefined];
+    selected.clear();
     if (route.name === "devices") devicesLoaded = false;
     if (route.name === "join") resetJoin?.();
   }
@@ -210,24 +267,41 @@ let resetJoin: (() => void) | null = null;
 const SKIP_KEY = "ddn.skip-welcome";
 
 const currentFolder = () => (route.name === "files" ? route.folder : "root");
+/** Selected rows of the current folder (cleared on navigation): id -> what the bulk actions need. */
+const selected = new Map<string, { name: string; kind: "file" | "folder" }>();
+/** The open folder lives under „Recovered” (rule 4): set by render from the path. */
+let underRecovered = false;
+const inRecovered = () => underRecovered;
+const DRAG_TYPE = "application/x-ddn-nodes";
 const openFolder = (id: string) => navigate(id === "root" ? "/" : `/folder/${id}`);
 
-function renderCrumbs(path: { id: string; name: string }[]) {
+/** Breadcrumb links are drop targets too (drag rows onto a parent folder). */
+function crumbLink(id: string, label: string) {
+  const a = h("a", { href: id === "root" ? "/" : `/folder/${id}`, "data-link": "", title: label, "data-drop": id }, label);
+  return a;
+}
+
+function renderCrumbs(fullPath: { id: string; name: string }[]) {
   const nav = ui("crumbs");
   const kids: (Node | string)[] = [];
+  // Under „Recovered” (rule 4) the path starts at that system folder instead of Files.
+  const rec = fullPath[0]?.id === "recovered";
+  const rootId = rec ? "recovered" : "root";
+  const rootLabel = rec ? t("nav.recovered") : t("files.root");
+  const path = rec ? fullPath.slice(1) : fullPath;
   // Mobile: back arrow to the parent (FolderBreadcrumb); desktop: the full path.
   const back = h("span", { class: "back" });
   if (path.length) {
     const parent = path.at(-2);
-    const a = h("a", { href: parent ? `/folder/${parent.id}` : "/", "data-link": "" }, icon("left"), parent ? parent.name : t("files.root"));
+    const a = h("a", { href: parent ? `/folder/${parent.id}` : rec ? "/folder/recovered" : "/", "data-link": "" }, icon("left"), parent ? parent.name : rootLabel);
     back.append(a);
-  } else back.append(h("span", { "aria-current": "page" }, t("files.root")));
+  } else back.append(h("span", { "aria-current": "page" }, rootLabel));
   kids.push(back);
   const desk = h("span", { class: "desk crumbs" });
-  desk.append(path.length ? h("a", { href: "/", "data-link": "" }, t("files.root")) : h("span", { "aria-current": "page" }, t("files.root")));
+  desk.append(path.length ? crumbLink(rootId, rootLabel) : h("span", { "aria-current": "page" }, rootLabel));
   path.forEach((p, i) => {
     desk.append(icon("right"));
-    desk.append(i === path.length - 1 ? h("span", { "aria-current": "page", title: p.name }, p.name) : h("a", { href: `/folder/${p.id}`, "data-link": "", title: p.name }, p.name));
+    desk.append(i === path.length - 1 ? h("span", { "aria-current": "page", title: p.name }, p.name) : crumbLink(p.id, p.name));
   });
   kids.push(desk);
   nav.replaceChildren(...kids);
@@ -256,6 +330,27 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
   const tr = enter ? h("tr", { class: "reveal", style: `--i:${Math.min(i, 12)}` }) : h("tr");
   tr.dataset.ddn = "row";
   tr.dataset.id = r.id;
+  tr.dataset.kind = r.kind;
+  const box = h("input", { type: "checkbox", "data-ddn": "select", "aria-label": t("bulk.one", { name: r.name }) }) as HTMLInputElement;
+  box.checked = selected.has(r.id);
+  box.onchange = () => {
+    if (box.checked) selected.set(r.id, { name: r.name, kind: r.kind });
+    else selected.delete(r.id);
+    tr.classList.toggle("sel", box.checked);
+    paintBulk();
+  };
+  tr.classList.toggle("sel", box.checked);
+  const sel = h("td", { class: "c-sel" }, box);
+  if (!searchQ) {
+    // Drag a row onto a folder row or a breadcrumb link to move it (with the rest of the selection).
+    tr.draggable = true;
+    tr.ondragstart = (e) => {
+      const ids = selected.has(r.id) ? [...selected.keys()] : [r.id];
+      e.dataTransfer?.setData(DRAG_TYPE, JSON.stringify(ids));
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+    };
+    if (r.kind === "folder") tr.dataset.drop = r.id;
+  }
   const name = h("td", { class: "c-name" });
   const acts = h("span", { class: "acts" });
   const iconBtn = (ic: string, label: string, title: string, tone = "") => h("button", { class: `iconbtn${tone ? ` ${tone}` : ""}`, type: "button", "aria-label": label, title }, icon(ic));
@@ -287,7 +382,7 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
         setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
       });
     acts.append(dl);
-    if (sharesOn) {
+    if (sharesOn && !inRecovered()) {
       const sh = iconBtn("share", t("files.share.aria", { name: r.name }), t("files.share"));
       sh.dataset.ddn = "share";
       sh.onclick = () =>
@@ -300,8 +395,16 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
       acts.append(sh);
     }
   }
+  const more = iconBtn("more", t("act.menu", { name: r.name }), t("act.more"));
+  more.dataset.ddn = "row-more";
+  more.setAttribute("aria-haspopup", "menu");
+  more.onclick = (e) => {
+    e.stopPropagation();
+    openRowMenu(more, r);
+  };
+  acts.append(more);
   const when = r.kind === "file" && r.modifiedAt ? fmtDate(r.modifiedAt, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
-  tr.append(name, h("td", { class: "size" }, r.kind === "folder" ? "" : fmt(r.size)), h("td", { class: "c-date" }, when), h("td", { class: "c-acts" }, acts));
+  tr.append(sel, name, h("td", { class: "size" }, r.kind === "folder" ? "" : fmt(r.size)), h("td", { class: "c-date" }, when), h("td", { class: "c-acts" }, acts));
   return tr;
 }
 
@@ -529,10 +632,14 @@ async function renderNow() {
   ui("hooks-block").hidden = false;
   renderShellStatus(st);
   const page = route.name;
+  const navKey = page === "files" && route.name === "files" && route.folder === "recovered" ? "recovered" : page;
   all<HTMLElement>("[data-page]").forEach((el) => (el.hidden = el.dataset.page !== page));
-  all<HTMLAnchorElement>("a[data-nav]").forEach((a) => (a.dataset.nav === page ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current")));
+  all<HTMLAnchorElement>("a[data-nav]").forEach((a) => (a.dataset.nav === navKey ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current")));
   document.title = `${t(`page.${page}`)} · ${t("app.title")}`;
 
+  ui("nav-recovered").hidden = (await core.recoveredCount()) === 0;
+  if (page === "trash") return renderTrash();
+  trashShown = false;
   if (page === "devices") {
     if (!devicesLoaded) await renderDevices(st.deviceId);
     return;
@@ -562,8 +669,9 @@ async function renderNow() {
     toast(t("files.gone"), "err");
     return navigate("/", true);
   }
+  underRecovered = path[0]?.id === "recovered";
   renderCrumbs(path);
-  ui("folder-title").textContent = path.length ? path.at(-1)!.name : t("files.root");
+  ui("folder-title").textContent = path.length ? (path.at(-1)!.id === "recovered" ? t("nav.recovered") : path.at(-1)!.name) : t("files.root");
   if (searchQ) return renderSearch();
   const [stats, pg] = await Promise.all([core.folderStats(folder), core.list(folder, cursorStack.at(-1), PAGE)]);
   ui("folder-meta").textContent = [tn("files.meta.folders", stats.folders), tn("files.meta.files", stats.files), stats.bytes > 0 ? fmt(stats.bytes) : ""].filter(Boolean).join(" · ");
@@ -576,7 +684,11 @@ async function renderNow() {
   const listKey = `${folder}|${pageIndex}|${cursorStack.at(-1) ?? ""}`;
   const enter = listKey !== shownList;
   shownList = listKey;
+  // Selection survives re-renders (sync, uploads) but only for rows that still exist here.
+  const here = new Set(rows.map((x) => x.id));
+  for (const id of [...selected.keys()]) if (!here.has(id)) selected.delete(id);
   $("list").replaceChildren(...rows.map((row, i) => fileRow(row, i, enter)));
+  paintBulk();
   ui("empty").hidden = pg.total > 0;
   ui("search-empty").hidden = true;
   const from = pg.total ? pageIndex * PAGE + 1 : 0;
@@ -796,6 +908,367 @@ function wireFilesPage() {
   name.onkeydown = (e) => {
     if (e.key === "Enter") $("mkdir").click();
   };
+}
+
+
+// ── selection, row menu, rename, move, trash (discordrive FileTable patterns) ──
+function download(id: string, name: string) {
+  return core.download(id).then((b) => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(b);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+  });
+}
+
+function paintBulk() {
+  const n = selected.size;
+  $("bulk").hidden = n === 0;
+  $("bulk-count").textContent = tn("bulk.count", n);
+  // Download is for files only (folders would need a ZIP, not in this app yet).
+  $<HTMLButtonElement>("bulk-download").hidden = ![...selected.values()].some((x) => x.kind === "file");
+  const all = $<HTMLInputElement>("select-all");
+  const rows = all.closest("table")!.querySelectorAll<HTMLInputElement>("tbody [data-ddn=select]");
+  const on = [...rows].filter((b) => b.checked).length;
+  all.checked = rows.length > 0 && on === rows.length;
+  all.indeterminate = on > 0 && on < rows.length;
+}
+
+/** Summary toast of an operation: rule notices first, else the plain success text (with Undo when given). */
+function report(r: OpOutcome, ok: string, undo?: () => Promise<unknown>) {
+  const shown = r.notices.filter((n) => noticeText(n));
+  if (shown.length) showNotices(shown);
+  if (r.outcome === "applied") toast(ok, "ok", undo ? { label: t("act.undo"), run: undo } : undefined);
+}
+
+async function trashItems(items: { id: string; name: string }[]) {
+  const ids = items.map((x) => x.id);
+  const r = await core.trash(ids);
+  selected.clear();
+  await render();
+  report(r, items.length === 1 ? t("act.trashed", { name: items[0]!.name }) : tn("act.trashedN", items.length), async () => {
+    showNotices((await core.restore(ids)).notices);
+    await render();
+  });
+}
+
+async function moveItems(ids: string[], target: string, targetName: string, firstName = "") {
+  const r = await core.move(ids, target);
+  selected.clear();
+  await render();
+  report(r, ids.length === 1 ? t("act.moved", { name: firstName, folder: targetName }) : tn("act.movedN", ids.length, { folder: targetName }), async () => {
+    showNotices((await core.moveBack(r.from)).notices);
+    await render();
+  });
+}
+
+// Row menu (⋯): one floating menu, positioned under the button.
+let menuFor: HTMLElement | null = null;
+function closeRowMenu() {
+  const m = $("row-menu");
+  if (m.hidden) return;
+  m.hidden = true;
+  menuFor?.setAttribute("aria-expanded", "false");
+  menuFor?.focus({ preventScroll: true });
+  menuFor = null;
+}
+function openRowMenu(btn: HTMLElement, r: { id: string; name: string; kind: "file" | "folder"; size: number | null }) {
+  const m = $("row-menu");
+  if (!m.hidden && menuFor === btn) return closeRowMenu();
+  const item = (ic: string, label: string, key: string, run: () => void, danger = false) => {
+    const b = h("button", { type: "button", role: "menuitem", class: danger ? "danger" : "", "data-ddn": `menu-${key}` }, icon(ic), label);
+    b.onclick = () => {
+      closeRowMenu();
+      run();
+    };
+    return b;
+  };
+  const items = [
+    ...(r.kind === "folder" ? [item("folder", t("act.open"), "open", () => openFolder(r.id))] : [item("download", t("files.download"), "download", () => void act(null, () => download(r.id, r.name)))]),
+    item("pencil", t("act.rename"), "rename", () => openRename(r)),
+    item("move", t("act.move"), "move", () => void openMove([r.id], r.name)),
+    item("trash", t("act.trash"), "trash", () => void act(null, () => trashItems([r])), true),
+  ];
+  m.replaceChildren(...items);
+  m.hidden = false;
+  menuFor = btn;
+  btn.setAttribute("aria-expanded", "true");
+  const b = btn.getBoundingClientRect();
+  const w = m.offsetWidth;
+  const top = b.bottom + 4 + m.offsetHeight > window.innerHeight ? Math.max(8, b.top - 4 - m.offsetHeight) : b.bottom + 4;
+  m.style.top = `${top}px`;
+  m.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, b.right - w))}px`;
+  m.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
+}
+function wireRowMenu() {
+  document.addEventListener("click", (e) => {
+    const m = $("row-menu");
+    if (!m.hidden && !m.contains(e.target as Node) && !(e.target as Element | null)?.closest("[data-ddn=row-more]")) closeRowMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if ($("row-menu").hidden) return;
+    if (e.key === "Escape") closeRowMenu();
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const bs = [...$("row-menu").querySelectorAll<HTMLButtonElement>("button")];
+      const i = bs.indexOf(document.activeElement as HTMLButtonElement);
+      bs[(i + (e.key === "ArrowDown" ? 1 : bs.length - 1)) % bs.length]?.focus();
+    }
+  });
+  window.addEventListener("scroll", () => closeRowMenu(), { passive: true });
+  window.addEventListener("resize", () => closeRowMenu());
+}
+
+// Rename (RenameFolderModal): prefilled, the name without the extension selected.
+let renaming: { id: string; name: string; kind: "file" | "folder" } | null = null;
+function openRename(r: { id: string; name: string; kind: "file" | "folder" }) {
+  renaming = r;
+  const d = $<HTMLDialogElement>("rename-dialog");
+  ui("rn-title").textContent = t(r.kind === "folder" ? "rn.folder" : "rn.file");
+  const input = $<HTMLInputElement>("rename-name");
+  input.value = r.name;
+  $("rename-error").hidden = true;
+  d.showModal();
+  input.focus();
+  const dot = r.kind === "file" ? r.name.lastIndexOf(".") : -1;
+  input.setSelectionRange(0, dot > 0 ? dot : r.name.length);
+}
+function renameProblem(v: string): string | null {
+  if (!v.trim()) return t("rn.empty");
+  if (v.includes("/")) return t("rn.slash");
+  if (v.trim() === "." || v.trim() === "..") return t("rn.dots");
+  return null;
+}
+function wireRename() {
+  const d = $<HTMLDialogElement>("rename-dialog");
+  const input = $<HTMLInputElement>("rename-name");
+  const err = $("rename-error");
+  ui("rn-close").onclick = () => d.close();
+  ui("rn-cancel").onclick = () => d.close();
+  input.oninput = () => {
+    const p = renameProblem(input.value);
+    err.hidden = !p;
+    err.textContent = p ?? "";
+  };
+  ui<HTMLFormElement>("rn-form").onsubmit = (e) => {
+    e.preventDefault();
+    const r = renaming;
+    if (!r) return;
+    const v = input.value.trim();
+    const p = renameProblem(v);
+    if (p) {
+      err.hidden = false;
+      err.textContent = p;
+      return;
+    }
+    if (v === r.name) return d.close();
+    void act($("rename-save"), async () => {
+      const res = await core.rename(r.id, v);
+      d.close();
+      await render();
+      // Rule 2: the name was taken, the node got a suffix: the notice says which.
+      report(res, t("act.renamed", { name: res.name ?? v }), async () => {
+        if (res.before) showNotices((await core.rename(r.id, res.before)).notices);
+        await render();
+      });
+    });
+  };
+}
+
+// Move to… (folder picker): browse folders from the root; the moved folders themselves are not offered.
+let moving: { ids: string[]; label: string; at: string; path: { id: string; name: string }[] } | null = null;
+async function openMove(ids: string[], label: string) {
+  moving = { ids, label, at: "root", path: [] };
+  ui("mv-title").textContent = ids.length === 1 ? t("mv.one", { name: label }) : tn("mv.many", ids.length);
+  $<HTMLDialogElement>("move-dialog").showModal();
+  await paintMove();
+}
+async function paintMove() {
+  const m = moving;
+  if (!m) return;
+  const crumbs = $("move-crumbs");
+  const link = (id: string, name: string, i: number) => {
+    const b = h("button", { type: "button", class: "link" }, name);
+    b.onclick = () => {
+      m.at = id;
+      m.path = m.path.slice(0, i);
+      void paintMove();
+    };
+    return b;
+  };
+  const parts: Node[] = [m.path.length ? link("root", t("files.root"), 0) : h("span", { "aria-current": "page" }, t("files.root"))];
+  m.path.forEach((p, i) => parts.push(icon("right"), i === m.path.length - 1 ? h("span", { "aria-current": "page" }, p.name) : link(p.id, p.name, i + 1)));
+  crumbs.replaceChildren(...parts);
+  const kids = (await core.subfolders(m.at)).filter((f) => !m.ids.includes(f.id));
+  $("move-list").replaceChildren(
+    ...(kids.length
+      ? kids.map((f) => {
+          const b = h("button", { type: "button", "data-ddn": "move-folder", "data-id": f.id }, icon("folder"), h("span", { class: "dname" }, f.name), icon("right"));
+          b.onclick = () => {
+            m.path.push(f);
+            m.at = f.id;
+            void paintMove();
+          };
+          return h("li", {}, b);
+        })
+      : [h("li", { class: "empty-row" }, t("mv.none"))]),
+  );
+  const here = m.path.at(-1)?.name ?? t("files.root");
+  ui("mv-hint").textContent = t("mv.target", { folder: here });
+}
+function wireMove() {
+  const d = $<HTMLDialogElement>("move-dialog");
+  ui("mv-close").onclick = () => d.close();
+  ui("mv-cancel").onclick = () => d.close();
+  d.addEventListener("close", () => (moving = null));
+  $("move-here").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      const m = moving;
+      if (!m) return;
+      const name = m.path.at(-1)?.name ?? t("files.root");
+      d.close();
+      await moveItems(m.ids, m.at, name, m.label);
+    });
+}
+
+/** Ask before something that cannot be undone. Resolves true on the danger button. */
+function confirmDanger(title: string, text: string, yes: string): Promise<boolean> {
+  const d = $<HTMLDialogElement>("confirm-dialog");
+  ui("cf-title").textContent = title;
+  ui("cf-text").textContent = text;
+  $("confirm-yes").textContent = yes;
+  d.showModal();
+  ui<HTMLButtonElement>("cf-no").focus();
+  return new Promise((resolve) => {
+    let answer = false;
+    $("confirm-yes").onclick = () => {
+      answer = true;
+      d.close();
+    };
+    ui("cf-no").onclick = () => d.close();
+    d.addEventListener("close", () => resolve(answer), { once: true });
+  });
+}
+
+function wireSelection() {
+  $<HTMLInputElement>("select-all").onchange = (e) => {
+    const on = (e.target as HTMLInputElement).checked;
+    for (const b of $("list").querySelectorAll<HTMLInputElement>("[data-ddn=select]")) {
+      if (b.checked !== on) {
+        b.checked = on;
+        b.dispatchEvent(new Event("change"));
+      }
+    }
+    paintBulk();
+  };
+  $("bulk-clear").onclick = () => {
+    selected.clear();
+    for (const b of $("list").querySelectorAll<HTMLInputElement>("[data-ddn=select]")) b.checked = false;
+    for (const tr of $("list").querySelectorAll("tr.sel")) tr.classList.remove("sel");
+    paintBulk();
+  };
+  $("bulk-trash").onclick = (e) => void act(e.currentTarget as HTMLElement, () => trashItems([...selected].map(([id, x]) => ({ id, name: x.name }))));
+  $("bulk-move").onclick = () => {
+    const ids = [...selected.keys()];
+    if (ids.length) void openMove(ids, selected.get(ids[0]!)!.name);
+  };
+  $("bulk-download").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      // One file after another (the browser asks once whether to allow several downloads).
+      for (const [id, x] of selected) if (x.kind === "file") await download(id, x.name);
+    });
+  // Drag and drop of rows onto folder rows and breadcrumb links.
+  const target = (e: DragEvent) => (e.dataTransfer?.types.includes(DRAG_TYPE) ? (e.target as Element | null)?.closest<HTMLElement>("[data-drop]") : null);
+  document.addEventListener("dragover", (e) => {
+    const t0 = target(e);
+    if (!t0) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    for (const x of document.querySelectorAll(".drop-over")) if (x !== t0) x.classList.remove("drop-over");
+    t0.classList.add("drop-over");
+  });
+  document.addEventListener("dragleave", (e) => {
+    const t0 = target(e);
+    if (t0 && !t0.contains(e.relatedTarget as Node | null)) t0.classList.remove("drop-over");
+  });
+  document.addEventListener("drop", (e) => {
+    const t0 = target(e);
+    if (!t0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    t0.classList.remove("drop-over");
+    const ids = (JSON.parse(e.dataTransfer!.getData(DRAG_TYPE) || "[]") as string[]).filter((id) => id !== t0.dataset.drop);
+    const dest = t0.dataset.drop!;
+    if (!ids.length || dest === currentFolder()) return;
+    const name = dest === "root" ? t("files.root") : dest === "recovered" ? t("nav.recovered") : (t0.querySelector("a")?.textContent ?? t0.textContent ?? "").trim();
+    const first = document.querySelector<HTMLElement>(`[data-ddn=row][data-id="${CSS.escape(ids[0]!)}"] .nm > :last-child`)?.textContent ?? "";
+    void act(null, () => moveItems(ids, dest, name, first));
+  });
+}
+
+// ── Trash page ──────────────────────────────────────────────────────
+function trashRow(x: TrashRow, i: number) {
+  const tr = h("tr", { class: "reveal", style: `--i:${Math.min(i, 12)}`, "data-ddn": "trash-row", "data-id": x.id });
+  const days = Math.max(0, Math.ceil((x.purgeAt - Date.now()) / 86_400_000));
+  const where = x.from === null ? "" : x.fromRecovered ? t("nav.recovered") + (x.from.length > 1 ? " / " + x.from.slice(1).join(" / ") : "") : x.from.length ? x.from.join(" / ") : t("files.root");
+  const [, label, tone] = x.kind === "file" ? typeOf(x.name) : [null, "", ""];
+  const lead = x.kind === "folder" ? icon("folder") : h("span", { class: `badge ${tone}` }, label);
+  const name = h(
+    "td",
+    { class: "c-name" },
+    h("span", { class: "nm" }, lead, h("span", { title: x.name }, x.name)),
+    // Phone: the date column is hidden, so the sub-line carries the days left too.
+    h("span", { class: "sub" }, [x.kind === "file" ? fmt(x.size) : t("files.folder"), t("trash.from", { path: where }), tn("trash.left", days)].filter(Boolean).join(" · ")),
+  );
+  const left = h("span", { class: `chip${days <= 3 ? " chip--warning" : ""}`, "data-ddn": "trash-left", title: fmtDate(x.purgeAt) }, tn("trash.left", days));
+  const restore = h("button", { class: "iconbtn accent", type: "button", "data-ddn": "trash-restore", "aria-label": t("trash.restore.aria", { name: x.name }), title: t("trash.restore") }, icon("restore"));
+  restore.onclick = () =>
+    void act(restore, async () => {
+      const r = await core.restore([x.id]);
+      await render();
+      report(r, t("trash.restored", { name: x.name }));
+    });
+  const del = h("button", { class: "iconbtn danger", type: "button", "data-ddn": "trash-purge", "aria-label": t("trash.purge.aria", { name: x.name }), title: t("trash.purge") }, icon("x"));
+  del.onclick = () =>
+    void act(del, async () => {
+      if (!(await confirmDanger(t("trash.purge.h"), t("trash.purge.q", { name: x.name }), t("trash.purge")))) return;
+      const r = await core.purge([x.id]);
+      await render();
+      report(r, t("trash.purged", { name: x.name }));
+    });
+  tr.append(
+    name,
+    h("td", { class: "size" }, x.kind === "file" ? fmt(x.size) : ""),
+    h("td", { class: "c-date" }, h("span", { class: "when-del" }, fmtDate(x.trashedAt, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })), left),
+    h("td", { class: "c-acts" }, h("span", { class: "acts" }, restore, del)),
+  );
+  return tr;
+}
+let trashShown = false;
+async function renderTrash() {
+  const list = await core.trashList();
+  const enter = !trashShown;
+  trashShown = true;
+  $("trash-list").replaceChildren(...list.map((x, i) => (enter ? trashRow(x, i) : (() => {
+    const r = trashRow(x, i);
+    r.classList.remove("reveal");
+    return r;
+  })())));
+  ui("trash-none").hidden = list.length > 0;
+  $<HTMLButtonElement>("trash-empty").disabled = list.length === 0;
+  ui("trash-meta").textContent = list.length ? [tn("files.count", list.length), fmt(list.reduce((s0, x) => s0 + (x.size ?? 0), 0))].join(" · ") : "";
+}
+function wireTrash() {
+  $("trash-empty").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      const n = (await core.trashList()).length;
+      if (!n) return;
+      if (!(await confirmDanger(t("trash.emptyQ.h"), tn("trash.emptyQ", n), t("trash.empty")))) return;
+      const r = await core.emptyTrash();
+      await render();
+      report(r, t("trash.emptied"));
+    });
 }
 
 function defaultDeviceName(): string {
@@ -1157,6 +1630,11 @@ async function main() {
   wireHooks();
   wireFilesPage();
   wireDevices();
+  wireRowMenu();
+  wireRename();
+  wireMove();
+  wireSelection();
+  wireTrash();
   $("share-copy").onclick = () => void copy($<HTMLTextAreaElement>("share-link").value, t("shareD.copied"));
   $("share-close").onclick = () => $<HTMLDialogElement>("share-dialog").close();
   $<HTMLDialogElement>("share-dialog").addEventListener("close", () => {
