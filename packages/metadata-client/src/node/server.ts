@@ -17,6 +17,7 @@ import { RULES_VERSION, Sequencer, isClientId } from "@ddv4/sync-core";
 import type { EncryptedEntry, EncryptedEnvelope } from "../op-crypto.js";
 import { PAIRING_TTL_MS } from "../pairing.js";
 import { AuthError, Ed25519Authenticator, type Authenticator, type Session } from "./auth.js";
+import { PasswordKeyStore, RateLimitedAuth } from "./password-keys.js";
 import { InviteStore } from "./invites.js";
 import { IpLimiter, clientIp, type BucketSpec } from "./ip-limit.js";
 import { NotifyHub } from "./notify.js";
@@ -42,11 +43,13 @@ export interface ServerLimits {
 export const DEFAULT_LIMITS: ServerLimits = { bodyBytes: MAX_BODY_BYTES, opPayloadB64: MAX_PAYLOAD_B64, vaultB64: MAX_VAULT_B64 };
 
 /** Per-IP buckets for unauthenticated endpoints. */
-export const DEFAULT_RATE_LIMITS: Record<"auth" | "signup" | "mailbox" | "share", BucketSpec> = {
+export const DEFAULT_RATE_LIMITS: Record<"auth" | "signup" | "mailbox" | "share" | "password", BucketSpec> = {
   auth: { burst: 60, perMin: 60 },
   signup: { burst: 5, perMin: 2 },
   mailbox: { burst: 60, perMin: 90 },
   share: { burst: 60, perMin: 120 },
+  /** Password sign-in (params + key), per IP; the per-account limit is in PasswordKeyStore. */
+  password: { burst: 10, perMin: 5 },
 };
 const MAX_WAIT_S = 30;
 
@@ -138,6 +141,7 @@ export class DdnServer {
   readonly notify: NotifyHub;
   readonly invites: InviteStore;
   readonly shares: ShareStore;
+  readonly passwords: PasswordKeyStore;
   private readonly limits: ServerLimits;
   private readonly signup: "open" | "invite" | "closed";
   private readonly ipLimits: Partial<Record<keyof typeof DEFAULT_RATE_LIMITS, IpLimiter>> = {};
@@ -163,6 +167,7 @@ export class DdnServer {
     this.notify = new NotifyHub(this.now);
     this.invites = new InviteStore(this.db, this.now);
     this.shares = new ShareStore(this.db, this.now, opts.bot ?? null, opts.cdnOrigins);
+    this.passwords = new PasswordKeyStore(this.db, this.now);
     this.limits = { ...DEFAULT_LIMITS, ...opts.limits };
     this.signup = opts.signup ?? (opts.openSignup === false ? "closed" : "open");
     if (opts.rateLimits !== false) {
@@ -377,7 +382,14 @@ export class DdnServer {
   async listen(port = 0, host = "127.0.0.1"): Promise<{ url: string; port: number }> {
     this.http = createServer((req, res) => {
       this.handle(req, res).catch((e: unknown) => {
-        const he = e instanceof HttpError ? e : e instanceof AuthError ? new HttpError(e.status, e.code) : new HttpError(500, "internal");
+        const he =
+          e instanceof HttpError
+            ? e
+            : e instanceof RateLimitedAuth
+              ? new HttpError(429, "rate_limited", { "retry-after": String(e.retryAfterS) })
+              : e instanceof AuthError
+                ? new HttpError(e.status, e.code)
+                : new HttpError(500, "internal");
         if (!(e instanceof HttpError) && !(e instanceof AuthError)) console.error("ddn-server:", (e as Error)?.message);
         send(res, he.status, { error: he.code }, he.headers);
       });
@@ -458,6 +470,8 @@ export class DdnServer {
     if (method === "GET" && path === "/v1/health") return send(res, 200, this.health());
     if (method === "POST" && path === "/v1/auth/challenge") return (this.limit("auth", req), send(res, 200, this.auth.challenge()));
     if (method === "POST" && path === "/v1/auth/login") return (this.limit("auth", req), send(res, 200, await this.auth.login(await json())));
+    if (method === "POST" && path === "/v1/auth/password/params") return (this.limit("password", req), send(res, 200, this.passwords.params(await json())));
+    if (method === "POST" && path === "/v1/auth/password/key") return (this.limit("password", req), send(res, 200, this.passwords.key(await json())));
     if (method === "POST" && path === "/v1/auth/rescue-device") return (this.limit("signup", req), send(res, 201, await this.auth.rescueAddDevice(await json())));
     if (method === "POST" && path === "/v1/accounts") {
       this.limit("signup", req);
@@ -515,6 +529,11 @@ export class DdnServer {
         const r = this.putVault(s, await json());
         return send(res, r.status === "ok" ? 200 : 409, r);
       }
+    }
+    if (path === "/v1/password-key") {
+      if (method === "GET") return send(res, 200, this.passwords.status(s));
+      if (method === "PUT") return (this.passwords.put(s, await json()), send(res, 200, this.passwords.status(s)));
+      if (method === "DELETE") return (this.passwords.remove(s), send(res, 200, this.passwords.status(s)));
     }
     if (path === "/v1/gc" && method === "GET") return send(res, 200, this.gcStatus(s));
     if (path === "/v1/gc/done" && method === "POST") return send(res, 200, { done: this.gcDone(s, await json()) });

@@ -396,3 +396,33 @@ Wariant B (decyzja właściciela 2026-10-12): tryby nowego rdzenia, nie stare `a
   pójdzie na 3022. Przeglądarka na http + adres VPN nie ma WebCrypto ani service workera
   (brak „secure context”), więc do testów w Chromium służy lokalny proxy (`DDN_E2E_TUNNEL=1`);
   właściciel potrzebuje domeny z HTTPS (prośba w raporcie).
+
+## Zlecenie 2026-10-13: kosz, sprzątanie, klucz konta chroniony hasłem
+
+### Kontrakt §3.3 (co serwer widzi) przy włączonym logowaniu hasłem (koncept §3.8, model Bitwarden)
+Domyślnie wyłączone; bez włączenia kontrakt §3.3 bez zmian. Po świadomym włączeniu w Settings → Security
+serwer trzyma dodatkowo, dla tego jednego konta:
+- **login** (jawny, unikalny na instancji, bez rozróżniania wielkości liter; pytanie do właściciela #26,
+  tymczasowo wariant „nazwa logowania”, bo losowego ID konta nikt nie zapamięta),
+- **zaszyfrowany klucz konta**: AES-256-GCM kluczem z Argon2id(hasło) przez HKDF (`ddn-pw-wrap-v1`),
+  AAD = ID konta; parametry jak w discordrive (`@ddv4/config` argon2: 64 MiB, 3 przebiegi, 4 tory),
+  sól 16 B i parametry jawnie,
+- **weryfikator** = SHA-256 z dowodu (HKDF `ddn-pw-auth-v1` z tego samego wyniku Argon2id). Serwer nigdy
+  nie widzi hasła, klucza owijającego ani klucza konta; szyfrogram wydaje tylko za poprawny dowód.
+- Świadome ryzyko (napisane w UI): kradzież bazy serwera pozwala łamać hasło offline (Argon2id spowalnia,
+  nie blokuje). Limit prób online: na IP (kubełek `password`, 10 na start, 5/min) i na konto (5 błędów
+  w 15 min → 429 do końca okna). Nieznany login dostaje stałe fałszywe parametry (bez wyliczania kont).
+- Nowe urządzenie: login + hasło → szyfrogram → klucz konta otwarty lokalnie → rejestracja klucza urządzenia
+  podpisem klucza ratunkowego wyprowadzonego z klucza konta (ta sama ścieżka co zestaw ratunkowy, #13).
+  Ten sam mechanizm w metadata only, e2ee i plain.
+- Wyłączenie = usunięcie szyfrogramu, weryfikatora i loginu z serwera. Zmiana hasła = nowa sól i szyfrogram.
+
+### Sprzątanie (Q4 w praktyce)
+- metadata only: klient (`Cleaner`, packages/metadata-client/src/cleanup.ts). Kosz > 30 dni → purge; fragmenty
+  tylko z `deletableUploadsWithRetention` (30 dni od zwolnienia i żadna trzymana baza sprzed zwolnienia).
+  Automatycznie w głównej karcie (po 1 min, potem co godzinę) z bramkami Q4; ręcznie „Clean up now”
+  (bez bramek „główne urządzenie” i „łącze taryfowe”, nadal tylko w pełni zsynchronizowane). Serwer trzyma
+  księgowanie `/v1/gc` (ostatnie sprzątanie, ID skasowanych uploadów; ID uploadów są jawne już dziś, §3.3).
+- e2ee/plain: kosz czyści klient (serwer w e2ee nie może pisać operacji), zwolnione uploady klient zgłasza,
+  fragmenty kasuje serwer w tle po 30 dniach. W e2ee/plain nie ma baz po stronie klienta do ochrony (serwer
+  pisze sam łańcuch segmentów, §6 stage3-modes.md), więc retencja = 30 dni od zwolnienia.

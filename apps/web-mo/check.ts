@@ -685,14 +685,54 @@ try {
   ops.storage = { before: st0, after: { last: await p.textContent("[data-ddn=storage-last]"), result: await p.textContent("[data-ddn=cleanup-result]"), waiting: await p.textContent("[data-ddn=storage-waiting]") } };
   await p.locator("#storage").scrollIntoViewIfNeeded();
   await shot(p, "18-settings-storage");
+  // Settings → Security: password sign-in (off by default), then a fresh browser signs in with it.
+  const pwLogin = `check.${Date.now().toString(36)}`;
+  const pwPass = "check run passphrase 2026 long";
+  ops.pwDefaultOff = /off|wyłączone/.test((await p.textContent("[data-ddn=pw-state]")) ?? "");
+  await typeInto(p, "[data-ddn=pw-login]", pwLogin);
+  await typeInto(p, "[data-ddn=pw-password]", pwPass);
+  await p.waitForFunction(() => Number(document.querySelector<HTMLElement>("[data-ddn=pw-strength]")?.dataset.score) >= 3);
+  ops.pwStrength = await p.textContent("[data-ddn-ui=pw-strength-t]");
+  await typeInto(p, "[data-ddn=pw-password2]", pwPass);
+  await p.click("[data-ddn=pw-save]");
+  ops.pwNeedsAck = /risk|ryzyko/.test((await p.waitForSelector(".toast.err").then((e) => e.textContent())) ?? "");
+  await p.check("[data-ddn=pw-ack]");
+  await p.click("[data-ddn=pw-save]");
+  await p.waitForFunction(() => /on|włączone/.test(document.querySelector("[data-ddn=pw-state]")?.textContent ?? "") && !/off|wyłączone/.test(document.querySelector("[data-ddn=pw-state]")?.textContent ?? ""), null, { timeout: 30_000 });
+  await p.locator("#security").scrollIntoViewIfNeeded();
+  await shot(p, "19-settings-security");
+  const fresh = await browser.newContext({ colorScheme: SCHEME });
+  await fresh.addInitScript({ content: `window.__name = (f) => f; try { localStorage.setItem("ddn.lang", ${JSON.stringify(LANG)}) } catch {}` });
+  const np = await newPage(fresh);
+  await np.goto(base);
+  await np.waitForSelector("body[data-ready='1']");
+  await np.click("[data-ddn=signin-open]");
+  await np.waitForURL((u) => u.pathname === "/signin");
+  await typeInto(np, "[data-ddn=signin-login]", pwLogin.toUpperCase());
+  await typeInto(np, "[data-ddn=signin-password]", "not the password at all");
+  await np.click("[data-ddn=signin-go]");
+  ops.pwWrong = await np.waitForSelector(".toast.err").then((e) => e.textContent());
+  await typeInto(np, "[data-ddn=signin-password]", pwPass);
+  await typeInto(np, "[data-ddn=signin-name]", "Haslem");
+  await shot(np, "20-signin-password");
+  await np.click("[data-ddn=signin-go]");
+  await count(np, L.of(65));
+  ops.pwSignedIn = true;
+  await fresh.close();
+  // Turn it off again: the sealed key is deleted from the server.
+  await p.click("[data-ddn=pw-off]");
+  await p.waitForSelector("[data-ddn=confirm-dialog][open]");
+  await p.click("[data-ddn=confirm-yes]");
+  await p.waitForFunction(() => /off|wyłączone/.test(document.querySelector("[data-ddn=pw-state]")?.textContent ?? ""));
+  ops.pwOff = true;
   r.ops = ops;
 
   // 11. what the server stores: no names in clear
   if (srv) {
-    const tables = ["devices", "log", "shares", "vault", "s_blobs", "s_uploads", "inst_hooks", "s_snapshots"].filter((t) => srv!.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t));
+    const tables = ["devices", "log", "shares", "vault", "s_blobs", "s_uploads", "inst_hooks", "s_snapshots", "password_keys"].filter((t) => srv!.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t));
     const rows = tables.map((t) => srv!.db.prepare(`SELECT * FROM ${t}`).all());
     r.serverTables = tables;
-    r.serverSeesNoNames = !/Telefon testowy|Laptop testowy|notatki|Wakacje|duzy\.bin|discord\.com\/api\/webhooks/.test(JSON.stringify(rows));
+    r.serverSeesNoNames = !/Telefon testowy|Laptop testowy|notatki|Wakacje|duzy\.bin|discord\.com\/api\/webhooks|check run passphrase/.test(JSON.stringify(rows));
   }
   await phone.close();
   r.pageErrors = errors;
@@ -754,6 +794,10 @@ try {
       // notatki.txt version waits for the retention (the purged folder had no upload).
       const by = SERVER_SIDE ? /server|serwer/ : /browser|przeglądarka/;
       return by.test(o.before.by) && /not yet|jeszcze nie/.test(o.before.last) && !/not yet|jeszcze nie/.test(o.after.last) && /\d/.test(o.after.result) && /^1 /.test(o.after.waiting);
+    })(),
+    passwordSignIn: (() => {
+      const o = r.ops as Record<string, unknown> | undefined;
+      return !!o && o.pwDefaultOff === true && /good|strong|dobre|mocne/.test(String(o.pwStrength)) && o.pwNeedsAck === true && /Wrong login or password|Zły login albo hasło/.test(String(o.pwWrong)) && o.pwSignedIn === true && o.pwOff === true;
     })(),
     serverBlind: MODE === "plain" ? true : r.serverSeesNoNames !== false,
     noPageErrors: errors.length === 0,

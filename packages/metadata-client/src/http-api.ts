@@ -66,6 +66,17 @@ export async function createAccountHttp(
   return { ...r, instanceId: c.instanceId };
 }
 
+/**
+ * Optional password sign-in (§3.8): parameters for a login, then the sealed account key for a
+ * correct proof. The caller opens the key locally and registers its device with the rescue key.
+ */
+export async function passwordParams(baseUrl: string, login: string, f: typeof fetch = defaultFetch): Promise<{ kdf: unknown }> {
+  return post<{ kdf: unknown }>(f, `${baseUrl}/v1/auth/password/params`, { login });
+}
+export async function passwordSealedKey(baseUrl: string, login: string, proof: string, f: typeof fetch = defaultFetch): Promise<{ accountId: string; sealedKey: string }> {
+  return post<{ accountId: string; sealedKey: string }>(f, `${baseUrl}/v1/auth/password/key`, { login, proof });
+}
+
 /** Rescue kit (§3.5): register a new device with the rescue key, no other device needed. */
 export async function rescueRegisterDevice(
   baseUrl: string,
@@ -246,6 +257,17 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
   /** Store a device's display name, sealed with the account key (see device-names.ts). */
   async setDeviceName(deviceId: string, nameSealed: string): Promise<void> {
     await this.call("PUT", `/v1/devices/${deviceId}/name`, { nameSealed });
+  }
+
+  // --- optional password-protected account key (§3.8)
+  async passwordKeyStatus(): Promise<{ enabled: boolean; login: string | null; updatedAt: number | null }> {
+    return (await this.call<{ enabled: boolean; login: string | null; updatedAt: number | null }>("GET", "/v1/password-key")).body;
+  }
+  async setPasswordKey(body: { login: string; kdf: unknown; sealedKey: string; proof: string }): Promise<{ enabled: boolean; login: string | null; updatedAt: number | null }> {
+    return (await this.call<{ enabled: boolean; login: string | null; updatedAt: number | null }>("PUT", "/v1/password-key", body)).body;
+  }
+  async removePasswordKey(): Promise<void> {
+    await this.call("DELETE", "/v1/password-key");
   }
 
   // --- cleanup bookkeeping (metadata only; cleanup.ts CleanupApi)

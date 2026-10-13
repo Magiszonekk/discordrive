@@ -37,6 +37,9 @@ import {
   newAccountKey,
   openDeviceName,
   openShare,
+  passwordStrength,
+  protectAccountKey,
+  signInWithPassword,
   prepareShareWith,
   rescueRegisterDevice,
   sealDeviceName,
@@ -660,6 +663,45 @@ export class AppCore {
 
   pairCancel(): void {
     this.pending = null;
+  }
+
+  // ── optional password-protected account key (§3.8, zlecenie 2026-10-13 p. 3) ──
+
+  async passwordKeyStatus() {
+    return this.http!.passwordKeyStatus();
+  }
+
+  /** Turn on or change: the key is sealed here with Argon2id(password); the server gets only the result. */
+  async setPasswordKey(login: string, password: string) {
+    const a = this.acct!;
+    return this.http!.setPasswordKey(await protectAccountKey(this.key!, a.accountId, login, password));
+  }
+
+  async removePasswordKey() {
+    await this.http!.removePasswordKey();
+    return this.http!.passwordKeyStatus();
+  }
+
+  passwordStrength(pw: string) {
+    return passwordStrength(pw);
+  }
+
+  /** New device: login + password -> account key opened here -> device registered with the rescue key. */
+  async joinWithPassword(serverUrl: string, login: string, password: string, deviceName: string): Promise<void> {
+    const dk = await generateDeviceKey(false);
+    const r = await signInWithPassword(serverUrl, login, password, dk);
+    await keystore.save({
+      serverUrl,
+      instanceId: r.instanceId,
+      accountId: r.accountId,
+      deviceId: r.deviceId,
+      deviceName,
+      accountKey: r.key.rawB64,
+      devicePublicKey: dk.publicKey,
+      devicePrivateKey: dk.privateKey,
+      // The account already confirmed its rescue kit on the first device.
+      kitSavedAt: Date.now(),
+    });
   }
 
   /** New device from the rescue kit (§3.5): registers this device with the rescue key. */

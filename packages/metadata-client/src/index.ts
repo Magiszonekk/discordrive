@@ -128,7 +128,20 @@ export {
   type SnapshotDeps,
   type SnapshotResult,
 } from "./snapshots.js";
-export { HttpApi, HttpPairingMailbox, ServerError, createAccountHttp, getChallenge, getHealth, rescueRegisterDevice, type HttpSession, type ServerDevice } from "./http-api.js";
+export {
+  protectAccountKey,
+  passwordProof,
+  passwordStrength,
+  signInWithPassword,
+  checkArgon2Params,
+  normalizeLogin,
+  validLogin,
+  PASSWORD_ARGON2,
+  MIN_PASSWORD_LENGTH,
+  type Argon2Params,
+  type PasswordKeyUpload,
+} from "./password-key.js";
+export { HttpApi, HttpPairingMailbox, ServerError, createAccountHttp, getChallenge, getHealth, passwordParams, passwordSealedKey, rescueRegisterDevice, type HttpSession, type ServerDevice } from "./http-api.js";
 export { sealDeviceName, openDeviceName, cleanDeviceName, MAX_DEVICE_NAME } from "./device-names.js";
 export { prepareShare, prepareShareWith, shareLink, parseShareLink, openShare, attachmentFilename, type ShareMeta, type ShareAttachment, type OpenedShare } from "./share.js";
 export {

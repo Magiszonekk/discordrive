@@ -440,3 +440,13 @@ dialog.player { width: min(1000px, 96vw); padding: 0; border: 1px solid var(--co
   .ftable tr:has(td.c-sel) { grid-template-columns: auto minmax(0, 1fr) auto; }
   .ftable th.c-sel { display: none; }
 }
+
+/* Settings → Security: password strength meter (3 segments like the channel slots) */
+.strength { display: grid; grid-template-columns: repeat(3, 1fr) auto; align-items: center; gap: .25rem .5rem; margin-top: -.5rem; }
+.strength i { height: .375rem; border-radius: 9999px; background: var(--color-paper-3); }
+.strength span { font: 500 .75rem/1rem var(--font-mono); color: var(--color-muted); min-width: 6ch; text-align: right; }
+.strength[data-score="1"] i:nth-child(-n+1) { background: var(--color-error); }
+.strength[data-score="2"] i:nth-child(-n+1), .strength[data-score="2"] i:nth-child(2) { background: var(--color-warning); }
+.strength[data-score="3"] i:nth-child(-n+2) { background: var(--color-success); }
+.strength[data-score="4"] i { background: var(--color-success); }
+.strength[data-score="1"] span { color: var(--color-error); }

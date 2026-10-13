@@ -74,7 +74,7 @@
     </div>
     <div class="auth-foot">
       <span data-i18n="create.have">Already have an account on another device?</span>
-      <div class="row-btns"><a class="btn" href="/join" data-ddn="join-pair" data-link><svg class="i"><use href="#i-phone"/></svg><span data-i18n="join.pair">Join this device</span></a><a class="btn" href="/restore" data-ddn="join-kit-open" data-link><svg class="i"><use href="#i-lock"/></svg><span data-i18n="join.kit">I have a rescue kit</span></a></div>
+      <div class="row-btns"><a class="btn" href="/join" data-ddn="join-pair" data-link><svg class="i"><use href="#i-phone"/></svg><span data-i18n="join.pair">Join this device</span></a><a class="btn" href="/restore" data-ddn="join-kit-open" data-link><svg class="i"><use href="#i-lock"/></svg><span data-i18n="join.kit">I have a rescue kit</span></a><a class="btn" href="/signin" data-ddn="signin-open" data-link><svg class="i"><use href="#i-key"/></svg><span data-i18n="join.password">Sign in with password</span></a></div>
     </div>
   </section>
 
@@ -100,6 +100,21 @@
       <button class="btn primary block" data-ddn="join-start" data-ddn-ui="join-actions" type="button" data-i18n="joinD.show">Show code</button>
     </div>
     <div class="auth-foot"><a class="link" href="/" data-ddn="join-cancel" data-link data-i18n="auth.back">Back to sign-up</a></div>
+  </section>
+
+  <!-- Sign in with password (optional, §3.8: only for accounts that turned it on) -->
+  <section class="auth-card" data-auth="signin" data-ddn="signin-dialog" aria-labelledby="signin-h" hidden>
+    <div class="wordmark"><span class="logo" aria-hidden="true">D</span><b data-i18n="brand.name">DiscorDrive</b></div>
+    <h1 id="signin-h" data-i18n="signin.h">Sign in with password</h1>
+    <p class="sub" data-i18n="signin.sub"></p>
+    <form class="auth-body" data-ddn-ui="signin-form">
+      <label class="field"><span class="lab" data-i18n="signin.login">Login</span><input class="input" data-ddn="signin-login" name="username" autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+      <label class="field"><span class="lab" data-i18n="signin.password">Password</span><input class="input" type="password" data-ddn="signin-password" name="password" autocomplete="current-password"></label>
+      <label class="field"><span class="lab" data-i18n="joinD.name">Name of this device</span><input class="input" data-ddn="signin-name" data-i18n-attr="placeholder=create.device.ph" autocomplete="off"></label>
+      <button class="btn primary block" data-ddn="signin-go" type="submit" data-i18n="signin.go">Sign in</button>
+      <p class="hint" data-i18n="signin.hint"></p>
+    </form>
+    <div class="auth-foot"><a class="link" href="/" data-link data-i18n="auth.back">Back to sign-up</a></div>
   </section>
 
   <!-- Restore from a rescue kit -->
@@ -333,6 +348,23 @@
             </dl>
             <div class="row-btns"><button class="btn" type="button" data-ddn="cleanup-now"><svg class="i"><use href="#i-trash"/></svg><span data-i18n="st.run">Clean up now</span></button></div>
             <p class="hint" data-ddn="cleanup-result" role="status" aria-live="polite"></p>
+          </div>
+        </section>
+
+        <section id="security" aria-labelledby="sec-h">
+          <h2 class="sec-h"><span id="sec-h" data-i18n="pw.h">Security</span><span class="chip" data-ddn="pw-state"></span></h2>
+          <p class="sec-lead" data-i18n="pw.lead"></p>
+          <div class="sec-body">
+            <div class="note warn"><svg class="i"><use href="#i-info"/></svg><p data-i18n-html="pw.warn"></p></div>
+            <p class="hint" data-ddn="pw-current" hidden></p>
+            <form class="stack" data-ddn-ui="pw-form">
+              <label class="field"><span class="lab" data-i18n="signin.login">Login</span><input class="input" data-ddn="pw-login" name="username" autocomplete="username" autocapitalize="none" spellcheck="false"><span class="hint" data-i18n="pw.login.hint"></span></label>
+              <label class="field"><span class="lab" data-i18n="signin.password">Password</span><input class="input" type="password" data-ddn="pw-password" name="new-password" autocomplete="new-password"></label>
+              <div class="strength" data-ddn="pw-strength" data-score="0"><i></i><i></i><i></i><span data-ddn-ui="pw-strength-t"></span></div>
+              <label class="field"><span class="lab" data-i18n="pw.repeat">Repeat password</span><input class="input" type="password" data-ddn="pw-password2" autocomplete="new-password"></label>
+              <label class="ack"><input type="checkbox" data-ddn="pw-ack"><span data-i18n="pw.ack"></span></label>
+              <div class="row-btns"><button class="btn primary" type="submit" data-ddn="pw-save" data-i18n="pw.on">Turn on</button><button class="btn danger" type="button" data-ddn="pw-off" data-i18n="pw.off" hidden>Turn off</button></div>
+            </form>
           </div>
         </section>
 

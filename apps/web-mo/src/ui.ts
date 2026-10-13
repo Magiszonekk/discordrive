@@ -90,7 +90,7 @@ const typeOf = (name: string) => EXT.find(([re]) => re.test(name)) ?? [null, "fi
 const VIDEO = EXT[0]![0];
 
 // ── messages and actions ────────────────────────────────────────────
-const KNOWN_ERRORS = ["invalid_name", "invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone", "instance_busy", "discord_blocked", "webhook_in_use", "too_many_channels"];
+const KNOWN_ERRORS = ["bad_password", "login_taken", "bad_login", "password_too_short", "invalid_name", "invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone", "instance_busy", "discord_blocked", "webhook_in_use", "too_many_channels"];
 /** Readable text for an error: no technical codes in the message (the raw one goes to the console). */
 const errText = (e: unknown) => {
   const m = String((e as Error)?.message ?? e);
@@ -182,8 +182,9 @@ type Route =
   | { name: "welcome" }
   | { name: "create" }
   | { name: "join" }
-  | { name: "restore" };
-const SIGNED_OUT_ROUTES = new Set(["create", "join", "restore"]);
+  | { name: "restore" }
+  | { name: "signin" };
+const SIGNED_OUT_ROUTES = new Set(["create", "join", "restore", "signin"]);
 function parseRoute(path = location.pathname): Route {
   const p = path.replace(/\/+$/, "") || "/";
   const f = /^\/folder\/([A-Za-z0-9_-]{1,64})$/.exec(p);
@@ -194,6 +195,7 @@ function parseRoute(path = location.pathname): Route {
   if (p === "/welcome") return { name: "welcome" };
   if (p === "/join") return { name: "join" };
   if (p === "/restore") return { name: "restore" };
+  if (p === "/signin") return { name: "signin" };
   return { name: "files", folder: "root" };
 }
 const hrefOf = (r: Route) =>
@@ -593,12 +595,12 @@ async function renderNow() {
   if (!st.signedIn) {
     showOnly("signed-out");
     if (!SIGNED_OUT_ROUTES.has(route.name) && !(route.name === "files" && route.folder === "root")) return navigate("/", true);
-    const screen = route.name === "join" || route.name === "restore" ? route.name : "create";
+    const screen = route.name === "join" || route.name === "restore" || route.name === "signin" ? route.name : "create";
     all<HTMLElement>("[data-auth]").forEach((el) => (el.hidden = el.dataset.auth !== screen));
     document.title = t("app.title");
     return;
   }
-  if (route.name === "join" || route.name === "restore") return navigate("/", true);
+  if (route.name === "join" || route.name === "restore" || route.name === "signin") return navigate("/", true);
 
   const wh = await core.webhooks();
   channelsOk = wh.advice.ok;
@@ -658,7 +660,7 @@ async function renderNow() {
     ui("about-storage").textContent = st.persistent ? t("status.persistent") : t("status.cache");
     ui("about-storage-t").textContent = st.persistent ? t("status.persistent.t") : t("status.cache.t");
     ui("about-device").textContent = st.deviceId ?? "-";
-    await Promise.all([renderShares(), renderStorage()]);
+    await Promise.all([renderShares(), renderStorage(), renderSecurity()]);
     return;
   }
 
@@ -1249,6 +1251,58 @@ function wireStorage() {
     });
 }
 
+// ── Settings → Security: optional password-protected account key (§3.8) ──
+let pwEnabled = false;
+async function renderSecurity() {
+  const st = await core.passwordKeyStatus().catch(() => null);
+  if (!st) return;
+  pwEnabled = st.enabled;
+  $("pw-state").textContent = st.enabled ? t("pw.state.on") : t("pw.state.off");
+  $("pw-state").className = `chip${st.enabled ? " chip--success" : ""}`;
+  $("pw-current").hidden = !st.enabled;
+  $("pw-current").textContent = st.enabled ? t("pw.current", { login: st.login ?? "", date: st.updatedAt ? fmtDate(st.updatedAt) : "" }) : "";
+  const login = $<HTMLInputElement>("pw-login");
+  if (st.enabled && !login.value) login.value = st.login ?? "";
+  $("pw-save").textContent = t(st.enabled ? "pw.change" : "pw.on");
+  $("pw-off").hidden = !st.enabled;
+}
+function paintStrength() {
+  const pw = $<HTMLInputElement>("pw-password").value;
+  void core.passwordStrength(pw).then((r) => {
+    $("pw-strength").dataset.score = String(pw ? r.score + 1 : 0);
+    ui("pw-strength-t").textContent = pw ? t(`pw.s${r.score}`) : "";
+  });
+}
+function wireSecurity() {
+  $<HTMLInputElement>("pw-password").oninput = () => paintStrength();
+  ui<HTMLFormElement>("pw-form").onsubmit = (e) => {
+    e.preventDefault();
+    void act($("pw-save"), async () => {
+      const login = $<HTMLInputElement>("pw-login").value.trim();
+      const pw = $<HTMLInputElement>("pw-password").value;
+      if (!/^[\p{L}\p{N}._+@-]{3,64}$/u.test(login)) throw new Error(t("pw.err.login"));
+      if (pw.length < 10) throw new Error(t("pw.err.short"));
+      if (pw !== $<HTMLInputElement>("pw-password2").value) throw new Error(t("pw.err.repeat"));
+      if (!$<HTMLInputElement>("pw-ack").checked) throw new Error(t("pw.err.ack"));
+      const was = pwEnabled;
+      await core.setPasswordKey(login, pw);
+      for (const id of ["pw-password", "pw-password2"]) $<HTMLInputElement>(id).value = "";
+      $<HTMLInputElement>("pw-ack").checked = false;
+      paintStrength();
+      await renderSecurity();
+      toast(t(was ? "pw.changed" : "pw.enabled"));
+    });
+  };
+  $("pw-off").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      if (!(await confirmDanger(t("pw.off.h"), t("pw.off.q"), t("pw.off")))) return;
+      await core.removePasswordKey();
+      $<HTMLInputElement>("pw-login").value = "";
+      await renderSecurity();
+      toast(t("pw.disabled"));
+    });
+}
+
 // ── Trash page ──────────────────────────────────────────────────────
 function trashRow(x: TrashRow, i: number) {
   const tr = h("tr", { class: "reveal", style: `--i:${Math.min(i, 12)}`, "data-ddn": "trash-row", "data-id": x.id });
@@ -1531,6 +1585,17 @@ function wireSignedOut(server: () => string) {
       toast(t("rescueD.done"));
     });
   $<HTMLInputElement>("rescue-name").value ||= defaultDeviceName();
+  $<HTMLInputElement>("signin-name").value ||= defaultDeviceName();
+  ui<HTMLFormElement>("signin-form").onsubmit = (e) => {
+    e.preventDefault();
+    void act($("signin-go"), async () => {
+      await core.joinWithPassword(server(), $<HTMLInputElement>("signin-login").value, $<HTMLInputElement>("signin-password").value, $<HTMLInputElement>("signin-name").value.trim() || defaultDeviceName());
+      $<HTMLInputElement>("signin-password").value = "";
+      await core.open();
+      navigate("/", true);
+      toast(t("signin.done"));
+    });
+  };
   if (route.name === "join") reset();
 }
 
@@ -1678,6 +1743,7 @@ async function main() {
   wireSelection();
   wireTrash();
   wireStorage();
+  wireSecurity();
   $("share-copy").onclick = () => void copy($<HTMLTextAreaElement>("share-link").value, t("shareD.copied"));
   $("share-close").onclick = () => $<HTMLDialogElement>("share-dialog").close();
   $<HTMLDialogElement>("share-dialog").addEventListener("close", () => {
