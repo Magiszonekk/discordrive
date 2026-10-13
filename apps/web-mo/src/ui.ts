@@ -805,7 +805,7 @@ async function uploadAll(files: File[]) {
       continue;
     }
     state.className = "qstate run";
-    state.textContent = t("queue.encrypting");
+    state.textContent = t("queue.preparing");
     const base = sent;
     progressHandlers.set(token, (done, tot) => {
       const pct = tot ? Math.floor((done / tot) * 100) : 100;

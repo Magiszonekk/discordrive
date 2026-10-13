@@ -18,13 +18,17 @@ export const isLang = (x: unknown): x is Lang => x === "en" || x === "pl";
 
 const STORE_KEY = "ddn.lang";
 
-/** Mode this bundle was built for (build.ts `define`); texts may have a `key@<mode>` variant. */
+/**
+ * Texts may have a `key@<mode>` variant (plain falls back to @e2ee, then the base text). The build
+ * resolves them per mode (build.ts resolveTexts), so a bundle's dictionaries already hold exactly
+ * what its mode shows; the chain below only matters when the sources run unbuilt (tests, tsx).
+ */
 declare const __DDN_MODE__: string | undefined;
 const MODE = typeof __DDN_MODE__ === "string" ? __DDN_MODE__ : "metadata-only";
-/** plain falls back to the e2ee text (same server role), then to the base text. */
 const MODE_CHAIN = MODE === "plain" ? ["@plain", "@e2ee", ""] : MODE === "e2ee" ? ["@e2ee", ""] : [""];
 
 function lookup(d: Record<string, string>, key: string): string | undefined {
+  if (MODE_CHAIN.length === 1) return d[key];
   for (const suf of MODE_CHAIN) {
     const v = d[key + suf];
     if (v !== undefined) return v;

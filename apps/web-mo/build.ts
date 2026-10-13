@@ -15,7 +15,7 @@ import { build, type Plugin } from "esbuild";
 import { copyFileSync, cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { sourceHash, STAMP_FILE } from "./source-hash.js";
 
 export const MODES = ["metadata-only", "e2ee", "plain"] as const;
@@ -23,11 +23,37 @@ export type Mode = (typeof MODES)[number];
 
 const here = dirname(fileURLToPath(import.meta.url));
 
+/** Text variants of a mode: plain falls back to e2ee (same server role), then to the base text. */
+const CHAIN: Record<Mode, string[]> = { "metadata-only": [""], e2ee: ["@e2ee", ""], plain: ["@plain", "@e2ee", ""] };
+
+/** One dictionary as this mode shows it: base keys only, each with the variant the mode would pick. */
+export function resolveTexts(dict: Record<string, string>, mode: Mode): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of Object.keys(dict)) {
+    if (k.includes("@")) continue;
+    for (const suf of CHAIN[mode]) {
+      const v = dict[k + suf];
+      if (v !== undefined) {
+        out[k] = v;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 function modePlugin(mode: Mode): Plugin {
   return {
     name: "ddn-mode",
     setup(b) {
       b.onResolve({ filter: /^ddn:mode$/ }, () => ({ path: join(here, "src", "modes", `${mode}.ts`) }));
+      // Texts: the bundle of a mode carries only the texts that mode shows (a plain bundle has no e2ee or
+      // metadata-only wording at all; the mode-texts test greps it), resolved here at build time.
+      b.onLoad({ filter: /[\\/]src[\\/]locales[\\/](en|pl)\.ts$/ }, async (a) => {
+        const lang = a.path.endsWith("en.ts") ? "en" : "pl";
+        const m = (await import(pathToFileURL(a.path).href)) as Record<string, Record<string, string>>;
+        return { contents: `export const ${lang} = ${JSON.stringify(resolveTexts(m[lang]!, mode))};`, loader: "js" };
+      });
     },
   };
 }

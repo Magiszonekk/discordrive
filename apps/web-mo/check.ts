@@ -232,6 +232,7 @@ try {
   r.themeToggled = await p.evaluate(() => ({ resolved: document.documentElement.dataset.theme, bg: getComputedStyle(document.body).backgroundColor }));
   await p.click("main[data-ddn=signed-out] > .auth-tools [data-mode=system]");
 
+  r.createSub = await p.textContent("[data-auth=create] .sub");
   r.serverFieldHidden = await p.isHidden("[data-ddn-ui=server-field]");
   r.inviteFieldShown = await p.isVisible("[data-ddn=invite]");
   await shot(p, "01-welcome");
@@ -343,6 +344,7 @@ try {
   await p.waitForFunction((done) => document.querySelector("[data-ddn-ui=queue-title]")?.textContent === done, L.uploaded, { timeout: 300_000 });
   await count(p, L.four);
   r.docSize = await p.locator("[data-ddn=row]", { hasText: "notatki.txt" }).locator(".size").textContent();
+  r.queueNote = await p.textContent("[data-ddn-ui=queue] > .hint");
   const bigSteps = [...new Set(progress.filter((x) => x.startsWith("duzy.bin:") && /%$/.test(x)))];
   r.progressBigFile = bigSteps;
   if (MODE === "plain") {
@@ -799,6 +801,13 @@ try {
       const o = r.ops as Record<string, unknown> | undefined;
       return !!o && o.pwDefaultOff === true && /good|strong|dobre|mocne/.test(String(o.pwStrength)) && o.pwNeedsAck === true && /Wrong login or password|Zły login albo hasło/.test(String(o.pwWrong)) && o.pwSignedIn === true && o.pwOff === true;
     })(),
+    // zlecenie 2026-10-13 p. 4: the note under the queue is true in this mode; plain says nothing about encryption.
+    modeTexts:
+      MODE === "plain"
+        ? /through the server|przez serwer/.test(String(r.queueNote)) && !/ncrypt|szyfr/i.test(String(r.queueNote)) && !/ncrypt|szyfr|end-to-end/i.test(String(r.createSub))
+        : MODE === "e2ee"
+          ? /encrypted in this tab and go through the server|szyfrowane w tej karcie i trafiają przez serwer/.test(String(r.queueNote))
+          : /^(Encryption and upload only run|Szyfrowanie i wysyłanie trwa)/.test(String(r.queueNote)),
     serverBlind: MODE === "plain" ? true : r.serverSeesNoNames !== false,
     noPageErrors: errors.length === 0,
   };
