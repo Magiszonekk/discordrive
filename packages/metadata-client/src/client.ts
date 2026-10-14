@@ -83,11 +83,34 @@ export class WebhookBlobStore implements BlobStore {
     return Math.max(1, new Set(act.map((h) => h.channelId ?? `hook:${h.id}`)).size);
   }
 
-  /** Webhooks that take new pieces: not retired, not excluded by the caller (a move posts only to the targets). */
+  private readonly rrInChannel = new Map<string, number>();
+  /**
+   * Webhooks that take new pieces: not retired, not excluded by the caller (a move posts only to the
+   * targets). The channel whose limiter frees up first (owner, 2026-10-14: free channels evenly, not
+   * blindly in turn: a channel slowed by a 429 is skipped while others have tokens); ties rotate, and
+   * the webhooks of one channel take turns.
+   */
   private nextHook(exclude?: ReadonlySet<string>): WebhookRef {
     const all = [...this.hooks.values()].filter((h) => !h.retired && !exclude?.has(h.id));
     if (!all.length) throw new Error("need_channel: no active channel to post to");
-    return all[this.rr++ % all.length]!;
+    const byChan = new Map<string, WebhookRef[]>();
+    for (const h of all) {
+      const k = h.channelId ?? `hook:${h.id}`;
+      byChan.set(k, [...(byChan.get(k) ?? []), h]);
+    }
+    const chans = [...byChan.keys()];
+    const off = this.rr++ % chans.length;
+    let best = chans[off]!;
+    let bestIn = Infinity;
+    for (let k = 0; k < chans.length; k++) {
+      const ch = chans[(off + k) % chans.length]!;
+      const t = this.pacer.readyIn(ch);
+      if (t < bestIn) ((best = ch), (bestIn = t));
+    }
+    const list = byChan.get(best)!;
+    const j = this.rrInChannel.get(best) ?? 0;
+    this.rrInChannel.set(best, j + 1);
+    return list[j % list.length]!;
   }
 
   /** Post to one given webhook (snapshot objects go to the pointer's channel only). */

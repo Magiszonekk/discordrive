@@ -62,6 +62,19 @@ async function rateLimitFrom(res: Response): Promise<RateLimitedError> {
   return new RateLimitedError(Math.ceil((Number.isFinite(ra) ? ra : 1) * 1000), res.headers.get("x-ratelimit-scope"), !!body.global);
 }
 
+/**
+ * multipart/form-data body of a webhook post. FormData with a Blob, NOT one Uint8Array: measured
+ * 2026-10-14 in Chromium (10 MiB posts to a local server, 4 at once): a Uint8Array body goes at
+ * ~8.5 MB/s, FormData/Blob at 180-400 MB/s (the renderer copies a typed-array body slowly; a Blob is
+ * handed to the network service by reference).
+ */
+function webhookForm(filename: string, data: Uint8Array): FormData {
+  const fd = new FormData();
+  fd.append("payload_json", JSON.stringify({ content: "", attachments: [{ id: 0, filename }] }));
+  fd.append("files[0]", new Blob([data as BlobPart], { type: "application/octet-stream" }), filename);
+  return fd;
+}
+
 export interface FetchTransportOptions {
   fetch?: typeof fetch;
   timeoutMs?: number;
@@ -103,10 +116,7 @@ export class DiscordWebhookTransport implements WebhookTransport {
   }
 
   async postFile(hook: WebhookRef, data: Uint8Array, filename: string, signal?: AbortSignal, timing?: ReqTiming): Promise<PostedAttachment> {
-    const fd = new FormData();
-    fd.append("payload_json", JSON.stringify({ content: "", attachments: [{ id: 0, filename }] }));
-    fd.append("files[0]", new Blob([data as BlobPart], { type: "application/octet-stream" }), filename);
-    const res = await this.req(`${hook.url}?wait=true`, { method: "POST", body: fd }, "webhook post", signal, timing);
+    const res = await this.req(`${hook.url}?wait=true`, { method: "POST", body: webhookForm(filename, data) }, "webhook post", signal, timing);
     const j = (await res.json()) as { id: string; channel_id: string; attachments: { id: string; url: string; size: number }[] };
     const a = j.attachments?.[0];
     if (!a) throw new Error("webhook post: no attachment in response");
@@ -114,11 +124,8 @@ export class DiscordWebhookTransport implements WebhookTransport {
   }
 
   async editMessageFile(hook: WebhookRef, messageId: string, data: Uint8Array, filename: string): Promise<PostedAttachment> {
-    const fd = new FormData();
     // attachments: [] of the new upload only => old attachment is dropped.
-    fd.append("payload_json", JSON.stringify({ content: "", attachments: [{ id: 0, filename }] }));
-    fd.append("files[0]", new Blob([data as BlobPart], { type: "application/octet-stream" }), filename);
-    const res = await this.req(`${hook.url}/messages/${messageId}`, { method: "PATCH", body: fd }, "webhook edit message");
+    const res = await this.req(`${hook.url}/messages/${messageId}`, { method: "PATCH", body: webhookForm(filename, data) }, "webhook edit message");
     const j = (await res.json()) as { id: string; channel_id: string; attachments: { id: string; url: string; size: number }[] };
     const a = j.attachments?.[0];
     if (!a || j.attachments.length !== 1) throw new Error("webhook edit: unexpected attachments in response");

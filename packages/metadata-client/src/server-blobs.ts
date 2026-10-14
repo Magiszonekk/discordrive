@@ -86,7 +86,9 @@ export class ServerBlobStore implements BlobStore {
       const ev = log ? { dir: "up", x: u, i, a, k: "server", b: data.byteLength, fl: log.fl.up } : null;
       try {
         r = await this.api.request("PUT", `/v1/uploads/${u}/blobs/${i}`, {
-          body: data as BodyInit,
+          // A Blob, not the Uint8Array: Chromium sends a typed-array body at ~8.5 MB/s, a Blob at hundreds
+          // (measured 2026-10-14, discord-transport.ts webhookForm). Same bytes, same content-length.
+          body: new Blob([data as BlobPart]),
           headers: { "content-type": "application/octet-stream", "x-ddn-sha256": sha },
           signal: ctx.signal,
         });

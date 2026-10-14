@@ -101,12 +101,33 @@ describe("parallel download", () => {
   it("upload concurrency: max(3, 2 × channels), capped; a setting overrides it", async () => {
     expect(setup({ channels: 1 }).c.uploadConcurrency).toBe(3);
     expect(setup({ channels: 4 }).c.uploadConcurrency).toBe(8);
-    expect(setup({ channels: 12 }).c.uploadConcurrency).toBe(16);
+    expect(setup({ channels: 12 }).c.uploadConcurrency).toBe(24);
+    expect(setup({ channels: 30 }).c.uploadConcurrency).toBe(32); // automatic stays ≤ 32
+    expect(setup({ channels: 4, concurrency: 200 }).c.uploadConcurrency).toBe(64); // a setting up to 64
     const { c } = setup({ channels: 4, concurrency: 2 });
     expect(c.uploadConcurrency).toBe(2);
     c.setConcurrency({ upload: null, download: 6 });
     expect(c.uploadConcurrency).toBe(8);
     expect(c.downloadConcurrency).toBe(6);
+  });
+
+  it("upload: reads + whole-file hash stay in order with 12 in flight and random post delays; 429-slowed channel is skipped", async () => {
+    const { t, c } = setup({ channels: 4, concurrency: 12 });
+    const src = data(40_500);
+    const orig = t.postFile.bind(t);
+    t.postFile = async (...a) => (await new Promise((r) => setTimeout(r, Math.random() * 10)), orig(...a));
+    const up = await c.upload(memorySource(src), "u.bin");
+    expect(up.version.plaintextSha256).toBe(await sha256Hex(src));
+    const s = sink();
+    await c.download(up.nodeId, s);
+    expect(Buffer.from(s.all()).equals(Buffer.from(src))).toBe(true);
+    // Channel choice: a channel blocked by a 429 gets nothing while the others have tokens.
+    const { t: t2, c: c2 } = setup({ channels: 3, concurrency: 3 });
+    c2.pacer.onRateLimited("chan-1", 60_000, "shared");
+    await c2.upload(memorySource(data(9_000)), "v.bin");
+    const used = new Set([...t2.messages.values()].map((m) => m.channelId));
+    expect(used.has("chan-1")).toBe(false);
+    expect(used.size).toBe(2);
   });
 
   it("Range over several fragments fetches them in parallel and returns the right bytes", async () => {

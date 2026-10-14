@@ -1,4 +1,4 @@
-// Build dist/<mode>/: ui.js, worker.js, sw.js (ESM bundles), sqlite3.wasm, index.html, cobalt/ (style),
+// Build dist/<mode>/: ui.js, w/worker.js, sw.js, w/sw.js (ESM / IIFE bundles), sqlite3.wasm, index.html, cobalt/ (style),
 // build-stamp.json (hash of the sources; `discordrive start` rebuilds when it no longer matches).
 //
 // The mode is fixed at build time (koncept §2, docs/stage3-modes.md §2): app-core imports the
@@ -75,8 +75,12 @@ export async function buildMode(mode: Mode, outRoot = join(here, "dist")): Promi
     define: { __DDN_MODE__: JSON.stringify(mode) },
     plugins: [modePlugin(mode)],
   };
-  await build({ ...common, entryPoints: { ui: join(here, "src/ui.ts"), worker: join(here, "src/worker.ts") }, outdir: out });
+  await build({ ...common, entryPoints: { ui: join(here, "src/ui.ts") }, outdir: out });
+  // The app worker lives under /w/, outside the scope of /sw.js (see sw.ts and src/w-sw.ts): requests of a
+  // client a service worker controls keep their upload bodies in Chromium's browser process.
+  await build({ ...common, entryPoints: { worker: join(here, "src/worker.ts") }, outdir: join(out, "w") });
   await build({ ...common, format: "iife", entryPoints: { sw: join(here, "src/sw.ts") }, outdir: out });
+  await build({ ...common, format: "iife", entryPoints: { sw: join(here, "src/w-sw.ts") }, outdir: join(out, "w") });
   copyFileSync(createRequire(import.meta.url).resolve("@sqlite.org/sqlite-wasm/sqlite3.wasm"), join(out, "sqlite3.wasm"));
   copyFileSync(join(here, "index.html"), join(out, "index.html"));
   // Look: Cobalt (discordrive) tokens, app CSS, theme.js and local fonts (see cobalt/README.md).

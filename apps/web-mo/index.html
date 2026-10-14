@@ -406,6 +406,18 @@
             <label class="ack"><input type="checkbox" data-ddn="diag-names"><span data-i18n="diag.names">Include file names</span></label>
             <p class="hint" data-i18n="diag.names.t"></p>
             <p class="hint" data-ddn="diag-info" role="status" aria-live="polite"></p>
+            <details class="howto" data-ddn="diag-adv">
+              <summary><svg class="i"><use href="#i-right"/></svg><span data-i18n="diag.adv">Advanced: pieces in flight</span></summary>
+              <div class="stack">
+                <p class="hint" data-i18n="diag.adv.t"></p>
+                <div class="inline">
+                  <label class="field"><span class="lab" data-i18n="diag.up">Upload</span><input class="input" type="number" min="0" max="64" step="1" inputmode="numeric" data-ddn="diag-conc-up"></label>
+                  <label class="field"><span class="lab" data-i18n="diag.down">Download</span><input class="input" type="number" min="0" max="64" step="1" inputmode="numeric" data-ddn="diag-conc-down"></label>
+                </div>
+                <p class="hint" data-ddn="diag-conc-now" role="status" aria-live="polite"></p>
+                <div class="note warn" data-ddn="diag-conc-warn" hidden><svg class="i"><use href="#i-info"/></svg><p data-ddn-ui="diag-conc-warn-t"></p></div>
+              </div>
+            </details>
             <div class="row-btns"><button class="btn" type="button" data-ddn="diag-download"><svg class="i"><use href="#i-download"/></svg><span data-i18n="diag.download">Download logs</span></button><button class="btn" type="button" data-ddn="diag-clear"><svg class="i"><use href="#i-trash"/></svg><span data-i18n="diag.clear">Clear</span></button></div>
           </div>
         </section>

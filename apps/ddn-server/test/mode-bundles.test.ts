@@ -28,7 +28,11 @@ const REQUIRED: Record<InstanceMode, { web: string[]; server: string[] }> = {
   plain: { web: ["ddn-mode-marker:plain", "ddn-server-blobs", "ddn-plain-op-codec"], server: ["ddn-mode-marker:plain", "ddn-server-blobs", PLAIN_OPS, "/v1/plain/"] },
 };
 
-const jsOf = (dir: string) => readdirSync(dir).filter((f) => f.endsWith(".js") || f.endsWith(".mjs")).map((f) => readFileSync(join(dir, f), "utf8")).join("\n");
+// Every bundle of the web build, the app worker under w/ included.
+const jsOf = (dir: string): string =>
+  readdirSync(dir, { withFileTypes: true })
+    .flatMap((f) => (f.isDirectory() ? [jsOf(join(dir, f.name))] : f.name.endsWith(".js") || f.name.endsWith(".mjs") ? [readFileSync(join(dir, f.name), "utf8")] : []))
+    .join("\n");
 
 describe("mode bundles: no code of the other modes", () => {
   const modes = availableModes();

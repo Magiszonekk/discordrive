@@ -44,8 +44,13 @@ import { LogObserver, type InvalidOpAlert } from "./policies.js";
 import { errText, ms, nowMs, type TransferLog } from "./transfer-log.js";
 import type { DiscordPlacement } from "./types.js";
 
-/** Upper bound of fragments in flight (each holds ~2 × 10 MiB of buffers while it is processed). */
-export const MAX_CONCURRENCY = 16;
+/**
+ * Upper bound of fragments in flight (owner, 2026-10-14: up to 64 to saturate a ~600 Mb/s line). Each
+ * upload fragment in flight holds ~2 × 10 MiB (ciphertext + request body), a download one ~2 × 10 MiB.
+ */
+export const MAX_CONCURRENCY = 64;
+/** The automatic upload value stays modest: 2 × channels (Discord's per-channel limit makes more useless). */
+export const AUTO_CONCURRENCY_MAX = 32;
 export const DEFAULT_DOWNLOAD_CONCURRENCY = 4;
 
 /** Plaintext fragment size; same as discordrive (10 MiB on the wire incl. 28 B of IV + tag). */
@@ -210,7 +215,7 @@ export class DriveClient {
 
   /** Fragments in flight at once for uploads: the setting, else max(3, 2 × the store's channels) (zlecenie 2026-10-13-transfer §3). */
   get uploadConcurrency(): number {
-    return this.concurrencyOpt ?? clampConc(Math.max(3, 2 * (this.blobs.lanes?.() ?? 1)));
+    return this.concurrencyOpt ?? Math.min(AUTO_CONCURRENCY_MAX, clampConc(Math.max(3, 2 * (this.blobs.lanes?.() ?? 1))));
   }
 
   get downloadConcurrency(): number {
@@ -313,17 +318,22 @@ export class DriveClient {
       const chunks: ChunkRef[] = new Array(count);
       const hasher = await createSHA256();
       hasher.init();
-      // Plaintext hash must be computed in order; fragments may finish out of order.
-      let hashedUpTo = 0;
-      const plain = new Map<number, Uint8Array>();
-      const feedHash = () => {
-        while (plain.has(hashedUpTo)) {
-          hasher.update(plain.get(hashedUpTo)!);
-          plain.delete(hashedUpTo);
-          hashedUpTo++;
-        }
+      // The whole-file plaintext hash must be fed in order. Reads run in parallel (each fragment's own),
+      // the hash takes them in index order as soon as each is read (not after its post, as before), so a
+      // fragment's plaintext is dropped right after it is encrypted and hashed: memory follows the
+      // fragments in flight, not the slowest post (owner's note 2026-10-14: 30–60 in flight).
+      let hashChain: Promise<unknown> = Promise.resolve();
+      const readInOrder = (i: number): Promise<{ data: Uint8Array; rd: number; ph: number }> => {
+        const r0 = nowMs();
+        const read = src.read(i * this.chunkSize, this.chunkSize).then((data) => ({ data, rd: ms(r0) }));
+        const hashed = hashChain.then(() => read).then((x) => {
+          const h0 = nowMs();
+          hasher.update(x.data);
+          return ms(h0);
+        });
+        hashChain = hashed.catch(() => {});
+        return Promise.all([read, hashed]).then(([x, ph]) => ({ data: x.data, rd: x.rd, ph }));
       };
-
       let next = 0;
       const stages: UploadStages = { enc: 0, net: 0 };
       opts.onProgress?.(0, src.size, { ...stages });
@@ -332,6 +342,9 @@ export class DriveClient {
           const i = next++;
           if (i >= count) return;
           throwIfAborted(signal);
+          // Queued at once (same tick as taking i), so the hash stays in index order.
+          const reading = readInOrder(i);
+          reading.catch(() => {});
           await renew();
           stages.enc++;
           opts.onProgress?.(sentBytes, src.size, { ...stages });
@@ -339,7 +352,8 @@ export class DriveClient {
           const f0 = log ? nowMs() : 0;
           let f1 = 0, f2 = 0, f3 = 0;
           try {
-            const data = await src.read(i * this.chunkSize, this.chunkSize);
+            const rd = await reading;
+            const data = rd.data;
             if (log) f1 = nowMs();
             const ct = await encryptFragment(key, data);
             if (log) f2 = nowMs();
@@ -352,11 +366,10 @@ export class DriveClient {
             const placed = await this.blobs.put(ct, `${blobId}${BLOB_EXT}`, { uploadId, index: i, sha256: hash, signal, stats });
             stages.net--;
             chunks[i] = { index: i, blobId, ciphertextSizeBytes: ct.byteLength, ciphertextHash: hash, placements: [placed] };
-            plain.set(i, data);
             const f4 = log ? nowMs() : 0;
-            feedHash();
             sentBytes += data.byteLength;
-            if (log) log.emit("frag", { dir: "up", x: uploadId, i, pb: data.byteLength, b: ct.byteLength, rd: ms(f0, f1), enc: ms(f1, f2), hash: ms(f2, f3), put: ms(f3, f4), ph: ms(f4), dur: ms(f0), hook: placed.locationId, ch: placed.channelId ?? null, fl: log.fl.up });
+            // rd = from the worker taking the fragment to it being read and hashed in order; ph = the hash step.
+            if (log) log.emit("frag", { dir: "up", x: uploadId, i, pb: data.byteLength, b: ct.byteLength, rd: ms(f0, f1), enc: ms(f1, f2), hash: ms(f2, f3), put: ms(f3, f4), ph: rd.ph, dur: ms(f0), hook: placed.locationId, ch: placed.channelId ?? null, fl: log.fl.up });
             opts.onProgress?.(sentBytes, src.size, { ...stages });
           } finally {
             if (log) log.fl.up--;
@@ -364,7 +377,7 @@ export class DriveClient {
         }
       };
       await Promise.all(Array.from({ length: conc }, worker));
-      feedHash();
+      await hashChain;
       const plaintextSha256 = hasher.digest("hex");
 
       const manifest: ChunkManifest = { schemaVersion: MANIFEST_SCHEMA_VERSION, chunkSizeBytes: this.chunkSize, chunks };

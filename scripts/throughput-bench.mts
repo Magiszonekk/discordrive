@@ -4,7 +4,7 @@
 // Discord over HTTP, pacer without limits). Answers whether the web UI could be the bottleneck at
 // 600 Mb/s up / 900 Mb/s down (75 / 112 MB/s) or Discord is (~30 fragments/min per channel).
 //
-//   npx tsx scripts/throughput-bench.ts [--mb 200] [--channels 4] [--out file.json] [--label before]
+//   npx tsx scripts/throughput-bench.mts [--mb 200] [--channels 4] [--out file.json] [--label before]
 // CHROMIUM_PATH as for check.ts. Writes the JSON result. The fake Discord runs in this Node process:
 // the Node end-to-end numbers share one event loop with it (a lower bound); Chromium's do not.
 import { build } from "esbuild";
@@ -175,4 +175,4 @@ function summary(log: string) {
   return { stages: r.summary.stages, requests: r.summary.requests, concurrency: r.summary.concurrency };
 }
 
-void main();
+await main();

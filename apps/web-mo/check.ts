@@ -96,7 +96,7 @@ if (remote) {
     rateLimits: false,
     mode: MODE,
     extensions,
-    web: { dir: dist, connectSrc: [...DISCORD_ORIGINS, discordOrigin], config: { discordApiOrigin: discordOrigin, mode: MODE } },
+    web: { dir: dist, connectSrc: [...DISCORD_ORIGINS, discordOrigin], config: { discordApiOrigin: discordOrigin, mode: MODE, streamMinBytes: 1024 * 1024 } },
     bot: shareBot,
     cdnOrigins: [discordOrigin],
   });
@@ -340,6 +340,14 @@ try {
   await p.click("[data-ddn=diag-log]");
   await p.waitForFunction(() => !document.querySelector<HTMLInputElement>("[data-ddn=diag-names]")!.disabled, null, { timeout: 10_000 });
   r.diagOn = await p.textContent("[data-ddn=diag-state]");
+  // Advanced: pieces in flight. Automatic by default (2 × channels, at least 3), a value applies at once.
+  await p.click("[data-ddn=diag-adv] summary");
+  await p.waitForFunction(() => /\d/.test(document.querySelector("[data-ddn=diag-conc-now]")?.textContent ?? ""));
+  r.concAuto = await p.getAttribute("[data-ddn=diag-conc-up]", "placeholder");
+  await typeInto(p, "[data-ddn=diag-conc-down]", "6");
+  await p.keyboard.press("Tab");
+  await p.waitForFunction(() => /6/.test(document.querySelector("[data-ddn=diag-conc-now]")?.textContent ?? ""));
+  r.concSet = await p.evaluate(async () => (window as unknown as { ddnCore: { concurrency(): Promise<{ upload: number; download: number }> } }).ddnCore.concurrency());
   await nav(p, "files");
 
   // 3. upload with byte progress
@@ -401,6 +409,8 @@ try {
   const [dl] = await Promise.all([p.waitForEvent("download", { timeout: 120_000 }), p.locator("[data-ddn=row]", { hasText: "duzy.bin" }).locator("[data-ddn=download]").click()]);
   r.downloadSha256Ok = sha(readFileSync((await dl.path())!)) === sha(readFileSync(big));
   r.downloadName = dl.suggestedFilename();
+  // 12 MiB > streamMinBytes (1 MiB here): saved through the service worker stream, not a Blob.
+  r.downloadStreamed = (await p.$$eval("[data-ddn=dl-frame]", (e) => e.map((f) => (f as HTMLIFrameElement).src))).some((u) => u.includes("/ddn/download/"));
   // The downloads panel: the file, done, its average speed (the same look as the upload queue).
   r.downloadPanel = await p.evaluate(() => {
     const li = document.querySelector("[data-ddn=dl-item]");
@@ -1335,7 +1345,7 @@ try {
     mainTab: r.mainTab === true,
     kit: r.kitFormat === true && r.kitQr === true && r.kitDoneDisabledBeforeAck === true && r.kitNotDismissableByEsc === true && r.kitFileHasCode === true,
     progress: (r.progressBigFile as string[]).length >= 2,
-    download: r.downloadSha256Ok === true,
+    download: r.downloadSha256Ok === true && (remote ? true : r.downloadStreamed === true),
     liveSpeed: (() => {
       const u = r.uploadSpeed as { file: string | null; meta: string | null };
       const d = r.downloadPanel as { shown: boolean; name: string; state: string; speed: string; bar: string };
@@ -1344,7 +1354,7 @@ try {
     transferLog: (() => {
       const l = r.transferLog as Record<string, any>;
       return (
-        r.diagOffByDefault === true && !!l && l.bad === 0 && l.noSecrets === true && l.upEnd && l.downEnd && l.ext === "bin" && l.fragsUp === 2 && l.reqsDown >= 2 &&
+        r.diagOffByDefault === true && /\(\d+\)/.test(String(r.concAuto)) && (r.concSet as { download: number }).download === 6 && !!l && l.bad === 0 && l.noSecrets === true && l.upEnd && l.downEnd && l.ext === "bin" && l.fragsUp === 2 && l.reqsDown >= 2 &&
         (SERVER_SIDE ? l.serverLines > 0 && l.serverPosts >= 3 : l.serverLines === 0) && l.report.files.length >= 2 && /\.jsonl(\.gz)?$/.test(l.file)
       );
     })(),

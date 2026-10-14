@@ -157,6 +157,8 @@ export class AppCore {
   /** Transfer logs (Settings → Diagnostics): the OPFS writer and the logger handed to the client. */
   private tlogStore: OpfsTransferLog | null = null;
   private tlog: TransferLog | null = null;
+  /** Settings → Diagnostics → fragments in flight (null = automatic / default); kept by the UI, applied to every client. */
+  private conc: { upload: number | null; download: number | null } = { upload: null, download: null };
   private snapTimer: ReturnType<typeof setInterval> | null = null;
   private gcTimer: ReturnType<typeof setTimeout> | null = null;
   private gc: ModeCleanup | null = null;
@@ -330,6 +332,7 @@ export class AppCore {
   private async rebuildClient() {
     this.client = await mode.client(this.ctx!);
     this.client.setTransferLog(this.tlog);
+    this.client.setConcurrency(this.conc);
     this.gc = mode.cleanup(this.ctx!, this.client, { primary: () => this.leader, metered: meteredLink });
     await this.client.pull();
   }
@@ -662,6 +665,96 @@ export class AppCore {
     return new Blob(parts as BlobPart[], { type: n ? mimeOf(n.name) : "" });
   }
 
+  /** Size and type of a file (the UI picks the download path by size). */
+  fileInfo(nodeId: string): { size: number; mime: string } | null {
+    const n = this.c().store.getNode(nodeId);
+    return n?.content ? { size: n.content.sizeBytes, mime: mimeOf(n.name) } : null;
+  }
+
+  /** Ports from the UI for streamed downloads (worker.ts hands them over), by token. */
+  private readonly ports = new Map<string, MessagePort>();
+  private readonly portWaiters = new Map<string, (p: MessagePort) => void>();
+  attachPort(token: string, port: MessagePort): void {
+    const w = this.portWaiters.get(token);
+    if (w) return (this.portWaiters.delete(token), w(port));
+    this.ports.set(token, port);
+  }
+  private port(token: string): Promise<MessagePort> {
+    const p = this.ports.get(token);
+    if (p) return (this.ports.delete(token), Promise.resolve(p));
+    return new Promise((resolve, reject) => {
+      this.portWaiters.set(token, resolve);
+      setTimeout(() => this.portWaiters.delete(token) && reject(new Error("stream_no_port")), 5000);
+    });
+  }
+
+  /**
+   * Download straight to disk (zlecenie 2026-10-13-transfer §3): the decrypted fragments go in order
+   * through a MessagePort to the service worker, whose streamed response the browser saves as a
+   * download. Only what the stream asks for is sent (one fragment per pull), so the tab holds at most
+   * the fragments in flight, whatever the file size. The whole-file SHA-256 is checked before the
+   * stream is closed: a mismatch fails the download in the browser instead of finishing it.
+   * "stream_not_started": the service worker never asked (no controller, it restarted): the UI falls back to a Blob.
+   */
+  async downloadStream(nodeId: string, token: string): Promise<{ bytes: number }> {
+    const port = await this.port(token);
+    const ac = new AbortController();
+    this.downloads.set(token, ac);
+    let credits = 0;
+    let wake: (() => void) | null = null;
+    let started = false;
+    let cancelled = false;
+    port.onmessage = (e: MessageEvent<{ pull?: boolean; cancel?: boolean }>) => {
+      if (e.data?.pull) ((credits++), (started = true));
+      if (e.data?.cancel) ((cancelled = true), ac.abort());
+      wake?.();
+    };
+    const startTimer = setTimeout(() => {
+      if (!started) ac.abort(new Error("stream_not_started"));
+      wake?.();
+    }, 20_000);
+    let bytes = 0;
+    let last = 0;
+    try {
+      await this.c().download(
+        nodeId,
+        {
+          write: async (d) => {
+            while (credits === 0) {
+              if (ac.signal.aborted) throw ac.signal.reason instanceof Error ? ac.signal.reason : new Error("aborted");
+              await new Promise<void>((r) => (wake = r));
+              wake = null;
+            }
+            credits--;
+            // Whole buffer of its own (decryptFragment makes one): transferred, not copied.
+            const buf = d.byteOffset === 0 && d.byteLength === d.buffer.byteLength ? (d.buffer as ArrayBuffer) : d.slice().buffer;
+            bytes += d.byteLength;
+            port.postMessage({ chunk: buf }, [buf]);
+          },
+        },
+        {
+          signal: ac.signal,
+          onProgress: (done, total) => {
+            const t = Date.now();
+            if (done > 0 && done < total && t - last < 100) return;
+            last = t;
+            this.onEvent({ type: "download-progress", token, done, total });
+          },
+        },
+      );
+      port.postMessage({ done: true });
+      return { bytes };
+    } catch (e) {
+      const reason = ac.signal.reason instanceof Error && ac.signal.reason.message === "stream_not_started" ? "stream_not_started" : cancelled ? "cancelled" : String((e as Error)?.message ?? e);
+      port.postMessage({ error: reason });
+      throw new Error(reason === String((e as Error)?.message ?? e) ? reason : reason);
+    } finally {
+      clearTimeout(startTimer);
+      this.downloads.delete(token);
+      port.close();
+    }
+  }
+
   cancelDownload(token: string): boolean {
     const ac = this.downloads.get(token);
     ac?.abort();
@@ -669,6 +762,18 @@ export class AppCore {
   }
 
   // ── transfer logs (Settings → Diagnostics, zlecenie 2026-10-13-transfer §2) ──
+
+  /** Fragments in flight (advanced): upload null = automatic (max(3, 2 × channels)), download null = 4. */
+  setConcurrency(upload: number | null, download: number | null) {
+    this.conc = { upload: upload || null, download: download || null };
+    this.client?.setConcurrency(this.conc);
+    return this.concurrency();
+  }
+
+  concurrency(): { upload: number; download: number; auto: boolean; channels: number } {
+    const c = this.client;
+    return { upload: c?.uploadConcurrency ?? 3, download: c?.downloadConcurrency ?? 4, auto: this.conc.upload === null, channels: c?.blobs.lanes?.() ?? 1 };
+  }
 
   /** Turn this browser's transfer log on/off (the UI keeps the choice); e2ee/plain: the instance's log for this account too. */
   async setTransferLog(on: boolean, names = false): Promise<{ on: boolean; names: boolean; server: { on: boolean; all: boolean } | null }> {

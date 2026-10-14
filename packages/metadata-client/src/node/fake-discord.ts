@@ -6,12 +6,15 @@
 // Optional per-channel limit like the real one (§7): `perChannelPerMin`.
 
 import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createSecureServer } from "node:http2";
 
 interface Msg {
   webhookId: string;
   channelId: string;
-  attachments: { id: string; filename: string; data: Uint8Array }[];
+  attachments: { id: string; filename: string; data: Uint8Array; size?: number }[];
 }
 
 /** Extensions the real CDN serves with Access-Control-Allow-Origin (subset, measured 2026-10-09). */
@@ -20,10 +23,22 @@ export const CDN_CORS_EXT = new Set(["txt", "log", "json", "csv", "webm", "mp4",
 export class FakeDiscord {
   /** Old behaviour (CORS for everything); off = like Discord today. */
   cdnCorsAll = false;
-  private server: Server | null = null;
+  private server: Server | ReturnType<typeof createSecureServer> | null = null;
   readonly hooks = new Map<string, { token: string; channelId: string; name: string }>();
   readonly messages = new Map<string, Msg>();
-  private readonly blobs = new Map<string, Uint8Array>();
+  /** Attachments in memory, or on disk under `blobDir` (big-file tests: GBs that must not sit in RAM). */
+  blobDir: string | null = null;
+  private readonly mem = new Map<string, Uint8Array>();
+  private readonly blobs = {
+    get: (id: string): Uint8Array | undefined => {
+      if (!this.blobDir) return this.mem.get(id);
+      const f = join(this.blobDir, id);
+      return existsSync(f) ? new Uint8Array(readFileSync(f)) : undefined;
+    },
+    has: (id: string): boolean => (this.blobDir ? existsSync(join(this.blobDir, id)) : this.mem.has(id)),
+    set: (id: string, d: Uint8Array): void => void (this.blobDir ? writeFileSync(join(this.blobDir, id), d) : this.mem.set(id, d)),
+    delete: (id: string): void => void (this.blobDir ? rmSync(join(this.blobDir, id), { force: true }) : this.mem.delete(id)),
+  };
   private next = 1_550_000_000_000_000_000n;
   origin = "";
   posts = 0;
@@ -69,10 +84,15 @@ export class FakeDiscord {
     return { id, url: `https://discord.com/api/webhooks/${id}/${token}`, channelId };
   }
 
-  async listen(): Promise<string> {
-    this.server = createServer((req, res) => void this.handle(req, res).catch(() => this.send(res, 500, { message: "internal" })));
+  /**
+   * Start on 127.0.0.1. `tls` (benchmarks): HTTPS with HTTP/2 like discord.com and its CDN (HTTP/1.1
+   * still accepted), to measure a browser over one multiplexed connection instead of 6 per host.
+   */
+  async listen(o: { tls?: { key: string | Buffer; cert: string | Buffer } } = {}): Promise<string> {
+    const h = (req: IncomingMessage, res: ServerResponse) => void this.handle(req, res).catch(() => this.send(res, 500, { message: "internal" }));
+    this.server = o.tls ? createSecureServer({ ...o.tls, allowHTTP1: true, settings: { maxConcurrentStreams: 256, initialWindowSize: 16 << 20 } }, h as never) : createServer(h);
     await new Promise<void>((r) => this.server!.listen(0, "127.0.0.1", r));
-    this.origin = `http://127.0.0.1:${(this.server.address() as { port: number }).port}`;
+    this.origin = `${o.tls ? "https" : "http"}://127.0.0.1:${(this.server.address() as { port: number }).port}`;
     return this.origin;
   }
 
@@ -103,7 +123,7 @@ export class FakeDiscord {
       id: mid,
       channel_id: m.channelId,
       webhook_id: m.webhookId,
-      attachments: m.attachments.map((a) => ({ id: a.id, filename: a.filename, size: a.data.byteLength, url: this.link(a.id) })),
+      attachments: m.attachments.map((a) => ({ id: a.id, filename: a.filename, size: a.size ?? a.data.byteLength, url: this.link(a.id) })),
     };
   }
 
@@ -171,23 +191,29 @@ export class FakeDiscord {
 
     if (!mid && req.method === "GET") return this.send(res, 200, { id: webhookId, channel_id: hook.channelId, guild_id: "fake-guild", name: hook.name }, cors);
 
-    const readForm = async () => {
+    // files[0] of the multipart body, found by its part header and the closing boundary (cheap: a 10 MiB
+    // post through Request.formData() cost the fake more CPU than the client it measures).
+    const readFile = async (): Promise<{ filename: string; data: Uint8Array } | null> => {
       const chunks: Buffer[] = [];
       for await (const c of req) chunks.push(c as Buffer);
-      const r = new Request(this.origin, { method: "POST", headers: { "content-type": req.headers["content-type"] ?? "" }, body: Buffer.concat(chunks) });
-      return r.formData();
-    };
-    const fileOf = async (fd: FormData) => {
-      const f = fd.get("files[0]");
-      if (!(f instanceof Blob)) return null;
-      return { filename: (f as File).name || "blob", data: new Uint8Array(await f.arrayBuffer()) };
+      const body = Buffer.concat(chunks);
+      const b = /boundary=(?:"([^"]+)"|([^;\s]+))/.exec(String(req.headers["content-type"] ?? ""));
+      if (!b) return null;
+      const boundary = Buffer.from(`--${b[1] ?? b[2]}`);
+      const at = body.indexOf('name="files[0]"');
+      if (at < 0) return null;
+      const headEnd = body.indexOf("\r\n\r\n", at);
+      const end = body.indexOf(Buffer.concat([Buffer.from("\r\n"), boundary]), headEnd);
+      if (headEnd < 0 || end < 0) return null;
+      const filename = /filename="([^"]*)"/.exec(body.subarray(at, headEnd).toString("utf8"))?.[1] || "blob";
+      return { filename, data: new Uint8Array(body.buffer, body.byteOffset + headEnd + 4, end - headEnd - 4) };
     };
 
     if (!mid && req.method === "POST") {
       const wait = this.limited(hook.channelId);
       if (wait > 0) this.rejectedByChannel.set(hook.channelId, (this.rejectedByChannel.get(hook.channelId) ?? 0) + 1);
       if (wait > 0) return this.send(res, 429, { message: "The resource is being rate limited.", retry_after: wait, global: false }, { ...cors, "x-ratelimit-scope": "shared" });
-      const f = await fileOf(await readForm());
+      const f = await readFile();
       if (this.postDelayMs) await new Promise((r) => setTimeout(r, this.postDelayMs));
       if (!f) return this.send(res, 400, { message: "no file" }, cors);
       if (f.data.byteLength > 20 * 1024 * 1024) return this.send(res, 413, { message: "Request entity too large" }, cors);
@@ -195,7 +221,8 @@ export class FakeDiscord {
       const aid = this.id();
       this.blobs.set(aid, f.data);
       this.attMeta.set(aid, { channelId: hook.channelId, filename: f.filename });
-      const msg: Msg = { webhookId, channelId: hook.channelId, attachments: [{ id: aid, ...f }] };
+      // With blobDir the bytes live only on disk (a message keeps the ID and the name).
+      const msg: Msg = { webhookId, channelId: hook.channelId, attachments: [{ id: aid, filename: f.filename, data: this.blobDir ? new Uint8Array(0) : f.data, size: f.data.byteLength }] };
       this.messages.set(id, msg);
       this.posts++;
       this.postsByChannel.set(hook.channelId, (this.postsByChannel.get(hook.channelId) ?? 0) + 1);
@@ -211,13 +238,13 @@ export class FakeDiscord {
       return void res.end();
     }
     if (req.method === "PATCH") {
-      const f = await fileOf(await readForm());
+      const f = await readFile();
       if (!f) return this.send(res, 400, { message: "no file" }, cors);
       for (const a of msg.attachments) this.blobs.delete(a.id);
       const aid = this.id();
       this.blobs.set(aid, f.data);
       this.attMeta.set(aid, { channelId: msg.channelId, filename: f.filename });
-      msg.attachments = [{ id: aid, ...f }];
+      msg.attachments = [{ id: aid, filename: f.filename, data: this.blobDir ? new Uint8Array(0) : f.data, size: f.data.byteLength }];
       return this.send(res, 200, this.msgJson(mid!, msg), cors);
     }
     return this.send(res, 405, { message: "Method Not Allowed" }, cors);

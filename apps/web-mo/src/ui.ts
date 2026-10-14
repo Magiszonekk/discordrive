@@ -24,13 +24,13 @@ let features = { thumbnails: false, search: false, streaming: false };
 /** plain: current server search ("" = none). */
 let searchQ = "";
 
-const cfg = (window as unknown as { DDN_CONFIG?: { discordApiOrigin?: string; serverUrl?: string; language?: string } }).DDN_CONFIG ?? {};
+const cfg = (window as unknown as { DDN_CONFIG?: { discordApiOrigin?: string; serverUrl?: string; language?: string; streamMinBytes?: number } }).DDN_CONFIG ?? {};
 // Language before the first paint: this browser's choice, else the instance default, else English.
 setLang(storedLang() ?? (isLang(cfg.language) ? cfg.language : "en"));
 applyStatic();
 /** Same-origin instance (served by `discordrive serve`): the API is this origin. */
 const serverUrl = cfg.serverUrl ?? location.origin;
-const worker = new Worker("./worker.js", { type: "module" });
+const worker = new Worker("./w/worker.js", { type: "module" });
 const progressHandlers = new Map<string, (done: number, total: number, stages?: UploadStages) => void>();
 let onShareProgress: (done: number, total: number) => void = () => {};
 function onCoreEvent(e: CoreEvent) {
@@ -1268,20 +1268,57 @@ function download(id: string, name: string) {
     // Closes itself a few seconds after the last download went fine; a failure stays until ×.
     if (!dlRunning && !all<HTMLElement>("[data-ddn=dl-item]").some((x) => x.dataset.state === "err")) dlCloseTimer = window.setTimeout(closeDownloads, 6000);
   };
-  return core.download(id, token).then(
-    (b) => {
-      end(true);
+  const viaBlob = () =>
+    core.download(id, token).then((b) => {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(b);
       a.download = name;
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
-    },
+    });
+  return (async () => {
+    const info = await core.fileInfo(id);
+    // Big files stream to disk through the service worker (the tab never holds the whole file);
+    // small ones, or without a service worker, through a Blob.
+    const sw = navigator.serviceWorker?.controller;
+    if (info && sw && info.size > STREAM_MIN_BYTES) {
+      try {
+        await streamDownload(sw, id, token, name, info);
+        return;
+      } catch (e) {
+        if (!/stream_not_started|stream_no_port/.test(String((e as Error)?.message ?? e))) throw e;
+      }
+    }
+    await viaBlob();
+  })().then(
+    () => end(true),
     (e) => {
       end(false, cancelled ? undefined : errText(e));
       if (!cancelled) throw e;
     },
   );
+}
+
+/** Files above this go straight to disk (sw.ts); below it a Blob is cheaper and works everywhere. Tests lower it (config). */
+const STREAM_MIN_BYTES = typeof cfg.streamMinBytes === "number" ? cfg.streamMinBytes : 32 * 1024 * 1024;
+async function streamDownload(sw: ServiceWorker, id: string, token: string, name: string, info: { size: number; mime: string }) {
+  const ch = new MessageChannel();
+  sw.postMessage({ ddn: "dl", token, name, size: info.size, mime: info.mime }, [ch.port1]);
+  worker.postMessage({ ddnPort: token }, [ch.port2]);
+  // A hidden frame opens the streamed URL: the response is an attachment, so the browser saves it.
+  const frame = document.createElement("iframe");
+  frame.hidden = true;
+  frame.dataset.ddn = "dl-frame";
+  frame.src = `/ddn/download/${encodeURIComponent(token)}`;
+  document.body.append(frame);
+  // The service worker may be stopped by the browser when idle for ~30 s: keep it busy while we stream.
+  const ping = window.setInterval(() => sw.postMessage({ ddn: "ping" }), 10_000);
+  try {
+    await core.downloadStream(id, token);
+  } finally {
+    clearInterval(ping);
+    setTimeout(() => frame.remove(), 60_000);
+  }
 }
 
 // ── selection, row menu, rename, move, trash (discordrive FileTable patterns) ──
@@ -1844,10 +1881,36 @@ function storeTransferLog(on: boolean, names: boolean) {
 }
 /** Transfer logs stay on across reloads (this browser's choice); the worker starts writing at once. */
 async function applyTransferLog() {
+  const c = storedConcurrency();
+  if ((c.upload || c.download) && (await core.status()).signedIn) await core.setConcurrency(c.upload, c.download).catch(() => null);
   const tl = storedTransferLog();
   if (tl.on && (await core.status()).signedIn) await core.setTransferLog(true, tl.names).catch(() => null);
 }
+const CONC_KEY = "ddn.concurrency";
+function storedConcurrency(): { upload: number | null; download: number | null } {
+  try {
+    const v = JSON.parse(localStorage.getItem(CONC_KEY) ?? "{}") as { upload?: number; download?: number };
+    return { upload: v.upload || null, download: v.download || null };
+  } catch {
+    return { upload: null, download: null };
+  }
+}
+async function paintConcurrency() {
+  const c = await core.concurrency().catch(() => null);
+  if (!c) return;
+  const st = storedConcurrency();
+  const up = $<HTMLInputElement>("diag-conc-up");
+  const down = $<HTMLInputElement>("diag-conc-down");
+  if (document.activeElement !== up) ((up.value = st.upload ? String(st.upload) : ""), (up.placeholder = t("diag.auto", { n: c.upload })));
+  if (document.activeElement !== down) ((down.value = st.download ? String(st.download) : ""), (down.placeholder = String(c.download)));
+  $("diag-conc-now").textContent = t("diag.conc.now", { up: c.upload, down: c.download, ch: c.channels });
+  // Above ~2 × channels Discord's per-channel limit (~30 pieces/min) answers 429: more in flight gains nothing.
+  const over = c.upload > 2 * c.channels && !c.auto;
+  $("diag-conc-warn").hidden = !over;
+  if (over) ui("diag-conc-warn-t").textContent = t("diag.conc.warn", { n: c.upload, ch: c.channels, max: 2 * c.channels });
+}
 async function renderDiagnostics() {
+  void paintConcurrency();
   const st = await core.transferLogStatus().catch(() => null);
   if (!st) return;
   $<HTMLInputElement>("diag-log").checked = st.on;
@@ -1870,6 +1933,20 @@ function wireDiagnostics() {
     });
   box.onchange = apply;
   names.onchange = apply;
+  const conc = () =>
+    void act(null, async () => {
+      const n = (v: string) => (v.trim() ? Math.max(1, Math.min(64, Math.round(Number(v)) || 0)) : null);
+      const c = { upload: n($<HTMLInputElement>("diag-conc-up").value), download: n($<HTMLInputElement>("diag-conc-down").value) };
+      try {
+        localStorage.setItem(CONC_KEY, JSON.stringify(c));
+      } catch {
+        /* private mode */
+      }
+      await core.setConcurrency(c.upload, c.download);
+      await paintConcurrency();
+    });
+  $("diag-conc-up").onchange = conc;
+  $("diag-conc-down").onchange = conc;
   $("diag-download").onclick = (e) =>
     void act(e.currentTarget as HTMLElement, async () => {
       const f = await core.transferLogFile();
@@ -2359,7 +2436,12 @@ async function main() {
   wireTheme();
   wireLinks();
   wireDrawer();
-  if ("serviceWorker" in navigator) await navigator.serviceWorker.register("./sw.js").catch(() => {});
+  if ("serviceWorker" in navigator) {
+    await navigator.serviceWorker.register("./sw.js").catch(() => {});
+    // /w/ (the app worker) under its own fetch-less service worker: see src/w-sw.ts. The app worker starts
+    // above before this registration exists on a first visit; it is only slower then, never wrong.
+    await navigator.serviceWorker.register("./w/sw.js", { scope: "./w/" }).catch(() => {});
+  }
   await core.init({ discordApiOrigin: cfg.discordApiOrigin, wasmUrl: new URL("./sqlite3.wasm", document.baseURI).href /* <base href="/">: right on /folder/<id> too */ });
   if (await openShareView()) return;
   $<HTMLInputElement>("server").value = serverUrl;
