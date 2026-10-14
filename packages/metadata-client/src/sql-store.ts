@@ -41,7 +41,16 @@ export interface SqlDriver {
  *                never an operation, so re-pasting a webhook makes them readable at once everywhere.
  * The derived rows never feed back into the tree (apply() does not read them).
  */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
+// 3 (zlecenie 2026-10-14-ui): sort columns on nodes (fo: 0 folder / 1 file, sz: size, mt: modified),
+//   filled from the record by putNode, with one index per sort (parent_id, fo, key, name_key, id), so
+//   every sort pages by keyset over an index (no OFFSET, no temp B-tree), folders first.
+
+/** Sort of a folder listing; folders always come first, ties by name then ID (same direction). */
+export interface ListSort {
+  by: "name" | "size" | "date";
+  desc?: boolean;
+}
 
 export interface ChildRow {
   id: NodeId;
@@ -87,7 +96,10 @@ export class SqlIndexStore implements IndexStore {
         parent_id TEXT,
         name_key TEXT NOT NULL,
         live INTEGER NOT NULL,
-        rec TEXT NOT NULL
+        rec TEXT NOT NULL,
+        fo INTEGER NOT NULL DEFAULT 1,
+        sz INTEGER NOT NULL DEFAULT 0,
+        mt INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS nodes_children ON nodes(parent_id, name_key, id);
       CREATE UNIQUE INDEX IF NOT EXISTS nodes_unique_name ON nodes(parent_id, name_key) WHERE live = 1 AND parent_id IS NOT NULL;
@@ -119,9 +131,27 @@ export class SqlIndexStore implements IndexStore {
     if (from < 2) {
       this.atomically(() => {
         for (const r of this.sql.all<{ rec: string }>("SELECT rec FROM nodes WHERE json_extract(rec, '$.kind') = 'file'", [])) this.indexFile(JSON.parse(r.rec) as NodeRecord);
-        this.sql.run("UPDATE meta SET v = ? WHERE k = 'schema'", [String(SCHEMA_VERSION)]);
       });
     }
+    if (from < 3) {
+      // Schema 2 -> 3: sort columns, filled from the records in one statement.
+      this.atomically(() => {
+        const cols = new Set(this.sql.all<{ name: string }>("PRAGMA table_info(nodes)", []).map((c) => c.name));
+        if (!cols.has("fo")) this.sql.exec("ALTER TABLE nodes ADD COLUMN fo INTEGER NOT NULL DEFAULT 1");
+        if (!cols.has("sz")) this.sql.exec("ALTER TABLE nodes ADD COLUMN sz INTEGER NOT NULL DEFAULT 0");
+        if (!cols.has("mt")) this.sql.exec("ALTER TABLE nodes ADD COLUMN mt INTEGER NOT NULL DEFAULT 0");
+        this.sql.run(
+          "UPDATE nodes SET fo = CASE json_extract(rec, '$.kind') WHEN 'folder' THEN 0 ELSE 1 END, sz = coalesce(json_extract(rec, '$.content.sizeBytes'), 0), mt = coalesce(json_extract(rec, '$.content.createdAt'), 0)",
+          [],
+        );
+      });
+    }
+    if (from < SCHEMA_VERSION) this.sql.run("UPDATE meta SET v = ? WHERE k = 'schema'", [String(SCHEMA_VERSION)]);
+    this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS nodes_by_name ON nodes(parent_id, fo, name_key, id);
+      CREATE INDEX IF NOT EXISTS nodes_by_size ON nodes(parent_id, fo, sz, name_key, id);
+      CREATE INDEX IF NOT EXISTS nodes_by_date ON nodes(parent_id, fo, mt, name_key, id);
+    `);
   }
 
   /**
@@ -300,9 +330,9 @@ export class SqlIndexStore implements IndexStore {
   putNode(rec: NodeRecord): void {
     try {
       this.sql.run(
-        "INSERT INTO nodes (id, parent_id, name_key, live, rec) VALUES (?, ?, ?, ?, ?) " +
-          "ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, name_key = excluded.name_key, live = excluded.live, rec = excluded.rec",
-        [rec.id, rec.parentId, nameKey(rec.name), rec.trashed === null ? 1 : 0, JSON.stringify(rec)],
+        "INSERT INTO nodes (id, parent_id, name_key, live, rec, fo, sz, mt) VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
+          "ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, name_key = excluded.name_key, live = excluded.live, rec = excluded.rec, fo = excluded.fo, sz = excluded.sz, mt = excluded.mt",
+        [rec.id, rec.parentId, nameKey(rec.name), rec.trashed === null ? 1 : 0, JSON.stringify(rec), rec.kind === "folder" ? 0 : 1, rec.content?.sizeBytes ?? 0, rec.content?.createdAt ?? 0],
       );
     } catch (e) {
       if (String((e as Error)?.message ?? e).includes("UNIQUE")) throw new Error(`unique name violation in ${rec.parentId}: ${rec.name}`);
@@ -369,29 +399,46 @@ export class SqlIndexStore implements IndexStore {
   }
 
   /**
-   * One page of a folder, sorted by case-folded name (then ID), keyset paging
-   * (koncept §4.1: no OFFSET, only the visible rows in RAM).
+   * One page of a folder: folders first, then files, each group by the sort key (name: case-folded
+   * name; size; date = the current version's createdAt), ties by name then ID in the same direction.
+   * Keyset paging over the per-sort index (koncept §4.1: no OFFSET, only the visible rows in RAM): one
+   * range scan per group (fo is an equality there, so a descending sort is the same index read backwards).
+   * Cursor: JSON [fo, key, name_key, id] (key null for the name sort).
    */
-  listChildren(parentId: NodeId, opts: { after?: string; limit?: number; includeTrashed?: boolean; hideUnavailable?: boolean } = {}): ChildRow[] {
-    const [afterKey, afterId] = opts.after ? (JSON.parse(opts.after) as [string, string]) : ["", ""];
-    const rows = this.sql.all<{ id: string; name_key: string; rec: string; unav: string | null }>(
-      `SELECT n.id, n.name_key, n.rec, u.locs AS unav FROM nodes n LEFT JOIN files f ON f.node_id = n.id LEFT JOIN unavail u ON u.upload_id = f.upload_id
-       WHERE n.parent_id = ? AND (n.name_key, n.id) > (?, ?) AND (n.live = 1 OR ? = 1) AND (? = 0 OR u.upload_id IS NULL) ORDER BY n.name_key, n.id LIMIT ?`,
-      [parentId, afterKey, afterId, opts.includeTrashed ? 1 : 0, opts.hideUnavailable ? 1 : 0, opts.limit ?? 200],
-    );
-    return rows.map((r) => {
-      const n = JSON.parse(r.rec) as NodeRecord;
-      return {
-        id: n.id,
-        name: n.name,
-        kind: n.kind,
-        size: n.content?.sizeBytes ?? null,
-        modifiedAt: n.content?.createdAt ?? null,
-        trashed: n.trashed !== null,
-        cursor: JSON.stringify([r.name_key, r.id]),
-        ...(r.unav ? { unavailable: JSON.parse(r.unav) as string[] } : {}),
-      };
-    });
+  listChildren(parentId: NodeId, opts: { after?: string; limit?: number; includeTrashed?: boolean; hideUnavailable?: boolean; sort?: ListSort } = {}): ChildRow[] {
+    const by = opts.sort?.by ?? "name";
+    const dir = opts.sort?.desc ? "DESC" : "ASC";
+    const cmp = opts.sort?.desc ? "<" : ">";
+    const col = by === "size" ? "n.sz" : by === "date" ? "n.mt" : null;
+    const cur = parseCursor(opts.after);
+    const limit = opts.limit ?? 200;
+    const out: ChildRow[] = [];
+    for (const fo of [0, 1]) {
+      if (out.length >= limit || (cur && cur.fo > fo)) continue;
+      const after = cur && cur.fo === fo ? cur : null;
+      const keyCols = col ? `(${col}, n.name_key, n.id)` : "(n.name_key, n.id)";
+      const keyVals: SqlValue[] = after ? (col ? [after.key ?? 0, after.nameKey, after.id] : [after.nameKey, after.id]) : [];
+      const rows = this.sql.all<{ id: string; name_key: string; rec: string; unav: string | null; sz: number; mt: number }>(
+        `SELECT n.id, n.name_key, n.rec, n.sz, n.mt, u.locs AS unav FROM nodes n LEFT JOIN files f ON f.node_id = n.id LEFT JOIN unavail u ON u.upload_id = f.upload_id
+         WHERE n.parent_id = ? AND n.fo = ?${after ? ` AND ${keyCols} ${cmp} (${keyVals.map(() => "?").join(", ")})` : ""} AND (n.live = 1 OR ? = 1) AND (? = 0 OR u.upload_id IS NULL)
+         ORDER BY ${col ? `${col} ${dir}, ` : ""}n.name_key ${dir}, n.id ${dir} LIMIT ?`,
+        [parentId, fo, ...keyVals, opts.includeTrashed ? 1 : 0, opts.hideUnavailable ? 1 : 0, limit - out.length],
+      );
+      for (const r of rows) {
+        const n = JSON.parse(r.rec) as NodeRecord;
+        out.push({
+          id: n.id,
+          name: n.name,
+          kind: n.kind,
+          size: n.content?.sizeBytes ?? null,
+          modifiedAt: n.content?.createdAt ?? null,
+          trashed: n.trashed !== null,
+          cursor: JSON.stringify([fo, by === "size" ? Number(r.sz) : by === "date" ? Number(r.mt) : null, r.name_key, r.id]),
+          ...(r.unav ? { unavailable: JSON.parse(r.unav) as string[] } : {}),
+        });
+      }
+    }
+    return out;
   }
 
   countChildren(parentId: NodeId, hideUnavailable = false): number {
@@ -432,4 +479,17 @@ export class SqlIndexStore implements IndexStore {
     const f = rows.find((r) => r.k === "file");
     return { folders: Number(rows.find((r) => r.k === "folder")?.n ?? 0), files: Number(f?.n ?? 0), bytes: Number(f?.b ?? 0) };
   }
+}
+
+/** Keyset cursor of listChildren ([fo, key, name_key, id]); null for none or an unreadable one (start over). */
+export function parseCursor(after: string | undefined): { fo: number; key: number | null; nameKey: string; id: string } | null {
+  if (!after) return null;
+  try {
+    const a = JSON.parse(after) as unknown[];
+    if (Array.isArray(a) && a.length === 4 && (a[0] === 0 || a[0] === 1) && typeof a[2] === "string" && typeof a[3] === "string")
+      return { fo: a[0], key: typeof a[1] === "number" ? a[1] : null, nameKey: a[2], id: a[3] };
+  } catch {
+    /* fall through */
+  }
+  return null;
 }

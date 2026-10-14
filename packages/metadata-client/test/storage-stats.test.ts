@@ -121,7 +121,7 @@ describe("derived tables in the local index (schema 2)", () => {
     a.close();
     const b = new SqliteIndexStore(path);
     expect(b.storageTotals()).toMatchObject({ files: 1, bytes: 9 });
-    expect(b.sql.get<{ v: string }>("SELECT v FROM meta WHERE k = 'schema'", [])!.v).toBe("2");
+    expect(b.sql.get<{ v: string }>("SELECT v FROM meta WHERE k = 'schema'", [])!.v).toBe("3"); // straight to the current schema (2: derived tables, 3: sort columns)
   });
 
   it("measured: 50 000 files, 2 000 000 fragments over 4 channels - totals, per channel, one channel's list, unavailable", () => {

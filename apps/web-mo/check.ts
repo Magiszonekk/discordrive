@@ -890,6 +890,143 @@ try {
   await m.keyboard.press("Escape");
   r.preview = pv;
 
+  // 10c'. zlecenie 2026-10-14-ui, in "Podglad": Move to trash next to Download (+ Undo), the context menu on
+  // the empty area (New folder) and on a file (Rename), Shift+F10 / arrows / Esc with focus back, the sort
+  // (folders first, remembered), List / Tiles (remembered after a reload), tiles on the phone with a long
+  // press, the trash's own menu (Restore).
+  step("context menu, tiles");
+  const cm: Record<string, unknown> = {};
+  await p.goto(`${base}/folder/${pvId}`);
+  await p.waitForSelector("body[data-ready='1']");
+  await count(p, /^7 /);
+  const rowOf = (pg: Page, name: string) => pg.locator("[data-ddn=row]", { hasText: name });
+  cm.trashNextToDownload = await rowOf(p, "g.svg").evaluate((tr) => {
+    const dl = tr.querySelector("[data-ddn=download]");
+    const tb = tr.querySelector<HTMLElement>("[data-ddn=row-trash]");
+    return !!dl && dl.nextElementSibling === tb && !!tb && tb.offsetParent !== null && /trash|kosz/i.test(tb.getAttribute("aria-label") ?? "") && !!tb.title;
+  });
+  cm.folderRowHasTrash = true;
+  await rowOf(p, "g.svg").locator("[data-ddn=row-trash]").click();
+  await count(p, /^6 /);
+  cm.trashNoConfirm = !(await p.isVisible("[data-ddn=confirm-dialog][open]"));
+  await p.locator("[data-ddn=toast-undo]").last().click();
+  await count(p, /^7 /);
+  cm.trashUndo = true;
+  // Right click on the empty area (the page head): New folder, Upload, Select all, View, Sort, Refresh.
+  await p.click("[data-ddn-ui=folder-title]", { button: "right" });
+  await p.waitForSelector("[data-ddn=row-menu]:not([hidden])[data-for=files]");
+  cm.areaItems = await p.$$eval("[data-ddn=row-menu] button", (b) => b.map((x) => x.getAttribute("data-ddn")));
+  await shot(p, "23-context-area");
+  await p.click("[data-ddn=menu-new-folder]");
+  await p.waitForSelector("[data-ddn=folder-dialog][open]");
+  await p.keyboard.type("Z menu", { delay: 2 });
+  await p.keyboard.press("Enter");
+  await count(p, /^8 /);
+  cm.newFolderFirst = (await p.$$eval("[data-ddn=row]", (e) => e.map((x) => x.getAttribute("data-kind"))))[0] === "folder" && (await p.textContent("[data-ddn=row] .nm > :last-child")) === "Z menu";
+  cm.folderRowHasTrash = (await rowOf(p, "Z menu").locator("[data-ddn=row-trash]").count()) === 1;
+  // Right click on a file: the row's actions; Rename.
+  await rowOf(p, "c.json").locator("[data-ddn=preview-open]").click({ button: "right" });
+  await p.waitForSelector("[data-ddn=row-menu]:not([hidden])[data-for=row]");
+  cm.rowItems = await p.$$eval("[data-ddn=row-menu] button", (b) => b.map((x) => x.getAttribute("data-ddn")));
+  cm.rightClickNoPreview = !(await p.isVisible("[data-ddn=preview-dialog][open]"));
+  await shot(p, "24-context-row");
+  await p.click("[data-ddn=menu-rename]");
+  await p.waitForSelector("[data-ddn=rename-dialog][open]");
+  await typeInto(p, "[data-ddn=rename-name]", "c2.json");
+  await p.keyboard.press("Enter");
+  await p.waitForFunction(() => [...document.querySelectorAll("[data-ddn=row] .nm > :last-child")].some((x) => x.textContent === "c2.json"), null, { timeout: 30_000 });
+  cm.renamedFromContext = true;
+  // Keyboard: Shift+F10 on the focused file name, arrows, Esc; the focus comes back.
+  await rowOf(p, "a.txt").locator("[data-ddn=preview-open]").focus();
+  await p.keyboard.press("Shift+F10");
+  await p.waitForSelector("[data-ddn=row-menu]:not([hidden])[data-for=row]");
+  const f0 = await p.evaluate(() => document.activeElement?.getAttribute("data-ddn"));
+  await p.keyboard.press("ArrowDown");
+  const f1 = await p.evaluate(() => document.activeElement?.getAttribute("data-ddn"));
+  await p.keyboard.press("End");
+  const f2 = await p.evaluate(() => document.activeElement?.getAttribute("data-ddn"));
+  await p.keyboard.press("Escape");
+  await p.waitForSelector("[data-ddn=row-menu][hidden]", { state: "attached" });
+  cm.keyboard = { first: f0, down: f1, end: f2, back: await p.evaluate(() => document.activeElement?.closest("[data-ddn=row]")?.querySelector(".nm > :last-child")?.textContent === "a.txt" && document.activeElement?.getAttribute("data-ddn") === "preview-open"), previewClosed: !(await p.isVisible("[data-ddn=preview-dialog][open]")) };
+  // Sort by size from the column head (biggest first; folders stay first), remembered after a reload.
+  await p.click("[data-ddn=sort][data-sort=size]");
+  const sized = async () =>
+    p.$$eval("[data-ddn=row]", (rows) => rows.map((x) => ({ k: x.getAttribute("data-kind"), n: x.querySelector(".nm > :last-child")?.textContent ?? "" })));
+  await p.waitForFunction(() => document.querySelector("[data-ddn=sort][data-sort=size]")?.closest("th")?.getAttribute("aria-sort") === "descending");
+  await p.waitForFunction(() => document.querySelectorAll("[data-ddn=row]")[1]?.querySelector(".nm > :last-child")?.textContent === "f.pdf" || document.querySelectorAll("[data-ddn=row]")[1]?.querySelector(".nm > :last-child")?.textContent === "e.jpg");
+  const sizes = Object.fromEntries(pvNames.map((n) => [n === "c.json" ? "c2.json" : n, statSync(join(pvDir, n)).size]));
+  const bySize = await sized();
+  cm.sortSize = bySize[0]!.k === "folder" && bySize.slice(1).every((x, i, a) => i === 0 || sizes[a[i - 1]!.n]! >= sizes[x.n]!);
+  await p.reload();
+  await p.waitForSelector("body[data-ready='1']");
+  await count(p, /^8 /);
+  cm.sortKept = JSON.stringify(await sized()) === JSON.stringify(bySize);
+  await p.click("[data-ddn=sort][data-sort=name]");
+  await p.waitForFunction(() => document.querySelectorAll("[data-ddn=row]")[1]?.querySelector(".nm > :last-child")?.textContent === "a.txt");
+  // List -> Tiles from the head switch; kept after a reload; back to List from the context menu.
+  await p.click("[data-ddn=view] [data-view=tiles]");
+  const tilesNow = (pg: Page) =>
+    pg.evaluate(() => {
+      const w = document.querySelector<HTMLElement>("[data-page=files] .ftable-wrap")!;
+      const tb = w.querySelector("tbody")!;
+      return { view: w.dataset.view, grid: getComputedStyle(tb).display === "grid", cols: getComputedStyle(tb).gridTemplateColumns.split(" ").length, pressed: document.querySelector("[data-page=files] [data-ddn=view] [aria-pressed=true]")?.getAttribute("data-view") };
+    });
+  cm.tiles = await tilesNow(p);
+  await shot(p, "25-tiles");
+  await p.reload();
+  await p.waitForSelector("body[data-ready='1']");
+  await count(p, /^8 /);
+  cm.tilesKept = await tilesNow(p);
+  await p.click("[data-ddn-ui=folder-title]", { button: "right" });
+  await p.waitForSelector("[data-ddn=row-menu]:not([hidden])[data-for=files]");
+  cm.viewChecked = await p.getAttribute("[data-ddn=menu-view-tiles]", "aria-checked");
+  await p.click("[data-ddn=menu-view-list]");
+  cm.listAgain = (await tilesNow(p)).view === "list";
+  // Phone (the paired device): Tiles, long press on a tile = the row menu (no preview), trash visible.
+  await m.goto(`${base}/folder/${pvId}`);
+  await m.waitForSelector("body[data-ready='1']");
+  await count(m, /^8 /);
+  await m.click("[data-ddn=view] [data-view=tiles]");
+  const mt = await tilesNow(m);
+  const tile = rowOf(m, "d.csv");
+  const box = (await tile.boundingBox())!;
+  const touch = await m.context().newCDPSession(m);
+  const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [at] });
+  await m.waitForTimeout(800);
+  await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await m.waitForSelector("[data-ddn=row-menu]:not([hidden])[data-for=row]", { timeout: 5000 });
+  await m.waitForTimeout(300);
+  cm.phone = {
+    ...mt,
+    noHScroll: await m.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
+    longPress: (await m.$$eval("[data-ddn=row-menu] button", (b) => b.map((x) => x.getAttribute("data-ddn")))).includes("menu-rename"),
+    noPreview: !(await m.isVisible("[data-ddn=preview-dialog][open]")),
+    trashShown: await tile.locator("[data-ddn=row-trash]").isVisible(),
+  };
+  await shot(m, "26-phone-tiles-menu");
+  await m.keyboard.press("Escape");
+  // Trash: its own menu on a row (Restore / Delete for good).
+  await rowOf(p, "d.csv").locator("[data-ddn=row-trash]").click();
+  await count(p, /^7 /);
+  await nav(p, "trash" as never);
+  await p.waitForSelector("[data-ddn=trash-row]");
+  await p.locator("[data-ddn=trash-row]", { hasText: "d.csv" }).click({ button: "right" });
+  await p.waitForSelector("[data-ddn=row-menu]:not([hidden])[data-for=trash-row]");
+  cm.trashItems = await p.$$eval("[data-ddn=row-menu] button", (b) => b.map((x) => x.getAttribute("data-ddn")));
+  await p.click("[data-ddn=menu-restore]");
+  await p.waitForSelector("[data-ddn-ui=trash-none]:not([hidden])");
+  cm.trashRestored = true;
+  // A text field keeps the browser's own menu.
+  await nav(p, "settings");
+  await p.waitForSelector("[data-ddn=pw-login]");
+  await p.click("[data-ddn=pw-login]", { button: "right" });
+  await p.waitForTimeout(200);
+  cm.nativeInInputs = await p.isHidden("[data-ddn=row-menu]");
+  await p.keyboard.press("Escape");
+  await nav(p, "files");
+  r.contextMenu = cm;
+
 
   // 10d. channels (zlecenie 2026-10-13-webhooki p. 1-3): the section folds (folded with channels, the
   // choice kept), per-channel stats, the remove dialog (impact list, options), retire + undo, a critical
@@ -1152,6 +1289,23 @@ try {
         o.quickArrows.file === "e.jpg" && o.quickArrows.bodyKids === 1 && o.quickArrows.img === true &&
         o.blobsRevoked.shown >= 4 && o.blobsRevoked.open === 0 && o.pwned === null &&
         o.phone.noHScroll === true && o.phone.full === true && o.phone.arrows === true && o.phonePdf.message === true && o.phonePdf.noFrame === true && o.phonePdf.download === true
+      );
+    })(),
+    contextMenu: (() => {
+      const o = r.contextMenu as Record<string, any> | undefined;
+      if (!o) return false;
+      const area = o.areaItems as string[];
+      const row = o.rowItems as string[];
+      return (
+        o.trashNextToDownload === true && o.trashNoConfirm === true && o.trashUndo === true && o.folderRowHasTrash === true &&
+        ["menu-new-folder", "menu-upload", "menu-select-all", "menu-view-list", "menu-view-tiles", "menu-sort-name", "menu-sort-size", "menu-sort-date", "menu-sort-asc", "menu-sort-desc", "menu-refresh"].every((k) => area.includes(k)) &&
+        o.newFolderFirst === true &&
+        ["menu-preview", "menu-download", "menu-rename", "menu-move", "menu-trash"].every((k) => row.includes(k)) && o.rightClickNoPreview === true && o.renamedFromContext === true &&
+        o.keyboard.first === "menu-preview" && o.keyboard.down === "menu-download" && o.keyboard.end === "menu-trash" && o.keyboard.back === true && o.keyboard.previewClosed === true &&
+        o.sortSize === true && o.sortKept === true &&
+        o.tiles.view === "tiles" && o.tiles.grid && o.tiles.cols >= 3 && o.tiles.pressed === "tiles" && o.tilesKept.view === "tiles" && o.tilesKept.grid && o.viewChecked === "true" && o.listAgain === true &&
+        o.phone.view === "tiles" && o.phone.grid && o.phone.cols >= 2 && o.phone.noHScroll && o.phone.longPress && o.phone.noPreview && o.phone.trashShown &&
+        JSON.stringify(o.trashItems) === JSON.stringify(["menu-restore", "menu-purge"]) && o.trashRestored === true && o.nativeInInputs === true
       );
     })(),
     noPageErrors: errors.length === 0,

@@ -27,6 +27,7 @@ import {
   HttpPairingMailbox,
   OpFailedError,
   SqlIndexStore,
+  parseCursor,
   accountKeyFromB64,
   acceptPairing,
   createAccountHttp,
@@ -54,6 +55,7 @@ import {
   type ChildRow,
   type DriveClient,
   type FolderStats,
+  type ListSort,
   type OpenedShare,
   type PendingPairing,
 } from "@ddv4/metadata-client";
@@ -503,24 +505,32 @@ export class AppCore {
   }
 
   /**
-   * One page of a folder (§4.1: only what is visible is in RAM). Keyset
-   * paging on (nameKey, id) in both stores: OPFS (main tab) and the in-memory
+   * One page of a folder (§4.1: only what is visible is in RAM): folders first, then files, each by
+   * the sort (name / size / date, either direction). Keyset paging with the same cursor
+   * ([fo, key, nameKey, id]) in both stores: OPFS (main tab, an index per sort) and the in-memory
    * replica (secondary tab), so paging behaves the same in every tab.
    */
-  list(parentId = ROOT_ID, after?: string, limit = 200): { rows: ChildRow[]; total: number } {
+  list(parentId = ROOT_ID, after?: string, limit = 200, sort?: ListSort): { rows: ChildRow[]; total: number } {
     const s = this.store;
     const hide = !this.showUnavailable;
-    if (s instanceof SqlIndexStore) return { rows: s.listChildren(parentId, { after, limit, hideUnavailable: hide }), total: s.countChildren(parentId, hide) };
-    const all: (ChildRow & { k: [string, string] })[] = [];
+    if (s instanceof SqlIndexStore) return { rows: s.listChildren(parentId, { after, limit, hideUnavailable: hide, sort }), total: s.countChildren(parentId, hide) };
+    type K = [number, number | null, string, string];
+    const by = sort?.by ?? "name";
+    const sign = sort?.desc ? -1 : 1;
+    const all: (ChildRow & { k: K })[] = [];
     for (const id of this.c().store.childIds(parentId)) {
       const n = this.c().store.getNode(id);
       if (!n || n.trashed) continue;
-      const k: [string, string] = [nameKey(n.name), id];
+      const fo = n.kind === "folder" ? 0 : 1;
+      const k: K = [fo, by === "size" ? (n.content?.sizeBytes ?? 0) : by === "date" ? (n.content?.createdAt ?? 0) : null, nameKey(n.name), id];
       all.push({ id, name: n.name, kind: n.kind as "file" | "folder", size: n.content?.sizeBytes ?? null, modifiedAt: n.content?.createdAt ?? null, trashed: false, cursor: JSON.stringify(k), k });
     }
-    const cmp = (x: [string, string], y: [string, string]) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : x[1] < y[1] ? -1 : x[1] > y[1] ? 1 : 0);
+    const c1 = (a: number | string | null, b: number | string | null) => (a === b ? 0 : (a ?? 0) < (b ?? 0) ? -1 : 1);
+    // Folders first in either direction; the rest of the key follows the direction.
+    const cmp = (x: K, y: K) => (x[0] !== y[0] ? x[0] - y[0] : sign * (c1(x[1], y[1]) || c1(x[2], y[2]) || c1(x[3], y[3])));
     all.sort((x, y) => cmp(x.k, y.k));
-    const from = after ? (JSON.parse(after) as [string, string]) : null;
+    const c = parseCursor(after);
+    const from: K | null = c ? [c.fo, c.key, c.nameKey, c.id] : null;
     const rows = (from ? all.filter((r) => cmp(r.k, from) > 0) : all).slice(0, limit).map(({ k: _k, ...r }) => r);
     return { rows, total: all.length };
   }

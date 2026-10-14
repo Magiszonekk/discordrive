@@ -227,11 +227,16 @@ export interface PreviewRow {
 }
 /** The part of the worker core the preview uses (structural: no import of app-core here). */
 export interface PreviewCore {
-  list(folder: string, after?: string, limit?: number): Promise<{ rows: PreviewRow[]; total: number }>;
+  list(folder: string, after?: string, limit?: number, sort?: ListSort): Promise<{ rows: PreviewRow[]; total: number }>;
   readRange(id: string, start: number, end: number): Promise<{ data: Uint8Array; size: number }>;
   download(id: string): Promise<Blob>;
   thumbnail(id: string): Promise<Blob | null>;
   streamUrl(id: string): Promise<string | null>;
+}
+/** Order of the file list (←/→ follow it): folders first, then by name / size / date. */
+export interface ListSort {
+  by: "name" | "size" | "date";
+  desc?: boolean;
 }
 export interface PreviewDeps {
   core: PreviewCore;
@@ -242,7 +247,7 @@ export interface PreviewDeps {
   error: (e: unknown) => void;
 }
 
-/** Files of one folder in name order, loaded page by page with core.list (folders skipped). */
+/** Files of one folder in the list's order, loaded page by page with core.list (folders skipped). */
 export class FolderFiles {
   files: PreviewRow[] = [];
   private cursor: string | undefined;
@@ -252,6 +257,7 @@ export class FolderFiles {
     private readonly folder: string | null,
     fixed?: PreviewRow[],
     private readonly pageSize = LIST_PAGE,
+    private readonly sort?: ListSort,
   ) {
     if (fixed) {
       this.files = fixed.filter((r) => r.kind === "file");
@@ -267,7 +273,7 @@ export class FolderFiles {
   private async load(): Promise<number> {
     const before = this.files.length;
     if (this.done || this.folder === null) return ((this.done = true), before);
-    const pg = await this.core.list(this.folder, this.cursor, this.pageSize);
+    const pg = await this.core.list(this.folder, this.cursor, this.pageSize, this.sort);
     for (const r of pg.rows) if (r.kind === "file") this.files.push(r);
     this.cursor = pg.rows.at(-1)?.cursor;
     if (pg.rows.length < this.pageSize || !this.cursor) this.done = true;
@@ -311,7 +317,7 @@ export function markdownDom(nodes: MdNode[]): DocumentFragment {
 
 export interface Preview {
   /** Open a file; siblings for ←/→ come from `folder` (core.list paging) or from `rows` (search hits). */
-  open(row: PreviewRow, from: { folder: string } | { rows: PreviewRow[] }): void;
+  open(row: PreviewRow, from: { folder: string; sort?: ListSort } | { rows: PreviewRow[] }): void;
   close(): void;
 }
 
@@ -433,9 +439,9 @@ export function createPreview(deps: PreviewDeps): Preview {
     show(f);
   }
 
-  function open(row: PreviewRow, from: { folder: string } | { rows: PreviewRow[] }) {
+  function open(row: PreviewRow, from: { folder: string; sort?: ListSort } | { rows: PreviewRow[] }) {
     wire();
-    list = "folder" in from ? new FolderFiles(deps.core, from.folder) : new FolderFiles(deps.core, null, from.rows);
+    list = "folder" in from ? new FolderFiles(deps.core, from.folder, undefined, LIST_PAGE, from.sort) : new FolderFiles(deps.core, null, from.rows);
     index = -1;
     want = -1;
     if (!dlg!.open) dlg!.showModal();

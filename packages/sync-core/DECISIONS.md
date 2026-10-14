@@ -491,3 +491,38 @@ serwer trzyma dodatkowo, dla tego jednego konta:
   odmawia PDF w ramce z `sandbox` (każdy wariant), więc ramka PDF jest bez `sandbox`; blob: jest związany
   z naszym originem i zawiera tylko to, co utworzyła aplikacja. `object-src 'none'` i `frame-ancestors
   'none'` bez zmian. SVG wyłącznie jako `<img>`, Markdown własnym rendererem do węzłów DOM (bez innerHTML).
+
+## Zlecenie 2026-10-14-ui: kosz obok pobierania, menu kontekstowe, widok kafelków, sortowanie
+
+### Kosz w wierszu
+- „Przenieś do kosza” jest ikoną bezpośrednio po „Pobierz” (pliki) i po „Otwórz” (foldery), z tooltipem i
+  aria-label, bez pytania; toast z „Cofnij” jak dotąd. Zostaje też w menu ⋯.
+- Telefon: w widoku listy (karta FileCard) przycisk jest ukryty, zostaje w menu ⋯ i pod długim
+  przytrzymaniem: w karcie 390 px są już pobieranie, udostępnianie i ⋯, czwarta ikona ściska nazwę.
+  W kafelkach na telefonie kosz jest widoczny (pasek akcji kafelka).
+
+### Menu kontekstowe
+- Jedno pływające menu dla ⋯, prawego przycisku, klawisza Menu / Shift+F10 i długiego przytrzymania
+  (500 ms, dotyk; iOS nie wysyła contextmenu). Pusty obszar Files: Nowy folder, Wyślij pliki, Zaznacz
+  wszystko, Widok (Lista / Kafelki), Sortuj (nazwa / rozmiar / data, rosnąco / malejąco), Odśwież.
+  Wiersz: akcje ⋯ (Podgląd, Pobierz, Udostępnij, Zmień nazwę, Przenieś do…, Do kosza); przy kilku
+  zaznaczonych (gdy kliknięty jest jednym z nich) akcje grupowe. Kosz: Przywróć / Usuń na zawsze, pusty
+  obszar: Opróżnij kosz + Widok. „Wklej” pominięte (brak schowka).
+- Natywne menu zostaje: pola tekstowe, okna dialogowe (podgląd), linki poza listą, Shift + PPM.
+- Klawiatura: strzałki, Home/End, Esc (fokus wraca do elementu, z którego otwarto), Tab zamyka.
+
+### Sortowanie (tanie przy stronicowaniu po kluczu)
+- Lokalna baza, schemat 3: kolumny `fo` (folder 0 / plik 1), `sz`, `mt` w `nodes`, uzupełniane z rekordu
+  w putNode; migracja w miejscu (ALTER + jeden UPDATE). Indeksy `(parent_id, fo, klucz, name_key, id)` dla
+  nazwy, rozmiaru i daty: każda strona to zakres indeksu, bez OFFSET i bez sortowania w pamięci (test
+  sprawdza EXPLAIN QUERY PLAN). Foldery zawsze na początku (też malejąco). Kursor `[fo, klucz, name_key, id]`;
+  stary kursor (schemat 2) zaczyna od początku zamiast błędu.
+- Karta drugorzędna (indeks w pamięci) sortuje tak samo tym samym kursorem. Podgląd ←/→ idzie w kolejności
+  listy. Wybór sortowania zapamiętany w localStorage (`ddn.sort`), tak jak widok (`ddn.view`).
+- Zmiana: lista ma teraz foldery przed plikami także przy sortowaniu po nazwie (wcześniej mieszane
+  alfabetycznie); zgodne z discordrive (FileTable: najpierw foldery).
+
+### Kafelki
+- Ten sam DOM wierszy (te same hooki, stronicowanie 50, zaznaczanie, menu), inny układ (siatka
+  auto-fill). Miniatury: plain z serwera, metadata only / e2ee ikona typu (zaszyfrowane podglądy §7.5.1
+  osobno). Kosz ma oba widoki.

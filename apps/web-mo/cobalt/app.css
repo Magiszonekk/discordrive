@@ -438,7 +438,7 @@ dialog.player { width: min(1000px, 96vw); padding: 0; border: 1px solid var(--co
 .bulk .btn { padding-top: .375rem; padding-bottom: .375rem; }
 
 /* Row menu (FolderActionMenu): min-w-44 card, rows px-4 py-3 text-sm, icon 16, danger in error after a hairline */
-.menu { position: fixed; z-index: var(--z-dropdown); min-width: 11rem; padding: .25rem 0; overflow: hidden; border: 1px solid var(--color-rule); border-radius: var(--radius-card); background: var(--color-paper); box-shadow: 0 10px 15px -3px oklch(24% 0.02 258 / 0.1), 0 4px 6px -4px oklch(24% 0.02 258 / 0.1); animation: menu-in var(--duration-micro, 120ms) var(--ease-out); }
+.menu { position: fixed; z-index: var(--z-dropdown); min-width: 11rem; max-height: calc(100dvh - 1rem); padding: .25rem 0; overflow: hidden auto; overscroll-behavior: contain; border: 1px solid var(--color-rule); border-radius: var(--radius-card); background: var(--color-paper); box-shadow: 0 10px 15px -3px oklch(24% 0.02 258 / 0.1), 0 4px 6px -4px oklch(24% 0.02 258 / 0.1); animation: menu-in var(--duration-micro, 120ms) var(--ease-out); }
 @keyframes menu-in { from { opacity: 0; transform: translateY(-4px); } }
 .menu button { display: flex; width: 100%; align-items: center; gap: .75rem; padding: .625rem 1rem; border: 0; background: none; text-align: left; font: 400 .875rem/1.25rem var(--font-body); color: var(--color-ink-2); cursor: pointer; transition: background-color var(--duration-short) var(--ease-out); }
 .menu button svg.i { color: var(--color-muted); }
@@ -702,3 +702,70 @@ tr.unavail .nm > [data-ddn="unavailable-chip"] { flex: none; }
 .chip--warning { color: color-mix(in oklab, var(--color-warning) 62%, var(--color-ink)); border-color: color-mix(in oklab, var(--color-warning) 55%, transparent); }
 .note.warn svg.i, .advice.need { color: color-mix(in oklab, var(--color-warning) 62%, var(--color-ink)); }
 .bar > i.paused { background: var(--color-warning); }
+
+/* ── zlecenie 2026-10-14-ui: trash next to Download, context menu, List / Tiles, sortable column heads ──
+ * Functional base on the Cobalt tokens (the look gets its polish from the frontend profile). */
+/* Move to trash in the row: quiet (muted, error on hover). Phone list cards: in the menu (no room). */
+@media (max-width: 767.98px) { .ftable-wrap:not([data-view="tiles"]) .row-trash { display: none; } }
+/* Context menu: group labels and radio items (view / sort) */
+.menu-label { padding: .5rem 1rem .25rem; font: 500 .6875rem/1rem var(--font-mono); text-transform: uppercase; letter-spacing: .04em; color: var(--color-muted); }
+.menu button[aria-checked="true"] { color: var(--color-ink); font-weight: 500; }
+.menu button[aria-checked="true"] svg.i { color: var(--color-accent); }
+/* Sortable column heads: the head text is the button; the arrow shows the direction of the active one */
+.th-sort { display: inline-flex; align-items: center; gap: .375rem; padding: 0; border: 0; background: none; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; cursor: pointer; }
+.th-sort svg.i { width: 12px; height: 12px; opacity: 0; transition: opacity var(--duration-short) var(--ease-out); }
+.th-sort:hover, .th-sort:focus-visible { color: var(--color-ink); }
+.th-sort:hover svg.i, .th-sort:focus-visible svg.i { opacity: .5; }
+th[aria-sort="ascending"] .th-sort, th[aria-sort="descending"] .th-sort { color: var(--color-ink-2); }
+th[aria-sort="ascending"] .th-sort svg.i, th[aria-sort="descending"] .th-sort svg.i { opacity: 1; color: var(--color-accent); }
+/* List / Tiles switch in the page head (the EN/PL segmented control) */
+.view-toggle { align-self: center; }
+.view-toggle button { display: inline-grid; place-items: center; }
+.view-toggle svg.i { width: 15px; height: 15px; }
+@media (max-width: 767.98px) { .view-toggle button { height: 2.25rem; min-width: 2.25rem; } }
+
+/* Tiles: the same rows (same hooks, paging, selection, menus) laid out as a responsive grid. */
+.ftable-wrap[data-view="tiles"] { overflow: visible; border: 0; border-radius: 0; background: none; }
+.ftable-wrap[data-view="tiles"] .ftable, .ftable-wrap[data-view="tiles"] .ftable tbody { display: block; }
+.ftable-wrap[data-view="tiles"] .ftable thead { display: none; }
+.ftable-wrap[data-view="tiles"] .ftable tbody { display: grid; grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr)); gap: .75rem; }
+.ftable-wrap[data-view="tiles"] .ftable tbody tr { position: relative; display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--color-rule); border-radius: var(--radius-card); background: var(--color-paper); }
+.ftable-wrap[data-view="tiles"] .ftable tbody tr:hover { border-color: var(--color-rule-2); background: var(--color-paper-2); }
+.ftable-wrap[data-view="tiles"] .ftable tbody tr.sel { border-color: color-mix(in oklch, var(--color-accent) 55%, transparent); }
+.ftable-wrap[data-view="tiles"] .ftable tbody tr.sel td:first-child { box-shadow: none; }
+.ftable-wrap[data-view="tiles"] .ftable td { display: block; padding: 0; border: 0; }
+.ftable-wrap[data-view="tiles"] .ftable td.size, .ftable-wrap[data-view="tiles"] .ftable td.c-date { display: none; }
+.ftable-wrap[data-view="tiles"] .ftable td.c-name { max-width: none; width: auto; padding: .5rem .5rem .75rem; }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm { display: flex; flex-direction: column; align-items: stretch; gap: .5rem; width: 100%; }
+/* the preview area: thumbnail (plain), the type badge or the folder icon, 4:3 */
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > :first-child { box-sizing: border-box; display: grid; place-items: center; width: 100%; height: auto; aspect-ratio: 4 / 3; margin: 0; border: 0; border-radius: var(--radius-input); background: var(--color-paper-2); }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > svg.i { padding: 26%; color: var(--color-ink-2); }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > .badge { font-size: .8125rem; line-height: 1rem; color: var(--color-ink-2); }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > .badge.media { color: var(--color-accent); }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > .thumb { object-fit: cover; outline: 1px solid var(--color-rule); outline-offset: -1px; }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > :is(a, span:last-child, [data-ddn="preview-open"]) { min-width: 0; padding: 0 .25rem; font-size: .875rem; line-height: 1.25rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > [data-ddn="unavailable-chip"] { align-self: flex-start; margin-left: .25rem; }
+.ftable-wrap[data-view="tiles"] .ftable .sub { display: block; margin-top: .125rem; padding: 0 .25rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ftable-wrap[data-view="tiles"] .ftable .unav-why { display: none; }
+/* selection box top left, actions top right: shown on hover / focus / selection (always on touch) */
+.ftable-wrap[data-view="tiles"] .ftable td.c-sel { position: absolute; z-index: 1; top: .875rem; left: .875rem; display: grid; place-items: center; width: 1.75rem; height: 1.75rem; padding: 0; border-radius: var(--radius-input); background: color-mix(in oklch, var(--color-paper) 88%, transparent); box-shadow: 0 1px 2px oklch(24% 0.02 258 / 0.12); }
+.ftable-wrap[data-view="tiles"] .ftable td.c-acts { position: absolute; z-index: 1; top: .875rem; right: .875rem; padding: .125rem; border-radius: var(--radius-input); background: color-mix(in oklch, var(--color-paper) 92%, transparent); box-shadow: 0 1px 2px oklch(24% 0.02 258 / 0.12); }
+.ftable-wrap[data-view="tiles"] .ftable .acts { gap: 0; }
+.ftable-wrap[data-view="tiles"] .ftable .acts :is([data-ddn="play"], [data-ddn="share"]) { display: none; }
+.ftable-wrap[data-view="tiles"] .ftable :is(td.c-sel, td.c-acts) { opacity: 0; transition: opacity var(--duration-short) var(--ease-out); }
+.ftable-wrap[data-view="tiles"] .ftable tr:is(:hover, :focus-within, .sel) :is(td.c-sel, td.c-acts),
+.ftable-wrap[data-view="tiles"] .ftable tbody:has(tr.sel) td.c-sel,
+.ftable-wrap[data-view="tiles"] .ftable tr:has([aria-expanded="true"]) td.c-acts { opacity: 1; }
+@media (hover: none) { .ftable-wrap[data-view="tiles"] .ftable :is(td.c-sel, td.c-acts) { opacity: 1; } }
+/* Trash in tiles: the days left and Restore / Delete under the name, always visible */
+.ftable-wrap.trash-wrap[data-view="tiles"] .ftable td.c-left { display: block; padding: 0 .75rem .5rem; }
+.ftable-wrap.trash-wrap[data-view="tiles"] .ftable td.c-acts { position: static; opacity: 1; padding: 0 .5rem .75rem; background: none; box-shadow: none; text-align: left; }
+.ftable-wrap.trash-wrap[data-view="tiles"] .ftable .acts { display: flex; justify-content: space-between; }
+@media (max-width: 767.98px) {
+  .ftable-wrap[data-view="tiles"] .ftable tbody { grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: .5rem; }
+  .ftable-wrap[data-view="tiles"] .ftable td.c-name { padding: .375rem .375rem .625rem; }
+  .ftable-wrap[data-view="tiles"] .ftable td.c-sel { top: .625rem; left: .625rem; }
+  .ftable-wrap[data-view="tiles"] .ftable td.c-acts { top: .625rem; right: .625rem; }
+}
+/* Long press opens the menu: no text selection / iOS callout on the rows */
+@media (hover: none) { .ftable tbody tr { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }

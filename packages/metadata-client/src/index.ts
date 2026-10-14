@@ -82,7 +82,7 @@ export {
   type EncryptedEntry,
   type EncryptedLogApi,
 } from "./op-crypto.js";
-export { SqlIndexStore, manifestLoc, type ChildRow, type FolderStats, type SqlDriver, type SqlValue } from "./sql-store.js";
+export { SqlIndexStore, manifestLoc, parseCursor, type ChildRow, type FolderStats, type ListSort, type SqlDriver, type SqlValue } from "./sql-store.js";
 // Node-only (node:sqlite, server): import from "@ddv4/metadata-client/node".
 export {
   clientBlobIO,

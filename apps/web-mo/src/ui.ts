@@ -279,6 +279,59 @@ let resetJoin: (() => void) | null = null;
 const SKIP_KEY = "ddn.skip-welcome";
 
 const currentFolder = () => (route.name === "files" ? route.folder : "root");
+// View (List / Tiles) and sort of the file list, remembered per device (zlecenie 2026-10-14-ui p. 2-3).
+type View = "list" | "tiles";
+type SortBy = "name" | "size" | "date";
+const VIEW_KEY = "ddn.view";
+const SORT_KEY = "ddn.sort";
+let view: View = (() => {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "tiles" ? "tiles" : "list";
+  } catch {
+    return "list";
+  }
+})();
+let sort: { by: SortBy; desc: boolean } = (() => {
+  try {
+    const s = JSON.parse(localStorage.getItem(SORT_KEY) ?? "null") as { by?: unknown; desc?: unknown } | null;
+    if (s && (s.by === "name" || s.by === "size" || s.by === "date")) return { by: s.by, desc: s.desc === true };
+  } catch {
+    /* default */
+  }
+  return { by: "name", desc: false };
+})();
+function paintView() {
+  for (const w of all<HTMLElement>(".ftable-wrap")) w.dataset.view = view;
+  for (const b of all<HTMLButtonElement>("[data-ddn=view] [data-view]")) b.setAttribute("aria-pressed", String(b.dataset.view === view));
+}
+function setView(v: View) {
+  view = v;
+  try {
+    localStorage.setItem(VIEW_KEY, v);
+  } catch {
+    /* private mode: this tab only */
+  }
+  paintView();
+}
+function paintSort() {
+  for (const b of all<HTMLButtonElement>("[data-ddn=sort]")) {
+    const on = b.dataset.sort === sort.by;
+    b.closest("th")!.setAttribute("aria-sort", on ? (sort.desc ? "descending" : "ascending") : "none");
+    b.dataset.dir = on ? (sort.desc ? "desc" : "asc") : "";
+  }
+}
+function setSort(by: SortBy, desc: boolean) {
+  sort = { by, desc };
+  try {
+    localStorage.setItem(SORT_KEY, JSON.stringify(sort));
+  } catch {
+    /* this tab only */
+  }
+  cursorStack = [undefined]; // keyset cursors belong to one order
+  shownList = "";
+  paintSort();
+  void render();
+}
 /** Selected rows of the current folder (cleared on navigation): id -> what the bulk actions need. */
 const selected = new Map<string, { name: string; kind: "file" | "folder" }>();
 /** The open folder lives under „Recovered” (rule 4): set by render from the path. */
@@ -337,6 +390,23 @@ function renderShellStatus(st: Status) {
 /** Folder + page of the list shown last: the row stagger (.reveal) plays only when that changes, like
  * discordrive's one-shot load (render() also runs after every upload and sync, and the rows must not fade again). */
 let shownList = "";
+/**
+ * Where the focus is inside a list (row ID + the element's data-ddn), so it can be put back after the rows
+ * were rebuilt (every render replaces them: sync, upload, rename) or the menu's origin was replaced.
+ */
+function focusKey(el: Element | null): { row: string; ddn: string } | null {
+  const row = el?.closest<HTMLElement>("[data-ddn=row], [data-ddn=trash-row]");
+  const ddn = el?.getAttribute("data-ddn");
+  return row?.dataset.id && ddn ? { row: row.dataset.id, ddn } : null;
+}
+function refocus(k: { row: string; ddn: string } | null) {
+  if (!k) return;
+  const row = document.querySelector(`[data-ddn=row][data-id="${CSS.escape(k.row)}"], [data-ddn=trash-row][data-id="${CSS.escape(k.row)}"]`);
+  row?.querySelector<HTMLElement>(`[data-ddn="${CSS.escape(k.ddn)}"]`)?.focus({ preventScroll: true });
+}
+/** Row element -> its data (the context menu of a row). */
+const rowData = new WeakMap<HTMLElement, { id: string; name: string; kind: "file" | "folder"; size: number | null; unavailable?: string[] }>();
+const trashData = new WeakMap<HTMLElement, TrashRow>();
 /** Removed channels by webhook ID (label + channel), for the "unavailable" explanation in the file list. */
 const removedLabels = new Map<string, string>();
 const channelName = (id: string) => removedLabels.get(id) ?? `#…${id.slice(-6)}`;
@@ -346,6 +416,7 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
   tr.dataset.ddn = "row";
   tr.dataset.id = r.id;
   tr.dataset.kind = r.kind;
+  rowData.set(tr, r);
   if (r.unavailable?.length) {
     tr.classList.add("unavail");
     tr.dataset.unavailable = r.unavailable.join(",");
@@ -360,8 +431,9 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
   };
   tr.classList.toggle("sel", box.checked);
   const sel = h("td", { class: "c-sel" }, box);
-  if (!searchQ) {
+  if (!searchQ && FINE_POINTER) {
     // Drag a row onto a folder row or a breadcrumb link to move it (with the rest of the selection).
+    // Not on touch: there a long press opens the menu (Chrome on Android would start a drag instead).
     tr.draggable = true;
     tr.ondragstart = (e) => {
       const ids = selected.has(r.id) ? [...selected.keys()] : [r.id];
@@ -373,11 +445,19 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
   const name = h("td", { class: "c-name" });
   const acts = h("span", { class: "acts" });
   const iconBtn = (ic: string, label: string, title: string, tone = "") => h("button", { class: `iconbtn${tone ? ` ${tone}` : ""}`, type: "button", "aria-label": label, title }, icon(ic));
+  // Move to trash right next to Download (zlecenie 2026-10-14-ui p. 1): no question (the trash can be
+  // undone), the toast offers Undo. Phone list cards keep it in the menu (CSS), there is no room.
+  const trashBtn = () => {
+    const b = iconBtn("trash", t("act.trash.aria", { name: r.name }), t("act.trash"), "danger quiet row-trash");
+    b.dataset.ddn = "row-trash";
+    b.onclick = () => void act(b, () => trashItems([r]));
+    return b;
+  };
   if (r.kind === "folder") {
     name.append(h("span", { class: "nm" }, icon("folder"), h("a", { href: `/folder/${r.id}`, "data-link": "", title: r.name }, r.name)), h("span", { class: "sub" }, t("files.folder")));
     const go = iconBtn("right", t("files.open", { name: r.name }), t("files.open", { name: r.name }));
     go.onclick = () => openFolder(r.id);
-    acts.append(go);
+    acts.append(go, trashBtn());
   } else {
     const [, label, tone] = typeOf(r.name);
     const badge = h("span", { class: `badge ${tone}` }, label);
@@ -432,16 +512,11 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
         setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
       });
     acts.append(dl);
+    if (!r.unavailable?.length) acts.append(trashBtn()); // unavailable: its own delete button above
     if (sharesOn && !inRecovered() && !r.unavailable?.length) {
       const sh = iconBtn("share", t("files.share.aria", { name: r.name }), t("files.share"));
       sh.dataset.ddn = "share";
-      sh.onclick = () =>
-        void act(sh, async () => {
-          const s = await core.shareFile(r.id, serverUrl);
-          ui("share-name").textContent = r.name;
-          $<HTMLTextAreaElement>("share-link").value = s.link;
-          $<HTMLDialogElement>("share-dialog").showModal();
-        });
+      sh.onclick = () => void act(sh, () => shareRow(r));
       acts.append(sh);
     }
   }
@@ -457,6 +532,15 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
   tr.append(sel, name, h("td", { class: "size" }, r.kind === "folder" ? "" : fmt(r.size)), h("td", { class: "c-date" }, when), h("td", { class: "c-acts" }, acts));
   return tr;
 }
+
+async function shareRow(r: { id: string; name: string }) {
+  const s = await core.shareFile(r.id, serverUrl);
+  ui("share-name").textContent = r.name;
+  $<HTMLTextAreaElement>("share-link").value = s.link;
+  $<HTMLDialogElement>("share-dialog").showModal();
+}
+const canShare = (r: { kind: string; unavailable?: string[] }) => r.kind === "file" && sharesOn && !inRecovered() && !r.unavailable?.length;
+const FINE_POINTER = matchMedia("(pointer: fine)").matches;
 
 /** plain: replace the type badge with the server's thumbnail once it exists (cached per file). */
 const thumbs = new Map<string, Promise<string | null>>();
@@ -510,7 +594,7 @@ const channelsUi = createChannelsUi({
 });
 const preview = createPreview({ core, features: () => features, download: (id, name) => download(id, name), error: (e) => toast(errText(e), "err") });
 function previewFile(r: PreviewRow) {
-  preview.open(r, searchQ ? { rows: searchRows } : { folder: currentFolder() });
+  preview.open(r, searchQ ? { rows: searchRows } : { folder: currentFolder(), sort });
 }
 function closePlayer() {
   const v = $<HTMLVideoElement>("player");
@@ -724,7 +808,7 @@ async function renderNow() {
   renderCrumbs(path);
   ui("folder-title").textContent = path.length ? (path.at(-1)!.id === "recovered" ? t("nav.recovered") : path.at(-1)!.name) : t("files.root");
   if (searchQ) return renderSearch();
-  const [stats, pg] = await Promise.all([core.folderStats(folder), core.list(folder, cursorStack.at(-1), PAGE)]);
+  const [stats, pg] = await Promise.all([core.folderStats(folder), core.list(folder, cursorStack.at(-1), PAGE, sort)]);
   ui("folder-meta").textContent = [tn("files.meta.folders", stats.folders), tn("files.meta.files", stats.files), stats.bytes > 0 ? fmt(stats.bytes) : ""].filter(Boolean).join(" · ");
   ui("need-channel").hidden = channelsOk;
   ui("upload-btn").setAttribute("aria-disabled", String(!channelsOk));
@@ -732,13 +816,15 @@ async function renderNow() {
   const pageIndex = cursorStack.length - 1;
   // Both kinds of tab (main on OPFS, secondary in memory) page with a (name, id) cursor.
   const rows = pg.rows;
-  const listKey = `${folder}|${pageIndex}|${cursorStack.at(-1) ?? ""}`;
+  const listKey = `${folder}|${pageIndex}|${cursorStack.at(-1) ?? ""}|${sort.by}${sort.desc ? "-" : "+"}`;
   const enter = listKey !== shownList;
   shownList = listKey;
   // Selection survives re-renders (sync, uploads) but only for rows that still exist here.
   const here = new Set(rows.map((x) => x.id));
   for (const id of [...selected.keys()]) if (!here.has(id)) selected.delete(id);
+  const hadFocus = $("list").contains(document.activeElement) ? focusKey(document.activeElement) : null;
   $("list").replaceChildren(...rows.map((row, i) => fileRow(row, i, enter)));
+  refocus(hadFocus);
   paintBulk();
   ui("empty").hidden = pg.total > 0;
   ui("search-empty").hidden = true;
@@ -940,6 +1026,20 @@ function wireFilesPage() {
       zone.click();
     }
   };
+  // List / Tiles (both pages) and the sort from the column heads (click again = the other direction).
+  for (const b of all<HTMLButtonElement>("[data-ddn=view] [data-view]")) {
+    b.onclick = () => {
+      setView(b.dataset.view === "tiles" ? "tiles" : "list");
+    };
+  }
+  for (const b of all<HTMLButtonElement>("[data-ddn=sort]")) {
+    b.onclick = () => {
+      const by = b.dataset.sort as SortBy;
+      setSort(by, sort.by === by ? !sort.desc : by !== "name"); // size / date: biggest / newest first
+    };
+  }
+  paintView();
+  paintSort();
   // New folder (NewFolderModal).
   const d = $<HTMLDialogElement>("folder-dialog");
   const name = $<HTMLInputElement>("folder-name");
@@ -1015,78 +1115,270 @@ async function moveItems(ids: string[], target: string, targetName: string, firs
   });
 }
 
-// Row menu (⋯): one floating menu, positioned under the button.
+// ── menus: the row menu (⋯) and the context menu (right click, Menu key / Shift+F10, long press) ──
+// One floating menu ([data-ddn=row-menu]) for all of them (zlecenie 2026-10-14-ui p. 2). Under a button
+// (⋯) or at the pointer; arrows / Home / End move, Esc closes, focus goes back to where it came from.
+type MenuRow = { id: string; name: string; kind: "file" | "folder"; size: number | null; unavailable?: string[] };
+type MenuEntry = { ic: string; label: string; key: string; run: () => void; danger?: boolean; checked?: boolean } | "sep" | { group: string };
 let menuFor: HTMLElement | null = null;
-function closeRowMenu() {
+let menuAt: { x: number; y: number } | null = null;
+let menuBack: HTMLElement | null = null;
+let menuBackKey: { row: string; ddn: string } | null = null;
+let menuOpenedAt = 0;
+function closeRowMenu(doRefocus = true) {
   const m = $("row-menu");
   if (m.hidden) return;
   m.hidden = true;
   menuFor?.setAttribute("aria-expanded", "false");
-  menuFor?.focus({ preventScroll: true });
-  menuFor = null;
+  const back = menuBack;
+  const key = menuBackKey;
+  menuFor = menuAt = menuBack = menuBackKey = null;
+  if (!doRefocus) return;
+  if (back?.isConnected) back.focus({ preventScroll: true });
+  else refocus(key); // the row was rebuilt meanwhile: the same control in the new row
 }
-function openRowMenu(btn: HTMLElement, r: { id: string; name: string; kind: "file" | "folder"; size: number | null }) {
+function openMenu(entries: MenuEntry[], where: { button: HTMLElement } | { x: number; y: number; back: HTMLElement | null }, kind: string) {
   const m = $("row-menu");
-  if (!m.hidden && menuFor === btn) return closeRowMenu();
-  const item = (ic: string, label: string, key: string, run: () => void, danger = false) => {
-    const b = h("button", { type: "button", role: "menuitem", class: danger ? "danger" : "", "data-ddn": `menu-${key}` }, icon(ic), label);
+  if (!m.hidden) closeRowMenu(false);
+  const kids: HTMLElement[] = [];
+  for (const e of entries) {
+    if (e === "sep") {
+      if (kids.length && !kids.at(-1)!.classList.contains("menu-sep")) kids.push(h("div", { class: "menu-sep", role: "separator" }));
+      continue;
+    }
+    if ("group" in e) {
+      kids.push(h("div", { class: "menu-label", role: "presentation" }, e.group));
+      continue;
+    }
+    const radio = e.checked !== undefined;
+    const b = h("button", { type: "button", role: radio ? "menuitemradio" : "menuitem", class: e.danger ? "danger" : "", "data-ddn": `menu-${e.key}`, tabindex: "-1" }, icon(radio ? (e.checked ? "check" : "none") : e.ic), e.label);
+    if (radio) b.setAttribute("aria-checked", String(e.checked));
+    if (e.danger && kids.length && !kids.at(-1)!.classList.contains("menu-sep")) kids.push(h("div", { class: "menu-sep", role: "separator" }));
     b.onclick = () => {
       closeRowMenu();
-      run();
+      e.run();
     };
-    return b;
-  };
-  const items = [
-    ...(r.kind === "folder" ? [item("folder", t("act.open"), "open", () => openFolder(r.id))] : [item("eye", t("pv.action"), "preview", () => previewFile(r)), item("download", t("files.download"), "download", () => void act(null, () => download(r.id, r.name)))]),
-    item("pencil", t("act.rename"), "rename", () => openRename(r)),
-    item("move", t("act.move"), "move", () => void openMove([r.id], r.name)),
-    item("trash", t("act.trash"), "trash", () => void act(null, () => trashItems([r])), true),
-  ];
-  m.replaceChildren(...items.flatMap((b) => (b.classList.contains("danger") ? [h("div", { class: "menu-sep", role: "separator" }), b] : [b])));
+    kids.push(b);
+  }
+  m.replaceChildren(...kids);
+  m.dataset.for = kind;
   m.hidden = false;
-  menuFor = btn;
   menuOpenedAt = Date.now();
-  btn.setAttribute("aria-expanded", "true");
+  if ("button" in where) {
+    menuFor = menuBack = where.button;
+    where.button.setAttribute("aria-expanded", "true");
+  } else {
+    menuAt = { x: where.x, y: where.y };
+    menuBack = where.back;
+  }
+  menuBackKey = focusKey(menuBack);
   placeRowMenu();
   m.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
 }
-let menuOpenedAt = 0;
 function placeRowMenu() {
   const m = $("row-menu");
-  if (!menuFor) return;
-  const b = menuFor.getBoundingClientRect();
   const w = m.offsetWidth;
-  const top = b.bottom + 4 + m.offsetHeight > window.innerHeight ? Math.max(8, b.top - 4 - m.offsetHeight) : b.bottom + 4;
-  m.style.top = `${top}px`;
-  m.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, b.right - w))}px`;
+  const hgt = m.offsetHeight;
+  let top: number;
+  let left: number;
+  if (menuFor) {
+    const b = menuFor.getBoundingClientRect();
+    top = b.bottom + 4 + hgt > window.innerHeight ? Math.max(8, b.top - 4 - hgt) : b.bottom + 4;
+    left = b.right - w;
+  } else if (menuAt) {
+    top = menuAt.y + hgt + 8 > window.innerHeight ? Math.max(8, menuAt.y - hgt) : menuAt.y;
+    left = menuAt.x + w + 8 > window.innerWidth ? menuAt.x - w : menuAt.x;
+  } else return;
+  m.style.top = `${Math.max(8, top)}px`;
+  m.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, left))}px`;
 }
+function openRowMenu(btn: HTMLElement, r: MenuRow) {
+  const m = $("row-menu");
+  if (!m.hidden && menuFor === btn) return closeRowMenu();
+  openMenu(rowEntries(r), { button: btn }, "row");
+}
+
+/** Actions of one row (the ⋯ menu and the right click); several selected rows -> the bulk actions. */
+function rowEntries(r: MenuRow): MenuEntry[] {
+  if (selected.size > 1 && selected.has(r.id)) {
+    const n = selected.size;
+    const files = [...selected.values()].some((x) => x.kind === "file");
+    return [
+      { group: tn("bulk.count", n) },
+      ...(files ? [{ ic: "download", label: t("files.download"), key: "download", run: () => void act(null, bulkDownload) }] : []),
+      { ic: "move", label: t("act.move"), key: "move", run: bulkMove },
+      { ic: "x", label: t("bulk.clear"), key: "clear", run: clearSelection },
+      { ic: "trash", label: t("act.trash"), key: "trash", run: () => void act(null, bulkTrash), danger: true },
+    ];
+  }
+  const un = !!r.unavailable?.length;
+  return [
+    ...(r.kind === "folder"
+      ? [{ ic: "folder", label: t("act.open"), key: "open", run: () => openFolder(r.id) }]
+      : [{ ic: "eye", label: t("pv.action"), key: "preview", run: () => previewFile(r) }, ...(un ? [] : [{ ic: "download", label: t("files.download"), key: "download", run: () => void act(null, () => download(r.id, r.name)) }])]),
+    ...(canShare(r) ? [{ ic: "share", label: t("files.share"), key: "share", run: () => void act(null, () => shareRow(r)) }] : []),
+    { ic: "pencil", label: t("act.rename"), key: "rename", run: () => openRename(r) },
+    { ic: "move", label: t("act.move"), key: "move", run: () => void openMove([r.id], r.name) },
+    { ic: "trash", label: t("act.trash"), key: "trash", run: () => void act(null, () => trashItems([r])), danger: true },
+  ];
+}
+/** View and sort entries (both pages' empty area). */
+function viewEntries(withSort: boolean): MenuEntry[] {
+  const out: MenuEntry[] = [
+    "sep",
+    { group: t("view.label") },
+    { ic: "list", label: t("view.list"), key: "view-list", run: () => setView("list"), checked: view === "list" },
+    { ic: "grid", label: t("view.tiles"), key: "view-tiles", run: () => setView("tiles"), checked: view === "tiles" },
+  ];
+  if (withSort && !searchQ)
+    out.push(
+      "sep",
+      { group: t("sort.label") },
+      ...(["name", "size", "date"] as const).map((by) => ({ ic: "sort", label: t(`sort.${by}`), key: `sort-${by}`, run: () => setSort(by, sort.desc), checked: sort.by === by })),
+      "sep",
+      { ic: "up", label: t("sort.asc"), key: "sort-asc", run: () => setSort(sort.by, false), checked: !sort.desc },
+      { ic: "down", label: t("sort.desc"), key: "sort-desc", run: () => setSort(sort.by, true), checked: sort.desc },
+    );
+  out.push("sep", { ic: "refresh", label: t("menu.refresh"), key: "refresh", run: refresh });
+  return out;
+}
+function refresh() {
+  shownList = "";
+  void render();
+}
+function filesEntries(): MenuEntry[] {
+  return [
+    ...(searchQ ? [] : [{ ic: "folder-plus", label: t("files.newFolder"), key: "new-folder", run: () => $("new-folder").click() }]),
+    { ic: "upload", label: t("files.upload"), key: "upload", run: () => (channelsOk ? $<HTMLInputElement>("file").click() : toast(t("err.need_channel"), "err")) },
+    { ic: "check-square", label: t("menu.selectAll"), key: "select-all", run: selectAllRows },
+    ...viewEntries(true),
+  ];
+}
+function trashRowEntries(x: TrashRow): MenuEntry[] {
+  return [
+    { ic: "restore", label: t("trash.restore"), key: "restore", run: () => void act(null, () => restoreOne(x)) },
+    { ic: "x", label: t("trash.purge"), key: "purge", run: () => void act(null, () => purgeOne(x)), danger: true },
+  ];
+}
+function trashEntries(): MenuEntry[] {
+  const any = $("trash-list").children.length > 0;
+  return [...(any ? [{ ic: "trash", label: t("trash.empty"), key: "empty-trash", run: () => void act(null, emptyTrashAsk), danger: true }] : []), ...viewEntries(false)];
+}
+
+/** What a right click / Menu key / long press at `target` opens; null = the browser's own menu. */
+function contextEntries(target: Element | null): { entries: MenuEntry[]; kind: string; back: HTMLElement | null } | null {
+  if (!target || target.closest("input:not([type=checkbox]), textarea, select, [contenteditable=true], dialog, .menu")) return null;
+  const page = target.closest<HTMLElement>("[data-page]");
+  if (!page || page.hidden) return null;
+  const row = target.closest<HTMLElement>("[data-ddn=row]");
+  if (row && rowData.has(row)) return { entries: rowEntries(rowData.get(row)!), kind: "row", back: row.querySelector<HTMLElement>("[data-ddn=row-more]") };
+  const tr = target.closest<HTMLElement>("[data-ddn=trash-row]");
+  if (tr && trashData.has(tr)) return { entries: trashRowEntries(trashData.get(tr)!), kind: "trash-row", back: tr.querySelector<HTMLElement>("[data-ddn=trash-restore]") };
+  // Links outside the list (breadcrumbs, navigation) keep the browser menu (open in a new tab).
+  if (target.closest("a[href]")) return null;
+  if (page.dataset.page === "files" && route.name === "files") return { entries: filesEntries(), kind: "files", back: null };
+  if (page.dataset.page === "trash") return { entries: trashEntries(), kind: "trash", back: null };
+  return null;
+}
+let suppressClickUntil = 0;
+let kbMenuAt = 0;
 function wireRowMenu() {
   document.addEventListener("click", (e) => {
     const m = $("row-menu");
-    if (!m.hidden && !m.contains(e.target as Node) && !(e.target as Element | null)?.closest("[data-ddn=row-more]")) closeRowMenu();
+    if (!m.hidden && !m.contains(e.target as Node) && !(e.target as Element | null)?.closest("[data-ddn=row-more]")) closeRowMenu(false);
   });
+  // The click that ends a long press must not open the preview or close the menu it opened.
+  window.addEventListener(
+    "click",
+    (e) => {
+      if (Date.now() < suppressClickUntil) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    },
+    true,
+  );
   document.addEventListener("keydown", (e) => {
+    // Menu key / Shift+F10: the context menu of the focused element (row, or the page's empty area).
+    if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+      const focus = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+      const target = focus ?? document.querySelector<HTMLElement>("[data-page]:not([hidden])");
+      const c = contextEntries(target);
+      if (!c) return;
+      e.preventDefault();
+      kbMenuAt = Date.now();
+      const r = (focus ?? target)!.getBoundingClientRect();
+      const box = focus ? r : { left: r.left + 16, bottom: r.top + 16 };
+      openMenu(c.entries, { x: Math.max(8, box.left), y: Math.max(8, Math.min(window.innerHeight - 8, box.bottom)), back: focus ?? c.back }, c.kind);
+      return;
+    }
     if ($("row-menu").hidden) return;
-    if (e.key === "Escape") closeRowMenu();
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeRowMenu();
+    } else if (e.key === "Tab") closeRowMenu(false);
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Home" || e.key === "End") {
       e.preventDefault();
       const bs = [...$("row-menu").querySelectorAll<HTMLButtonElement>("button")];
       const i = bs.indexOf(document.activeElement as HTMLButtonElement);
-      bs[(i + (e.key === "ArrowDown" ? 1 : bs.length - 1)) % bs.length]?.focus();
+      const j = e.key === "Home" ? 0 : e.key === "End" ? bs.length - 1 : (i + (e.key === "ArrowDown" ? 1 : bs.length - 1)) % bs.length;
+      bs[j]?.focus();
     }
   });
+  // Long press on a touch screen = the same menu (iOS Safari fires no contextmenu at all).
+  let press: { id: number; x: number; y: number; timer: number } | null = null;
+  const cancel = () => {
+    if (press) clearTimeout(press.timer);
+    press = null;
+  };
+  document.addEventListener("contextmenu", (e) => {
+    // Shift + right click: the browser's own menu (inspect, copy link…).
+    if (e.shiftKey && e.button === 2) return;
+    const c = contextEntries(e.target as Element | null);
+    if (!c) return;
+    e.preventDefault();
+    cancel(); // Android: its own long-press contextmenu came first
+    // Already opened by the key or the long press that caused this event.
+    if (Date.now() - kbMenuAt < 600 || (!$("row-menu").hidden && Date.now() - menuOpenedAt < 600)) return;
+    openMenu(c.entries, { x: e.clientX, y: e.clientY, back: c.back }, c.kind);
+  });
+  document.addEventListener("pointerdown", (e) => {
+    cancel();
+    if (e.pointerType !== "touch") return;
+    const target = e.target as Element | null;
+    if (!contextEntries(target) || target?.closest("button, input")) return;
+    const { clientX: x, clientY: y, pointerId: id } = e;
+    press = {
+      id,
+      x,
+      y,
+      timer: window.setTimeout(() => {
+        press = null;
+        const c = contextEntries(target);
+        if (!c) return;
+        suppressClickUntil = Date.now() + 800;
+        openMenu(c.entries, { x, y, back: c.back }, c.kind);
+        navigator.vibrate?.(10);
+      }, 500),
+    };
+  });
+  document.addEventListener("pointermove", (e) => {
+    if (press && e.pointerId === press.id && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) cancel();
+  });
+  document.addEventListener("pointerup", cancel);
+  document.addEventListener("pointercancel", cancel);
   // Close on a real scroll by the user, not on the small scroll the browser itself makes right after
   // opening (focus into view; seen in plain PL where the row sits near the bottom): the menu follows the
   // button instead within the first moment.
   window.addEventListener(
     "scroll",
     () => {
-      if (Date.now() - menuOpenedAt < 400 && menuFor) return placeRowMenu();
-      closeRowMenu();
+      if (Date.now() - menuOpenedAt < 400 && (menuFor || menuAt)) return placeRowMenu();
+      closeRowMenu(false);
     },
     { passive: true },
   );
-  window.addEventListener("resize", () => closeRowMenu());
+  window.addEventListener("resize", () => closeRowMenu(false));
 }
 
 // Rename (RenameFolderModal): prefilled, the name without the extension selected.
@@ -1220,33 +1512,37 @@ function confirmDanger(title: string, text: string, yes: string): Promise<boolea
   });
 }
 
-function wireSelection() {
-  $<HTMLInputElement>("select-all").onchange = (e) => {
-    const on = (e.target as HTMLInputElement).checked;
-    for (const b of $("list").querySelectorAll<HTMLInputElement>("[data-ddn=select]")) {
-      if (b.checked !== on) {
-        b.checked = on;
-        b.dispatchEvent(new Event("change"));
-      }
+function setAllRows(on: boolean) {
+  for (const b of $("list").querySelectorAll<HTMLInputElement>("[data-ddn=select]")) {
+    if (b.checked !== on) {
+      b.checked = on;
+      b.dispatchEvent(new Event("change"));
     }
-    paintBulk();
-  };
-  $("bulk-clear").onclick = () => {
-    selected.clear();
-    for (const b of $("list").querySelectorAll<HTMLInputElement>("[data-ddn=select]")) b.checked = false;
-    for (const tr of $("list").querySelectorAll("tr.sel")) tr.classList.remove("sel");
-    paintBulk();
-  };
-  $("bulk-trash").onclick = (e) => void act(e.currentTarget as HTMLElement, () => trashItems([...selected].map(([id, x]) => ({ id, name: x.name }))));
-  $("bulk-move").onclick = () => {
-    const ids = [...selected.keys()];
-    if (ids.length) void openMove(ids, selected.get(ids[0]!)!.name);
-  };
-  $("bulk-download").onclick = (e) =>
-    void act(e.currentTarget as HTMLElement, async () => {
-      // One file after another (the browser asks once whether to allow several downloads).
-      for (const [id, x] of selected) if (x.kind === "file") await download(id, x.name);
-    });
+  }
+  paintBulk();
+}
+const selectAllRows = () => setAllRows(true);
+function clearSelection() {
+  selected.clear();
+  for (const b of $("list").querySelectorAll<HTMLInputElement>("[data-ddn=select]")) b.checked = false;
+  for (const tr of $("list").querySelectorAll("tr.sel")) tr.classList.remove("sel");
+  paintBulk();
+}
+const bulkTrash = () => trashItems([...selected].map(([id, x]) => ({ id, name: x.name })));
+function bulkMove() {
+  const ids = [...selected.keys()];
+  if (ids.length) void openMove(ids, selected.get(ids[0]!)!.name);
+}
+async function bulkDownload() {
+  // One file after another (the browser asks once whether to allow several downloads).
+  for (const [id, x] of selected) if (x.kind === "file") await download(id, x.name);
+}
+function wireSelection() {
+  $<HTMLInputElement>("select-all").onchange = (e) => setAllRows((e.target as HTMLInputElement).checked);
+  $("bulk-clear").onclick = () => clearSelection();
+  $("bulk-trash").onclick = (e) => void act(e.currentTarget as HTMLElement, bulkTrash);
+  $("bulk-move").onclick = () => bulkMove();
+  $("bulk-download").onclick = (e) => void act(e.currentTarget as HTMLElement, bulkDownload);
   // Drag and drop of rows onto folder rows and breadcrumb links.
   const target = (e: DragEvent) => (e.dataTransfer?.types.includes(DRAG_TYPE) ? (e.target as Element | null)?.closest<HTMLElement>("[data-drop]") : null);
   document.addEventListener("dragover", (e) => {
@@ -1372,6 +1668,7 @@ function wireSecurity() {
 // ── Trash page ──────────────────────────────────────────────────────
 function trashRow(x: TrashRow, i: number) {
   const tr = h("tr", { class: "reveal", style: `--i:${Math.min(i, 12)}`, "data-ddn": "trash-row", "data-id": x.id });
+  trashData.set(tr, x);
   const days = Math.max(0, Math.ceil((x.purgeAt - Date.now()) / 86_400_000));
   const where = x.from === null ? "" : x.fromRecovered ? t("nav.recovered") + (x.from.length > 1 ? " / " + x.from.slice(1).join(" / ") : "") : x.from.length ? x.from.join(" / ") : t("files.root");
   const [, label, tone] = x.kind === "file" ? typeOf(x.name) : [null, "", ""];
@@ -1385,20 +1682,9 @@ function trashRow(x: TrashRow, i: number) {
   );
   const left = h("span", { class: `chip${days <= 3 ? " chip--warning" : ""}`, "data-ddn": "trash-left", title: fmtDate(x.purgeAt) }, tn("trash.left", days));
   const restore = h("button", { class: "btn sm", type: "button", "data-ddn": "trash-restore", "aria-label": t("trash.restore.aria", { name: x.name }), title: t("trash.restore") }, icon("restore"), h("span", { class: "lbl-md" }, t("trash.restore")));
-  restore.onclick = () =>
-    void act(restore, async () => {
-      const r = await core.restore([x.id]);
-      await render();
-      report(r, t("trash.restored", { name: x.name }));
-    });
+  restore.onclick = () => void act(restore, () => restoreOne(x));
   const del = h("button", { class: "iconbtn danger quiet", type: "button", "data-ddn": "trash-purge", "aria-label": t("trash.purge.aria", { name: x.name }), title: t("trash.purge") }, icon("x"));
-  del.onclick = () =>
-    void act(del, async () => {
-      if (!(await confirmDanger(t("trash.purge.h"), t("trash.purge.q", { name: x.name }), t("trash.purge")))) return;
-      const r = await core.purge([x.id]);
-      await render();
-      report(r, t("trash.purged", { name: x.name }));
-    });
+  del.onclick = () => void act(del, () => purgeOne(x));
   tr.append(
     name,
     h("td", { class: "size" }, x.kind === "file" ? fmt(x.size) : ""),
@@ -1408,11 +1694,32 @@ function trashRow(x: TrashRow, i: number) {
   );
   return tr;
 }
+async function restoreOne(x: TrashRow) {
+  const r = await core.restore([x.id]);
+  await render();
+  report(r, t("trash.restored", { name: x.name }));
+}
+async function purgeOne(x: TrashRow) {
+  if (!(await confirmDanger(t("trash.purge.h"), t("trash.purge.q", { name: x.name }), t("trash.purge")))) return;
+  const r = await core.purge([x.id]);
+  await render();
+  report(r, t("trash.purged", { name: x.name }));
+}
+async function emptyTrashAsk() {
+  const n = (await core.trashList()).length;
+  if (!n) return;
+  if (!(await confirmDanger(t("trash.emptyQ.h"), tn("trash.emptyQ", n), t("trash.empty")))) return;
+  const r = await core.emptyTrash();
+  await render();
+  report(r, t("trash.emptied"));
+}
 let trashShown = false;
 async function renderTrash() {
   const list = await core.trashList();
   const enter = !trashShown;
   trashShown = true;
+  const hadFocus = $("trash-list").contains(document.activeElement) ? focusKey(document.activeElement) : null;
+  queueMicrotask(() => refocus(hadFocus));
   $("trash-list").replaceChildren(...list.map((x, i) => (enter ? trashRow(x, i) : (() => {
     const r = trashRow(x, i);
     r.classList.remove("reveal");
@@ -1423,15 +1730,7 @@ async function renderTrash() {
   ui("trash-meta").textContent = list.length ? [tn("files.count", list.length), fmt(list.reduce((s0, x) => s0 + (x.size ?? 0), 0))].join(" · ") : "";
 }
 function wireTrash() {
-  $("trash-empty").onclick = (e) =>
-    void act(e.currentTarget as HTMLElement, async () => {
-      const n = (await core.trashList()).length;
-      if (!n) return;
-      if (!(await confirmDanger(t("trash.emptyQ.h"), tn("trash.emptyQ", n), t("trash.empty")))) return;
-      const r = await core.emptyTrash();
-      await render();
-      report(r, t("trash.emptied"));
-    });
+  $("trash-empty").onclick = (e) => void act(e.currentTarget as HTMLElement, () => emptyTrashAsk());
 }
 
 function defaultDeviceName(): string {

@@ -90,6 +90,73 @@ describe("SqliteIndexStore (koncept §4.1, tree on disk)", () => {
     expect(s.folderStats(ROOT_ID)).toEqual({ folders: N, files: 0, bytes: 0 });
   });
 
+  it("sorts (name / size / date, both directions): folders first, keyset pages = the full sort, on an index; schema 2 -> 3", () => {
+    const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-sort-"));
+    const path = join(dir, "index.db");
+    const s = new SqliteIndexStore(path);
+    const rec = (id: string, kind: "file" | "folder", name: string, size: number | null, at: number) => ({
+      id, kind, name, parentId: ROOT_ID, trashed: null,
+      created: { seq: 1, deviceId: "d" }, nameChanged: { seq: 1, deviceId: "d" }, placed: { seq: 1, deviceId: "d" },
+      content: size === null ? null : ({ sizeBytes: size, createdAt: at } as never), recoveredFrom: null, conflictOf: null,
+    });
+    // Ties on purpose (same size / same date) so the name/ID tie-break is exercised across page edges.
+    for (let i = 0; i < 37; i++) s.putNode(rec(`fold-${i}`, "folder", `Dir ${(i * 7) % 37}`, null, 0));
+    for (let i = 0; i < 211; i++) s.putNode(rec(`file-${String(i).padStart(3, "0")}`, "file", `f${(i * 13) % 211}.bin`, (i % 9) * 1000, 1_700_000_000_000 + (i % 5) * 60_000));
+    const all = (sort: { by: "name" | "size" | "date"; desc?: boolean }, page: number) => {
+      const out: { id: string; kind: string; name: string; size: number | null; modifiedAt: number | null }[] = [];
+      let after: string | undefined;
+      for (;;) {
+        const pg = s.listChildren(ROOT_ID, { after, limit: page, sort });
+        if (!pg.length) break;
+        out.push(...pg);
+        after = pg.at(-1)!.cursor;
+      }
+      return out;
+    };
+    const key = (r: { kind: string; name: string; size: number | null; modifiedAt: number | null; id: string }, by: string) => [r.kind === "folder" ? 0 : 1, by === "size" ? (r.size ?? 0) : by === "date" ? (r.modifiedAt ?? 0) : 0, r.name.toLowerCase(), r.id] as const;
+    for (const by of ["name", "size", "date"] as const)
+      for (const desc of [false, true]) {
+        const got = all({ by, desc }, 23);
+        expect(got.length).toBe(248);
+        expect(new Set(got.map((r) => r.id)).size).toBe(248);
+        expect(got.slice(0, 37).every((r) => r.kind === "folder")).toBe(true); // folders first in both directions
+        const sign = desc ? -1 : 1;
+        const want = [...got].sort((a, b) => {
+          const x = key(a, by), y = key(b, by);
+          if (x[0] !== y[0]) return x[0] - y[0];
+          for (let i = 1; i < 4; i++) if (x[i] !== y[i]) return sign * (x[i]! < y[i]! ? -1 : 1);
+          return 0;
+        });
+        expect(got.map((r) => r.id), `${by} ${desc}`).toEqual(want.map((r) => r.id));
+        // The same order with one big page (no cursor) and with pages of 1.
+        expect(all({ by, desc }, 1000).map((r) => r.id)).toEqual(got.map((r) => r.id));
+      }
+    // Every sort reads an index (no full scan of the table, no temp B-tree for ORDER BY).
+    for (const [col, ix] of [["name_key", "nodes_by_name"], ["sz", "nodes_by_size"], ["mt", "nodes_by_date"]] as const) {
+      const plan = s.sql.all<{ detail: string }>(`EXPLAIN QUERY PLAN SELECT id FROM nodes WHERE parent_id = ? AND fo = 1 ORDER BY ${col === "name_key" ? "" : `${col} DESC, `}name_key DESC, id DESC LIMIT 50`, [ROOT_ID]).map((r) => r.detail).join(" | ");
+      expect(plan, col).toContain(ix);
+      expect(plan, col).not.toMatch(/TEMP B-TREE/);
+    }
+    // An old cursor (schema 2: [nameKey, id]) starts over instead of failing.
+    expect(s.listChildren(ROOT_ID, { after: JSON.stringify(["dir 1", "fold-1"]), limit: 5 })[0]!.kind).toBe("folder");
+    // Schema 2 database (no sort columns, no sort indexes): opened, migrated, same order.
+    const before = all({ by: "size", desc: true }, 50).map((r) => r.id);
+    s.sql.exec("DROP INDEX nodes_by_name; DROP INDEX nodes_by_size; DROP INDEX nodes_by_date; ALTER TABLE nodes DROP COLUMN fo; ALTER TABLE nodes DROP COLUMN sz; ALTER TABLE nodes DROP COLUMN mt; UPDATE meta SET v = '2' WHERE k = 'schema';");
+    s.close();
+    const b = new SqliteIndexStore(path);
+    expect(b.sql.get<{ v: string }>("SELECT v FROM meta WHERE k = 'schema'", [])!.v).toBe("3");
+    let after: string | undefined;
+    const again: string[] = [];
+    for (;;) {
+      const pg = b.listChildren(ROOT_ID, { after, limit: 50, sort: { by: "size", desc: true } });
+      if (!pg.length) break;
+      again.push(...pg.map((r) => r.id));
+      after = pg.at(-1)!.cursor;
+    }
+    expect(again).toEqual(before);
+    b.close();
+  });
+
   it("folderStats: live sub-folders, files and their bytes; trashed nodes not counted", () => {
     const s = new SqliteIndexStore();
     const rec = (id: string, kind: "file" | "folder", size: number | null, trashed = false) => ({
