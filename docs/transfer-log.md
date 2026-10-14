@@ -63,14 +63,15 @@ Every line:
 ### `file_start` / `file_end` (per file)
 
 `file_start`: `size`, `n` fragments, `chunk` (plaintext fragment size), `conc` fragments in flight
-allowed, `mode` (`metadata-only` / `e2ee` / `plain`), `ext`, `name` (only with names on).
+allowed, `lanes` (upload: channels the store spreads over; added 2026-10-14), `mode` (`metadata-only` / `e2ee` / `plain`), `ext`, `name` (only with names on).
 
 `file_end`: `ok`, `size`, `b` bytes done, `dur` (from start), `mbps` (MB/s, 10^6 B/s), `posts`
 (upload: requests incl. retries), `err` (`aborted` for a cancel).
 
 ### `frag` (per fragment)
 
-Upload, client: `i`, `pb` plaintext bytes, `b` ciphertext bytes, `rd` read, `enc` AES-GCM, `hash`
+Upload, client: `i`, `pb` plaintext bytes, `b` ciphertext bytes, `rd` read (since 2026-10-14: until the
+fragment is read and fed to the whole-file hash in order; `ph` is that hash step), `enc` AES-GCM, `hash`
 SHA-256 of the ciphertext, `put` the store call (limiter + request + retries), `ph` the whole-file
 plaintext hash step, `dur` total, `hook`, `ch` where it landed, `fl` fragments in flight then.
 
@@ -78,8 +79,9 @@ Upload, server (e2ee/plain): `budget` wait for the in-flight byte budget, `body`
 `hash` checking its SHA-256, `post` the Discord part (limiter + request + retries), `dur`, `ok`, `st`
 (on failure), `hook`, `ch`, `fl`.
 
-Download, client: `get` (link + CDN incl. retries), `hash`, `dec`, `wr` (write to the sink), `dur`,
-`b`, `pb`, `hook`, `ch`, `fl`.
+Download, client: `get` (link + CDN incl. retries), `hash`, `dec`, `wait` (fetched and decrypted, waiting
+for the fragments before it to be written: downloads run in parallel since 2026-10-14, writes stay in order),
+`wr` (write to the sink), `dur`, `b`, `pb`, `hook`, `ch`, `fl`.
 
 ### `req` (per HTTP request)
 
