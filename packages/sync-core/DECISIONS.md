@@ -526,3 +526,12 @@ serwer trzyma dodatkowo, dla tego jednego konta:
 - Ten sam DOM wierszy (te same hooki, stronicowanie 50, zaznaczanie, menu), inny układ (siatka
   auto-fill). Miniatury: plain z serwera, metadata only / e2ee ikona typu (zaszyfrowane podglądy §7.5.1
   osobno). Kosz ma oba widoki.
+
+### Panel kolejki zamyka się sam (dopisek właściciela 2026-10-14)
+- Po zakończeniu kolejki: 5 s, gdy wszystko weszło; 12 s po błędzie lub przerwaniu. Odliczanie widać jako
+  kreskę u dołu panelu; najechanie myszą lub fokus w panelu wstrzymuje je (dotyk nie), × zamyka od razu,
+  nowy upload w trakcie odliczania je anuluje (także drugi upload równolegle: panel czeka na oba).
+- Pliki, które nie weszły, zostają po zamknięciu panelu w żółtym pasku nad listą: „N plików nie zostało
+  wysłanych”, Szczegóły (nazwa + przyczyna), Ponów (wysyła te same pliki do ich folderów jeszcze raz),
+  × czyści. Przerwane przez użytkownika nie trafiają do paska (to jego wybór), ale wydłużają czas panelu.
+- Panel pobierania dostanie to samo w zleceniu „transfer”.

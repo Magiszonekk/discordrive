@@ -214,6 +214,14 @@
         <ul class="qlist" data-ddn-ui="queue-list"></ul>
         <p class="hint" data-i18n="queue.note"></p>
       </section>
+      <!-- Files that did not go in stay listed after the queue panel closed itself: why, Retry, dismiss. -->
+      <section class="note warn upfail" data-ddn="upload-failed" role="status" hidden>
+        <svg class="i"><use href="#i-alert"/></svg>
+        <div class="upfail-b">
+          <div class="upfail-h"><b data-ddn="upload-failed-count"></b><span class="row-btns"><button class="btn sm" type="button" data-ddn="upload-failed-show" aria-expanded="false" data-i18n="upf.show">Details</button><button class="btn sm" type="button" data-ddn="upload-retry"><svg class="i"><use href="#i-restore"/></svg><span data-i18n="upf.retry">Retry</span></button><button class="iconbtn" type="button" data-ddn="upload-failed-close" data-i18n-attr="aria-label=upf.dismiss, title=upf.dismiss"><svg class="i"><use href="#i-x"/></svg></button></span></div>
+          <ul class="upfail-list" data-ddn="upload-failed-list" hidden></ul>
+        </div>
+      </section>
 
       <!-- plain mode only (server-side search); hidden in the other modes. Full-width bar over the table like
            discordrive's FileTable filter: search icon on the left, clear button on the right. -->

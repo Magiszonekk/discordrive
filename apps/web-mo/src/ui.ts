@@ -893,13 +893,108 @@ function wireSearch() {
 }
 
 // ── upload queue (UploadProgress) ───────────────────────────────────
-async function uploadAll(files: File[]) {
+// The panel closes itself when the queue is done (owner's note 2026-10-14): ~5 s when everything went
+// in, longer after a failure or a cancel (time to read it); hover / focus pause the countdown, × closes
+// at once, a new upload cancels it. Files that failed stay in the warning bar (Details, Retry).
+const QUEUE_CLOSE_OK_MS = 5000;
+const QUEUE_CLOSE_PROBLEM_MS = 12000;
+let queueBatches = 0;
+let queueProblem = false;
+const queueClose: { timer: number; left: number; since: number; held: boolean } = { timer: 0, left: 0, since: 0, held: false };
+const failedUploads: { file: File; folder: string; why: string }[] = [];
+function closeQueue() {
+  stopQueueCountdown();
+  queueProblem = false;
+  ui("queue").hidden = true;
+  ui("queue-list").replaceChildren();
+}
+function stopQueueCountdown() {
+  clearTimeout(queueClose.timer);
+  queueClose.timer = 0;
+  const box = ui("queue");
+  delete box.dataset.closing;
+  delete box.dataset.paused;
+}
+function runQueueCountdown() {
+  const box = ui("queue");
+  clearTimeout(queueClose.timer);
+  if (queueClose.held) {
+    box.dataset.paused = "1";
+    return;
+  }
+  delete box.dataset.paused;
+  queueClose.since = Date.now();
+  queueClose.timer = window.setTimeout(closeQueue, queueClose.left);
+}
+function startQueueCountdown() {
+  const box = ui("queue");
+  const ms = queueProblem ? QUEUE_CLOSE_PROBLEM_MS : QUEUE_CLOSE_OK_MS;
+  queueClose.left = ms;
+  box.dataset.result = queueProblem ? "err" : "ok";
+  box.style.setProperty("--close-ms", `${ms}ms`);
+  box.removeAttribute("data-closing");
+  void box.offsetWidth; // restart the hairline animation
+  box.dataset.closing = "1";
+  runQueueCountdown();
+}
+function holdQueue(on: boolean) {
+  if (queueClose.held === on) return;
+  queueClose.held = on;
+  if (!ui("queue").dataset.closing) return;
+  if (on) {
+    clearTimeout(queueClose.timer);
+    queueClose.left = Math.max(1000, queueClose.left - (Date.now() - queueClose.since));
+    ui("queue").dataset.paused = "1";
+  } else runQueueCountdown();
+}
+function wireQueue() {
+  const box = ui("queue");
+  const hovered = () => box.matches(":hover");
+  box.addEventListener("pointerenter", (e) => {
+    if (e.pointerType !== "touch") holdQueue(true);
+  });
+  box.addEventListener("pointerleave", () => holdQueue(box.contains(document.activeElement)));
+  box.addEventListener("focusin", () => holdQueue(true));
+  box.addEventListener("focusout", (e) => holdQueue(box.contains(e.relatedTarget as Node | null) || hovered()));
+  ui("queue-close").onclick = () => closeQueue();
+  const bar = $("upload-failed");
+  const list = $("upload-failed-list");
+  const show = $("upload-failed-show");
+  show.onclick = () => {
+    list.hidden = !list.hidden;
+    show.setAttribute("aria-expanded", String(!list.hidden));
+    show.textContent = t(list.hidden ? "upf.show" : "upf.hide");
+  };
+  $("upload-failed-close").onclick = () => {
+    failedUploads.length = 0;
+    paintFailed();
+  };
+  $("upload-retry").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      const again = failedUploads.splice(0);
+      paintFailed();
+      const byFolder = new Map<string, File[]>();
+      for (const x of again) (byFolder.get(x.folder) ?? byFolder.set(x.folder, []).get(x.folder)!).push(x.file);
+      for (const [folder, files] of byFolder) await uploadAll(files, folder);
+    });
+  bar.hidden = true;
+}
+function paintFailed() {
+  const bar = $("upload-failed");
+  bar.hidden = failedUploads.length === 0;
+  $("upload-failed-count").textContent = tn("upf.count", failedUploads.length);
+  $("upload-failed-list").replaceChildren(...failedUploads.map((x) => h("li", { "data-ddn": "upload-failed-item" }, h("span", { class: "n", title: x.file.name }, x.file.name), h("span", { class: "why", title: x.why }, x.why))));
+}
+
+async function uploadAll(files: File[], into?: string) {
   if (!files.length) return;
   if (!channelsOk) {
     toast(t("err.need_channel"), "err");
     return;
   }
-  const folder = currentFolder();
+  const folder = into ?? currentFolder();
+  stopQueueCountdown(); // a new upload cancels the closing
+  queueBatches++;
   const box = ui("queue");
   const list = ui("queue-list");
   const total = files.reduce((s, f) => s + f.size, 0);
@@ -932,6 +1027,7 @@ async function uploadAll(files: File[]) {
   for (const item of items) {
     const { f, state, bar, token } = item;
     if (item.cancelled) {
+      queueProblem = true;
       state.className = "qstate cancel";
       bar.className = "cancel";
       state.textContent = t("queue.cancelled");
@@ -958,11 +1054,15 @@ async function uploadAll(files: File[]) {
       // Cancelled is the user's choice, not a failure: muted text and bar like discordrive's CANCELLED.
       state.className = item.cancelled ? "qstate cancel" : "qstate err";
       bar.className = item.cancelled ? "cancel" : "err";
+      queueProblem = true;
       if (item.cancelled) state.textContent = t("queue.cancelled");
       else {
         failed++;
         state.textContent = t("queue.err");
-        state.title = errText(e);
+        // A file changed on disk after it was picked cannot be read again from this selection.
+        const why = /NotReadable|could not be read/i.test(String((e as Error)?.message ?? e)) ? t("upf.gone", { name: f.name }) : errText(e);
+        state.title = why;
+        failedUploads.push({ file: f, folder, why });
       }
     } finally {
       progressHandlers.delete(token);
@@ -974,10 +1074,14 @@ async function uploadAll(files: File[]) {
     meta();
     void render();
   }
+  queueBatches--;
+  if (queueBatches > 0) return void render(); // another batch still runs in the same panel
   uploading = null;
   meta();
   ui("queue-close").hidden = false;
   if (failed) toast(t("queue.failed", { failed, total: files.length }), "err");
+  paintFailed();
+  startQueueCountdown();
   await render();
 }
 
@@ -988,10 +1092,7 @@ function wireFilesPage() {
     input.value = "";
     await uploadAll(files);
   };
-  ui("queue-close").onclick = () => {
-    ui("queue").hidden = true;
-    ui("queue-list").replaceChildren();
-  };
+  wireQueue();
   // Drop zone + drag over the whole Files page (Dashboard).
   const zone = ui("dropzone");
   const page = document.querySelector<HTMLElement>("[data-page=files]")!;

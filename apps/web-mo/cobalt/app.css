@@ -769,3 +769,20 @@ th[aria-sort="ascending"] .th-sort svg.i, th[aria-sort="descending"] .th-sort sv
 }
 /* Long press opens the menu: no text selection / iOS callout on the rows */
 @media (hover: none) { .ftable tbody tr { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
+
+/* Upload queue closes itself (owner's note 2026-10-14): a hairline counts down at the bottom of the panel
+ * (paused on hover / focus); files that failed stay in a warning bar with Details and Retry. */
+.uploads { position: relative; }
+.uploads[data-closing]::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: color-mix(in oklch, var(--color-accent) 35%, transparent); transform-origin: left; animation: toast-time var(--close-ms, 5000ms) linear forwards; }
+.uploads[data-closing][data-result="err"]::after { background: color-mix(in oklch, var(--color-error) 45%, transparent); }
+.uploads[data-closing][data-paused]::after { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { .uploads[data-closing]::after { display: none; } }
+.upfail { margin-bottom: 1rem; }
+.upfail-b { display: grid; gap: .5rem; min-width: 0; }
+.upfail-h { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
+.upfail-h .row-btns { align-items: center; gap: .375rem; }
+.upfail-list { display: grid; gap: .25rem; margin: 0; padding: 0; list-style: none; font-size: .8125rem; }
+.upfail-list li { display: flex; gap: .5rem; min-width: 0; }
+.upfail-list .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-ink); font-weight: 500; }
+.upfail-list .why { flex: none; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-muted); }
+

@@ -107,7 +107,7 @@ export const en: Record<string, string> = {
   "queue.preparing": "Encrypting…",
   "queue.ok": "Complete",
   "queue.err": "Failed",
-  "queue.failed": "{failed} of {total} files could not be uploaded. Hover over “Failed” to see why.",
+  "queue.failed": "{failed} of {total} files could not be uploaded. Details and Retry stay above the list.",
 
   // status (sidebar footer + Settings → About this browser)
   "status.connecting": "connecting…",
@@ -304,6 +304,13 @@ export const en: Record<string, string> = {
   "status.cache.t@e2ee": "The browser may clear the local copy of the file list. The files are on Discord and the list is restored from the server.",
   "queue.cancel": "Cancel",
   "queue.cancelled": "Cancelled",
+  "upf.count_one": "{n} file was not uploaded",
+  "upf.count_other": "{n} files were not uploaded",
+  "upf.show": "Details",
+  "upf.hide": "Hide details",
+  "upf.retry": "Retry",
+  "upf.dismiss": "Dismiss",
+  "upf.gone": "Choose the file again (the browser no longer has it): {name}",
   "err.instance_busy": "The server cannot reach Discord right now. Try again in a few minutes.",
   "err.discord_blocked": "Discord is blocking the server for a while. Try again later.",
   "err.webhook_in_use": "This webhook is already used by another account.",

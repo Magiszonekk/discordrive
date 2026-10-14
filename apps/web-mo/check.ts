@@ -859,6 +859,14 @@ try {
   pv.quickArrows = await p.evaluate(() => ({ file: document.querySelector("[data-ddn=preview-dialog]")?.getAttribute("data-file"), bodyKids: document.querySelector("[data-ddn=preview-body]")!.children.length, img: !!document.querySelector("[data-ddn=preview-img]") }));
   await p.keyboard.press("Escape");
   await p.waitForSelector("[data-ddn=preview-dialog][open]", { state: "detached" });
+  // The dialog's "close" event (which revokes) comes in a task after [open] is gone: give it a moment;
+  // a real leak still shows as open > 0 after it.
+  await p
+    .waitForFunction(() => {
+      const w = window as unknown as { __blobs: Record<string, { revoked: boolean }>; __pvUrls?: string[] };
+      return (w.__pvUrls ?? []).every((u) => w.__blobs[u]?.revoked);
+    }, null, { timeout: 3000 })
+    .catch(() => {});
   pv.blobsRevoked = await p.evaluate(() => {
     const w = window as unknown as { __blobs: Record<string, { revoked: boolean; type?: string }>; __pvUrls?: string[] };
     const shown = [...new Set(w.__pvUrls ?? [])];
@@ -1026,6 +1034,68 @@ try {
   await p.keyboard.press("Escape");
   await nav(p, "files");
   r.contextMenu = cm;
+
+  // 10c''. owner's note 2026-10-14: the upload panel closes itself (~5 s after success, later after a
+  // failure; hover pauses it) and a failed file stays listed (Details, Retry) after it closed.
+  step("queue closes");
+  const qc: Record<string, unknown> = {};
+  await p.goto(`${base}/folder/${pvId}`);
+  await p.waitForSelector("body[data-ready='1']");
+  await count(p, /^8 /);
+  const qDir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-q-"));
+  writeFileSync(join(qDir, "q1.txt"), "queue closes\n");
+  writeFileSync(join(qDir, "q2.txt"), "hover pauses\n");
+  const queueShown = () => p.isVisible("[data-ddn-ui=queue]");
+  const uploadDone = async (name: string) => {
+    await p.setInputFiles("[data-ddn=file]", [join(qDir, name)]);
+    await p.waitForFunction(() => !!document.querySelector("[data-ddn-ui=queue][data-closing]"), null, { timeout: 60_000 });
+    return Date.now();
+  };
+  // Success: gone after ~5 s by itself.
+  let t0 = await uploadDone("q1.txt");
+  await p.mouse.move(5, 5);
+  await p.waitForSelector("[data-ddn-ui=queue]", { state: "hidden", timeout: 15_000 });
+  qc.okClosedMs = Date.now() - t0;
+  // Hover pauses: still there after 7 s with the pointer on it, gone after it leaves.
+  t0 = await uploadDone("q2.txt");
+  await p.hover("[data-ddn-ui=queue-title]");
+  await p.waitForTimeout(7000);
+  qc.hoverKeeps = (await queueShown()) && (await p.getAttribute("[data-ddn-ui=queue]", "data-paused")) === "1";
+  await p.mouse.move(5, 5);
+  await p.waitForSelector("[data-ddn-ui=queue]", { state: "hidden", timeout: 15_000 });
+  qc.closedAfterLeave = true;
+  // Failure (a NUL in the name is refused before anything is sent): stays longer, the failed bar remains.
+  await p.evaluate(() => {
+    const input = document.querySelector<HTMLInputElement>("[data-ddn=file]")!;
+    const dt = new DataTransfer();
+    dt.items.add(new File(["x"], "bad\u0000name.txt"));
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change"));
+  });
+  await p.waitForFunction(() => !!document.querySelector("[data-ddn-ui=queue][data-closing]"), null, { timeout: 60_000 });
+  t0 = Date.now();
+  await p.mouse.move(5, 5);
+  await p.waitForTimeout(7000);
+  qc.errStillShownAt7s = await queueShown();
+  qc.failedBar = { shown: await p.isVisible("[data-ddn=upload-failed]"), count: await p.textContent("[data-ddn=upload-failed-count]") };
+  await p.waitForSelector("[data-ddn-ui=queue]", { state: "hidden", timeout: 15_000 });
+  qc.errClosedMs = Date.now() - t0;
+  qc.failedBarAfter = await p.isVisible("[data-ddn=upload-failed]");
+  await p.click("[data-ddn=upload-failed-show]");
+  qc.failedItem = await p.textContent("[data-ddn=upload-failed-item] .n");
+  await shot(p, "27-upload-failed");
+  // Retry runs it again (it fails again: the name is still invalid), the bar comes back with the file.
+  await p.click("[data-ddn=upload-retry]");
+  await p.waitForSelector("[data-ddn-ui=queue]:not([hidden])");
+  await p.waitForFunction(() => !document.querySelector("[data-ddn=upload-failed]")!.hasAttribute("hidden"), null, { timeout: 60_000 });
+  qc.retried = (await p.locator("[data-ddn=upload-failed-item]").count()) === 1;
+  // × closes at once; dismiss clears the bar.
+  await p.click("[data-ddn-ui=queue-close]");
+  qc.xCloses = !(await queueShown());
+  await p.click("[data-ddn=upload-failed-close]");
+  qc.dismissed = await p.isHidden("[data-ddn=upload-failed]");
+  await count(p, /^10 /);
+  r.queueCloses = qc;
 
 
   // 10d. channels (zlecenie 2026-10-13-webhooki p. 1-3): the section folds (folded with channels, the
@@ -1306,6 +1376,14 @@ try {
         o.tiles.view === "tiles" && o.tiles.grid && o.tiles.cols >= 3 && o.tiles.pressed === "tiles" && o.tilesKept.view === "tiles" && o.tilesKept.grid && o.viewChecked === "true" && o.listAgain === true &&
         o.phone.view === "tiles" && o.phone.grid && o.phone.cols >= 2 && o.phone.noHScroll && o.phone.longPress && o.phone.noPreview && o.phone.trashShown &&
         JSON.stringify(o.trashItems) === JSON.stringify(["menu-restore", "menu-purge"]) && o.trashRestored === true && o.nativeInInputs === true
+      );
+    })(),
+    queueCloses: (() => {
+      const o = r.queueCloses as Record<string, any> | undefined;
+      return (
+        !!o && o.okClosedMs >= 4000 && o.okClosedMs < 9000 && o.hoverKeeps === true && o.closedAfterLeave === true &&
+        o.errStillShownAt7s === true && o.failedBar.shown === true && /^1 /.test(String(o.failedBar.count)) && o.errClosedMs >= 10_000 && o.errClosedMs < 17_000 &&
+        o.failedBarAfter === true && /^bad/.test(String(o.failedItem)) && o.retried === true && o.xCloses === true && o.dismissed === true
       );
     })(),
     noPageErrors: errors.length === 0,
