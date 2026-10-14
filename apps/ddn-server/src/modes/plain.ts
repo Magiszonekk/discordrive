@@ -15,7 +15,7 @@ export const serverMode: ServerMode = {
   mode: "plain",
   marker: MODE_MARKER,
   parts(c, ctx) {
-    const m = serverBlobsMode({ dataDir: c.dataDir, bot: ctx.bot, discordApiOrigin: c.testing?.discordApiOrigin, log: ctx.log });
+    const m = serverBlobsMode({ dataDir: c.dataDir, bot: ctx.bot, discordApiOrigin: c.testing?.discordApiOrigin, log: ctx.log, transferLogsAll: c.transferLogs === true });
     const plain = new PlainExtension({ dataDir: c.dataDir, blobs: m.blobs, log: ctx.log });
     return {
       extensions: [...m.extensions, plain, { name: "no-vault", route: async (r) => (r.path === "/v1/vault" ? (r.send(404, { error: "not_in_this_mode" }), true) : false) }],

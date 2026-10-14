@@ -13,6 +13,8 @@
 //   ddn [--state DIR] put <file> [name]
 //   ddn [--state DIR] get <name|nodeId> <out>
 //   ddn [--state DIR] ls
+//   --transfer-log <file>   append transfer logs (JSON Lines, docs/transfer-log.md) of put/get;
+//                           --transfer-log-names: with file names (off by default)
 //
 // State dir (default ~/.local/share/ddn, 0700; files 0600):
 //   account.json  account ID + account key (the secret; the rescue kit, §3.5),
@@ -57,6 +59,9 @@ export interface CliEnv {
   webhookFiles: string[];
   transport?: WebhookTransport;
   out?: (line: string) => void;
+  /** Append transfer logs (JSON Lines) of put/get to this file. */
+  transferLog?: string;
+  transferLogNames?: boolean;
 }
 
 export async function fileSource(path: string): Promise<ByteSource & { close(): Promise<void> }> {
@@ -370,6 +375,11 @@ export async function runCli(argv: string[], env: CliEnv): Promise<number> {
     throw new Error("vault has no webhooks: `ddn webhook add <url-file>`");
   }
   const client = await openClient(st, transport);
+  if (env.transferLog) {
+    const { TransferLog } = await import("./transfer-log.js");
+    const file = env.transferLog;
+    client.setTransferLog(new TransferLog((line) => appendFileSync(file, line, { mode: 0o600 }), { src: "cli", names: env.transferLogNames, mode: "metadata-only" }));
+  }
   switch (cmd) {
     case "put": {
       const [path, name] = args;
@@ -418,6 +428,8 @@ function parseArgs(argv: string[]): { env: CliEnv; rest: string[] } {
     const a = argv[i]!;
     if (a === "--state") env.stateDir = argv[++i]!;
     else if (a === "--webhook-file") env.webhookFiles.push(argv[++i]!);
+    else if (a === "--transfer-log") env.transferLog = argv[++i]!;
+    else if (a === "--transfer-log-names") env.transferLogNames = true;
     else rest.push(a);
   }
   return { env, rest };

@@ -6,7 +6,8 @@
 //    sent while x-ratelimit-remaining is still > 0, so headers alone cannot predict it).
 // The transport only reports; pacing lives in ChannelPacer (rate-limit.ts).
 
-import type { MessageAttachment, PostedAttachment, WebhookRef, WebhookTransport } from "./types.js";
+import type { MessageAttachment, PostedAttachment, ReqTiming, WebhookRef, WebhookTransport } from "./types.js";
+import { ms, nowMs } from "./transfer-log.js";
 
 export class RateLimitedError extends Error {
   constructor(
@@ -81,12 +82,14 @@ export class DiscordWebhookTransport implements WebhookTransport {
     this.timeoutMs = opts.timeoutMs ?? 120_000;
   }
 
-  private async req(url: string, init: RequestInit, what: string, signal?: AbortSignal): Promise<Response> {
+  private async req(url: string, init: RequestInit, what: string, signal?: AbortSignal, timing?: ReqTiming): Promise<Response> {
     if (this.apiOrigin) url = url.replace(/^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com/, this.apiOrigin);
     let res: Response;
     const timeout = AbortSignal.timeout(this.timeoutMs);
+    const t0 = timing ? nowMs() : 0;
     try {
       res = await this.f(url, { ...init, signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
+      if (timing) ((timing.ttfb = ms(t0)), (timing.st = res.status));
     } catch (e) {
       if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
       throw new Error(`${what}: ${redactWebhookUrl(String((e as Error)?.message ?? e))}`);
@@ -99,11 +102,11 @@ export class DiscordWebhookTransport implements WebhookTransport {
     return res;
   }
 
-  async postFile(hook: WebhookRef, data: Uint8Array, filename: string, signal?: AbortSignal): Promise<PostedAttachment> {
+  async postFile(hook: WebhookRef, data: Uint8Array, filename: string, signal?: AbortSignal, timing?: ReqTiming): Promise<PostedAttachment> {
     const fd = new FormData();
     fd.append("payload_json", JSON.stringify({ content: "", attachments: [{ id: 0, filename }] }));
     fd.append("files[0]", new Blob([data as BlobPart], { type: "application/octet-stream" }), filename);
-    const res = await this.req(`${hook.url}?wait=true`, { method: "POST", body: fd }, "webhook post", signal);
+    const res = await this.req(`${hook.url}?wait=true`, { method: "POST", body: fd }, "webhook post", signal, timing);
     const j = (await res.json()) as { id: string; channel_id: string; attachments: { id: string; url: string; size: number }[] };
     const a = j.attachments?.[0];
     if (!a) throw new Error("webhook post: no attachment in response");
@@ -122,14 +125,14 @@ export class DiscordWebhookTransport implements WebhookTransport {
     return { webhookId: hook.id, channelId: j.channel_id, messageId: j.id, attachmentId: a.id, sizeBytes: a.size, url: a.url };
   }
 
-  async getAttachments(hook: WebhookRef, messageId: string): Promise<MessageAttachment[]> {
-    const res = await this.req(`${hook.url}/messages/${messageId}`, { method: "GET" }, "webhook get message");
+  async getAttachments(hook: WebhookRef, messageId: string, timing?: ReqTiming): Promise<MessageAttachment[]> {
+    const res = await this.req(`${hook.url}/messages/${messageId}`, { method: "GET" }, "webhook get message", undefined, timing);
     const j = (await res.json()) as { attachments: { id: string; url: string; size: number }[] };
     return (j.attachments ?? []).map((a) => ({ id: a.id, url: a.url, size: a.size }));
   }
 
-  async fetchCdn(url: string, signal?: AbortSignal): Promise<Uint8Array> {
-    const res = await this.req(url, { method: "GET" }, "cdn get", signal);
+  async fetchCdn(url: string, signal?: AbortSignal, timing?: ReqTiming): Promise<Uint8Array> {
+    const res = await this.req(url, { method: "GET" }, "cdn get", signal, timing);
     return new Uint8Array(await res.arrayBuffer());
   }
 

@@ -44,6 +44,7 @@ import { DiscordSender, DiscordUnavailableError, NoChannelError, type SenderHook
 import { InstanceHooks, POOL } from "./instance-hooks.js";
 import { ChannelError, ChannelMover, ChannelStore, blobTables } from "./channels.js";
 import type { SnapshotsExtension } from "./snapshots-ext.js";
+import type { ServerTransferLogs } from "./transfer-logs.js";
 
 /** Largest blob accepted (a fragment is 10 MiB incl. IV + tag; a manifest of 1327 fragments ~160 KB). */
 export const MAX_BLOB_BYTES = 10 * 1024 * 1024 + 64 * 1024;
@@ -51,6 +52,7 @@ export const DEFAULT_INFLIGHT_BYTES = 192 * 1024 * 1024;
 export const FRAGMENT_RETENTION_MS = 30 * 24 * 3600_000;
 export const HEALTH_EVERY_MS = 15 * 60_000;
 const CDN = "https://cdn.discordapp.com/attachments";
+const r1 = (x: number) => Math.round(x * 10) / 10;
 const HEX64 = /^[0-9a-f]{64}$/;
 
 /**
@@ -111,6 +113,8 @@ export interface BlobsExtensionOptions {
   log?: (s: string) => void;
   /** Server snapshots (channel moves rewrite the chains on a moved webhook). */
   snapshots?: () => SnapshotsExtension | null;
+  /** Transfer logs (Settings → Diagnostics, `transferLogs` in the config). */
+  transferLogs?: ServerTransferLogs | null;
 }
 
 export class BlobsExtension implements ServerExtension {
@@ -145,6 +149,7 @@ export class BlobsExtension implements ServerExtension {
     // The operator CLI (`discordrive channels`) writes the same database: wait for its short locks.
     this.db.exec("PRAGMA busy_timeout = 5000");
     blobTables(this.db);
+    this.o.transferLogs?.init(this.db);
     if (this.o.tickMs !== 0) {
       this.timer = setInterval(() => {
         void this.tick().catch((e) => this.o.log?.(`background: ${(e as Error).message}`));
@@ -213,6 +218,7 @@ export class BlobsExtension implements ServerExtension {
   async close(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.o.transferLogs?.close();
   }
 
   health(): Record<string, unknown> {
@@ -281,7 +287,11 @@ export class BlobsExtension implements ServerExtension {
       return r.send(200, { placement: placementOfRow(old), reused: true });
     }
 
+    const tlog = this.o.transferLogs?.for(s.accountId) ?? null;
+    const t0 = tlog ? performance.now() : 0;
     const release = await this.budget.acquire(len);
+    const t1 = tlog ? performance.now() : 0;
+    if (tlog) tlog.fl.up++;
     let fl = 0;
     const ac = new AbortController();
     const onClose = () => {
@@ -298,7 +308,9 @@ export class BlobsExtension implements ServerExtension {
         o += b.length;
       }
       if (o !== len) throw new HttpError(400, "short_body");
+      const t2 = tlog ? performance.now() : 0;
       if (createHash("sha256").update(buf).digest("hex") !== sha) throw new HttpError(400, "sha256_mismatch");
+      const t3 = tlog ? performance.now() : 0;
       const hooks = this.o.hooks.hooksFor(s.accountId);
       const filename = `${randomBytes(16).toString("base64url")}${BLOB_EXT}`;
       let p: DiscordPlacement & { url: string };
@@ -306,10 +318,13 @@ export class BlobsExtension implements ServerExtension {
       fl = ++this.inflightSeq;
       this.inflight.set(fl, hooks.map((h) => h.id));
       try {
-        p = await this.o.sender.post(hooks, buf, filename, ac.signal);
+        p = await this.o.sender.post(hooks, buf, filename, ac.signal, tlog ? { log: tlog, x: u, i: idx === "m" ? "m" : Number(idx) } : undefined);
       } catch (e) {
-        throw senderHttpError(e);
+        const he = senderHttpError(e);
+        if (tlog) tlog.emit("frag", { dir: "up", x: u, i: idx === "m" ? "m" : Number(idx), b: len, budget: r1(t1 - t0), body: r1(t2 - t1), hash: r1(t3 - t2), dur: r1(performance.now() - t0), ok: false, st: (he as { status?: number }).status ?? 500, fl: tlog.fl.up });
+        throw he;
       }
+      if (tlog) tlog.emit("frag", { dir: "up", x: u, i: idx === "m" ? "m" : Number(idx), b: len, budget: r1(t1 - t0), body: r1(t2 - t1), hash: r1(t3 - t2), post: r1(performance.now() - t3), dur: r1(performance.now() - t0), ok: true, hook: p.locationId, ch: p.channelId, fl: tlog.fl.up });
       for (const h of hooks) if (h.alive === false) this.o.hooks.setAlive(h.id, false);
       // Re-check: cancelled or reaped while posting -> do not keep it.
       const now = this.upload(s.accountId, u);
@@ -333,6 +348,7 @@ export class BlobsExtension implements ServerExtension {
       r.send(200, { placement: { provider: "discord-webhook", locationId: p.locationId, channelId: p.channelId, messageId: p.messageId, attachmentId: p.attachmentId } });
     } finally {
       release();
+      if (tlog) tlog.fl.up--;
       r.res.off("close", onClose);
       if (fl) this.inflight.delete(fl);
     }
@@ -485,6 +501,31 @@ export class BlobsExtension implements ServerExtension {
     return this.channelStore.resolveBlob(attachmentId, acct) as BlobRow | undefined;
   }
 
+  // --- diagnostics (transfer logs of this account)
+
+  private async diagnostics(r: ExtRequest): Promise<void> {
+    const s = r.session();
+    const tl = this.o.transferLogs;
+    if (!tl) throw new HttpError(404, "not_available");
+    if (r.method === "GET" && r.url.searchParams.get("download") === "1") {
+      const data = Buffer.from(tl.read(s.accountId), "utf8");
+      r.res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "content-length": data.byteLength, "cache-control": "no-store", "x-content-type-options": "nosniff" });
+      r.res.end(data);
+      return;
+    }
+    if (r.method === "GET") return r.send(200, tl.status(s.accountId));
+    if (r.method === "POST") {
+      const b = (await r.json()) as { on?: unknown };
+      tl.set(s.accountId, b.on === true);
+      return r.send(200, tl.status(s.accountId));
+    }
+    if (r.method === "DELETE") {
+      tl.clear(s.accountId);
+      return r.send(200, tl.status(s.accountId));
+    }
+    throw new HttpError(405, "method_not_allowed");
+  }
+
   // --- channels of an account
 
   private channels(acct: string) {
@@ -516,6 +557,7 @@ export class BlobsExtension implements ServerExtension {
     const ub = /^\/v1\/uploads\/([A-Za-z0-9_-]{8,64})\/blobs\/(m|\d{1,6})$/.exec(path);
     if (ub && method === "PUT") return (await this.putBlob(r, ub[1]!, ub[2]!), true);
     if (method === "POST" && path === "/v1/uploads/released") return (this.released(r, await r.json()), true);
+    if (path === "/v1/diagnostics/transfer-log") return (await this.diagnostics(r), true);
     // Cleanup state for Settings → Storage (the instance cleans in the background) and "Clean up now".
     if (method === "GET" && path === "/v1/gc") return (r.send(200, this.gcStatus(r.session().accountId)), true);
     if (method === "POST" && path === "/v1/gc/run") {
@@ -541,7 +583,10 @@ export class BlobsExtension implements ServerExtension {
       if (!Array.isArray(list) || list.length > 50) throw new HttpError(400, "bad_attachments");
       const asked = list.map((x) => String((x as { attachmentId?: unknown })?.attachmentId));
       const rows = asked.map((a) => this.ownBlob(s.accountId, a));
+      const tlog = this.o.transferLogs?.for(s.accountId) ?? null;
+      const t0 = tlog ? performance.now() : 0;
       const fresh = await this.freshUrls(rows);
+      tlog?.emit("links", { dir: "down", n: rows.length, dur: r1(performance.now() - t0), via: this.o.bot ? "bot" : "webhook" });
       // Keyed by the ID the client asked for: after a move that is the old one (its manifest keeps it).
       return (r.send(200, { urls: rows.map((b, i) => ({ attachmentId: asked[i], url: fresh.get(b.attachment_id) })) }), true);
     }
@@ -558,7 +603,16 @@ export class BlobsExtension implements ServerExtension {
     if (bl && method === "GET") {
       const s = r.session();
       const b = this.ownBlob(s.accountId, bl[1]!);
-      const data = await this.readBlob(b);
+      const tlog = this.o.transferLogs?.for(s.accountId) ?? null;
+      const t0 = tlog ? performance.now() : 0;
+      let data: Uint8Array;
+      try {
+        data = await this.readBlob(b);
+      } catch (e) {
+        tlog?.emit("req", { dir: "down", k: "proxy", hook: b.webhook_id, ch: b.channel_id, dur: r1(performance.now() - t0), err: String((e as Error)?.message ?? e).replace(/\b[a-z]+:\/\/([^/\s]+)\S*/gi, "<url:$1>").slice(0, 200) });
+        throw e;
+      }
+      tlog?.emit("req", { dir: "down", k: "proxy", hook: b.webhook_id, ch: b.channel_id, b: data.byteLength, dur: r1(performance.now() - t0), st: 200 });
       r.res.writeHead(200, { "content-type": "application/octet-stream", "content-length": data.byteLength, "cache-control": "private, max-age=3600" });
       r.res.end(data);
       return true;

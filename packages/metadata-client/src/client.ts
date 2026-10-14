@@ -4,7 +4,8 @@
 // (fetch + WebCrypto). Marker for the build-time mode check: ddn-webhook-vault.
 
 import type { ArbiterApi } from "./arbiter.js";
-import type { BlobPutContext, BlobStore } from "./blob-store.js";
+import type { BlobGetContext, BlobPutContext, BlobStore } from "./blob-store.js";
+import { hostOf, ms, nowMs, reqErrFields, type TransferLog } from "./transfer-log.js";
 import { RateLimitedError } from "./discord-transport.js";
 import { DriveClient } from "./drive-client.js";
 import { ChannelPacer } from "./rate-limit.js";
@@ -58,6 +59,7 @@ export class WebhookBlobStore implements BlobStore {
   readonly pacer: ChannelPacer;
   readonly hooks: Map<string, WebhookRef>;
   private rr = 0;
+  log: TransferLog | null = null;
   private readonly maxRetries: number;
   private readonly sleep: (ms: number) => Promise<void>;
 
@@ -93,7 +95,8 @@ export class WebhookBlobStore implements BlobStore {
   }
 
   async put(data: Uint8Array, filename: string, ctx: BlobPutContext = {}): Promise<DiscordPlacement> {
-    return placementOf(await this.post(data, filename, ctx.stats ?? { posts: 0 }));
+    const tx = ctx.uploadId !== undefined ? { x: ctx.uploadId, i: ctx.index ?? 0 } : undefined;
+    return placementOf(await this.postOn(() => this.nextHook(), data, filename, ctx.stats ?? { posts: 0 }, tx));
   }
 
   /** Post one blob with pacing per channel and retries (round-robin over the active webhooks, minus `exclude`). */
@@ -101,19 +104,26 @@ export class WebhookBlobStore implements BlobStore {
     return this.postOn(() => this.nextHook(exclude), data, filename, stats);
   }
 
-  private async postOn(pick: () => WebhookRef, data: Uint8Array, filename: string, stats: { posts: number }): Promise<PostedAttachment> {
+  private async postOn(pick: () => WebhookRef, data: Uint8Array, filename: string, stats: { posts: number }, tx?: { x: string; i: number | "m" }): Promise<PostedAttachment> {
     let attempt = 0;
-    for (;;) {
+    const log = tx ? this.log : null;
+    for (let a = 0; ; a++) {
       const hook = pick();
       const key = hook.channelId ?? `hook:${hook.id}`;
+      const tq = log ? nowMs() : 0;
       await this.pacer.acquire(key);
       stats.posts++;
+      const tr = log ? nowMs() : 0;
+      const timing: { ttfb?: number; st?: number } = {};
+      const ev = log ? { dir: "up", x: tx!.x, i: tx!.i, a, hook: hook.id, ch: hook.channelId ?? null, b: data.byteLength, lim: ms(tq, tr), lst: this.pacer.state(key), fl: log.fl.up } : null;
       try {
-        const res = await this.transport.postFile(hook, data, filename);
+        const res = await this.transport.postFile(hook, data, filename, undefined, log ? timing : undefined);
         if (!hook.channelId) hook.channelId = res.channelId;
         this.pacer.onSuccess(key);
+        if (log) log.emit("req", { ...ev, ch: res.channelId, dur: ms(tr), ttfb: timing.ttfb, st: timing.st ?? 200 });
         return res;
       } catch (e) {
+        if (log) log.emit("req", { ...ev, dur: ms(tr), ttfb: timing.ttfb, ...reqErrFields(e) });
         if (e instanceof RateLimitedError) {
           this.pacer.onRateLimited(key, e.retryAfterMs, e.scope);
           if (e.global && e.retryAfterMs > 60_000) throw e;
@@ -126,16 +136,31 @@ export class WebhookBlobStore implements BlobStore {
   }
 
   /** Fetch a stored attachment through its webhook (fresh signed CDN link, koncept §7). */
-  async get(p: DiscordPlacement): Promise<Uint8Array> {
+  async get(p: DiscordPlacement, _signal?: AbortSignal, ctx?: BlobGetContext): Promise<Uint8Array> {
     const hook = this.hook(p.locationId);
+    const log = ctx?.x !== undefined ? this.log : null;
+    const ev = log ? { dir: "down", x: ctx!.x, i: ctx!.i ?? 0, hook: hook.id, ch: p.channelId ?? null } : null;
     let attempt = 0;
-    for (;;) {
+    for (let n = 0; ; n++) {
+      let step = "link";
+      let t0 = log ? nowMs() : 0;
+      const timing: { ttfb?: number; st?: number } = {};
       try {
-        const atts = await this.transport.getAttachments(hook, p.messageId);
+        const atts = await this.transport.getAttachments(hook, p.messageId, log ? timing : undefined);
         const a = atts.find((x) => x.id === p.attachmentId);
         if (!a) throw new Error("attachment missing from message");
-        return await this.transport.fetchCdn(a.url);
+        if (log) {
+          log.emit("req", { ...ev, a: n, k: "link", dur: ms(t0), ttfb: timing.ttfb, st: timing.st ?? 200, fl: log.fl.down });
+          step = "cdn";
+          t0 = nowMs();
+          delete timing.ttfb;
+          delete timing.st;
+        }
+        const data = await this.transport.fetchCdn(a.url, undefined, log ? timing : undefined);
+        if (log) log.emit("req", { ...ev, a: n, k: "cdn", host: hostOf(a.url), b: data.byteLength, dur: ms(t0), ttfb: timing.ttfb, st: timing.st ?? 200, fl: log.fl.down });
+        return data;
       } catch (e) {
+        if (log) log.emit("req", { ...ev, a: n, k: step, dur: ms(t0), ttfb: timing.ttfb, ...reqErrFields(e), fl: log.fl.down });
         if (e instanceof RateLimitedError) {
           await this.sleep(e.retryAfterMs);
           continue;

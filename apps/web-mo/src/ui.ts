@@ -14,6 +14,8 @@ import { applyStatic, fmtDate, fmtDateTime, fmtNum, fmtSize, getLang, isLang, se
 import { connect } from "./rpc.js";
 import { createPreview, type PreviewRow } from "./preview.js";
 import { createChannelsUi, storedShowUnavailable } from "./channels-ui.js";
+import { SpeedMeter, fmtDuration } from "./speed.js";
+import type { UploadStages } from "@ddv4/metadata-client";
 
 /** Mode this bundle was built for (build.ts define). */
 declare const __DDN_MODE__: string;
@@ -29,10 +31,10 @@ applyStatic();
 /** Same-origin instance (served by `discordrive serve`): the API is this origin. */
 const serverUrl = cfg.serverUrl ?? location.origin;
 const worker = new Worker("./worker.js", { type: "module" });
-const progressHandlers = new Map<string, (done: number, total: number) => void>();
+const progressHandlers = new Map<string, (done: number, total: number, stages?: UploadStages) => void>();
 let onShareProgress: (done: number, total: number) => void = () => {};
 function onCoreEvent(e: CoreEvent) {
-  if (e.type === "upload-progress") progressHandlers.get(e.token)?.(e.done, e.total);
+  if (e.type === "upload-progress" || e.type === "download-progress") progressHandlers.get(e.token)?.(e.done, e.total, e.type === "upload-progress" ? e.stages : undefined);
   else if (e.type === "share-progress") onShareProgress(e.done, e.total);
   else if (e.type === "changed") void render();
   else if (e.type === "notices") showNotices(e.notices);
@@ -58,6 +60,20 @@ const ui = <T extends HTMLElement>(sel: string) => document.querySelector<T>(`[d
 const all = <T extends HTMLElement>(css: string) => [...document.querySelectorAll<T>(css)];
 
 const fmt = fmtSize;
+/** Speed in MB/s (10^6 B/s, like the transfer report and the line speed of a provider); Mb/s for the tooltip. */
+const fmtRate = (bps: number) => `${fmtNum(bps / 1e6, bps < 10e6 ? 1 : 0)} MB/s`;
+const fmtRateBits = (bps: number) => `${fmtNum((bps * 8) / 1e6, 0)} Mb/s`;
+/** "12.3 MB/s · 0:42 left" while running (… until the first 0.5 s), "avg 11.8 MB/s · 1:05" when done. */
+function speedText(m: SpeedMeter, now = Date.now()): { text: string; title: string } {
+  if (m.endedAt !== null) {
+    const avg = m.average(now);
+    return { text: t("speed.done", { rate: fmtRate(avg), time: fmtDuration(m.durationMs(now)) }), title: fmtRateBits(avg) };
+  }
+  const r = m.rate(now);
+  if (r === null) return { text: "", title: "" };
+  const eta = m.etaMs(now);
+  return { text: eta === null ? fmtRate(r) : t("speed.run", { rate: fmtRate(r), eta: fmtDuration(eta) }), title: fmtRateBits(r) };
+}
 const short = (id: string | null | undefined) => (id ? id.slice(0, 6) : "-");
 
 /** Tiny DOM builder: h("span", {class: "x"}, "text", child). */
@@ -502,15 +518,8 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
     const dl = iconBtn("download", t("files.download.aria", { name: r.name }), t("files.download"), "accent");
     dl.dataset.ddn = "download";
     if (r.unavailable?.length) dl.hidden = true; // a piece is on a removed channel: the download could not finish
-    dl.onclick = () =>
-      void act(dl, async () => {
-        const b = await core.download(r.id);
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(b);
-        a.download = r.name;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
-      });
+    // Progress, speed and time left in the downloads panel above the list.
+    dl.onclick = () => void act(dl, () => download(r.id, r.name));
     acts.append(dl);
     if (!r.unavailable?.length) acts.append(trashBtn()); // unavailable: its own delete button above
     if (sharesOn && !inRecovered() && !r.unavailable?.length) {
@@ -792,7 +801,7 @@ async function renderNow() {
     ui("about-storage").textContent = st.persistent ? t("status.persistent") : t("status.cache");
     ui("about-storage-t").textContent = st.persistent ? t("status.persistent.t") : t("status.cache.t");
     ui("about-device").textContent = st.deviceId ?? "-";
-    await Promise.all([renderShares(), renderStorage(), renderSecurity(), channelsUi.paintStorage(wh)]);
+    await Promise.all([renderShares(), renderStorage(), renderSecurity(), renderDiagnostics(), channelsUi.paintStorage(wh)]);
     return;
   }
 
@@ -1005,10 +1014,11 @@ async function uploadAll(files: File[], into?: string) {
     const bar = h("i");
     const token = crypto.randomUUID();
     const cancel = h("button", { class: "iconbtn qcancel", type: "button", "data-ddn": "queue-cancel", "aria-label": t("queue.cancel"), title: t("queue.cancel") }, icon("x"));
-    const li = h("li", {}, h("span", { class: "qname", title: f.name }, f.name), h("span", { class: "qside" }, cancel, state), h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, fmt(f.size)));
+    const speed = h("span", { "data-ddn": "queue-speed" });
+    const li = h("li", {}, h("span", { class: "qname", title: f.name }, f.name), h("span", { class: "qside" }, cancel, state), h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, fmt(f.size), speed));
     li.dataset.ddn = "queue-item";
     list.append(li);
-    const item = { f, state, bar, token, cancel, cancelled: false };
+    const item = { f, state, bar, token, cancel, cancelled: false, speed };
     cancel.onclick = () => {
       item.cancelled = true;
       cancel.hidden = true;
@@ -1019,9 +1029,16 @@ async function uploadAll(files: File[], into?: string) {
   box.hidden = false;
   ui("queue-close").hidden = true;
   uploading = { done: 0, total: files.length };
+  // The whole batch: speed / time left over every byte of it (waits between files count too).
+  const batch = new SpeedMeter(total, Date.now());
   const meta = () => {
     ui("queue-title").textContent = uploading ? t("queue.running", { done: uploading.done, total: uploading.total }) : failed ? t("queue.doneErr", { n: failed }) : t("queue.done");
-    ui("queue-meta").textContent = t("queue.meta", { sent: fmt(sent), total: fmt(total) });
+    batch.add(sent, Date.now());
+    const sp = speedText(batch);
+    const m = ui("queue-meta");
+    m.textContent = t("queue.meta", { sent: fmt(sent), total: fmt(total) }) + (sp.text ? ` · ${sp.text}` : "");
+    m.title = sp.title;
+    m.dataset.ddn = "queue-meta";
   };
   meta();
   for (const item of items) {
@@ -1038,11 +1055,24 @@ async function uploadAll(files: File[], into?: string) {
     state.className = "qstate run";
     state.textContent = t("queue.preparing");
     const base = sent;
-    progressHandlers.set(token, (done, tot) => {
+    const meter = new SpeedMeter(f.size, Date.now());
+    const paintSpeed = (stages?: UploadStages) => {
+      const sp = speedText(meter);
+      // metadata only / e2ee: which stage the fragments are in (encrypting in this tab vs on the wire).
+      const st = stages && meter.endedAt === null && (stages.enc || stages.net) ? t("queue.stages", { enc: stages.enc, net: stages.net }) : "";
+      item.speed.textContent = [sp.text, st].filter(Boolean).map((x) => ` · ${x}`).join("");
+      item.speed.title = sp.title;
+    };
+    const tick = window.setInterval(() => paintSpeed(), 1000);
+    let lastStages: UploadStages | undefined;
+    progressHandlers.set(token, (done, tot, stages) => {
       const pct = tot ? Math.floor((done / tot) * 100) : 100;
       state.textContent = `${pct}%`;
       bar.style.width = `${pct}%`;
       sent = base + done;
+      meter.add(done, Date.now());
+      lastStages = stages ?? lastStages;
+      paintSpeed(lastStages);
       meta();
     });
     try {
@@ -1067,6 +1097,10 @@ async function uploadAll(files: File[], into?: string) {
     } finally {
       progressHandlers.delete(token);
       item.cancel.hidden = true;
+      clearInterval(tick);
+      meter.finish(Date.now());
+      if (state.className === "qstate done") paintSpeed();
+      else item.speed.textContent = "";
     }
     sent = base + f.size;
     if (!item.cancelled) bar.style.width = "100%"; // a cancelled bar stays where it stopped
@@ -1077,6 +1111,7 @@ async function uploadAll(files: File[], into?: string) {
   queueBatches--;
   if (queueBatches > 0) return void render(); // another batch still runs in the same panel
   uploading = null;
+  batch.finish(Date.now());
   meta();
   ui("queue-close").hidden = false;
   if (failed) toast(t("queue.failed", { failed, total: files.length }), "err");
@@ -1164,16 +1199,92 @@ function wireFilesPage() {
 }
 
 
-// ── selection, row menu, rename, move, trash (discordrive FileTable patterns) ──
-function download(id: string, name: string) {
-  return core.download(id).then((b) => {
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(b);
-    a.download = name;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
-  });
+// ── downloads panel (zlecenie 2026-10-13-transfer §1): progress, speed, time left, cancel ──
+let dlRunning = 0;
+let dlCloseTimer = 0;
+function dlMeta() {
+  const items = all<HTMLElement>("[data-ddn=dl-item]");
+  const failed = items.filter((li) => li.dataset.state === "err").length;
+  ui("dl-title").textContent = dlRunning ? t("dl.running", { n: dlRunning }) : failed ? t("dl.doneErr", { n: failed }) : t("dl.done");
+  $("dl-close").hidden = dlRunning > 0;
 }
+function closeDownloads() {
+  clearTimeout(dlCloseTimer);
+  $("downloads").hidden = true;
+  $("dl-list").replaceChildren();
+}
+function download(id: string, name: string) {
+  const box = $("downloads");
+  const list = $("dl-list");
+  clearTimeout(dlCloseTimer);
+  const token = crypto.randomUUID();
+  const state = h("span", { class: "qstate run" }, "0%");
+  const bar = h("i");
+  const speed = h("span", { "data-ddn": "dl-speed" });
+  const size = h("span", {}, "");
+  const cancel = h("button", { class: "iconbtn qcancel", type: "button", "data-ddn": "dl-cancel", "aria-label": t("queue.cancel"), title: t("queue.cancel") }, icon("x"));
+  const li = h("li", { "data-ddn": "dl-item" }, h("span", { class: "qname", title: name }, name), h("span", { class: "qside" }, cancel, state), h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, size, speed));
+  list.prepend(li);
+  box.hidden = false;
+  dlRunning++;
+  dlMeta();
+  let meter: SpeedMeter | null = null;
+  let cancelled = false;
+  cancel.onclick = () => {
+    cancelled = true;
+    void core.cancelDownload(token);
+  };
+  const paint = () => {
+    if (!meter) return;
+    const sp = speedText(meter);
+    speed.textContent = sp.text ? ` · ${sp.text}` : "";
+    speed.title = sp.title;
+  };
+  const tick = window.setInterval(paint, 1000);
+  progressHandlers.set(token, (done, total) => {
+    meter ??= new SpeedMeter(total, Date.now());
+    meter.add(done, Date.now());
+    const pct = total ? Math.floor((done / total) * 100) : 100;
+    state.textContent = `${pct}%`;
+    bar.style.width = `${pct}%`;
+    size.textContent = t("queue.meta", { sent: fmt(done), total: fmt(total) });
+    paint();
+  });
+  const end = (ok: boolean, why?: string) => {
+    progressHandlers.delete(token);
+    clearInterval(tick);
+    cancel.hidden = true;
+    dlRunning--;
+    meter?.finish(Date.now());
+    li.dataset.state = ok ? "done" : cancelled ? "cancel" : "err";
+    state.className = `qstate ${ok ? "done" : cancelled ? "cancel" : "err"}`;
+    state.textContent = ok ? t("queue.ok") : cancelled ? t("queue.cancelled") : t("queue.err");
+    bar.className = ok ? "done" : cancelled ? "cancel" : "err";
+    if (ok) bar.style.width = "100%";
+    if (why) state.title = why;
+    if (ok) paint();
+    else speed.textContent = "";
+    dlMeta();
+    // Closes itself a few seconds after the last download went fine; a failure stays until ×.
+    if (!dlRunning && !all<HTMLElement>("[data-ddn=dl-item]").some((x) => x.dataset.state === "err")) dlCloseTimer = window.setTimeout(closeDownloads, 6000);
+  };
+  return core.download(id, token).then(
+    (b) => {
+      end(true);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(b);
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+    },
+    (e) => {
+      end(false, cancelled ? undefined : errText(e));
+      if (!cancelled) throw e;
+    },
+  );
+}
+
+// ── selection, row menu, rename, move, trash (discordrive FileTable patterns) ──
 
 function paintBulk() {
   const n = selected.size;
@@ -1714,6 +1825,70 @@ function wireStorage() {
     });
 }
 
+// ── Settings → Diagnostics: transfer logs (zlecenie 2026-10-13-transfer §2) ──
+const TLOG_KEY = "ddn.transferLog";
+function storedTransferLog(): { on: boolean; names: boolean } {
+  try {
+    const v = localStorage.getItem(TLOG_KEY);
+    return { on: v === "1" || v === "names", names: v === "names" };
+  } catch {
+    return { on: false, names: false };
+  }
+}
+function storeTransferLog(on: boolean, names: boolean) {
+  try {
+    localStorage.setItem(TLOG_KEY, on ? (names ? "names" : "1") : "0");
+  } catch {
+    /* private mode */
+  }
+}
+/** Transfer logs stay on across reloads (this browser's choice); the worker starts writing at once. */
+async function applyTransferLog() {
+  const tl = storedTransferLog();
+  if (tl.on && (await core.status()).signedIn) await core.setTransferLog(true, tl.names).catch(() => null);
+}
+async function renderDiagnostics() {
+  const st = await core.transferLogStatus().catch(() => null);
+  if (!st) return;
+  $<HTMLInputElement>("diag-log").checked = st.on;
+  $<HTMLInputElement>("diag-names").checked = st.names;
+  $<HTMLInputElement>("diag-names").disabled = !st.on;
+  $("diag-state").textContent = st.on ? t("diag.on") : t("diag.off");
+  $("diag-state").className = `chip${st.on ? " chip--accent" : ""}`;
+  const parts = [t("diag.size", { size: fmt(st.bytes) }), st.where === "memory" ? t("diag.memory") : ""];
+  if (st.server) parts.push(st.server.all ? t("diag.serverAll") : st.server.on ? t("diag.serverOn") : t("diag.serverOff"));
+  $("diag-info").textContent = parts.filter(Boolean).join(" ");
+}
+function wireDiagnostics() {
+  const box = $<HTMLInputElement>("diag-log");
+  const names = $<HTMLInputElement>("diag-names");
+  const apply = () =>
+    void act(null, async () => {
+      storeTransferLog(box.checked, box.checked && names.checked);
+      await core.setTransferLog(box.checked, box.checked && names.checked);
+      await renderDiagnostics();
+    });
+  box.onchange = apply;
+  names.onchange = apply;
+  $("diag-download").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      const f = await core.transferLogFile();
+      if (!f.lines) return toast(t("diag.empty"), "info");
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(f.data);
+      a.download = `discordrive-transfers-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.jsonl${f.gz ? ".gz" : ""}`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+      toast(t("diag.downloaded", { n: fmtNum(f.lines) }));
+    });
+  $("diag-clear").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      await core.clearTransferLog();
+      await renderDiagnostics();
+      toast(t("diag.cleared"));
+    });
+}
+
 // ── Settings → Security: optional password-protected account key (§3.8) ──
 let pwEnabled = false;
 async function renderSecurity() {
@@ -1976,6 +2151,7 @@ function wireSignedOut(server: () => string) {
     void act(e.currentTarget as HTMLElement, async () => {
       await core.createAccount(server(), $<HTMLInputElement>("device-name").value.trim() || defaultDeviceName(), $<HTMLInputElement>("invite").value);
       await core.open();
+      await applyTransferLog();
       sessionStorage.removeItem(SKIP_KEY);
       navigate("/welcome");
     });
@@ -2035,6 +2211,7 @@ function wireSignedOut(server: () => string) {
     void act(e.currentTarget as HTMLElement, async () => {
       await core.pairConfirm();
       await core.open();
+      await applyTransferLog();
       navigate("/", true);
       toast(t("dev.paired"));
     });
@@ -2048,6 +2225,7 @@ function wireSignedOut(server: () => string) {
       await core.joinWithKit(server(), $<HTMLTextAreaElement>("rescue-text").value, $<HTMLInputElement>("rescue-name").value.trim() || defaultDeviceName());
       $<HTMLTextAreaElement>("rescue-text").value = "";
       await core.open();
+      await applyTransferLog();
       navigate("/", true);
       toast(t("rescueD.done"));
     });
@@ -2059,6 +2237,7 @@ function wireSignedOut(server: () => string) {
       await core.joinWithPassword(server(), $<HTMLInputElement>("signin-login").value, $<HTMLInputElement>("signin-password").value, $<HTMLInputElement>("signin-name").value.trim() || defaultDeviceName());
       $<HTMLInputElement>("signin-password").value = "";
       await core.open();
+      await applyTransferLog();
       navigate("/", true);
       toast(t("signin.done"));
     });
@@ -2212,7 +2391,9 @@ async function main() {
   wireSelection();
   wireTrash();
   wireStorage();
+  wireDiagnostics();
   wireSecurity();
+  $("dl-close").onclick = () => closeDownloads();
   $("share-copy").onclick = () => void copy($<HTMLTextAreaElement>("share-link").value, t("shareD.copied"));
   $("share-close").onclick = () => $<HTMLDialogElement>("share-dialog").close();
   $<HTMLDialogElement>("share-dialog").addEventListener("close", () => {
@@ -2221,6 +2402,7 @@ async function main() {
   ui("player-close").onclick = () => closePlayer();
   ui<HTMLDialogElement>("player-dialog").addEventListener("close", () => $<HTMLVideoElement>("player").pause());
   if ((await core.status()).hasAccount) await act(null, () => core.open());
+  await applyTransferLog();
   // Link from a QR code scanned by a phone camera: …/#pair=ddn-pair1:…
   const hashPair = location.hash.startsWith("#pair=") ? decodeURIComponent(location.hash.slice(6)) : null;
   if (hashPair) {

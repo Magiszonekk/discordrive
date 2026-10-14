@@ -22,6 +22,7 @@
     "test:integration": "npm run test:integration --workspace=@ddv4/api",
     "test:e2e:download": "tsx scripts/e2e-download-smoke.ts",
     "benchmark": "tsx scripts/benchmark.ts",
+    "transfer-report": "tsx packages/metadata-client/src/transfer-report-main.ts",
     "benchmark:e2e": "tsx scripts/benchmark-e2e.ts",
     "infra:up": "docker compose -f infra/docker-compose.yml --env-file .env up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml --env-file .env down",

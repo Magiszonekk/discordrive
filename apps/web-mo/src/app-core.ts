@@ -58,7 +58,10 @@ import {
   type ListSort,
   type OpenedShare,
   type PendingPairing,
+  TransferLog,
+  type UploadStages,
 } from "@ddv4/metadata-client";
+import { OpfsTransferLog, gzipText } from "./transfer-log-opfs.js";
 import { fromBase64, toBase64 } from "@ddv4/processing";
 import { claimLeadership, openOpfsIndexStore, requestPersistentStorage } from "@ddv4/metadata-client/browser";
 // Resolved at build time to ONE mode (build.ts): the other modes are not in the bundle.
@@ -101,7 +104,8 @@ export interface TrashRow {
 
 /** Events pushed from the worker to the UI (not request/response). */
 export type CoreEvent =
-  | { type: "upload-progress"; token: string; done: number; total: number }
+  | { type: "upload-progress"; token: string; done: number; total: number; stages?: UploadStages }
+  | { type: "download-progress"; token: string; done: number; total: number }
   | { type: "share-progress"; done: number; total: number }
   | { type: "changed" }
   | { type: "cleanup"; running: boolean }
@@ -149,6 +153,10 @@ export class AppCore {
   private ctx: ModeCtx | null = null;
   private sub: { close(): void } | null = null;
   private uploads = new Map<string, AbortController>();
+  private downloads = new Map<string, AbortController>();
+  /** Transfer logs (Settings → Diagnostics): the OPFS writer and the logger handed to the client. */
+  private tlogStore: OpfsTransferLog | null = null;
+  private tlog: TransferLog | null = null;
   private snapTimer: ReturnType<typeof setInterval> | null = null;
   private gcTimer: ReturnType<typeof setTimeout> | null = null;
   private gc: ModeCleanup | null = null;
@@ -321,6 +329,7 @@ export class AppCore {
   /** (Re)build the client around the same store and log position (channels changed). */
   private async rebuildClient() {
     this.client = await mode.client(this.ctx!);
+    this.client.setTransferLog(this.tlog);
     this.gc = mode.cleanup(this.ctx!, this.client, { primary: () => this.leader, metered: meteredLink });
     await this.client.pull();
   }
@@ -581,11 +590,11 @@ export class AppCore {
     if (token) this.uploads.set(token, ac);
     const r = await this.c().upload(blobSource(file), name, parentId, {
       signal: ac.signal,
-      onProgress: (done, total) => {
+      onProgress: (done, total, stages) => {
         const t = Date.now();
         if (done > 0 && done < total && t - last < 100) return;
         last = t;
-        this.onEvent({ type: "upload-progress", token, done, total });
+        this.onEvent({ type: "upload-progress", token, done, total, stages });
       },
     }).finally(() => this.uploads.delete(token));
     this.version++;
@@ -624,11 +633,91 @@ export class AppCore {
     return !!ac;
   }
 
-  async download(nodeId: string): Promise<Blob> {
+  /** Download (verified) into a Blob; with a token: "download-progress" events, cancel with cancelDownload(token). */
+  async download(nodeId: string, token = ""): Promise<Blob> {
     const parts: Uint8Array[] = [];
-    await this.c().download(nodeId, { write: async (d) => void parts.push(new Uint8Array(d)) });
+    const ac = new AbortController();
+    if (token) this.downloads.set(token, ac);
+    let last = 0;
+    try {
+      await this.c().download(
+        nodeId,
+        { write: async (d) => void parts.push(new Uint8Array(d)) },
+        {
+          signal: ac.signal,
+          onProgress: token
+            ? (done, total) => {
+                const t = Date.now();
+                if (done > 0 && done < total && t - last < 100) return;
+                last = t;
+                this.onEvent({ type: "download-progress", token, done, total });
+              }
+            : undefined,
+        },
+      );
+    } finally {
+      this.downloads.delete(token);
+    }
     const n = this.c().store.getNode(nodeId);
     return new Blob(parts as BlobPart[], { type: n ? mimeOf(n.name) : "" });
+  }
+
+  cancelDownload(token: string): boolean {
+    const ac = this.downloads.get(token);
+    ac?.abort();
+    return !!ac;
+  }
+
+  // ── transfer logs (Settings → Diagnostics, zlecenie 2026-10-13-transfer §2) ──
+
+  /** Turn this browser's transfer log on/off (the UI keeps the choice); e2ee/plain: the instance's log for this account too. */
+  async setTransferLog(on: boolean, names = false): Promise<{ on: boolean; names: boolean; server: { on: boolean; all: boolean } | null }> {
+    if (on) {
+      this.tlogStore ??= new OpfsTransferLog();
+      this.tlog ??= new TransferLog(this.tlogStore.write, { src: "web", mode: mode.mode });
+      this.tlog.names = names;
+    } else {
+      await this.tlogStore?.flush();
+      this.tlog = null;
+    }
+    this.client?.setTransferLog(this.tlog);
+    let server: { on: boolean; all: boolean } | null = null;
+    if (!mode.clientSnapshots && this.http) {
+      server = await this.http
+        .json<{ on: boolean; all: boolean }>("POST", "/v1/diagnostics/transfer-log", { on })
+        .then((r) => r.body)
+        .catch(() => null);
+    }
+    return { on: !!this.tlog, names: !!this.tlog?.names, server };
+  }
+
+  async transferLogStatus(): Promise<{ on: boolean; names: boolean; bytes: number; where: string; server: { on: boolean; all: boolean } | null }> {
+    this.tlogStore ??= new OpfsTransferLog();
+    let server: { on: boolean; all: boolean } | null = null;
+    if (!mode.clientSnapshots && this.http) server = await this.http.json<{ on: boolean; all: boolean }>("GET", "/v1/diagnostics/transfer-log").then((r) => r.body).catch(() => null);
+    return { on: !!this.tlog, names: !!this.tlog?.names, bytes: await this.tlogStore.size(), where: this.tlogStore.where, server };
+  }
+
+  /**
+   * The log file to download: this browser's lines (all tabs) and, in e2ee/plain, the instance's lines
+   * for this account, in one JSON Lines file (`src` tells them apart), gzipped when the browser can.
+   */
+  async transferLogFile(): Promise<{ data: Blob; gz: boolean; lines: number; serverLines: number }> {
+    this.tlogStore ??= new OpfsTransferLog();
+    const mine = await this.tlogStore.text();
+    let srv = "";
+    if (!mode.clientSnapshots && this.http) {
+      const r = await this.http.request("GET", "/v1/diagnostics/transfer-log?download=1").catch(() => null);
+      if (r?.ok) srv = await r.text();
+    }
+    const all = mine + srv;
+    const count = (s: string) => (s.match(/\n/g) ?? []).length;
+    return { ...(await gzipText(all)), lines: count(all), serverLines: count(srv) };
+  }
+
+  async clearTransferLog(): Promise<void> {
+    await this.tlogStore?.clear();
+    if (!mode.clientSnapshots && this.http) await this.http.json("DELETE", "/v1/diagnostics/transfer-log").catch(() => null);
   }
 
   async readRange(nodeId: string, start: number, end: number) {
@@ -1032,6 +1121,7 @@ export class AppCore {
   }
 
   close() {
+    void this.tlogStore?.stop();
     this.sub?.close();
     if (this.snapTimer) clearInterval(this.snapTimer);
     if (this.gcTimer) clearTimeout(this.gcTimer);

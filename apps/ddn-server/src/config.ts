@@ -47,6 +47,11 @@ export interface InstanceConfig {
   webDir?: string;
   /** The operator accepted the risk text (ToS + no warranty) of this version at `at` (ISO time). */
   acceptedRisk?: { version: number; at: string } | null;
+  /**
+   * Transfer logs of every account (e2ee/plain: <dataDir>/logs/transfers-YYYY-MM-DD.jsonl, docs/transfer-log.md).
+   * Off (default): each user turns them on for their own account in Settings → Diagnostics.
+   */
+  transferLogs?: boolean;
   /** Tests only: send Discord API/CDN calls to a local fake. Never set on a real instance. */
   testing?: { discordApiOrigin?: string };
 }

@@ -12,7 +12,8 @@
 // No webhook URL ever reaches the client. Marker for the build-time mode check: ddn-server-blobs.
 
 import { sha256Hex } from "./file-crypto.js";
-import { AbortedError, type BlobPutContext, type BlobStore } from "./blob-store.js";
+import { AbortedError, type BlobGetContext, type BlobPutContext, type BlobStore } from "./blob-store.js";
+import { errText, hostOf, ms, nowMs, type TransferLog } from "./transfer-log.js";
 import type { HttpApi } from "./http-api.js";
 import { ServerError } from "./http-api.js";
 import type { DiscordPlacement } from "./types.js";
@@ -32,7 +33,7 @@ export interface ServerBlobStoreOptions {
   maxRetries?: number;
   maxWaitMs?: number;
   sleep?: (ms: number) => Promise<void>;
-  fetchCdn?: (url: string, signal?: AbortSignal) => Promise<Uint8Array>;
+  fetchCdn?: (url: string, signal?: AbortSignal, timing?: { ttfb?: number; st?: number }) => Promise<Uint8Array>;
 }
 
 export class ServerBlobStore implements BlobStore {
@@ -41,7 +42,8 @@ export class ServerBlobStore implements BlobStore {
   private readonly maxRetries: number;
   private readonly maxWaitMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
-  private readonly fetchCdn: (url: string, signal?: AbortSignal) => Promise<Uint8Array>;
+  private readonly fetchCdn: (url: string, signal?: AbortSignal, timing?: { ttfb?: number; st?: number }) => Promise<Uint8Array>;
+  log: TransferLog | null = null;
   /** CDN unreachable from here (CORS/network) -> read through the instance from now on. */
   proxyOnly = false;
 
@@ -54,8 +56,10 @@ export class ServerBlobStore implements BlobStore {
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.fetchCdn =
       o.fetchCdn ??
-      (async (url, signal) => {
+      (async (url, signal, timing) => {
+        const t0 = timing ? nowMs() : 0;
         const r = await fetch(url, { signal });
+        if (timing) ((timing.ttfb = ms(t0)), (timing.st = r.status));
         if (!r.ok) throw new Error(`cdn: HTTP ${r.status}`);
         return new Uint8Array(await r.arrayBuffer());
       });
@@ -68,10 +72,13 @@ export class ServerBlobStore implements BlobStore {
     const sha = ctx.sha256 ?? (await sha256Hex(data));
     let attempt = 0;
     let waited = 0;
-    for (;;) {
+    const log = this.log;
+    for (let a = 0; ; a++) {
       if (ctx.signal?.aborted) throw new AbortedError();
       if (ctx.stats) ctx.stats.posts++;
       let r: Response;
+      const t0 = log ? nowMs() : 0;
+      const ev = log ? { dir: "up", x: u, i, a, k: "server", b: data.byteLength, fl: log.fl.up } : null;
       try {
         r = await this.api.request("PUT", `/v1/uploads/${u}/blobs/${i}`, {
           body: data as BodyInit,
@@ -79,13 +86,20 @@ export class ServerBlobStore implements BlobStore {
           signal: ctx.signal,
         });
       } catch (e) {
+        if (log) log.emit("req", { ...ev, dur: ms(t0), err: errText(e) });
         if (ctx.signal?.aborted) throw new AbortedError();
         if (++attempt > this.maxRetries) throw e;
         await this.sleep(500 * 2 ** (attempt - 1));
         continue;
       }
-      if (r.ok) return ((await r.json()) as { placement: DiscordPlacement }).placement;
+      if (r.ok) {
+        const pl = ((await r.json()) as { placement: DiscordPlacement; reused?: boolean }).placement;
+        // The server's own part (limiter, Discord request) is in its log (same x / i); here: the whole round trip.
+        if (log) log.emit("req", { ...ev, dur: ms(t0), st: r.status, hook: pl.locationId, ch: pl.channelId });
+        return pl;
+      }
       const j = (await r.json().catch(() => ({}))) as { error?: string; retryAfterMs?: number };
+      if (log) log.emit("req", { ...ev, dur: ms(t0), st: r.status, err: String(j.error ?? "?").slice(0, 80), ...(j.retryAfterMs ? { ra: j.retryAfterMs } : {}) });
       if (r.status === 503 || r.status === 429) {
         const wait = Math.max(500, Number(r.headers.get("retry-after") ?? 0) * 1000 || j.retryAfterMs || 2000);
         if (waited + wait > this.maxWaitMs) throw new InstanceBusyError(wait);
@@ -116,23 +130,32 @@ export class ServerBlobStore implements BlobStore {
     const need = ps.filter((p) => !((this.links.get(p.attachmentId)?.until ?? 0) > t));
     for (let k = 0; k < need.length; k += 50) {
       const part = need.slice(k, k + 50);
+      const t0 = this.log ? nowMs() : 0;
       const r = await this.api.json<{ urls: { attachmentId: string; url: string }[] }>("POST", "/v1/blobs/urls", {
         attachments: part.map((p) => ({ webhookId: p.locationId, messageId: p.messageId, attachmentId: p.attachmentId })),
       });
+      this.log?.emit("links", { dir: "down", n: part.length, dur: ms(t0), st: r.status });
       // Links live ~24 h; keep them 1 h, a refresh is cheap.
       for (const x of r.body.urls) this.links.set(x.attachmentId, { url: x.url, until: t + 3600_000 });
     }
     if (this.links.size > 20_000) for (const [k, v] of this.links) if (v.until <= t) this.links.delete(k);
   }
 
-  async get(p: DiscordPlacement, signal?: AbortSignal): Promise<Uint8Array> {
+  async get(p: DiscordPlacement, signal?: AbortSignal, ctx?: BlobGetContext): Promise<Uint8Array> {
+    const log = ctx?.x !== undefined ? this.log : null;
+    const ev = log ? { dir: "down", x: ctx!.x, i: ctx!.i ?? 0, hook: p.locationId, ch: p.channelId ?? null } : null;
     if (!this.proxyOnly) {
       await this.prefetch([p]);
       const l = this.links.get(p.attachmentId);
       if (l) {
+        const t0 = log ? nowMs() : 0;
+        const timing: { ttfb?: number; st?: number } = {};
         try {
-          return await this.fetchCdn(l.url, signal);
+          const d = await this.fetchCdn(l.url, signal, log ? timing : undefined);
+          if (log) log.emit("req", { ...ev, k: "cdn", host: hostOf(l.url), b: d.byteLength, dur: ms(t0), ttfb: timing.ttfb, st: timing.st ?? 200, fl: log.fl.down });
+          return d;
         } catch (e) {
+          if (log) log.emit("req", { ...ev, k: "cdn", host: hostOf(l.url), dur: ms(t0), ttfb: timing.ttfb, ...(timing.st ? { st: timing.st } : {}), err: errText(e), fl: log.fl.down });
           if (signal?.aborted) throw new AbortedError();
           // A stale link or a CDN this browser cannot read (CORS): drop it and go through the instance.
           this.links.delete(p.attachmentId);
@@ -140,14 +163,22 @@ export class ServerBlobStore implements BlobStore {
         }
       }
     }
-    return this.proxy(p, signal);
+    return this.proxy(p, signal, ctx);
   }
 
   /** Read through the instance (it fetches from Discord): the fallback path. */
-  async proxy(p: DiscordPlacement, signal?: AbortSignal): Promise<Uint8Array> {
+  async proxy(p: DiscordPlacement, signal?: AbortSignal, ctx?: BlobGetContext): Promise<Uint8Array> {
+    const log = ctx?.x !== undefined ? this.log : null;
     for (let attempt = 0; ; attempt++) {
+      const t0 = log ? nowMs() : 0;
       const r = await this.api.request("GET", `/v1/blobs/${p.attachmentId}?w=${p.locationId}&m=${p.messageId}`, { signal });
-      if (r.ok) return new Uint8Array(await r.arrayBuffer());
+      const ttfb = log ? ms(t0) : 0;
+      if (r.ok) {
+        const d = new Uint8Array(await r.arrayBuffer());
+        if (log) log.emit("req", { dir: "down", x: ctx!.x, i: ctx!.i ?? 0, a: attempt, k: "proxy", hook: p.locationId, b: d.byteLength, dur: ms(t0), ttfb, st: r.status, fl: log.fl.down });
+        return d;
+      }
+      if (log) log.emit("req", { dir: "down", x: ctx!.x, i: ctx!.i ?? 0, a: attempt, k: "proxy", hook: p.locationId, dur: ms(t0), st: r.status, fl: log.fl.down });
       if ((r.status >= 500 || r.status === 429) && attempt < this.maxRetries) {
         await this.sleep(500 * 2 ** attempt);
         continue;

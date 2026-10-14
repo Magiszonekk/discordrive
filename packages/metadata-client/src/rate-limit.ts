@@ -75,6 +75,13 @@ export class ChannelPacer {
     b.updatedAt = t;
   }
 
+  /** Limiter state of a channel for transfer logs (transfer-log.ts LimiterState). */
+  state(key: string): { pm: number; tok: number; blk: number; q: number } {
+    const b = this.bucket(key);
+    this.refill(b);
+    return { pm: Math.round(b.perMin * 10) / 10, tok: Math.round(b.tokens * 100) / 100, blk: Math.max(0, Math.round(b.blockedUntil - this.now())), q: b.waiting };
+  }
+
   /** Current sustained rate for a channel (messages/min). */
   rate(key: string): number {
     return this.bucket(key).perMin;

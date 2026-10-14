@@ -335,6 +335,11 @@ try {
   await shot(p, "03b-settings");
   // Cobalt fonts are local files (CSP: 'self' only) and really load: Space Grotesk / Inter / JetBrains Mono.
   r.fontsLoaded = await p.evaluate(async () => (await document.fonts.ready, [...new Set([...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family.replace(/"/g, "")))].sort()));
+  // Settings → Diagnostics: transfer logs on (zlecenie 2026-10-13-transfer §2); the upload and download below are logged.
+  r.diagOffByDefault = !(await p.isChecked("[data-ddn=diag-log]")) && (await p.isDisabled("[data-ddn=diag-names]"));
+  await p.click("[data-ddn=diag-log]");
+  await p.waitForFunction(() => !document.querySelector<HTMLInputElement>("[data-ddn=diag-names]")!.disabled, null, { timeout: 10_000 });
+  r.diagOn = await p.textContent("[data-ddn=diag-state]");
   await nav(p, "files");
 
   // 3. upload with byte progress
@@ -351,8 +356,15 @@ try {
   await p.evaluate(() => {
     const q = document.querySelector("[data-ddn-ui=queue-list]")!;
     new MutationObserver(() => {
-      for (const li of q.querySelectorAll("[data-ddn=queue-item]")) (window as unknown as { __progress(s: string): void }).__progress(`${li.firstElementChild?.textContent}:${li.querySelector(".qstate")?.textContent}`);
-    }).observe(q, { childList: true, characterData: true, subtree: true });
+      const w = window as unknown as { __progress(s: string): void };
+      for (const li of q.querySelectorAll("[data-ddn=queue-item]")) {
+        w.__progress(`${li.firstElementChild?.textContent}:${li.querySelector(".qstate")?.textContent}`);
+        const sp = li.querySelector("[data-ddn=queue-speed]")?.textContent;
+        if (sp) w.__progress(`${li.firstElementChild?.textContent}:speed${sp}`);
+      }
+      const meta = document.querySelector("[data-ddn=queue-meta]")?.textContent;
+      if (meta) w.__progress(`meta:${meta}`);
+    }).observe(document.querySelector("[data-ddn-ui=queue]")!, { childList: true, characterData: true, subtree: true });
   });
   await p.setInputFiles("[data-ddn=file]", [doc, video, big]);
   await p.waitForFunction((done) => document.querySelector("[data-ddn-ui=queue-title]")?.textContent === done, L.uploaded, { timeout: 300_000 });
@@ -361,6 +373,8 @@ try {
   r.queueNote = await p.textContent("[data-ddn-ui=queue] > .hint");
   const bigSteps = [...new Set(progress.filter((x) => x.startsWith("duzy.bin:") && /%$/.test(x)))];
   r.progressBigFile = bigSteps;
+  // Live speed: the file's line ends with the average and the time ("avg 3.1 MB/s · 4 s"), the batch line too.
+  r.uploadSpeed = { file: progress.filter((x) => x.startsWith("duzy.bin:speed")).at(-1) ?? null, meta: progress.filter((x) => x.startsWith("meta:") && /MB\/s/.test(x)).at(-1) ?? null };
   if (MODE === "plain") {
     // Thumbnail of the video (made on the server in the background) replaces the type badge.
     // Without a reload: the list asks again until the server has made it.
@@ -387,6 +401,40 @@ try {
   const [dl] = await Promise.all([p.waitForEvent("download", { timeout: 120_000 }), p.locator("[data-ddn=row]", { hasText: "duzy.bin" }).locator("[data-ddn=download]").click()]);
   r.downloadSha256Ok = sha(readFileSync((await dl.path())!)) === sha(readFileSync(big));
   r.downloadName = dl.suggestedFilename();
+  // The downloads panel: the file, done, its average speed (the same look as the upload queue).
+  r.downloadPanel = await p.evaluate(() => {
+    const li = document.querySelector("[data-ddn=dl-item]");
+    return { shown: !document.querySelector("[data-ddn=downloads]")!.hasAttribute("hidden"), name: li?.querySelector(".qname")?.textContent ?? null, state: (li as HTMLElement | null)?.dataset.state ?? null, speed: li?.querySelector("[data-ddn=dl-speed]")?.textContent ?? null, bar: (li?.querySelector(".bar > i") as HTMLElement | null)?.style.width ?? null };
+  });
+  // Download the transfer log (Settings → Diagnostics), check it and run the report on it.
+  {
+    await nav(p, "settings");
+    await p.waitForFunction(() => /\d/.test(document.querySelector("[data-ddn=diag-info]")?.textContent ?? ""), null, { timeout: 10_000 });
+    const [lf] = await Promise.all([p.waitForEvent("download", { timeout: 30_000 }), p.click("[data-ddn=diag-download]")]);
+    const raw = readFileSync((await lf.path())!);
+    const text = (raw[0] === 0x1f && raw[1] === 0x8b ? (await import("node:zlib")).gunzipSync(raw) : raw).toString("utf8");
+    const { parseLines, buildReport } = await import("@ddv4/metadata-client/transfer-report");
+    const { events, bad } = parseLines(text);
+    const tokens = hookUrls.map((u) => u.split("/").at(-1)!);
+    const rep = buildReport(events, { bucketS: 5 });
+    const fileOf = (src: string, dir: string) => events.find((e) => e.ev === "file_end" && e.src === src && e.dir === dir && e.size === 12 * 1024 * 1024);
+    r.transferLog = {
+      file: lf.suggestedFilename(),
+      lines: events.length,
+      bad,
+      noSecrets: !tokens.some((x) => text.includes(x)) && !/duzy\.bin|notatki|klip\.webm|[?&](ex|hm)=|\/webhooks\/\d+\/[\w.-]{20,}/.test(text),
+      upEnd: !!fileOf("web", "up")?.ok,
+      downEnd: !!fileOf("web", "down")?.ok,
+      ext: events.find((e) => e.ev === "file_start" && e.dir === "up" && e.size === 12 * 1024 * 1024)?.ext ?? null,
+      fragsUp: events.filter((e) => e.ev === "frag" && e.src === "web" && e.dir === "up" && e.x === fileOf("web", "up")?.x).length,
+      reqsDown: events.filter((e) => e.ev === "req" && e.src === "web" && e.dir === "down").length,
+      // e2ee/plain: the instance's part for this account is in the same file.
+      serverLines: events.filter((e) => e.src === "server").length,
+      serverPosts: events.filter((e) => e.src === "server" && e.ev === "req" && e.k === "discord").length,
+      report: { files: rep.summary.files, n429: rep.summary.rateLimits.n429, stages: Object.keys(rep.summary.stages) },
+    };
+    await nav(p, "files");
+  }
 
   // 5. video through the service worker (Range), with a seek
   step("video");
@@ -1288,6 +1336,18 @@ try {
     kit: r.kitFormat === true && r.kitQr === true && r.kitDoneDisabledBeforeAck === true && r.kitNotDismissableByEsc === true && r.kitFileHasCode === true,
     progress: (r.progressBigFile as string[]).length >= 2,
     download: r.downloadSha256Ok === true,
+    liveSpeed: (() => {
+      const u = r.uploadSpeed as { file: string | null; meta: string | null };
+      const d = r.downloadPanel as { shown: boolean; name: string; state: string; speed: string; bar: string };
+      return /MB\/s/.test(String(u.file)) && /MB\/s/.test(String(u.meta)) && d.shown && d.name === "duzy.bin" && d.state === "done" && /MB\/s/.test(String(d.speed)) && d.bar === "100%";
+    })(),
+    transferLog: (() => {
+      const l = r.transferLog as Record<string, any>;
+      return (
+        r.diagOffByDefault === true && !!l && l.bad === 0 && l.noSecrets === true && l.upEnd && l.downEnd && l.ext === "bin" && l.fragsUp === 2 && l.reqsDown >= 2 &&
+        (SERVER_SIDE ? l.serverLines > 0 && l.serverPosts >= 3 : l.serverLines === 0) && l.report.files.length >= 2 && /\.jsonl(\.gz)?$/.test(l.file)
+      );
+    })(),
     video: !v.err && v.duration > 7 && v.seeked && v.t >= 5.5,
     paging: pg.page1 === 50 && pg.page2 === 14,
     secondTab: st2.secondary && st2.rows === 50 && st2.page2 === 14 && st2.liveUpdate,

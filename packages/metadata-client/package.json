@@ -11,7 +11,8 @@
     "./node": "./src/node/index.ts",
     "./browser": "./src/browser/index.ts",
     "./server-blobs": "./src/server-blobs.ts",
-    "./plain-ops": "./src/plain-ops.ts"
+    "./plain-ops": "./src/plain-ops.ts",
+    "./transfer-report": "./src/transfer-report.ts"
   },
   "bin": {
     "ddn": "./src/cli.ts"

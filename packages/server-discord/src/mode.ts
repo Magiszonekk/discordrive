@@ -10,6 +10,7 @@ import { BlobsExtension } from "./blobs-ext.js";
 import { INSTANCE_KEY_FILE, InstanceHooks, loadInstanceKey } from "./instance-hooks.js";
 import { DiscordSender } from "./sender.js";
 import { SnapshotsExtension } from "./snapshots-ext.js";
+import { ServerTransferLogs } from "./transfer-logs.js";
 
 export interface ServerBlobsModeOptions {
   dataDir: string;
@@ -24,6 +25,8 @@ export interface ServerBlobsModeOptions {
   cleanupTickMs?: number;
   snapshotTickMs?: number;
   inflightBytes?: number;
+  /** Transfer logs for every account (config `transferLogs: true`); otherwise per account from Settings. */
+  transferLogsAll?: boolean;
 }
 
 export interface ServerBlobsMode {
@@ -35,6 +38,7 @@ export interface ServerBlobsMode {
   snapshots: SnapshotsExtension;
   sender: DiscordSender;
   instanceKey: Buffer;
+  transferLogs: ServerTransferLogs;
 }
 
 export function serverBlobsMode(o: ServerBlobsModeOptions): ServerBlobsMode {
@@ -53,6 +57,7 @@ export function serverBlobsMode(o: ServerBlobsModeOptions): ServerBlobsMode {
     },
   };
   let snapshots: SnapshotsExtension | null = null;
+  const transferLogs = new ServerTransferLogs({ dataDir: o.dataDir, all: o.transferLogsAll });
   const blobs = new BlobsExtension({
     get hooks() {
       return getHooks();
@@ -64,7 +69,8 @@ export function serverBlobsMode(o: ServerBlobsModeOptions): ServerBlobsMode {
     inflightBytes: o.inflightBytes,
     cdnOrigins: o.discordApiOrigin ? [o.discordApiOrigin] : [],
     log: o.log,
+    transferLogs,
   } as never);
   snapshots = new SnapshotsExtension({ instanceKey, hooks: getHooks, sender, dataDir: o.dataDir, tickMs: o.snapshotTickMs, log: o.log });
-  return { extensions: [hooksExt, blobs, snapshots], shareRefresher: blobs.shareRefresher(), hooks: getHooks, blobs, snapshots, sender, instanceKey };
+  return { extensions: [hooksExt, blobs, snapshots], shareRefresher: blobs.shareRefresher(), hooks: getHooks, blobs, snapshots, sender, instanceKey, transferLogs };
 }

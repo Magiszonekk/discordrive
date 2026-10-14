@@ -10,6 +10,7 @@
 // the transport differs. A mode bundle imports one implementation only.
 
 import type { DiscordPlacement } from "./types.js";
+import type { TransferLog } from "./transfer-log.js";
 
 export interface BlobPutContext {
   /** Upload the blob belongs to (fragments and the manifest of one version). */
@@ -23,9 +24,19 @@ export interface BlobPutContext {
   stats?: { posts: number };
 }
 
+/** Which transfer a read belongs to (transfer logs only). */
+export interface BlobGetContext {
+  /** Upload ID of the version being read. */
+  x?: string;
+  /** Fragment index or "m" (manifest). */
+  i?: number | "m";
+}
+
 export interface BlobStore {
   put(data: Uint8Array, filename: string, ctx?: BlobPutContext): Promise<DiscordPlacement>;
-  get(p: DiscordPlacement, signal?: AbortSignal): Promise<Uint8Array>;
+  get(p: DiscordPlacement, signal?: AbortSignal, ctx?: BlobGetContext): Promise<Uint8Array>;
+  /** Transfer log (Settings → Diagnostics); null = off. Set by DriveClient.setTransferLog. */
+  log?: TransferLog | null;
   /** Optional hint before reading many blobs in order (batch link refresh). */
   prefetch?(ps: DiscordPlacement[]): Promise<void>;
   /** All blobs of the upload are stored; about to commit (the server stops treating it as abandoned). */

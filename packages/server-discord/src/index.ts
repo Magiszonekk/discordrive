@@ -8,3 +8,4 @@ export { ChannelStore, ChannelMover, ChannelError, blobTables, etaMs, MOVE_RETRY
 export { serverBlobsMode, type ServerBlobsMode, type ServerBlobsModeOptions } from "./mode.js";
 // plain mode only (kept out of this index so an e2ee bundle never contains it):
 //   import { PlainExtension } from "@ddv4/server-discord/plain"
+export { ServerTransferLogs, SERVER_LOG_MAX_BYTES, type ServerTransferLogsOptions } from "./transfer-logs.js";

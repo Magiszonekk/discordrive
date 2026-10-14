@@ -28,7 +28,18 @@ import {
   type MessageAttachment,
   type WebhookRef,
   type WebhookTransport,
+  type TransferLog,
 } from "@ddv4/metadata-client";
+
+/** Which transfer a post belongs to (server transfer logs). */
+export interface SenderTx {
+  log: TransferLog;
+  x: string;
+  i: number | "m";
+}
+
+const nowMs = () => Math.round(performance.timeOrigin * 10 + performance.now() * 10) / 10;
+const since = (t: number) => Math.round((nowMs() - t) * 10) / 10;
 
 /** Build-time mode check: the server posts blobs itself (never in a metadata-only bundle). */
 export const SERVER_BLOBS_MARKER = "ddn-server-blobs";
@@ -158,20 +169,32 @@ export class DiscordSender {
   }
 
   /** Post one blob through one of `hooks` (paced per channel, retried, fail-fast on Cloudflare). */
-  async post(hooks: SenderHook[], data: Uint8Array, filename: string, signal?: AbortSignal): Promise<DiscordPlacement & { url: string }> {
+  async post(hooks: SenderHook[], data: Uint8Array, filename: string, signal?: AbortSignal, tx?: SenderTx): Promise<DiscordPlacement & { url: string }> {
     let attempt = 0;
-    for (;;) {
+    const log = tx?.log;
+    for (let a = 0; ; a++) {
       signal?.throwIfAborted();
       const hook = this.pick(hooks);
+      const tq = log ? nowMs() : 0;
       await this.pacer.acquire(hook.channelId);
       signal?.throwIfAborted();
+      const te = log ? nowMs() : 0;
       await this.gateEgress();
       this.stats.posts++;
+      const tr = log ? nowMs() : 0;
+      const timing: { ttfb?: number; st?: number } = {};
+      const ev = log ? { dir: "up", x: tx!.x, i: tx!.i, a, k: "discord", hook: hook.id, ch: hook.channelId, b: data.byteLength, lim: Math.round((te - tq) * 10) / 10, egress: Math.round((tr - te) * 10) / 10, lst: this.pacer.state(hook.channelId), fl: log.fl.up } : null;
       try {
-        const r = await this.transport.postFile(hook, data, filename, signal);
+        const r = await this.transport.postFile(hook, data, filename, signal, log ? timing : undefined);
         this.pacer.onSuccess(hook.channelId);
+        if (log) log.emit("req", { ...ev, dur: since(tr), ttfb: timing.ttfb, st: timing.st ?? 200 });
         return { ...placementOf(r), url: r.url };
       } catch (e) {
+        if (log) {
+          const x = e as { status?: number; retryAfterMs?: number; scope?: string | null; global?: boolean; cloudflare?: boolean; message?: string };
+          const rl = e instanceof RateLimitedError;
+          log.emit("req", { ...ev, dur: since(tr), ttfb: timing.ttfb, ...(rl ? { st: 429, ra: x.retryAfterMs, scope: x.scope ?? null, glob: !!x.global, ...(x.cloudflare ? { cf: true } : {}), err: "429" } : { ...(typeof x.status === "number" ? { st: x.status } : {}), err: redactWebhookUrl(String(x.message ?? e)).replace(/\b[a-z]+:\/\/([^/\s]+)\S*/gi, "<url:$1>").slice(0, 200) }) });
+        }
         if (signal?.aborted) throw e;
         if (e instanceof RateLimitedError) {
           this.noteRateLimit(hook.channelId, e);

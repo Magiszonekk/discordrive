@@ -214,6 +214,15 @@
         <ul class="qlist" data-ddn-ui="queue-list"></ul>
         <p class="hint" data-i18n="queue.note"></p>
       </section>
+      <!-- Downloads: progress, speed and time left per file (same look as the upload queue). -->
+      <section class="uploads" data-ddn="downloads" hidden aria-live="polite">
+        <div class="uploads-h">
+          <div class="t"><b data-ddn-ui="dl-title" data-i18n="dl.title">Downloads</b><span data-ddn-ui="dl-meta"></span></div>
+          <button class="iconbtn" type="button" data-ddn="dl-close" data-i18n-attr="aria-label=queue.hide" hidden><svg class="i"><use href="#i-x"/></svg></button>
+        </div>
+        <ul class="qlist" data-ddn="dl-list"></ul>
+        <p class="hint" data-i18n="dl.note"></p>
+      </section>
       <!-- Files that did not go in stay listed after the queue panel closed itself: why, Retry, dismiss. -->
       <section class="note warn upfail" data-ddn="upload-failed" role="status" hidden>
         <svg class="i"><use href="#i-alert"/></svg>
@@ -385,6 +394,19 @@
             </dl>
             <div class="row-btns"><button class="btn" type="button" data-ddn="cleanup-now"><svg class="i"><use href="#i-trash"/></svg><span data-i18n="st.run">Clean up now</span></button></div>
             <p class="result" data-ddn="cleanup-result" role="status" aria-live="polite"></p>
+          </div>
+        </section>
+
+        <section id="diagnostics" aria-labelledby="diag-h">
+          <h2 class="sec-h"><span id="diag-h" data-i18n="diag.h">Diagnostics</span><span class="chip" data-ddn="diag-state"></span></h2>
+          <p class="sec-lead" data-i18n="diag.lead"></p>
+          <div class="sec-body">
+            <label class="ack"><input type="checkbox" data-ddn="diag-log"><span data-i18n="diag.log">Record transfer logs</span></label>
+            <p class="hint" data-i18n="diag.log.t"></p>
+            <label class="ack"><input type="checkbox" data-ddn="diag-names"><span data-i18n="diag.names">Include file names</span></label>
+            <p class="hint" data-i18n="diag.names.t"></p>
+            <p class="hint" data-ddn="diag-info" role="status" aria-live="polite"></p>
+            <div class="row-btns"><button class="btn" type="button" data-ddn="diag-download"><svg class="i"><use href="#i-download"/></svg><span data-i18n="diag.download">Download logs</span></button><button class="btn" type="button" data-ddn="diag-clear"><svg class="i"><use href="#i-trash"/></svg><span data-i18n="diag.clear">Clear</span></button></div>
           </div>
         </section>
 

@@ -126,6 +126,11 @@ function human(e: unknown): string {
 
 export async function main(argv: string[]): Promise<number | "running"> {
   let cmd = "help";
+  // Reads log files, needs no instance: before the config and the argument parser (positional files).
+  if (argv[0] === "transfer-report") {
+    const { runTransferReport } = await import("@ddv4/metadata-client/transfer-report");
+    return runTransferReport(argv.slice(1));
+  }
   try {
     // Language before anything is printed: flag, env, saved config, English.
     const li = argv.findIndex((a) => a === "--lang" || a.startsWith("--lang="));

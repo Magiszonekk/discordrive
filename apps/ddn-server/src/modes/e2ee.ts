@@ -14,7 +14,7 @@ export const serverMode: ServerMode = {
   mode: "e2ee",
   marker: MODE_MARKER,
   parts(c, ctx) {
-    const m = serverBlobsMode({ dataDir: c.dataDir, bot: ctx.bot, discordApiOrigin: c.testing?.discordApiOrigin, log: ctx.log });
+    const m = serverBlobsMode({ dataDir: c.dataDir, bot: ctx.bot, discordApiOrigin: c.testing?.discordApiOrigin, log: ctx.log, transferLogsAll: c.transferLogs === true });
     return {
       extensions: [
         ...m.extensions,

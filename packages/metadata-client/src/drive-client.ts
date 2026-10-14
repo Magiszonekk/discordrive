@@ -41,6 +41,7 @@ import {
   type FileKey,
 } from "./file-crypto.js";
 import { LogObserver, type InvalidOpAlert } from "./policies.js";
+import { errText, ms, nowMs, type TransferLog } from "./transfer-log.js";
 import type { DiscordPlacement } from "./types.js";
 
 /** Plaintext fragment size; same as discordrive (10 MiB on the wire incl. 28 B of IV + tag). */
@@ -133,11 +134,25 @@ export interface DriveClientOptions {
   onInvalidOps?: (a: InvalidOpAlert) => void;
 }
 
+/** Fragments of an upload per stage right now (live view: encrypting vs sending). */
+export interface UploadStages {
+  /** Reading + encrypting + hashing. */
+  enc: number;
+  /** Waiting for the limiter or on the wire. */
+  net: number;
+}
+
 export interface UploadOptions {
-  /** Plaintext bytes whose fragments are stored so far (called after each fragment). */
-  onProgress?: (doneBytes: number, totalBytes: number) => void;
+  /** Plaintext bytes whose fragments are stored so far (called after each fragment and on stage changes). */
+  onProgress?: (doneBytes: number, totalBytes: number, stages?: UploadStages) => void;
   /** Cancel: stops the fragment in flight; the store drops what was sent (e2ee/plain). */
   signal?: AbortSignal;
+}
+
+export interface DownloadOptions {
+  signal?: AbortSignal;
+  /** Plaintext bytes written to the sink so far. */
+  onProgress?: (doneBytes: number, totalBytes: number) => void;
 }
 
 export interface UploadResult {
@@ -158,6 +173,8 @@ export class DriveClient {
   protected readonly leaseRenewMs: number;
   protected readonly now: () => number;
   protected readonly sleep: (ms: number) => Promise<void>;
+  /** Transfer log (Settings → Diagnostics); null = off. */
+  tlog: TransferLog | null = null;
 
   constructor(protected readonly d: DriveClientOptions) {
     this.replica = new Replica({ device: d.device, store: d.store, newOpId: newId, now: d.now });
@@ -171,6 +188,17 @@ export class DriveClient {
 
   get store(): IndexStore {
     return this.replica.store;
+  }
+
+  /** Turn transfer logs on (a TransferLog) or off (null) for this client and its blob store. */
+  setTransferLog(l: TransferLog | null): void {
+    this.tlog = l;
+    this.blobs.log = l;
+  }
+
+  /** Fragments in flight at once for uploads (the store may still gate per channel). */
+  get uploadConcurrency(): number {
+    return this.concurrency;
   }
 
   /** Pull the log tail from the arbiter. */
@@ -235,8 +263,18 @@ export class DriveClient {
     const uploadId = newId();
     const nodeId = newId();
     const stats = { posts: 0 };
+    const log = this.tlog;
+    const t0 = nowMs();
+    const nFrags = Math.max(1, Math.ceil(src.size / this.chunkSize));
+    log?.emit("file_start", { dir: "up", x: uploadId, size: src.size, n: nFrags, chunk: this.chunkSize, conc: Math.min(this.concurrency, nFrags), mode: log.o.mode, ...log.nameFields(nfc) });
+    let sentBytes = 0;
+    const endLog = (ok: boolean, e?: unknown) =>
+      log?.emit("file_end", { dir: "up", x: uploadId, ok, size: src.size, b: sentBytes, dur: ms(t0), mbps: mbps(sentBytes, ms(t0)), posts: stats.posts, ...(ok ? {} : { err: e instanceof Error && e.name === "AbortError" ? "aborted" : errText(e) }) });
 
-    if (!(await this.d.arbiter.renewLease(uploadId, deviceId))) throw new Error("lease refused");
+    if (!(await this.d.arbiter.renewLease(uploadId, deviceId))) {
+      endLog(false, new Error("lease refused"));
+      throw new Error("lease refused");
+    }
     let lastRenew = this.now();
     const renew = async () => {
       if (this.now() - lastRenew < this.leaseRenewMs) return;
@@ -264,24 +302,42 @@ export class DriveClient {
       };
 
       let next = 0;
-      let sentBytes = 0;
-      opts.onProgress?.(0, src.size);
+      const stages: UploadStages = { enc: 0, net: 0 };
+      opts.onProgress?.(0, src.size, { ...stages });
       const worker = async () => {
         for (;;) {
           const i = next++;
           if (i >= count) return;
           throwIfAborted(signal);
           await renew();
-          const data = await src.read(i * this.chunkSize, this.chunkSize);
-          const ct = await encryptFragment(key, data);
-          const blobId = newId();
-          const hash = await sha256Hex(ct);
-          const placed = await this.blobs.put(ct, `${blobId}${BLOB_EXT}`, { uploadId, index: i, sha256: hash, signal, stats });
-          chunks[i] = { index: i, blobId, ciphertextSizeBytes: ct.byteLength, ciphertextHash: hash, placements: [placed] };
-          plain.set(i, data);
-          feedHash();
-          sentBytes += data.byteLength;
-          opts.onProgress?.(sentBytes, src.size);
+          stages.enc++;
+          opts.onProgress?.(sentBytes, src.size, { ...stages });
+          if (log) log.fl.up++;
+          const f0 = log ? nowMs() : 0;
+          let f1 = 0, f2 = 0, f3 = 0;
+          try {
+            const data = await src.read(i * this.chunkSize, this.chunkSize);
+            if (log) f1 = nowMs();
+            const ct = await encryptFragment(key, data);
+            if (log) f2 = nowMs();
+            const blobId = newId();
+            const hash = await sha256Hex(ct);
+            if (log) f3 = nowMs();
+            stages.enc--;
+            stages.net++;
+            opts.onProgress?.(sentBytes, src.size, { ...stages });
+            const placed = await this.blobs.put(ct, `${blobId}${BLOB_EXT}`, { uploadId, index: i, sha256: hash, signal, stats });
+            stages.net--;
+            chunks[i] = { index: i, blobId, ciphertextSizeBytes: ct.byteLength, ciphertextHash: hash, placements: [placed] };
+            plain.set(i, data);
+            const f4 = log ? nowMs() : 0;
+            feedHash();
+            sentBytes += data.byteLength;
+            if (log) log.emit("frag", { dir: "up", x: uploadId, i, pb: data.byteLength, b: ct.byteLength, rd: ms(f0, f1), enc: ms(f1, f2), hash: ms(f2, f3), put: ms(f3, f4), ph: ms(f4), dur: ms(f0), hook: placed.locationId, ch: placed.channelId ?? null, fl: log.fl.up });
+            opts.onProgress?.(sentBytes, src.size, { ...stages });
+          } finally {
+            if (log) log.fl.up--;
+          }
         }
       };
       await Promise.all(Array.from({ length: Math.min(this.concurrency, count) }, worker));
@@ -305,6 +361,7 @@ export class DriveClient {
       };
       throwIfAborted(signal);
       await renew();
+      const tf = log ? nowMs() : 0;
       await this.blobs.finalize?.(uploadId);
       committed = true;
       await this.commitOp(
@@ -317,8 +374,11 @@ export class DriveClient {
         },
         "upload_commit+create",
       );
+      log?.emit("commit", { dir: "up", x: uploadId, dur: ms(tf) });
+      endLog(true);
       return { nodeId, uploadId, version, chunks: count, posts: stats.posts };
     } catch (e) {
+      endLog(false, e);
       // Cancelled or failed before finalize: the store may drop what was sent (e2ee/plain: the server deletes).
       if (!committed) await this.blobs.abort?.(uploadId).catch(() => {});
       throw e;
@@ -360,34 +420,60 @@ export class DriveClient {
    * Download the current version of a file node into `sink`, verifying every
    * fragment's ciphertext hash and the whole-file plaintext SHA-256.
    */
-  async download(nodeId: NodeId, sink: ByteSink, signal?: AbortSignal): Promise<FileVersion> {
+  async download(nodeId: NodeId, sink: ByteSink, signalOrOpts?: AbortSignal | DownloadOptions): Promise<FileVersion> {
+    const opts: DownloadOptions = signalOrOpts instanceof AbortSignal ? { signal: signalOrOpts } : (signalOrOpts ?? {});
+    const signal = opts.signal;
     const node = this.store.getNode(nodeId);
     if (!node || node.kind !== "file" || !node.content) throw new Error("not a file");
     const v = node.content;
-    const { manifest, key } = await this.loadManifest(v.manifestRef);
-    if (manifest.chunks.length !== v.chunkCount) throw new Error("manifest chunk count mismatch");
-    const hasher = await createSHA256();
-    hasher.init();
+    const log = this.tlog;
+    const x = v.uploadId;
+    const t0 = nowMs();
     let total = 0;
-    const ordered = [...manifest.chunks].sort((a, b) => a.index - b.index);
-    for (let i = 0; i < ordered.length; i++) {
-      const c = ordered[i]!;
-      // Batch hint every 50 fragments (e2ee/plain: one link refresh call instead of 50).
-      if (i % 50 === 0) await this.blobs.prefetch?.(ordered.slice(i, i + 50).map((x) => x.placements?.[0] as DiscordPlacement).filter(Boolean));
-      throwIfAborted(signal);
-      const p = c.placements?.[0] as DiscordPlacement | undefined;
-      if (!p) throw new Error(`chunk ${c.index}: no placement`);
-      const ct = await this.blobs.get(p, signal);
-      if (c.ciphertextHash && (await sha256Hex(ct)) !== c.ciphertextHash) throw new Error(`chunk ${c.index}: ciphertext hash mismatch`);
-      const pt = await decryptFragment(key, ct);
-      hasher.update(pt);
-      total += pt.byteLength;
-      await sink.write(pt);
+    log?.emit("file_start", { dir: "down", x, size: v.sizeBytes, n: v.chunkCount, conc: 1, mode: log.o.mode, ...log.nameFields(node.name) });
+    try {
+      const tm = log ? nowMs() : 0;
+      const { manifest, key } = await this.loadManifest(v.manifestRef);
+      log?.emit("manifest", { dir: "down", x, dur: ms(tm) });
+      if (manifest.chunks.length !== v.chunkCount) throw new Error("manifest chunk count mismatch");
+      const hasher = await createSHA256();
+      hasher.init();
+      opts.onProgress?.(0, v.sizeBytes);
+      const ordered = [...manifest.chunks].sort((a, b) => a.index - b.index);
+      for (let i = 0; i < ordered.length; i++) {
+        const c = ordered[i]!;
+        // Batch hint every 50 fragments (e2ee/plain: one link refresh call instead of 50).
+        if (i % 50 === 0) await this.blobs.prefetch?.(ordered.slice(i, i + 50).map((x) => x.placements?.[0] as DiscordPlacement).filter(Boolean));
+        throwIfAborted(signal);
+        const p = c.placements?.[0] as DiscordPlacement | undefined;
+        if (!p) throw new Error(`chunk ${c.index}: no placement`);
+        if (log) log.fl.down++;
+        const f0 = log ? nowMs() : 0;
+        try {
+          const ct = await this.blobs.get(p, signal, { x, i: c.index });
+          const f1 = log ? nowMs() : 0;
+          if (c.ciphertextHash && (await sha256Hex(ct)) !== c.ciphertextHash) throw new Error(`chunk ${c.index}: ciphertext hash mismatch`);
+          const f2 = log ? nowMs() : 0;
+          const pt = await decryptFragment(key, ct);
+          const f3 = log ? nowMs() : 0;
+          hasher.update(pt);
+          total += pt.byteLength;
+          await sink.write(pt);
+          if (log) log.emit("frag", { dir: "down", x, i: c.index, b: ct.byteLength, pb: pt.byteLength, get: ms(f0, f1), hash: ms(f1, f2), dec: ms(f2, f3), wr: ms(f3), dur: ms(f0), hook: p.locationId, ch: p.channelId ?? null, fl: log.fl.down });
+          opts.onProgress?.(total, v.sizeBytes);
+        } finally {
+          if (log) log.fl.down--;
+        }
+      }
+      if (total !== v.sizeBytes) throw new Error(`size mismatch: ${total} != ${v.sizeBytes}`);
+      const h = hasher.digest("hex");
+      if (v.plaintextSha256 && h !== v.plaintextSha256) throw new Error("plaintext SHA-256 mismatch");
+      log?.emit("file_end", { dir: "down", x, ok: true, size: v.sizeBytes, b: total, dur: ms(t0), mbps: mbps(total, ms(t0)) });
+      return v;
+    } catch (e) {
+      log?.emit("file_end", { dir: "down", x, ok: false, size: v.sizeBytes, b: total, dur: ms(t0), mbps: mbps(total, ms(t0)), err: e instanceof Error && e.name === "AbortError" ? "aborted" : errText(e) });
+      throw e;
     }
-    if (total !== v.sizeBytes) throw new Error(`size mismatch: ${total} != ${v.sizeBytes}`);
-    const h = hasher.digest("hex");
-    if (v.plaintextSha256 && h !== v.plaintextSha256) throw new Error("plaintext SHA-256 mismatch");
-    return v;
   }
 
   /**
@@ -419,6 +505,11 @@ export class DriveClient {
     }
     return out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   }
+}
+
+/** MB/s (10^6 bytes per second, 2 decimals) of `bytes` in `durMs`. */
+export function mbps(bytes: number, durMs: number): number {
+  return durMs > 0 ? Math.round((bytes / 1e6 / (durMs / 1000)) * 100) / 100 : 0;
 }
 
 /** Piece locations of a version (rules v3 PieceLoc): fragments per placement location + the manifest. Sorted, unique. */

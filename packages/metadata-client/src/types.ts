@@ -37,13 +37,19 @@ export interface MessageAttachment {
  * Minimal Discord surface the client needs. Real implementation:
  * `DiscordWebhookTransport` (fetch, Node + browser). Tests: `MemoryTransport`.
  */
+/** Filled by a transport for transfer logs: time to the response headers and the HTTP status. */
+export interface ReqTiming {
+  ttfb?: number;
+  st?: number;
+}
+
 export interface WebhookTransport {
   /** POST one file as a new message (`?wait=true`). */
-  postFile(hook: WebhookRef, data: Uint8Array, filename: string, signal?: AbortSignal): Promise<PostedAttachment>;
+  postFile(hook: WebhookRef, data: Uint8Array, filename: string, signal?: AbortSignal, timing?: ReqTiming): Promise<PostedAttachment>;
   /** GET a message sent by this webhook; returns fresh signed CDN links (koncept §7). */
-  getAttachments(hook: WebhookRef, messageId: string): Promise<MessageAttachment[]>;
+  getAttachments(hook: WebhookRef, messageId: string, timing?: ReqTiming): Promise<MessageAttachment[]>;
   /** Download a CDN link. */
-  fetchCdn(url: string, signal?: AbortSignal): Promise<Uint8Array>;
+  fetchCdn(url: string, signal?: AbortSignal, timing?: ReqTiming): Promise<Uint8Array>;
   /** GET the webhook itself: validates the URL and tells its channel/guild (no message is sent). */
   inspectWebhook(hook: WebhookRef): Promise<{ id: string; channelId: string; guildId: string | null; name: string }>;
   /**

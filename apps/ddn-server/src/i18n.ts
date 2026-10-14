@@ -302,6 +302,7 @@ export const en = {
   invite   new single-use invite code                            npm run invite
   uninstall-autostart   remove the background start              npm run uninstall-autostart
   channels  pool webhooks of an e2ee/plain instance: list, impact, retire, move, remove
+  transfer-report <log.jsonl…>  summary of transfer logs (speed, 429, limiter vs network) + CSV
 
 Common: --data-dir DIR (default {dir}), --lang en|pl (or DISCORDRIVE_LANG=pl)
 setup without questions: --yes [--answers file.json] [--public-url URL] [--host H] [--port N]
@@ -688,6 +689,7 @@ export const pl: Record<CliKey, string> = {
   invite   nowy jednorazowy kod zaproszenia                                 npm run invite
   uninstall-autostart   usuń start w tle                                    npm run uninstall-autostart
   channels  webhooki puli instancji e2ee/plain: list, impact, retire, move, remove
+  transfer-report <log.jsonl…>  podsumowanie logów transferów (prędkość, 429, limiter vs sieć) + CSV
 
 Wspólne: --data-dir DIR (domyślnie {dir}), --lang en|pl (albo DISCORDRIVE_LANG=pl)
 setup bez pytań: --yes [--answers plik.json] [--public-url URL] [--host H] [--port N]
