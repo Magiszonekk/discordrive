@@ -4,7 +4,7 @@
 // (fetch + WebCrypto). Marker for the build-time mode check: ddn-webhook-vault.
 
 import type { ArbiterApi } from "./arbiter.js";
-import type { BlobGetContext, BlobPutContext, BlobStore } from "./blob-store.js";
+import { AbortedError, type BlobGetContext, type BlobPutContext, type BlobStore } from "./blob-store.js";
 import { hostOf, ms, nowMs, reqErrFields, type TransferLog } from "./transfer-log.js";
 import { RateLimitedError } from "./discord-transport.js";
 import { DriveClient } from "./drive-client.js";
@@ -41,8 +41,10 @@ export interface MetadataClientOptions {
   store?: IndexStore;
   pacer?: ChannelPacer;
   chunkSize?: number;
-  /** Fragments in flight at once (the pacer still gates per channel). */
+  /** Upload fragments in flight at once (the pacer still gates per channel); default from the channels. */
   concurrency?: number;
+  /** Download fragments in flight at once (default 4). */
+  downloadConcurrency?: number;
   /** Retries per fragment for non-429 errors. */
   maxRetries?: number;
   /** Renew the upload lease at least this often (ms). */
@@ -73,6 +75,12 @@ export class WebhookBlobStore implements BlobStore {
     this.pacer = o.pacer ?? new ChannelPacer({ now: o.now, sleep: o.sleep });
     this.maxRetries = o.maxRetries ?? 4;
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  }
+
+  /** Distinct channels of the active webhooks (a channel is the unit of Discord's limit). */
+  lanes(): number {
+    const act = [...this.hooks.values()].filter((h) => !h.retired);
+    return Math.max(1, new Set(act.map((h) => h.channelId ?? `hook:${h.id}`)).size);
   }
 
   /** Webhooks that take new pieces: not retired, not excluded by the caller (a move posts only to the targets). */
@@ -136,7 +144,7 @@ export class WebhookBlobStore implements BlobStore {
   }
 
   /** Fetch a stored attachment through its webhook (fresh signed CDN link, koncept §7). */
-  async get(p: DiscordPlacement, _signal?: AbortSignal, ctx?: BlobGetContext): Promise<Uint8Array> {
+  async get(p: DiscordPlacement, signal?: AbortSignal, ctx?: BlobGetContext): Promise<Uint8Array> {
     const hook = this.hook(p.locationId);
     const log = ctx?.x !== undefined ? this.log : null;
     const ev = log ? { dir: "down", x: ctx!.x, i: ctx!.i ?? 0, hook: hook.id, ch: p.channelId ?? null } : null;
@@ -156,11 +164,12 @@ export class WebhookBlobStore implements BlobStore {
           delete timing.ttfb;
           delete timing.st;
         }
-        const data = await this.transport.fetchCdn(a.url, undefined, log ? timing : undefined);
+        const data = await this.transport.fetchCdn(a.url, signal, log ? timing : undefined);
         if (log) log.emit("req", { ...ev, a: n, k: "cdn", host: hostOf(a.url), b: data.byteLength, dur: ms(t0), ttfb: timing.ttfb, st: timing.st ?? 200, fl: log.fl.down });
         return data;
       } catch (e) {
         if (log) log.emit("req", { ...ev, a: n, k: step, dur: ms(t0), ttfb: timing.ttfb, ...reqErrFields(e), fl: log.fl.down });
+        if (signal?.aborted) throw new AbortedError();
         if (e instanceof RateLimitedError) {
           await this.sleep(e.retryAfterMs);
           continue;

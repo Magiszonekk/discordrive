@@ -40,10 +40,13 @@ export const mode: ModeImpl = {
   },
 
   async client(ctx) {
+    const blobs = new ServerBlobStore(ctx.http);
+    // Upload concurrency follows the channels the instance posts this account's blobs to (own or the pool).
+    blobs.channels = await serverChannels(ctx).then((v) => v.advice.channels).catch(() => 1);
     return new DriveClient({
       device: { id: ctx.acct.deviceId, name: ctx.acct.deviceName },
       arbiter: this.arbiter(ctx),
-      blobs: new ServerBlobStore(ctx.http),
+      blobs,
       store: ctx.store,
     });
   },

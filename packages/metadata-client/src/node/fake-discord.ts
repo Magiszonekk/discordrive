@@ -30,6 +30,9 @@ export class FakeDiscord {
   cdnGets = 0;
   /** Per-channel sustained limit (messages/min); 0 = off. */
   perChannelPerMin = 0;
+  /** Benchmarks: extra time before a webhook post / a CDN read is answered (ms), like Discord's latency. */
+  postDelayMs = 0;
+  cdnDelayMs = 0;
   /**
    * Cloudflare edge block of the webhook route until this time (ms): HTML 429, no
    * x-ratelimit-* headers, retry-after in seconds (ddrive 0d098ca). 0 = off.
@@ -145,6 +148,7 @@ export class FakeDiscord {
       const b = this.blobs.get(cdn[1]!);
       if (!b || !url.searchParams.get("hm")) return this.send(res, 404, { message: "Not Found" });
       this.cdnGets++;
+      if (this.cdnDelayMs) await new Promise((r) => setTimeout(r, this.cdnDelayMs));
       // Like the real CDN (measured 2026-10-09): CORS only for some types, by file extension.
       const ext = /\.([A-Za-z0-9]+)$/.exec(url.pathname)?.[1]?.toLowerCase() ?? "";
       const cors = this.cdnCorsAll || CDN_CORS_EXT.has(ext) ? { "access-control-allow-origin": "*" } : {};
@@ -184,6 +188,7 @@ export class FakeDiscord {
       if (wait > 0) this.rejectedByChannel.set(hook.channelId, (this.rejectedByChannel.get(hook.channelId) ?? 0) + 1);
       if (wait > 0) return this.send(res, 429, { message: "The resource is being rate limited.", retry_after: wait, global: false }, { ...cors, "x-ratelimit-scope": "shared" });
       const f = await fileOf(await readForm());
+      if (this.postDelayMs) await new Promise((r) => setTimeout(r, this.postDelayMs));
       if (!f) return this.send(res, 400, { message: "no file" }, cors);
       if (f.data.byteLength > 20 * 1024 * 1024) return this.send(res, 413, { message: "Request entity too large" }, cors);
       const id = this.id();

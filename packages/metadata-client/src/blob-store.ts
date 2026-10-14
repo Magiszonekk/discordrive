@@ -35,6 +35,8 @@ export interface BlobGetContext {
 export interface BlobStore {
   put(data: Uint8Array, filename: string, ctx?: BlobPutContext): Promise<DiscordPlacement>;
   get(p: DiscordPlacement, signal?: AbortSignal, ctx?: BlobGetContext): Promise<Uint8Array>;
+  /** Channels new blobs are spread over (DriveClient sizes the upload concurrency from it). */
+  lanes?(): number;
   /** Transfer log (Settings → Diagnostics); null = off. Set by DriveClient.setTransferLog. */
   log?: TransferLog | null;
   /** Optional hint before reading many blobs in order (batch link refresh). */

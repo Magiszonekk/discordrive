@@ -28,7 +28,7 @@ import {
   type IndexStore,
 } from "@ddv4/sync-core";
 import type { ArbiterApi } from "./arbiter.js";
-import { throwIfAborted, type BlobStore } from "./blob-store.js";
+import { AbortedError, throwIfAborted, type BlobStore } from "./blob-store.js";
 import {
   FRAGMENT_FORMAT_VERSION,
   decryptFragment,
@@ -43,6 +43,10 @@ import {
 import { LogObserver, type InvalidOpAlert } from "./policies.js";
 import { errText, ms, nowMs, type TransferLog } from "./transfer-log.js";
 import type { DiscordPlacement } from "./types.js";
+
+/** Upper bound of fragments in flight (each holds ~2 × 10 MiB of buffers while it is processed). */
+export const MAX_CONCURRENCY = 16;
+export const DEFAULT_DOWNLOAD_CONCURRENCY = 4;
 
 /** Plaintext fragment size; same as discordrive (10 MiB on the wire incl. 28 B of IV + tag). */
 export const DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024 - 28;
@@ -124,8 +128,13 @@ export interface DriveClientOptions {
   blobs: BlobStore;
   store?: IndexStore;
   chunkSize?: number;
-  /** Fragments in flight at once (a store may still gate per channel). */
+  /**
+   * Upload fragments in flight at once (a store may still gate per channel). Default: twice the
+   * channels the store spreads over (BlobStore.lanes), at least 3, at most MAX_CONCURRENCY.
+   */
   concurrency?: number;
+  /** Download fragments in flight at once (fetched in parallel, written in order). Default 4. */
+  downloadConcurrency?: number;
   /** Renew the upload lease at least this often (ms). */
   leaseRenewMs?: number;
   now?: () => number;
@@ -169,7 +178,9 @@ export class DriveClient {
   readonly observer = new LogObserver();
   readonly blobs: BlobStore;
   protected readonly chunkSize: number;
-  protected readonly concurrency: number;
+  /** Fixed upload concurrency (option / setting); null = automatic from the store's lanes. */
+  private concurrencyOpt: number | null;
+  private downloadConc: number;
   protected readonly leaseRenewMs: number;
   protected readonly now: () => number;
   protected readonly sleep: (ms: number) => Promise<void>;
@@ -180,7 +191,8 @@ export class DriveClient {
     this.replica = new Replica({ device: d.device, store: d.store, newOpId: newId, now: d.now });
     this.blobs = d.blobs;
     this.chunkSize = d.chunkSize ?? DEFAULT_CHUNK_SIZE;
-    this.concurrency = Math.max(1, d.concurrency ?? 3);
+    this.concurrencyOpt = d.concurrency ? clampConc(d.concurrency) : null;
+    this.downloadConc = clampConc(d.downloadConcurrency ?? DEFAULT_DOWNLOAD_CONCURRENCY);
     this.leaseRenewMs = d.leaseRenewMs ?? 60_000;
     this.now = d.now ?? (() => Date.now());
     this.sleep = d.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -196,9 +208,19 @@ export class DriveClient {
     this.blobs.log = l;
   }
 
-  /** Fragments in flight at once for uploads (the store may still gate per channel). */
+  /** Fragments in flight at once for uploads: the setting, else max(3, 2 × the store's channels) (zlecenie 2026-10-13-transfer §3). */
   get uploadConcurrency(): number {
-    return this.concurrency;
+    return this.concurrencyOpt ?? clampConc(Math.max(3, 2 * (this.blobs.lanes?.() ?? 1)));
+  }
+
+  get downloadConcurrency(): number {
+    return this.downloadConc;
+  }
+
+  /** Settings → Diagnostics → advanced: fragments in flight (null / 0 = automatic upload, default download). */
+  setConcurrency(o: { upload?: number | null; download?: number | null }): void {
+    if (o.upload !== undefined) this.concurrencyOpt = o.upload ? clampConc(o.upload) : null;
+    if (o.download !== undefined) this.downloadConc = o.download ? clampConc(o.download) : DEFAULT_DOWNLOAD_CONCURRENCY;
   }
 
   /** Pull the log tail from the arbiter. */
@@ -266,7 +288,8 @@ export class DriveClient {
     const log = this.tlog;
     const t0 = nowMs();
     const nFrags = Math.max(1, Math.ceil(src.size / this.chunkSize));
-    log?.emit("file_start", { dir: "up", x: uploadId, size: src.size, n: nFrags, chunk: this.chunkSize, conc: Math.min(this.concurrency, nFrags), mode: log.o.mode, ...log.nameFields(nfc) });
+    const conc = Math.min(this.uploadConcurrency, nFrags);
+    log?.emit("file_start", { dir: "up", x: uploadId, size: src.size, n: nFrags, chunk: this.chunkSize, conc, lanes: this.blobs.lanes?.() ?? null, mode: log.o.mode, ...log.nameFields(nfc) });
     let sentBytes = 0;
     const endLog = (ok: boolean, e?: unknown) =>
       log?.emit("file_end", { dir: "up", x: uploadId, ok, size: src.size, b: sentBytes, dur: ms(t0), mbps: mbps(sentBytes, ms(t0)), posts: stats.posts, ...(ok ? {} : { err: e instanceof Error && e.name === "AbortError" ? "aborted" : errText(e) }) });
@@ -340,7 +363,7 @@ export class DriveClient {
           }
         }
       };
-      await Promise.all(Array.from({ length: Math.min(this.concurrency, count) }, worker));
+      await Promise.all(Array.from({ length: conc }, worker));
       feedHash();
       const plaintextSha256 = hasher.digest("hex");
 
@@ -430,7 +453,8 @@ export class DriveClient {
     const x = v.uploadId;
     const t0 = nowMs();
     let total = 0;
-    log?.emit("file_start", { dir: "down", x, size: v.sizeBytes, n: v.chunkCount, conc: 1, mode: log.o.mode, ...log.nameFields(node.name) });
+    const conc = Math.min(this.downloadConc, Math.max(1, v.chunkCount));
+    log?.emit("file_start", { dir: "down", x, size: v.sizeBytes, n: v.chunkCount, conc, mode: log.o.mode, ...log.nameFields(node.name) });
     try {
       const tm = log ? nowMs() : 0;
       const { manifest, key } = await this.loadManifest(v.manifestRef);
@@ -440,30 +464,69 @@ export class DriveClient {
       hasher.init();
       opts.onProgress?.(0, v.sizeBytes);
       const ordered = [...manifest.chunks].sort((a, b) => a.index - b.index);
-      for (let i = 0; i < ordered.length; i++) {
-        const c = ordered[i]!;
-        // Batch hint every 50 fragments (e2ee/plain: one link refresh call instead of 50).
-        if (i % 50 === 0) await this.blobs.prefetch?.(ordered.slice(i, i + 50).map((x) => x.placements?.[0] as DiscordPlacement).filter(Boolean));
-        throwIfAborted(signal);
+      // Parallel fetch (zlecenie 2026-10-13-transfer §3): up to `conc` fragments are fetched, checked and
+      // decrypted at once; they are written strictly in order, so memory holds at most `conc` fragments and
+      // the whole-file SHA-256 is fed in order. The first failure stops the others (internal abort).
+      const ac = new AbortController();
+      const onAbort = () => ac.abort();
+      signal?.addEventListener("abort", onAbort);
+      type Done = { pt: Uint8Array; ct: number; t: [number, number, number, number]; p: DiscordPlacement };
+      const fetchOne = async (c: ChunkRef): Promise<Done> => {
+        throwIfAborted(ac.signal);
         const p = c.placements?.[0] as DiscordPlacement | undefined;
         if (!p) throw new Error(`chunk ${c.index}: no placement`);
         if (log) log.fl.down++;
-        const f0 = log ? nowMs() : 0;
         try {
-          const ct = await this.blobs.get(p, signal, { x, i: c.index });
+          const f0 = log ? nowMs() : 0;
+          const ct = await this.blobs.get(p, ac.signal, { x, i: c.index });
           const f1 = log ? nowMs() : 0;
           if (c.ciphertextHash && (await sha256Hex(ct)) !== c.ciphertextHash) throw new Error(`chunk ${c.index}: ciphertext hash mismatch`);
           const f2 = log ? nowMs() : 0;
           const pt = await decryptFragment(key, ct);
-          const f3 = log ? nowMs() : 0;
-          hasher.update(pt);
-          total += pt.byteLength;
-          await sink.write(pt);
-          if (log) log.emit("frag", { dir: "down", x, i: c.index, b: ct.byteLength, pb: pt.byteLength, get: ms(f0, f1), hash: ms(f1, f2), dec: ms(f2, f3), wr: ms(f3), dur: ms(f0), hook: p.locationId, ch: p.channelId ?? null, fl: log.fl.down });
-          opts.onProgress?.(total, v.sizeBytes);
+          return { pt, ct: ct.byteLength, t: [f0, f1, f2, log ? nowMs() : 0], p };
         } finally {
           if (log) log.fl.down--;
         }
+      };
+      const inflight = new Map<number, Promise<Done>>();
+      let launched = 0;
+      // The first real failure (the others are then aborts caused by it) is what the caller sees.
+      let firstErr: unknown = null;
+      const launch = async () => {
+        while (launched < ordered.length && inflight.size < conc) {
+          const k = launched++;
+          // Batch hint every 50 fragments (e2ee/plain: one link refresh call instead of 50).
+          if (k % 50 === 0) await this.blobs.prefetch?.(ordered.slice(k, k + 50).map((y) => y.placements?.[0] as DiscordPlacement).filter(Boolean));
+          const pr = fetchOne(ordered[k]!);
+          pr.catch((e) => {
+            if (!ac.signal.aborted) firstErr ??= e;
+            ac.abort(); // stop the rest at once
+          });
+          inflight.set(k, pr);
+        }
+      };
+      try {
+        for (let i = 0; i < ordered.length; i++) {
+          await launch();
+          throwIfAborted(signal);
+          const d = await inflight.get(i)!;
+          inflight.delete(i);
+          const w0 = log ? nowMs() : 0;
+          const pb = d.pt.byteLength;
+          hasher.update(d.pt);
+          total += pb;
+          // The sink may take the buffer (a stream transfers it): nothing reads d.pt after this.
+          await sink.write(d.pt);
+          const [f0, f1, f2, f3] = d.t;
+          if (log) log.emit("frag", { dir: "down", x, i: ordered[i]!.index, b: d.ct, pb, get: ms(f0, f1), hash: ms(f1, f2), dec: ms(f2, f3), wait: ms(f3, w0), wr: ms(w0), dur: ms(f0), hook: d.p.locationId, ch: d.p.channelId ?? null, fl: log.fl.down });
+          opts.onProgress?.(total, v.sizeBytes);
+        }
+      } catch (e) {
+        ac.abort();
+        await Promise.allSettled(inflight.values());
+        throw signal?.aborted ? new AbortedError() : (firstErr ?? e);
+      } finally {
+        signal?.removeEventListener("abort", onAbort);
       }
       if (total !== v.sizeBytes) throw new Error(`size mismatch: ${total} != ${v.sizeBytes}`);
       const h = hasher.digest("hex");
@@ -492,7 +555,7 @@ export class DriveClient {
   ): Promise<{ data: Uint8Array; size: number; start: number; end: number }> {
     const node = this.store.getNode(nodeId);
     if (!node || node.kind !== "file" || !node.content) throw new Error("not a file");
-    return readVersionRange(this, node.content, start, end, cache);
+    return readVersionRange(this, node.content, start, end, cache, this.downloadConc);
   }
 
   /** Children of a folder (non-trashed), sorted by name. */
@@ -505,6 +568,10 @@ export class DriveClient {
     }
     return out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   }
+}
+
+function clampConc(n: number): number {
+  return Math.max(1, Math.min(MAX_CONCURRENCY, Math.round(n)));
 }
 
 /** MB/s (10^6 bytes per second, 2 decimals) of `bytes` in `durMs`. */
@@ -536,6 +603,7 @@ export async function readVersionRange(
   start: number,
   end: number,
   cache?: Map<string, Uint8Array>,
+  concurrency = DEFAULT_DOWNLOAD_CONCURRENCY,
 ): Promise<{ data: Uint8Array; size: number; start: number; end: number }> {
   const size = v.sizeBytes;
   if (size === 0) return { data: new Uint8Array(0), size, start: 0, end: -1 };
@@ -546,7 +614,10 @@ export async function readVersionRange(
   const cs = manifest.chunkSizeBytes;
   const out = new Uint8Array(end - start + 1);
   const chunks = [...manifest.chunks].sort((a, b) => a.index - b.index);
-  for (let i = Math.floor(start / cs); i <= Math.floor(end / cs); i++) {
+  const first = Math.floor(start / cs);
+  const last = Math.floor(end / cs);
+  // The overlapping fragments, fetched with the same limit as a download (a long Range spans several).
+  const one = async (i: number) => {
     const ch = chunks[i];
     if (!ch || ch.index !== i) throw new Error(`manifest has no chunk ${i}`);
     const ck = `${v.versionId}:${i}`;
@@ -560,6 +631,11 @@ export async function readVersionRange(
     const from = Math.max(start, i * cs) - i * cs;
     const to = Math.min(end, i * cs + pt.byteLength - 1) - i * cs;
     out.set(pt.subarray(from, to + 1), Math.max(start, i * cs) - start);
-  }
+  };
+  let next = first;
+  const lane = async () => {
+    while (next <= last) await one(next++);
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, last - first + 1)) }, lane));
   return { data: out, size, start, end };
 }

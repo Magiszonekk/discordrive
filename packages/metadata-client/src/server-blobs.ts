@@ -44,6 +44,11 @@ export class ServerBlobStore implements BlobStore {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly fetchCdn: (url: string, signal?: AbortSignal, timing?: { ttfb?: number; st?: number }) => Promise<Uint8Array>;
   log: TransferLog | null = null;
+  /** Channels the instance posts this account's blobs to (from GET /v1/channels; sizes the upload concurrency). */
+  channels = 1;
+  lanes(): number {
+    return Math.max(1, this.channels);
+  }
   /** CDN unreachable from here (CORS/network) -> read through the instance from now on. */
   proxyOnly = false;
 
