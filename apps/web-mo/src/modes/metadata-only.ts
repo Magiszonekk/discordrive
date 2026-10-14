@@ -184,6 +184,18 @@ export const mode: ModeImpl = {
     return impact;
   },
 
+  async channelFileIds(ctx, _c, id) {
+    const s = sqlOf(ctx);
+    if (!s) return [];
+    const out: string[] = [];
+    for (let after = ""; ; ) {
+      const b = s.versionsAt(id, after, 5000);
+      if (!b.length) return out;
+      out.push(...b.map((x) => x.nodeId));
+      after = b.at(-1)!.uploadId;
+    }
+  },
+
   async retireChannel(ctx, id, retired) {
     const v = await vault(ctx).load();
     const w = v.webhooks.find((x) => x.id === id);

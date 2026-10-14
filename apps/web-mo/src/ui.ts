@@ -1045,13 +1045,20 @@ function openRowMenu(btn: HTMLElement, r: { id: string; name: string; kind: "fil
   m.replaceChildren(...items.flatMap((b) => (b.classList.contains("danger") ? [h("div", { class: "menu-sep", role: "separator" }), b] : [b])));
   m.hidden = false;
   menuFor = btn;
+  menuOpenedAt = Date.now();
   btn.setAttribute("aria-expanded", "true");
-  const b = btn.getBoundingClientRect();
+  placeRowMenu();
+  m.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
+}
+let menuOpenedAt = 0;
+function placeRowMenu() {
+  const m = $("row-menu");
+  if (!menuFor) return;
+  const b = menuFor.getBoundingClientRect();
   const w = m.offsetWidth;
   const top = b.bottom + 4 + m.offsetHeight > window.innerHeight ? Math.max(8, b.top - 4 - m.offsetHeight) : b.bottom + 4;
   m.style.top = `${top}px`;
   m.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, b.right - w))}px`;
-  m.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
 }
 function wireRowMenu() {
   document.addEventListener("click", (e) => {
@@ -1068,7 +1075,17 @@ function wireRowMenu() {
       bs[(i + (e.key === "ArrowDown" ? 1 : bs.length - 1)) % bs.length]?.focus();
     }
   });
-  window.addEventListener("scroll", () => closeRowMenu(), { passive: true });
+  // Close on a real scroll by the user, not on the small scroll the browser itself makes right after
+  // opening (focus into view; seen in plain PL where the row sits near the bottom): the menu follows the
+  // button instead within the first moment.
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (Date.now() - menuOpenedAt < 400 && menuFor) return placeRowMenu();
+      closeRowMenu();
+    },
+    { passive: true },
+  );
   window.addEventListener("resize", () => closeRowMenu());
 }
 

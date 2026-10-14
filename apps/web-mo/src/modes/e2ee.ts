@@ -20,6 +20,7 @@ import {
   serverRecoverWithBot,
   serverRemovalImpact,
   serverRemoveChannel,
+  serverChannelFileIds,
   serverRetireChannel,
   serverShareAttachments,
   serverUnavailable,
@@ -60,6 +61,7 @@ export const mode: ModeImpl = {
     await serverRemoveChannel(ctx, id);
   },
   removalImpact: serverRemovalImpact,
+  channelFileIds: serverChannelFileIds,
   retireChannel: serverRetireChannel,
   async moveChannel(ctx, _client, id, onProgress) {
     return serverMoveChannel(ctx, id, onProgress);

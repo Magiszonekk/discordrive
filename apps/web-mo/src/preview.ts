@@ -482,7 +482,10 @@ export function createPreview(deps: PreviewDeps): Preview {
     /** Blob URL owned by the file on screen (revoked on reset), only while it is still current. */
     const own = (b: Blob) => {
       const u = URL.createObjectURL(b);
-      urls.push(u);
+      // A late answer (the plain thumbnail arriving after the preview moved on or closed): revoke it at once
+      // instead of keeping a URL nobody will release.
+      if (my !== seq) queueMicrotask(() => URL.revokeObjectURL(u));
+      else urls.push(u);
       return u;
     };
     const tooBig = (limit: number) => size > limit && (done(message(t("pv.tooBig", { size: fmtSize(size), limit: fmtSize(limit) }))), true);
@@ -531,6 +534,7 @@ export function createPreview(deps: PreviewDeps): Preview {
             void deps.core
               .thumbnail(f.id)
               .then((b) => {
+                // Checked again here: the thumbnail may come after the full image, a next file or the close.
                 if (!b || my !== seq || img.dataset.full) return;
                 img.src = own(new Blob([b], { type: "image/jpeg" }));
                 img.dataset.placeholder = "1";

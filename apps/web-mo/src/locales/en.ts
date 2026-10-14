@@ -583,4 +583,9 @@ export const en: Record<string, string> = {
   "un.noShare": "This file is unavailable: it cannot be shared.",
   "un.noPreview": "This file is unavailable: one of its pieces is on a removed channel.",
   "st.discord.t@plain": "Everything stored on Discord: file pieces, file indexes and snapshots.",
+  "ch.rmList.t_one": "This file ({size}) becomes unavailable. Nothing is deleted; it comes back when you paste the webhook again:",
+  "ch.rmList.t_other": "These {n} files ({size}) become unavailable. Nothing is deleted; they come back when you paste the webhook again:",
+  "ch.rmList.more": "…and {n} more (all of them are in the downloadable list)",
+  "ch.rmList.export": "Download the full list",
+  "ch.rmList.head": "Files that become unavailable when {name} is removed ({n}):",
 };

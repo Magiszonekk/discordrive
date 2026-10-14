@@ -372,6 +372,24 @@ export class AppCore {
     return mode.removalImpact(this.ctx!, this.c(), id);
   }
 
+  /**
+   * Every file with a piece on the channel (name with its folder path, size, trash), for the full list before
+   * "Remove anyway" (owner, #31). From the local index: metadata only by piece locations, e2ee/plain by the
+   * instance's upload IDs mapped to names here.
+   */
+  async channelFiles(id: string): Promise<{ path: string; size: number; trashed: boolean }[]> {
+    const ids = await mode.channelFileIds(this.ctx!, this.c(), id);
+    const s = this.c().store;
+    const out: { path: string; size: number; trashed: boolean }[] = [];
+    for (const nodeId of ids) {
+      const n = s.getNode(nodeId);
+      if (!n || n.kind !== "file") continue;
+      const dir = n.parentId ? pathOf(s, n.parentId) : null;
+      out.push({ path: [...(dir ?? []), n.name].join("/"), size: n.content?.sizeBytes ?? 0, trashed: inTrash(s, n.id) });
+    }
+    return out.sort((a, b) => Number(a.trashed) - Number(b.trashed) || a.path.localeCompare(b.path));
+  }
+
   /** Option 1 and its undo. */
   async retireWebhook(id: string, retired = true) {
     await mode.retireChannel(this.ctx!, id, retired);

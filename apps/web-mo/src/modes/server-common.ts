@@ -82,6 +82,12 @@ export async function serverRemovalImpact(ctx: ModeCtx, client: DriveClient, id:
   };
 }
 
+/** Node IDs of every file with a blob on the channel (upload IDs from the instance, mapped here). */
+export async function serverChannelFileIds(ctx: ModeCtx, client: DriveClient, id: string): Promise<string[]> {
+  const r = await ctx.http.json<{ uploads: string[] }>("GET", `/v1/channels/${id}/impact`);
+  return r.body.uploads.map((u) => client.store.getUpload(u)?.boundTo?.nodeId).filter((x): x is string => !!x);
+}
+
 export async function serverRetireChannel(ctx: ModeCtx, id: string, retired: boolean): Promise<void> {
   await ctx.http.json("POST", `/v1/channels/${id}/retire`, { retired });
 }

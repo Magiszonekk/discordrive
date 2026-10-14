@@ -190,6 +190,8 @@ export interface ModeImpl {
   addChannel(ctx: ModeCtx, url: string): Promise<void>;
   /** The remove dialog: what removing this channel affects. Names come from the local index. */
   removalImpact(ctx: ModeCtx, client: DriveClient, id: string): Promise<RemovalImpact>;
+  /** Node IDs of every file with a piece on the channel (the full list before "remove anyway"). */
+  channelFileIds(ctx: ModeCtx, client: DriveClient, id: string): Promise<string[]>;
   /** Option 1 (and its undo): stop / resume sending new fragments to this channel. Refused for a critical channel. */
   retireChannel(ctx: ModeCtx, id: string, retired: boolean): Promise<void>;
   /**

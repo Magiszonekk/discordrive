@@ -701,3 +701,4 @@ tr.unavail .nm > [data-ddn="unavailable-chip"] { flex: none; }
  * amber (hue 80) and the blue ink (hue 258) meet halfway round the wheel and the text reads olive green. */
 .chip--warning { color: color-mix(in oklab, var(--color-warning) 62%, var(--color-ink)); border-color: color-mix(in oklab, var(--color-warning) 55%, transparent); }
 .note.warn svg.i, .advice.need { color: color-mix(in oklab, var(--color-warning) 62%, var(--color-ink)); }
+.bar > i.paused { background: var(--color-warning); }

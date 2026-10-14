@@ -445,11 +445,11 @@ serwer trzyma dodatkowo, dla tego jednego konta:
   pobierania manifestów. Format snapshotu bez zmian (pole opcjonalne, nieobecne = stan reguł 2 identyczny).
 - W metadata only serwer dalej nie widzi nic nowego: `relocate` jest zaszyfrowane jak każda operacja.
 
-### Webhook krytyczny (decyzja właściciela + rozstrzygnięcie samodzielne, pytanie #31 w inboxie)
+### Webhook krytyczny (decyzja właściciela; #31 2026-10-14: manifesty nie czynią kanału krytycznym)
 - Krytyczny = trzyma wiadomość wskaźnikową albo obiekty łańcucha snapshotów, do których sięga bieżący
   wskaźnik (segmenty od `prunedUpTo`, części baz trzymanych przez retencję). Tylko „Przenieś i usuń”;
   dla ostatniego aktywnego kanału żadna opcja („dodaj najpierw inny kanał”).
-- Manifesty plików NIE czynią kanału krytycznym (przyjęte tymczasowo, pytanie #31): manifest idzie
+- Manifesty plików NIE czynią kanału krytycznym (decyzja właściciela #31, 2026-10-14, wariant przyjęty wcześniej): manifest idzie
   round-robin jak fragmenty, więc wtedy każdy kanał z plikami byłby krytyczny, a opcje 1 i 3 nigdy
   niedostępne. Manifest jest liczony jak fragment (plik z manifestem na kanale = w liście wpływu).
 - Od teraz segmenty i bazy snapshotów idą tylko na kanał wskaźnika (metadata only: `postBlobTo`; e2ee/plain:
@@ -466,6 +466,11 @@ serwer trzyma dodatkowo, dla tego jednego konta:
 - e2ee/plain: serwer kasuje stare wiadomości od razu po potwierdzeniu kopii, bo w e2ee nie ma baz
   wskazujących na rozmieszczenia blobów; stare ID załączników z manifestów klientów działają dalej przez
   aliasy (`s_blob_alias`), bo serwer nie może przepisać zaszyfrowanych manifestów.
+
+### „Usuń mimo to”: lista plików (prośba właściciela przy #31)
+- Po wybraniu „Usuń mimo to” okno pokazuje przy potwierdzeniu listę plików, które staną się niedostępne
+  (do 1000 nazw, reszta jako „…i N więcej”), i przycisk „Pobierz pełną listę” (plik tekstowy: ścieżka, rozmiar,
+  oznaczenie kosza; wszystkie pliki, z lokalnego indeksu).
 
 ### Pliki niedostępne (decyzja właściciela)
 - Stan liczony, nigdy operacja w logu: metadata only z sejfu + tabeli `pieces` (kawałek na webhooku spoza

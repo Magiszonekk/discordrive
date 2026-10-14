@@ -631,4 +631,11 @@ export const pl: Record<string, string> = {
   "un.noShare": "Ten plik jest niedostępny: nie można go udostępnić.",
   "un.noPreview": "Ten plik jest niedostępny: jeden z jego fragmentów leży na usuniętym kanale.",
   "st.discord.t@plain": "Wszystko, co leży na Discordzie: fragmenty plików, indeksy plików i snapshoty.",
+  "ch.rmList.t_one": "Ten plik ({size}) stanie się niedostępny. Nic nie jest kasowane; wróci, gdy wkleisz webhook ponownie:",
+  "ch.rmList.t_few": "Te {n} pliki ({size}) staną się niedostępne. Nic nie jest kasowane; wrócą, gdy wkleisz webhook ponownie:",
+  "ch.rmList.t_many": "Tych {n} plików ({size}) stanie się niedostępnych. Nic nie jest kasowane; wrócą, gdy wkleisz webhook ponownie:",
+  "ch.rmList.t_other": "Te {n} pliku ({size}) staną się niedostępne. Nic nie jest kasowane; wrócą, gdy wkleisz webhook ponownie:",
+  "ch.rmList.more": "…i {n} więcej (wszystkie są na liście do pobrania)",
+  "ch.rmList.export": "Pobierz pełną listę",
+  "ch.rmList.head": "Pliki, które staną się niedostępne po usunięciu {name} ({n}):",
 };

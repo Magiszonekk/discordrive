@@ -862,7 +862,7 @@ try {
   pv.blobsRevoked = await p.evaluate(() => {
     const w = window as unknown as { __blobs: Record<string, { revoked: boolean }>; __pvUrls?: string[] };
     const shown = [...new Set(w.__pvUrls ?? [])];
-    return { shown: shown.length, open: shown.filter((u) => !w.__blobs[u]?.revoked).length };
+    return { shown: shown.length, open: shown.filter((u) => !w.__blobs[u]?.revoked).length, openTypes: shown.filter((u) => !w.__blobs[u]?.revoked).map((u) => w.__blobs[u]?.type ?? "?") };
   });
   pv.pwned = await p.evaluate(() => (window as unknown as { __pwned?: unknown }).__pwned ?? null);
   // Phone (the paired device): full-screen preview, no horizontal scroll, arrows on screen; PDF -> Download.
@@ -970,6 +970,12 @@ try {
     await p.waitForFunction(() => !document.querySelector<HTMLInputElement>("[data-ddn=chd-opt-remove]")!.disabled, null, { timeout: 30_000 });
     await p.check("[data-ddn=chd-opt-remove]");
     ch.ackNeeded = await p.isDisabled("[data-ddn=chd-go]");
+    // Owner (#31): "Remove anyway" lists the files that become unavailable, and the full list downloads.
+    await p.waitForSelector("[data-ddn=chd-remove-files]:not([hidden])");
+    const [rl] = await Promise.all([p.waitForEvent("download", { timeout: 30_000 }), p.click("[data-ddn=chd-remove-export]")]);
+    const rlText = readFileSync((await rl.path())!, "utf8");
+    ch.removeList = { shown: await p.$$eval("[data-ddn=chd-remove-file] .dname", (e) => e.map((x) => x.textContent)), file: /Kanaly\/kanal\.txt/.test(rlText) };
+    await shot(p, "23b-channel-remove-anyway-list");
     await p.check("[data-ddn=chd-ack]");
     await p.click("[data-ddn=chd-go]");
     await p.waitForSelector("[data-ddn=removed-row]", { timeout: 30_000 });
@@ -1124,7 +1130,7 @@ try {
         /1 (file|plik)/.test(String(c.stats)) && /\d/.test(String((c.totals as { all: string }).all)) &&
         JSON.stringify(imp.files) === JSON.stringify(["kanal.txt"]) && imp.retireDefault && c.retired === true && c.unretired === true &&
         (typeof crit === "string" ? (SERVER_SIDE && crit === "none-own") : crit.retire && crit.remove && crit.move) &&
-        c.ackNeeded === true && /1/.test(String(c.unavailTotal)) && c.hiddenByDefault === true && /Unavailable|Niedostępny/.test(sh.chip) && /\(#…\d{6}\)/.test(sh.why) && sh.whyVisible && sh.noDownload && sh.deleteBtn &&
+        c.ackNeeded === true && JSON.stringify((c.removeList as { shown: string[] }).shown) === JSON.stringify(["kanal.txt"]) && (c.removeList as { file: boolean }).file && /1/.test(String(c.unavailTotal)) && c.hiddenByDefault === true && /Unavailable|Niedostępny/.test(sh.chip) && /\(#…\d{6}\)/.test(sh.why) && sh.whyVisible && sh.noDownload && sh.deleteBtn &&
         c.backAfterPaste === true && /moved|przeniesiony/i.test(String(c.moveDone)) && c.goneAfterMove === true && c.downloadAfterMove === true &&
         (c.phone as { folded: boolean; noHScroll: boolean }).folded && (c.phone as { noHScroll: boolean }).noHScroll
       );

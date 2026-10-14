@@ -172,7 +172,7 @@ export function createChannelsUi(d: ChannelsUiDeps) {
     box.dataset.state = s.state;
     const bar = $("channel-move-bar");
     bar.style.width = `${s.total ? Math.round((100 * s.done) / s.total) : s.state === "done" ? 100 : 0}%`;
-    bar.className = s.state === "done" ? "done" : s.state === "running" ? "" : "err";
+    bar.className = s.state === "done" ? "done" : s.state === "running" ? "" : s.state === "paused" ? "paused" : "err";
   }
 
   /** Called by ui.ts renderHooks after the generic part (advice, slots, pool row). */
@@ -228,6 +228,25 @@ export function createChannelsUi(d: ChannelsUiDeps) {
     paintChoice();
   }
 
+  function paintRemoveList(imp: RemovalImpact) {
+    ui("chd-remove-files-t").textContent = tn("ch.rmList.t", imp.files, { size: fmtSize(imp.bytes) });
+    $("chd-remove-list").replaceChildren(
+      ...imp.list.map((f) => h("li", { "data-ddn": "chd-remove-file" }, icon("file"), h("span", { class: "dname", title: f.name }, f.name), h("span", { class: "when" }, [fmtSize(f.size), f.trashed ? t("ch.dlg.inTrash") : ""].filter(Boolean).join(" · ")))),
+      ...(imp.more ? [h("li", { class: "empty-row" }, t("ch.rmList.more", { n: fmtNum(imp.more) }))] : []),
+    );
+  }
+
+  /** The complete list (every file, with its folder path) as a text file, before removing anyway. */
+  async function exportList(imp: RemovalImpact) {
+    const all = await core.channelFiles(imp.webhookId);
+    const lines = [t("ch.rmList.head", { name: imp.label || "webhook", n: all.length }), "", ...all.map((f) => `${f.path}\t${fmtSize(f.size)}${f.trashed ? `\t${t("ch.dlg.inTrash")}` : ""}`)];
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([lines.join("\n") + "\n"], { type: "text/plain;charset=utf-8" }));
+    a.download = `unavailable-${(imp.label || imp.webhookId).replace(/[^\p{L}\p{N}._-]+/gu, "_")}.txt`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+  }
+
   function choice(): "retire" | "move" | "remove" | null {
     for (const id of ["retire", "move", "remove"] as const) if ($<HTMLInputElement>(`chd-opt-${id}`).checked) return id;
     return null;
@@ -238,6 +257,9 @@ export function createChannelsUi(d: ChannelsUiDeps) {
     const go = $<HTMLButtonElement>("chd-go");
     const needAck = c === "remove" && !!imp && imp.files > 0;
     $("chd-ack-row").hidden = !needAck;
+    // Owner (#31): with "Remove anyway" the files that become unavailable are listed right by the confirmation.
+    $("chd-remove-files").hidden = !needAck;
+    if (needAck && imp) paintRemoveList(imp);
     if (imp) ui("chd-ack-t").textContent = tn("ch.ack", imp.files, { size: fmtSize(imp.bytes) });
     go.textContent = c ? t(`ch.go.${c}`) : t("ch.go.retire");
     go.className = `btn ${c === "remove" ? "danger" : "primary"}`;
@@ -248,6 +270,10 @@ export function createChannelsUi(d: ChannelsUiDeps) {
     const dlg = $<HTMLDialogElement>("channel-dialog");
     for (const id of ["retire", "move", "remove"]) $(`chd-opt-${id}`).onchange = () => paintChoice();
     $("chd-ack").onchange = () => paintChoice();
+    $("chd-remove-export").onclick = (e) =>
+      void act(e.currentTarget as HTMLElement, async () => {
+        if (current) await exportList(current);
+      });
     ui("chd-close").onclick = () => dlg.close();
     ui("chd-cancel").onclick = () => dlg.close();
     dlg.addEventListener("close", () => {

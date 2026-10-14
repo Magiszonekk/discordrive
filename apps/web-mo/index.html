@@ -483,6 +483,11 @@
       <label class="choice"><input type="radio" name="chd-opt" value="move" data-ddn="chd-opt-move"><span><b data-i18n="ch.opt.move">Move and remove</b><small data-ddn-ui="chd-opt-move-t"></small></span></label>
       <label class="choice"><input type="radio" name="chd-opt" value="remove" data-ddn="chd-opt-remove"><span><b data-i18n="ch.opt.remove">Remove anyway</b><small data-ddn-ui="chd-opt-remove-t"></small></span></label>
     </fieldset>
+    <div class="stack" data-ddn="chd-remove-files" hidden>
+      <p class="hint" data-ddn-ui="chd-remove-files-t"></p>
+      <ul class="list scroll" data-ddn="chd-remove-list"></ul>
+      <div class="row-btns"><button class="btn sm" type="button" data-ddn="chd-remove-export"><svg class="i"><use href="#i-download"/></svg><span data-i18n="ch.rmList.export">Download the full list</span></button></div>
+    </div>
     <label class="ack" data-ddn="chd-ack-row" hidden><input type="checkbox" data-ddn="chd-ack"><span data-ddn-ui="chd-ack-t"></span></label>
     <div class="modal-acts"><button class="btn" type="button" data-ddn-ui="chd-cancel" data-i18n="nf.cancel">Cancel</button><button class="btn primary" type="button" data-ddn="chd-go"></button></div>
   </div>
