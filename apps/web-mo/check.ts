@@ -860,7 +860,7 @@ try {
   await p.keyboard.press("Escape");
   await p.waitForSelector("[data-ddn=preview-dialog][open]", { state: "detached" });
   pv.blobsRevoked = await p.evaluate(() => {
-    const w = window as unknown as { __blobs: Record<string, { revoked: boolean }>; __pvUrls?: string[] };
+    const w = window as unknown as { __blobs: Record<string, { revoked: boolean; type?: string }>; __pvUrls?: string[] };
     const shown = [...new Set(w.__pvUrls ?? [])];
     return { shown: shown.length, open: shown.filter((u) => !w.__blobs[u]?.revoked).length, openTypes: shown.filter((u) => !w.__blobs[u]?.revoked).map((u) => w.__blobs[u]?.type ?? "?") };
   });
