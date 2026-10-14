@@ -1003,7 +1003,8 @@ try {
   await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [at] });
   await m.waitForTimeout(800);
   await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-  await m.waitForSelector("[data-ddn=row-menu]:not([hidden])[data-for=row]", { timeout: 5000 });
+  // 15 s: under two parallel runs the 5 s wait once missed the menu (frontend note 3, 2026-10-14)
+  await m.waitForSelector("[data-ddn=row-menu]:not([hidden])[data-for=row]", { timeout: 15000 });
   await m.waitForTimeout(300);
   cm.phone = {
     ...mt,

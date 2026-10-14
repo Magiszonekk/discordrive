@@ -786,3 +786,98 @@ th[aria-sort="ascending"] .th-sort svg.i, th[aria-sort="descending"] .th-sort sv
 .upfail-list .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-ink); font-weight: 500; }
 .upfail-list .why { flex: none; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-muted); }
 
+/* ── zlecenie 2026-10-14-ui, polish (frontend profile, styles #58). CSS only, every data-ddn hook unchanged ── */
+/* List / Tiles: the segmented control is as tall as the buttons beside it (38 px; 46 px on a phone) */
+.files-h .view-toggle button { height: 2rem; min-width: 2.25rem; padding: 0 .5rem; }
+.files-h .view-toggle svg.i { width: 16px; height: 16px; }
+.files-h .view-toggle button[aria-pressed="true"] { background: var(--color-paper-3); }
+@media (max-width: 767.98px) { .files-h .view-toggle button { height: 2.5rem; min-width: 2.5rem; } }
+
+/* Sortable heads: one arrow, down = descending (biggest / newest first), turned up for ascending; a faint
+ * hint on hover of a column that is not the sort; numbers column: the arrow sits before the text so the
+ * head keeps its right edge on the figures */
+.th-sort { margin: -.25rem -.375rem; padding: .25rem .375rem; border-radius: .25rem; }
+.th-sort:hover { background: var(--color-paper-2); }
+.th-sort svg.i { transition: opacity var(--duration-short) var(--ease-out), transform var(--duration-short) var(--ease-out); }
+th.r .th-sort { flex-direction: row-reverse; }
+th[aria-sort="ascending"] .th-sort svg.i { transform: rotate(180deg); }
+th[aria-sort="none"] .th-sort:hover svg.i, th[aria-sort="none"] .th-sort:focus-visible svg.i { opacity: .45; }
+
+/* Row trash: on a desktop list the folder's trash stands in the same column as the files' trash (files
+ * carry Share after it, folders do not) */
+@media (min-width: 768px) {
+  .ftable-wrap:not([data-view="tiles"]) tbody:has([data-ddn="share"]) tr[data-kind="folder"] .row-trash { margin-right: calc(31px + .25rem); }
+}
+
+/* Context menu: view / sort radios are denser than actions (the area menu was ~540 px tall); a group
+ * label right after a rule sits closer to it */
+.menu button[role="menuitemradio"] { padding-top: .4375rem; padding-bottom: .4375rem; }
+.menu-sep + .menu-label { padding-top: .375rem; }
+.menu-label { padding-left: 2.75rem; letter-spacing: .06em; }
+.menu button[role="menuitemradio"][aria-checked="false"] { color: var(--color-ink-2); }
+
+/* Tiles: the phone card rule (.ftable tr { align-items: center }) also reached the tile's flex column and
+ * shrank its cells to their content (trash actions centred, long names not cut): cells fill the tile */
+.ftable-wrap[data-view="tiles"] .ftable tbody tr { align-items: stretch; }
+/* Tiles: a card that lifts on hover (the preview no longer melts into a paper-2 card), a selection ring */
+.ftable-wrap[data-view="tiles"] .ftable tbody tr { transition: border-color var(--duration-short) var(--ease-out), box-shadow var(--duration-short) var(--ease-out); }
+.ftable-wrap[data-view="tiles"] .ftable tbody tr:hover { background: var(--color-paper); box-shadow: 0 1px 2px oklch(24% 0.02 258 / 0.06), 0 6px 16px -8px oklch(24% 0.02 258 / 0.18); }
+.ftable-wrap[data-view="tiles"] .ftable tbody tr:hover .c-name .nm > :first-child:not(.badge) { background-color: var(--color-paper-3); }
+.ftable-wrap[data-view="tiles"] .ftable tbody tr.sel,
+.ftable-wrap[data-view="tiles"] .ftable tbody tr.sel:hover { border-color: var(--color-accent); background: color-mix(in oklch, var(--color-accent) 5%, var(--color-paper)); box-shadow: 0 0 0 1px var(--color-accent); }
+.ftable-wrap[data-view="tiles"] .ftable tbody tr.sel .c-name .nm > :first-child:not(.badge) { background-color: color-mix(in oklch, var(--color-accent) 9%, var(--color-paper-2)); }
+.ftable-wrap[data-view="tiles"] .ftable tbody tr.drop-over { outline-offset: -1px; }
+/* the preview: folder drawn thin (a 16 px icon blown up to ~50 px reads heavy at stroke 2), set below the
+ * corner controls */
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > svg.i { padding: 26% 34% 12%; stroke-width: 1.25; color: var(--color-muted); transition: background-color var(--duration-short) var(--ease-out); }
+/* a file without a thumbnail: a sheet in the type's tone with the type under it (the list colours kept) */
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > .badge { display: grid; place-content: center; justify-items: center; gap: .375rem; padding: 1.75rem 0 0; border: 0; color: var(--color-ink-2); font: 600 .6875rem/1rem var(--font-mono); letter-spacing: .08em; transition: background-color var(--duration-short) var(--ease-out); }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > .badge::before { content: ""; width: 2.25rem; height: 2.75rem; border-radius: .25rem; background: currentColor; opacity: .16; clip-path: polygon(0 0, 66% 0, 100% 26%, 100% 100%, 0 100%); }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > .badge.media { color: var(--color-accent); background-color: color-mix(in oklab, var(--color-accent) 6%, var(--color-paper-2)); }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > .badge.doc { color: var(--color-error); background-color: color-mix(in oklab, var(--color-error) 6%, var(--color-paper-2)); }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > .badge.sheet { color: var(--color-success); background-color: color-mix(in oklab, var(--color-success) 6%, var(--color-paper-2)); }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > .badge.archive { color: color-mix(in oklab, var(--color-warning) 70%, var(--color-ink)); background-color: color-mix(in oklab, var(--color-warning) 8%, var(--color-paper-2)); }
+.ftable-wrap[data-view="tiles"] .ftable tbody tr:hover .c-name .nm > .badge { background-image: linear-gradient(oklch(50% 0 0 / 0.04), oklch(50% 0 0 / 0.04)); }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > .thumb { animation: none; }
+/* name + size · date */
+.ftable-wrap[data-view="tiles"] .ftable td.c-name { padding: .375rem .375rem .75rem; }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm { gap: .625rem; }
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > :is(a, span:last-child, [data-ddn="preview-open"]) { color: var(--color-ink); }
+.ftable-wrap[data-view="tiles"] .ftable .sub { margin-top: .125rem; font-size: .6875rem; }
+/* corner controls: the box and the actions pill the same height (30 px), tighter icon buttons */
+.ftable-wrap[data-view="tiles"] .ftable td.c-sel { top: .75rem; left: .75rem; width: 1.875rem; height: 1.875rem; border: 1px solid var(--color-rule); box-shadow: 0 1px 2px oklch(24% 0.02 258 / 0.08); }
+.ftable-wrap[data-view="tiles"] .ftable td.c-acts { top: .75rem; right: .75rem; padding: 0 .0625rem; border: 1px solid var(--color-rule); box-shadow: 0 1px 2px oklch(24% 0.02 258 / 0.08); background: color-mix(in oklch, var(--color-paper) 94%, transparent); }
+.ftable-wrap[data-view="tiles"] .ftable td.c-acts .iconbtn { padding: .375rem; }
+.ftable-wrap[data-view="tiles"] .ftable td.c-acts .acts { display: flex; height: 1.75rem; align-items: center; }
+.ftable-wrap[data-view="tiles"] .ftable tr.sel td.c-sel { border-color: var(--color-accent); }
+/* Trash tiles: the controls sit in the card, not over the preview: days left as a chip, Restore + delete */
+.ftable-wrap.trash-wrap[data-view="tiles"] .ftable .c-name .nm > .badge { padding-top: 0; }
+.ftable-wrap.trash-wrap[data-view="tiles"] .ftable .c-name .nm > svg.i { padding: 22% 34%; }
+.ftable-wrap.trash-wrap[data-view="tiles"] .ftable td.c-name { padding-bottom: .5rem; }
+/* the sub-line already says the days left: the chip stays only as the warning (3 days or less) */
+.ftable-wrap.trash-wrap[data-view="tiles"] .ftable td.c-left { padding: 0 .625rem .625rem; }
+.ftable-wrap.trash-wrap[data-view="tiles"] .ftable td.c-left:not(:has(.chip--warning)) { display: none; }
+.ftable-wrap.trash-wrap[data-view="tiles"] .ftable td.c-acts { margin-top: auto; padding: .5rem .5rem .5rem .625rem; border: 0; border-top: 1px solid var(--color-rule); border-radius: 0; background: none; box-shadow: none; }
+.ftable-wrap.trash-wrap[data-view="tiles"] .ftable td.c-acts .acts { height: auto; align-items: center; }
+.ftable-wrap.trash-wrap[data-view="tiles"] .ftable td.c-acts .iconbtn { padding: .5rem; }
+.ftable-wrap.trash-wrap[data-view="tiles"] .ftable .sub { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+@media (max-width: 767.98px) {
+  .ftable-wrap[data-view="tiles"] .ftable td.c-name { padding: .3125rem .3125rem .625rem; }
+  .ftable-wrap[data-view="tiles"] .ftable td.c-sel { top: .625rem; left: .625rem; }
+  .ftable-wrap[data-view="tiles"] .ftable td.c-acts { top: .625rem; right: .625rem; }
+  .ftable-wrap[data-view="tiles"] .ftable td.c-sel input[type="checkbox"] { width: 1rem; height: 1rem; }
+  .ftable-wrap[data-view="tiles"] .ftable .c-name .nm > .badge { padding-top: 2rem; gap: .25rem; }
+  .ftable-wrap[data-view="tiles"] .ftable .c-name .nm > .badge::before { width: 1.75rem; height: 2.125rem; }
+  .ftable-wrap.trash-wrap[data-view="tiles"] .ftable .c-name .nm > .badge { padding-top: 0; }
+  /* the trash tile on a phone shows the days in the sub-line; Restore keeps its label (there is room) */
+  .ftable-wrap.trash-wrap[data-view="tiles"] .btn.sm .lbl-md { position: static; width: auto; height: auto; overflow: visible; clip: auto; }
+  .ftable-wrap.trash-wrap[data-view="tiles"] .btn.sm { padding: .3125rem .625rem; }
+}
+@media (hover: none) {
+  .ftable-wrap[data-view="tiles"] .ftable tbody tr:hover { box-shadow: none; }
+  .ftable-wrap[data-view="tiles"] .ftable tbody tr:hover .c-name .nm > :first-child:not(.badge) { background-color: var(--color-paper-2); }
+  .ftable-wrap[data-view="tiles"] .ftable tbody tr:hover .c-name .nm > .badge { background-image: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .th-sort svg.i, .ftable-wrap[data-view="tiles"] .ftable tbody tr { transition: none; }
+}
