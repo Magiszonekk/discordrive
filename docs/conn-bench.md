@@ -42,3 +42,13 @@ while the same 32 over separate connections (`h2-N`) all go through (60/60, 0 er
 stack does not hit this (the web app posts 32 at once on one connection without errors). So the `h2-1`
 **upload** row in Node is not a fair stand-in for the browser at high concurrency — compare uploads with
 `h2-N` / `h1-N`, and use `h2-1` for downloads. A desktop agent must post over several connections.
+
+## IP test with a proxy (`--proxy`, scenario `split`)
+
+    npm run conn-bench -- webhooks.txt --count 200 --conc 32 --scenarios h2-N,split --proxy http://user:pass@host:port
+
+`h2-N` first measures what this IP reaches alone with all channels. `split` then posts from this IP with
+~70 % of the channels/fragments and, **at the same time**, through the proxy with the other ~30 %
+(`--proxy-share`). Compare "split: both IPs" with `h2-N`: clearly more → Discord's ceiling is per IP; about the
+same → it is not (route, line, or a limit per Discord server — all channels are in one guild).
+Downloads are not split: they already reach the line from one IP.

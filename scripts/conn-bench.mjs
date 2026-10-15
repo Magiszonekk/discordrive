@@ -18,6 +18,8 @@
 
 import http2 from "node:http2";
 import https from "node:https";
+import tls from "node:tls";
+import http from "node:http";
 import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -44,9 +46,15 @@ const PAUSE_S = Number(opt("pause", 30));
 const NO_DOWNLOAD = flag("no-download");
 const KEEP = flag("keep");
 const NO_SPEEDTEST = flag("no-speedtest");
+// --proxy http://user:pass@host:port : an HTTP CONNECT proxy (another IP). Adds the "split" scenario: half of
+// the channels post from this computer's IP, the other half through the proxy, at the same time.
+const PROXY = opt("proxy", process.env.DDN_BENCH_PROXY || "");
+// Share of the channels (and of COUNT/CONC) that go through the proxy in "split". The direct side keeps the
+// bigger part, so it can still reach its own ceiling (~35–45 MB/s); the proxy only ADDS traffic on top.
+const PROXY_SHARE = Math.min(0.9, Math.max(0.1, Number(opt("proxy-share", 0.3))));
 const file = argv[0];
 if (!file || flag("help")) {
-  console.log("usage: node scripts/conn-bench.mjs webhooks.txt [--count 30] [--conc 24] [--size 10] [--scenarios h2-1,h2-N,h1-N] [--pause 30] [--no-download] [--keep] [--no-speedtest]");
+  console.log("usage: node scripts/conn-bench.mjs webhooks.txt [--count 30] [--conc 24] [--size 10] [--scenarios h2-1,h2-N,h1-N] [--pause 30] [--no-download] [--keep] [--no-speedtest] [--proxy http://user:pass@host:port] [--proxy-share 0.3]");
   process.exit(file ? 0 : 2);
 }
 const [major] = process.versions.node.split(".").map(Number);
@@ -83,6 +91,32 @@ const noteFail = (r) => {
   failReasons.set(k, (failReasons.get(k) ?? 0) + 1);
 };
 
+/** TLS socket to host:443 through an HTTP CONNECT proxy (Basic auth from the URL). */
+function connectVia(proxyUrl, host, alpn) {
+  const pu = new URL(proxyUrl);
+  return new Promise((resolve, reject) => {
+    const auth = pu.username ? { "proxy-authorization": "Basic " + Buffer.from(`${decodeURIComponent(pu.username)}:${decodeURIComponent(pu.password)}`).toString("base64") } : {};
+    const req = http.request({ host: pu.hostname, port: Number(pu.port || 80), method: "CONNECT", path: `${host}:443`, headers: { host: `${host}:443`, ...auth } });
+    req.setTimeout(20_000, () => req.destroy(new Error("proxy timeout")));
+    req.on("connect", (res, socket) => {
+      if (res.statusCode !== 200) {
+        socket.destroy();
+        return reject(new Error(`proxy CONNECT ${res.statusCode}`));
+      }
+      const t = tls.connect({ socket, servername: host, ALPNProtocols: alpn }, () => resolve(t));
+      t.on("error", reject);
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+/** https.Agent whose sockets go through the proxy (HTTP/1.1). */
+class ProxyAgent extends https.Agent {
+  createConnection(options, cb) {
+    connectVia(PROXY, options.host || options.hostname, ["http/1.1"]).then((s) => cb(null, s), (e) => cb(e));
+  }
+}
+
 /** HTTP/1.1 request on an agent: { status, headers, body, ttfb, dur } */
 function h1(agent, url, { method = "GET", headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
@@ -103,16 +137,21 @@ function h1(agent, url, { method = "GET", headers = {}, body } = {}) {
 
 /** HTTP/2 sessions to one origin; lane i uses session i % n. Windows sized like Chromium's. */
 class H2 {
-  constructor(origin, n) {
+  constructor(origin, n, viaProxy = false) {
     this.origin = origin;
     this.n = n;
+    this.viaProxy = viaProxy;
     this.sessions = new Array(n).fill(null);
   }
   session(i) {
     const k = i % this.n;
     let s = this.sessions[k];
     if (!s || s.closed || s.destroyed || s.dead) {
-      s = http2.connect(this.origin, { settings: { initialWindowSize: 6 * 1024 * 1024 } });
+      const host = new URL(this.origin).hostname;
+      s = http2.connect(this.origin, {
+        settings: { initialWindowSize: 6 * 1024 * 1024 },
+        ...(this.viaProxy ? { createConnection: () => this.pending.shift() } : {}),
+      });
       const fresh = s;
       fresh.on("error", () => (fresh.dead = true));
       fresh.on("goaway", () => {
@@ -129,7 +168,19 @@ class H2 {
     }
     return s;
   }
-  request(lane, url, { method = "GET", headers = {}, body } = {}) {
+  async ready(lane) {
+    if (!this.viaProxy) return;
+    const k = lane % this.n;
+    const s = this.sessions[k];
+    if (s && !s.closed && !s.destroyed && !s.dead) return;
+    this.pending ??= [];
+    this.pending.push(await connectVia(PROXY, new URL(this.origin).hostname, ["h2"]));
+  }
+  async request(lane, url, init = {}) {
+    await this.ready(lane);
+    return this.request2(lane, url, init);
+  }
+  request2(lane, url, { method = "GET", headers = {}, body } = {}) {
     return new Promise((resolve, reject) => {
       const u = new URL(url);
       const t0 = now();
@@ -177,6 +228,14 @@ function transport(kind, origin) {
   }
   if (kind === "h1-N") {
     const agent = new https.Agent({ keepAlive: true, maxSockets: CONC });
+    return { request: (_lane, url, init) => h1(agent, url, init), close: () => agent.destroy() };
+  }
+  if (kind === "proxy-h2-N") {
+    const p = new H2(origin, CONC, true);
+    return { request: (lane, url, init) => p.request(lane, url, init), close: () => p.close() };
+  }
+  if (kind === "proxy-h1-N") {
+    const agent = new ProxyAgent({ keepAlive: true, maxSockets: CONC });
     return { request: (_lane, url, init) => h1(agent, url, init), close: () => agent.destroy() };
   }
   throw new Error(`unknown scenario ${kind}`);
@@ -229,10 +288,10 @@ async function retry429(fn, stats) {
 }
 
 /** Run tasks with CONC workers; each worker is a lane (its own connection in h2-N). */
-async function runPool(tasks, worker) {
+async function runPool(tasks, worker, conc = CONC) {
   let next = 0;
   await Promise.all(
-    Array.from({ length: Math.min(CONC, tasks.length) }, async (_, lane) => {
+    Array.from({ length: Math.min(conc, tasks.length) }, async (_, lane) => {
       for (;;) {
         const i = next++;
         if (i >= tasks.length) return;
@@ -246,14 +305,15 @@ async function runPool(tasks, worker) {
 const posted = []; // { hook, messageId } for cleanup
 let rr = 0;
 
-async function upload(kind) {
+async function upload(kind, { list = hooks, count = COUNT, conc = CONC, label = kind } = {}) {
   const t = transport(kind, "https://discord.com");
-  const stats = { kind, dir: "up", n: 0, bytes: 0, durs: [], ttfbs: [], n429: 0, retries: 0, errors: 0, t0: 0, t1: 0 };
+  const stats = { kind: label, dir: "up", n: 0, bytes: 0, durs: [], ttfbs: [], n429: 0, retries: 0, errors: 0, t0: 0, t1: 0, want: count };
   const results = [];
-  const tasks = Array.from({ length: COUNT }, (_, i) => i);
+  const tasks = Array.from({ length: count }, (_, i) => i);
+  let my = 0;
   stats.t0 = now();
   await runPool(tasks, async (_i, lane) => {
-    const hook = hooks[rr++ % hooks.length];
+    const hook = list[my++ % list.length];
     await takeToken(hook.channel);
     const { body, type } = multipart(randomBytes(SIZE));
     const r = await retry429(() => t.request(lane, `${hook.url}?wait=true`, { method: "POST", headers: { "content-type": type, "content-length": String(body.length) }, body }), stats);
@@ -268,10 +328,40 @@ async function upload(kind) {
     stats.bytes += SIZE;
     stats.durs.push(r.dur);
     stats.ttfbs.push(r.ttfb);
-  });
+  }, conc);
   stats.t1 = now();
   t.close();
   return { stats, results };
+}
+
+/**
+ * "split": most channels post from this computer's IP, the rest (PROXY_SHARE) through the proxy, all at the
+ * same time. The direct part gets enough channels and fragments in flight to reach its own ceiling; the
+ * proxy part only adds traffic. If "both IPs" is clearly above what one IP reaches alone (h2-N with all
+ * channels, ~35–45 MB/s), Discord's ceiling is per IP. If it stays at the same sum, it is not (route, line,
+ * or a limit per Discord server/guild — all test channels are in one guild).
+ */
+async function uploadSplit() {
+  const nProxyHooks = Math.max(1, Math.round(hooks.length * PROXY_SHARE));
+  const a = hooks.slice(0, hooks.length - nProxyHooks);
+  const b = hooks.slice(hooks.length - nProxyHooks);
+  if (!a.length) throw new Error("split needs at least 2 channels");
+  const cA = Math.max(1, Math.round(CONC * (1 - PROXY_SHARE)));
+  const cB = Math.max(1, CONC - cA);
+  const nA = Math.max(1, Math.round(COUNT * (1 - PROXY_SHARE)));
+  const nB = Math.max(1, COUNT - nA);
+  console.log(`\n  split: direct ${a.length} channels / ${cA} in flight / ${nA} fragments, proxy ${b.length} channels / ${cB} in flight / ${nB} fragments`);
+  const t0 = now();
+  const [direct, proxied] = await Promise.all([
+    upload("h2-N", { list: a, count: nA, conc: cA, label: "split: direct IP" }),
+    upload("proxy-h2-N", { list: b, count: nB, conc: cB, label: "split: proxy IP" }),
+  ]);
+  const t1 = now();
+  const sum = { kind: "split: both IPs", dir: "up", n: direct.stats.n + proxied.stats.n, bytes: direct.stats.bytes + proxied.stats.bytes, durs: [...direct.stats.durs, ...proxied.stats.durs], ttfbs: [...direct.stats.ttfbs, ...proxied.stats.ttfbs], n429: direct.stats.n429 + proxied.stats.n429, retries: direct.stats.retries + proxied.stats.retries, errors: direct.stats.errors + proxied.stats.errors, t0, t1, want: nA + nB };
+  // Each side's MB/s over the whole split window (the two ran side by side).
+  direct.stats.t0 = proxied.stats.t0 = t0;
+  direct.stats.t1 = proxied.stats.t1 = t1;
+  return { rows: [direct.stats, proxied.stats, sum], results: [...direct.results, ...proxied.results] };
 }
 
 async function download(kind, items) {
@@ -324,7 +414,7 @@ function row(s) {
   return {
     scenario: s.kind,
     dir: s.dir,
-    ok: `${s.n}/${s.dir === "up" ? COUNT : s.n + s.errors}`,
+    ok: `${s.n}/${s.dir === "up" ? (s.want ?? COUNT) : s.n + s.errors}`,
     "MB/s": wall ? +(mb(s.bytes) / wall).toFixed(1) : 0,
     "Mb/s": wall ? Math.round((mb(s.bytes) * 8) / wall) : 0,
     "% of line": line && wall && (s.dir === "up" ? line.upMBps : line.downMBps) > 0 ? Math.round((100 * mb(s.bytes)) / wall / (s.dir === "up" ? line.upMBps : line.downMBps)) : null,
@@ -405,6 +495,7 @@ if (!NO_SPEEDTEST) {
   const d = await speedtest("down");
   const u = await speedtest("up");
   line = { downMBps: +d.MBps.toFixed(1), upMBps: +u.MBps.toFixed(1) };
+  if (PROXY) console.log("(the proxy's own line is not measured here; the split rows show what it reached)");
   console.log(`download ${line.downMBps} MB/s (${Math.round(line.downMBps * 8)} Mb/s), upload ${line.upMBps} MB/s (${Math.round(line.upMBps * 8)} Mb/s)\n`);
 }
 
@@ -416,6 +507,15 @@ try {
       process.stdout.write(`(pause ${PAUSE_S} s so Discord's limits refill)\n`);
       await sleep(PAUSE_S * 1000);
     }
+    if (sc === "split") {
+      if (!PROXY) throw new Error("scenario split needs --proxy http://user:pass@host:port");
+      process.stdout.write(`upload   split (most channels direct, the rest through the proxy, at once) … `);
+      const u = await uploadSplit();
+      for (const st of u.rows) rows.push(row(st));
+      upSets.push(u.results);
+      console.log(`${rows.at(-1)["MB/s"]} MB/s together (${rows.at(-3)["MB/s"]} direct + ${rows.at(-2)["MB/s"]} proxy)`);
+      continue;
+    }
     process.stdout.write(`upload   ${sc} … `);
     const u = await upload(sc);
     rows.push(row(u.stats));
@@ -425,8 +525,9 @@ try {
   if (!NO_DOWNLOAD) {
     // Each download scenario reads a different set (the CDN would cache a set read twice).
     for (const [k, sc] of SCENARIOS.entries()) {
-      process.stdout.write(`download ${sc} … `);
-      const d = await download(sc, upSets[k]);
+      const dk = sc === "split" ? "h2-1" : sc.startsWith("proxy-") ? sc : sc;
+      process.stdout.write(`download ${sc === "split" ? "split set via h2-1" : sc} … `);
+      const d = await download(dk, upSets[k]);
       rows.push(row(d));
       console.log(`${rows.at(-1)["MB/s"]} MB/s`);
     }
