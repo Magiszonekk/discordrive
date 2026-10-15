@@ -8,7 +8,7 @@
 // against ModeImpl below.
 
 import type { IndexStore } from "@ddv4/sync-core";
-import type { AccountKey, ArbiterApi, DriveClient, HttpApi, ShareAttachment } from "@ddv4/metadata-client";
+import type { AccountKey, ArbiterApi, DriveClient, HttpApi, NetControl, ShareAttachment } from "@ddv4/metadata-client";
 
 export type ModeName = "metadata-only" | "e2ee" | "plain";
 
@@ -32,6 +32,8 @@ export interface ModeCtx {
   /** Test hook: Discord API origin of the fake (metadata only posts there). */
   discordApiOrigin?: string;
   serverTimeOf(seq: number): number | undefined;
+  /** Network state shared by every client this tab builds (gate, windows, guard; zlecenie 2026-10-15-transfery). */
+  net?: NetControl;
 }
 
 /** One own channel (webhook) with what lies on it (zlecenie 2026-10-13-webhooki p. 1–2). */

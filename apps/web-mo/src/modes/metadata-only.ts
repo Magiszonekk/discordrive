@@ -124,6 +124,7 @@ export const mode: ModeImpl = {
       transport: transport(ctx),
       webhooks: hooks.length ? hooks : [{ id: "0", url: "unset://" }],
       store: ctx.store,
+      net: ctx.net,
     });
   },
 

@@ -48,6 +48,7 @@ export const mode: ModeImpl = {
       arbiter: this.arbiter(ctx),
       blobs,
       store: ctx.store,
+      net: ctx.net,
     });
   },
 

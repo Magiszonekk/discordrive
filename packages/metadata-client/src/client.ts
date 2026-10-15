@@ -9,7 +9,7 @@ import { hostOf, ms, nowMs, reqErrFields, type TransferLog } from "./transfer-lo
 import { RateLimitedError } from "./discord-transport.js";
 import { guardedRead, netCall, retryFree, type LaneTiming, type NetControl } from "./net.js";
 import type { LaneFetch } from "./blob-store.js";
-import { DriveClient } from "./drive-client.js";
+import { DriveClient, type ResumeStore } from "./drive-client.js";
 import { ChannelPacer } from "./rate-limit.js";
 import type { InvalidOpAlert } from "./policies.js";
 import type { DiscordPlacement, PostedAttachment, WebhookRef, WebhookTransport } from "./types.js";
@@ -57,6 +57,8 @@ export interface MetadataClientOptions {
   onInvalidOps?: (a: InvalidOpAlert) => void;
   /** Network state (tests); default: a fresh one. */
   net?: NetControl;
+  /** Unfinished transfers (resume after a reload). */
+  resume?: ResumeStore;
 }
 
 /** Blobs on the user's webhooks, paced per channel on this device (koncept §7, §8.2). */

@@ -17,7 +17,7 @@ export {
   type FileKey,
 } from "./file-crypto.js";
 export { type BlobStore, type BlobPutContext, type BlobGetContext, type LaneFetch, AbortedError, throwIfAborted } from "./blob-store.js";
-export { DriveClient, piecesOf, readVersionRange, mbps, type DriveClientOptions, type DownloadOptions, type UploadStages } from "./drive-client.js";
+export { DriveClient, piecesOf, readVersionRange, mbps, type DriveClientOptions, type DownloadOptions, type UploadStages, type ResumeStore, type UploadJournal } from "./drive-client.js";
 export { AdaptiveWindow, NetControl, NetGate, NetworkError, SpeedBaseline, StuckGuard, guardedRead, isNetworkError, netCall, realClock, retryFree, type BaselineData, type GateState, type NetClock, type NetUiState } from "./net.js";
 export { TransferLog, MemoryLogSink, TRANSFER_LOG_VERSION, scrubText, errText as logErrText, hostOf, nowMs, type TransferLogOptions, type TransferDir, type TransferSource, type LimiterState } from "./transfer-log.js";
 // e2ee/plain clients: import { ServerBlobStore } from "@ddv4/metadata-client/server-blobs" (kept out of this index).

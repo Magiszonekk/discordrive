@@ -149,6 +149,8 @@ export interface DriveClientOptions {
   onInvalidOps?: (a: InvalidOpAlert) => void;
   /** Network state (tests: virtual clock); default: a fresh one. */
   net?: NetControl;
+  /** Unfinished transfers (resume after a reload); none = no resume. */
+  resume?: ResumeStore;
 }
 
 /** Fragments of an upload per stage right now (live view: encrypting vs sending). */
@@ -159,9 +161,40 @@ export interface UploadStages {
   net: number;
 }
 
+/**
+ * Where unfinished transfers are remembered on this device (zlecenie 2026-10-15-transfery §2: resume after
+ * a reload). Browser: IndexedDB of this origin. Values are plain JSON; an upload's entry holds the file
+ * key of the unfinished version (the device already holds the account key the same way).
+ */
+export interface ResumeStore {
+  get(key: string): Promise<unknown>;
+  put(key: string, value: unknown): Promise<void>;
+  del(key: string): Promise<void>;
+}
+
+/** Journal of an unfinished upload: which fragments are already on Discord, and with which plaintext. */
+export interface UploadJournal {
+  v: 1;
+  uploadId: string;
+  nodeId: string;
+  parentId: string;
+  name: string;
+  size: number;
+  chunk: number;
+  key: string;
+  /** Fragment index → its ChunkRef and the SHA-256 of its plaintext (a changed file is not mixed in). */
+  done: Record<string, { c: ChunkRef; ph: string }>;
+  at: number;
+}
+
 export interface UploadOptions {
   /** Plaintext bytes whose fragments are stored so far (called after each fragment and on stage changes). */
   onProgress?: (doneBytes: number, totalBytes: number, stages?: UploadStages) => void;
+  /**
+   * Resume key (the UI: name + size + modification time + folder). With `resume` set on the client, an
+   * upload with the same key continues the unfinished one: fragments already stored are not sent again.
+   */
+  resumeKey?: string;
   /** Cancel: stops the fragment in flight; the store drops what was sent (e2ee/plain). */
   signal?: AbortSignal;
 }
@@ -170,6 +203,13 @@ export interface DownloadOptions {
   signal?: AbortSignal;
   /** Plaintext bytes written to the sink so far. */
   onProgress?: (doneBytes: number, totalBytes: number) => void;
+  /**
+   * Resume (zlecenie 2026-10-15-transfery §2): the sink already holds fragments [0, from) of this version;
+   * `hash` is the whole-file SHA-256 state after them (from `onWritten`). Only the rest is fetched.
+   */
+  resume?: { versionId: string; from: number; hash: Uint8Array };
+  /** After each fragment written: the next index and the hash state so far (to store a resume point). */
+  onWritten?: (p: { versionId: string; next: number; hash: () => Uint8Array }) => void;
 }
 
 export interface UploadResult {
@@ -178,6 +218,8 @@ export interface UploadResult {
   version: ContentRef;
   chunks: number;
   posts: number;
+  /** Fragments taken over from an unfinished upload (not sent again). */
+  resumed: number;
 }
 
 export class DriveClient {
@@ -314,9 +356,20 @@ export class DriveClient {
     const signal = opts.signal;
     throwIfAborted(signal);
     const deviceId = this.d.device.id;
-    const uploadId = newId();
-    const nodeId = newId();
+    // Resume (zlecenie 2026-10-15-transfery §2): the same upload ID, file key and node ID as the unfinished
+    // upload, if it is still open in the index and its lease can be taken again; otherwise a fresh start.
+    const rkey = opts.resumeKey && this.d.resume ? `up:${opts.resumeKey}` : null;
+    let jr: UploadJournal | null = null;
+    if (rkey) {
+      const j = (await this.d.resume!.get(rkey).catch(() => null)) as UploadJournal | null;
+      const u = j?.v === 1 ? this.store.getUpload(j.uploadId) : undefined;
+      if (j && u?.status === "open" && j.size === src.size && j.chunk === this.chunkSize && j.parentId === parentId && j.name === nfc && (await this.d.arbiter.renewLease(j.uploadId, deviceId))) jr = j;
+      else if (j) await this.d.resume!.del(rkey).catch(() => {});
+    }
+    const uploadId = jr?.uploadId ?? newId();
+    const nodeId = jr?.nodeId ?? newId();
     const stats = { posts: 0 };
+    let resumed = 0;
     const log = this.tlog;
     const t0 = nowMs();
     const nFrags = Math.max(1, Math.ceil(src.size / this.chunkSize));
@@ -340,11 +393,24 @@ export class DriveClient {
     };
     let committed = false;
     try {
-      await this.commitOp({ type: "upload_begin", uploadId }, "upload_begin");
+      if (!jr) await this.commitOp({ type: "upload_begin", uploadId }, "upload_begin");
 
-      const key = await newFileKey();
+      const key = jr ? await importFileKey(jr.key) : await newFileKey();
       const count = Math.max(1, Math.ceil(src.size / this.chunkSize));
       const chunks: ChunkRef[] = new Array(count);
+      const journal: UploadJournal | null = rkey ? (jr ?? { v: 1, uploadId, nodeId, parentId, name: nfc, size: src.size, chunk: this.chunkSize, key: key.rawB64, done: {}, at: Date.now() }) : null;
+      // The journal is rewritten at most every 2 s (and at the end of the file), not per fragment.
+      let jDirty = false;
+      let jAt = 0;
+      const saveJournal = async (force = false) => {
+        if (!journal || !jDirty || (!force && Date.now() - jAt < 2000)) return;
+        jDirty = false;
+        jAt = Date.now();
+        journal.at = jAt;
+        await this.d.resume!.put(rkey!, journal).catch(() => {});
+      };
+      if (journal && !jr) ((jDirty = true), await saveJournal(true));
+      if (jr) log?.emit("resume", { dir: "up", x: uploadId, have: Object.keys(jr.done).length, n: count });
       const hasher = await createSHA256();
       hasher.init();
       // The whole-file plaintext hash must be fed in order. Reads run in parallel (each fragment's own),
@@ -366,11 +432,14 @@ export class DriveClient {
       let next = 0;
       const stages: UploadStages = { enc: 0, net: 0 };
       opts.onProgress?.(0, src.size, { ...stages });
+      // The first failure stops the other workers from taking new fragments (before, they went on sending
+      // the rest of the file after the upload had already failed).
+      let failed = false;
       const worker = async () => {
         for (;;) {
           // The adaptive window (weak link: fewer pieces in flight) gates taking the next fragment.
           const free = await win.acquire(signal);
-          const i = next++;
+          const i = failed ? count : next++;
           if (i >= count) return free();
           try {
           throwIfAborted(signal);
@@ -387,6 +456,17 @@ export class DriveClient {
             const rd = await reading;
             const data = rd.data;
             if (log) f1 = nowMs();
+            // Resume: the same plaintext as in the unfinished upload → its stored fragment is taken over.
+            const ph = journal ? await sha256Hex(data) : "";
+            const prev = jr?.done[String(i)];
+            if (prev && prev.ph === ph) {
+              chunks[i] = prev.c;
+              resumed++;
+              stages.enc--;
+              sentBytes += data.byteLength;
+              opts.onProgress?.(sentBytes, src.size, { ...stages });
+              continue;
+            }
             const ct = await encryptFragment(key, data);
             if (log) f2 = nowMs();
             const blobId = newId();
@@ -398,6 +478,11 @@ export class DriveClient {
             const placed = await this.blobs.put(ct, `${blobId}${BLOB_EXT}`, { uploadId, index: i, sha256: hash, signal, stats });
             stages.net--;
             chunks[i] = { index: i, blobId, ciphertextSizeBytes: ct.byteLength, ciphertextHash: hash, placements: [placed] };
+            if (journal) {
+              journal.done[String(i)] = { c: chunks[i]!, ph };
+              jDirty = true;
+              void saveJournal();
+            }
             const f4 = log ? nowMs() : 0;
             sentBytes += data.byteLength;
             // rd = from the worker taking the fragment to it being read and hashed in order; ph = the hash step.
@@ -411,7 +496,17 @@ export class DriveClient {
           }
         }
       };
-      await Promise.all(Array.from({ length: conc }, worker));
+      // All workers end before the upload returns or throws (Promise.all would reject at the first failure
+      // while the others still post: fragments of a failed upload landing after it, and in the journal).
+      // A cancel does not wait for the posts in flight (the user asked to stop now).
+      let firstErr: unknown = null;
+      const done = Promise.all(Array.from({ length: conc }, () => worker().catch((e) => ((failed = true), (firstErr ??= e)))));
+      const aborted = signal ? new Promise<void>((r) => (signal.aborted ? r() : signal.addEventListener("abort", () => r(), { once: true }))) : null;
+      await (aborted ? Promise.race([done, aborted]) : done);
+      failed = true;
+      await saveJournal(true);
+      throwIfAborted(signal);
+      if (firstErr) throw firstErr;
       await hashChain;
       const plaintextSha256 = hasher.digest("hex");
 
@@ -446,12 +541,16 @@ export class DriveClient {
         "upload_commit+create",
       );
       log?.emit("commit", { dir: "up", x: uploadId, dur: ms(tf) });
+      if (rkey) await this.d.resume!.del(rkey).catch(() => {});
       endLog(true);
-      return { nodeId, uploadId, version, chunks: count, posts: stats.posts };
+      return { nodeId, uploadId, version, chunks: count, posts: stats.posts, resumed };
     } catch (e) {
       endLog(false, e);
       // Cancelled or failed before finalize: the store may drop what was sent (e2ee/plain: the server deletes).
-      if (!committed) await this.blobs.abort?.(uploadId).catch(() => {});
+      // A cancel by the user forgets the journal; a failure (network, tab closing) keeps it for a resume.
+      const cancelled = e instanceof Error && e.name === "AbortError";
+      if (rkey && cancelled) await this.d.resume!.del(rkey).catch(() => {});
+      if (!committed && (cancelled || !rkey)) await this.blobs.abort?.(uploadId).catch(() => {});
       throw e;
     } finally {
       await this.d.arbiter.releaseLease(uploadId, deviceId);
@@ -512,8 +611,16 @@ export class DriveClient {
       if (manifest.chunks.length !== v.chunkCount) throw new Error("manifest chunk count mismatch");
       const hasher = await createSHA256();
       hasher.init();
-      opts.onProgress?.(0, v.sizeBytes);
-      const ordered = [...manifest.chunks].sort((a, b) => a.index - b.index);
+      const all = [...manifest.chunks].sort((a, b) => a.index - b.index);
+      // Resume: skip what the sink already has (same version only; the hash continues from its state).
+      const from = opts.resume && opts.resume.versionId === v.versionId && opts.resume.from > 0 && opts.resume.from <= all.length ? opts.resume.from : 0;
+      if (from) {
+        hasher.load(opts.resume!.hash);
+        total = Math.min(v.sizeBytes, from * manifest.chunkSizeBytes);
+        log?.emit("resume", { dir: "down", x, have: from, n: all.length });
+      }
+      const ordered = all.slice(from);
+      opts.onProgress?.(total, v.sizeBytes);
       // Parallel fetch (zlecenie 2026-10-13-transfer §3): up to `conc` fragments are fetched, checked and
       // decrypted at once; they are written strictly in order, so memory holds at most `conc` fragments and
       // the whole-file SHA-256 is fed in order. The first failure stops the others (internal abort).
@@ -606,6 +713,7 @@ export class DriveClient {
           await sink.write(d.pt);
           const [f0, f1, f2, f3] = d.t;
           if (log) log.emit("frag", { dir: "down", x, i: ordered[i]!.index, b: d.ct, pb, get: ms(f0, f1), hash: ms(f1, f2), dec: ms(f2, f3), wait: ms(f3, w0), wr: ms(w0), dur: ms(f0), hook: d.p.locationId, ch: d.p.channelId ?? null, fl: log.fl.down });
+          opts.onWritten?.({ versionId: v.versionId, next: from + i + 1, hash: () => hasher.save() });
           opts.onProgress?.(total, v.sizeBytes);
         }
       } catch (e) {

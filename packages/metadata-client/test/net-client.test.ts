@@ -25,7 +25,8 @@ function setup(o: { metered?: boolean; maxRetries?: number; downloadConcurrency?
 
 describe("weak and lost network (client)", () => {
   it("network gone for a while mid-download: the download waits at the gate and completes (retries not used up)", async () => {
-    const { t, c, net } = setup({ maxRetries: 1 });
+    // 3 retries (production: 4): the first network errors, before the gate closes, still count.
+    const { t, c, net } = setup({ maxRetries: 3 });
     const src = data(30_000);
     const up = await c.upload(memorySource(src), "f.bin");
     const orig = t.fetchCdn.bind(t);
@@ -48,7 +49,7 @@ describe("weak and lost network (client)", () => {
     const s = sink();
     await c.download(up.nodeId, s);
     expect(await sha256Hex(s.all())).toBe(await sha256Hex(src));
-    expect(failed).toBe(12); // far more than maxRetries = 1: they waited at the gate instead of failing the file
+    expect(failed).toBe(12); // far more than maxRetries = 3: they waited at the gate instead of failing the file
     expect(states).toContain("offline");
     expect(net.gate.open).toBe(true);
     expect(net.win.down.cuts).toBeGreaterThan(0);
