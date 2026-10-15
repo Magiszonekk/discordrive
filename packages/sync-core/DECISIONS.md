@@ -551,3 +551,48 @@ serwer trzyma dodatkowo, dla tego jednego konta:
 - Decyzja: drugie połączenie = **„tor” w ukrytym iframe sandbox** serwowanym przez instancję
   (`/lane.html`), z którym worker rozmawia przez MessagePort. Używa go strażnik (§3). Domyślnie wysyłanie
   i pobieranie zostają na jednym torze.
+
+### Słabe i niestabilne łącza (§2), `packages/metadata-client/src/net.ts`
+- Trzy sytuacje, trzy reakcje: **słabe łącze** (błędy sieci, timeouty) → mniej fragmentów w locie;
+  **brak sieci** → stop i jedno próbne żądanie co jakiś czas; **zatkane połączenie** (wolno BEZ błędów,
+  pierwszy bajt szybki) → strażnik. 429 i błędy HTTP nie są „siecią” (429 obsługuje limiter kanału).
+- Okno (osobno wysyłanie/pobieranie): start = ustawienie (auto/ręczne), błąd sieci lub timeout → ×0,5
+  raz na „zdarzenie straty” (błędy żądań wysłanych przed cięciem nie tną drugi raz; 30 naraz „Failed to
+  fetch” z logu właściciela = jedno cięcie), min 2; +1 co ceil(limit/4) odpowiedzi do ustawienia.
+- Bramka: zdarzenie `offline` przeglądarki → zero ruchu do `online`; 3 błędy sieci z rzędu → jedno
+  próbne żądanie po 1, 2, 4 … 60 s (±50 % losowo); jego odpowiedź otwiera dla wszystkich. Odpowiedź na
+  żądanie sprzed ostatniego błędu nie zeruje licznika (przyszła „z przeszłości”). Błędy przy zamkniętej
+  bramce nie zużywają ponowień: plik czeka zamiast się wywalić.
+- Panel kolejki i pobierania: jedna linia słowami („Słabe łącze: wysyłam mniej…”, „Czekam na sieć…”,
+  „Sieć wróciła: wznowiono.”), bez kodów.
+- „Oszczędzaj dane” (Settings → Diagnostyka; włączone samo, gdy przeglądarka zgłasza łącze taryfowe /
+  `saveData` / `cellular` / telefon): najwyżej 2 fragmenty w locie, strażnik wyłączony, snapshoty bazowe
+  i automatyczne sprzątanie jak na łączu taryfowym (§6.2, Q4, już było).
+- Wznawianie po odświeżeniu: **wysyłanie** — dziennik w IndexedDB (nagłówek: upload ID, node ID, klucz
+  pliku; osobny mały wpis na każdy zapisany fragment z SHA-256 jego jawnej treści). Te same pliki wybrane
+  ponownie (nazwa+rozmiar+mtime+folder) idą pod tym samym upload ID, jeśli upload jest nadal `open`
+  w indeksie i dzierżawę da się wziąć z powrotem (10 min); fragmenty z tą samą treścią nie są wysyłane
+  drugi raz, zmieniony fragment idzie od nowa. Przeglądarka nie pozwala odczytać pliku bez ponownego
+  wyboru — stąd pasek „N wysyłań zostało przerwanych … Wybierz pliki, aby dokończyć”. Anulowanie przez
+  użytkownika czyści dziennik (i jak dotąd: abort). **Pobieranie** — rdzeń umie wznowić od fragmentu k
+  ze stanem SHA-256 (`resume: {versionId, from, hash}`, test); w przeglądarce zapis idzie przez
+  service worker do „Pobranych”, którego nie da się dopisać po przeładowaniu — wznowienie w UI wymaga
+  File System Access API (`showSaveFilePicker` + `createWritable({keepExistingData: true})` + `seek`;
+  Chromium na komputerze, brak w Firefox/Safari/Android) albo agenta desktopowego; na razie pobieranie
+  po przeładowaniu zaczyna od nowa (opisane w docs/desktop-agent-transport.md jako wymaganie agenta).
+
+### Strażnik zatkanego połączenia (§3)
+- Punkt odniesienia urządzenia: mediana szczytów (najlepsze 10 s) ostatnich ≤ 5 transferów trwających
+  ≥ 20 s, osobno dla wysyłania i pobierania, z ostatnich 7 dni, z tego samego typu sieci, gdy
+  przeglądarka go podaje (Chromium: `navigator.connection.type`); min. 2 pomiary (nowe urządzenie
+  najpierw zbiera). Werdykt „to łącze” dopisuje wolną prędkość jako szczyt: po zmianie sieci punkt
+  odniesienia schodzi w ciągu kilku transferów. Trzymany w localStorage (`ddn.net`).
+- Wyłączony: punkt odniesienia < 5 MB/s, łącze taryfowe / „Oszczędzaj dane”, przełącznik w Settings,
+  brak punktu odniesienia, błędy/429/brak sieci w ostatnich 30 s, tylko jedno połączenie.
+- Wykrycie (tylko pobieranie; wysyłanie w przeglądarce nie ma objawu — 38–40 MB/s równo): po 20 s
+  rozgrzewki przez 30 s < 40 % punktu odniesienia, ≥ 4 fragmenty w oknie, ≥ 2 w locie, mediana
+  pierwszego bajtu ≤ 25 % mediany czasu fragmentu.
+- Test: następny POTRZEBNY fragment idzie drugim połączeniem (iframe sandbox). Przełączenie, gdy sam ten
+  fragment jest ≥ 1,2 × szybszy niż wszystko na starym połączeniu razem (przy zatkanym 14 MB/s vs ~75
+  wychodzi kilkanaście razy). Stare żądania kończą się na starym połączeniu. Kolejna próba ≥ 5 min.
+  Koszt: 0 dodatkowych bajtów (testy: na słabym/taryfowym/wolnym łączu 0 żądań drugim połączeniem).

@@ -17,6 +17,12 @@ class MemResume implements ResumeStore {
   async del(k: string) {
     this.m.delete(k);
   }
+  async entries(p: string): Promise<[string, unknown][]> {
+    return [...this.m].filter(([k]) => k.startsWith(p)).map(([k, v]) => [k, JSON.parse(JSON.stringify(v))]);
+  }
+  async delPrefix(p: string) {
+    for (const k of [...this.m.keys()]) if (k.startsWith(p)) this.m.delete(k);
+  }
 }
 function data(n: number, seed = 0): Uint8Array {
   const b = new Uint8Array(n);
@@ -48,8 +54,8 @@ describe("resume", () => {
       if (n >= 9) throw new Error("webhook post: HTTP 500"); // the tab "dies": 9 posts got through
     };
     await expect(c1.upload(memorySource(src), "big.bin", undefined, { resumeKey: "k1" })).rejects.toThrow();
-    const j = (await w.resume.get("up:k1")) as { uploadId: string; done: Record<string, unknown> };
-    expect(Object.keys(j.done).length).toBe(9);
+    const j = (await w.resume.get("up:k1")) as { uploadId: string };
+    expect((await w.resume.entries("upf:k1:")).length).toBe(9);
     // a new tab: same device, the index caught up from the log (here: the same store), journal in IndexedDB
     w.t.beforePost = undefined;
     const before = w.t.posts;
@@ -60,6 +66,7 @@ describe("resume", () => {
     expect(r.resumed).toBe(9);
     expect(w.t.posts - before).toBe(20 - 9 + 1); // missing fragments + the manifest
     expect(await w.resume.get("up:k1")).toBeUndefined();
+    expect(await w.resume.entries("upf:k1:")).toEqual([]);
     const s = sink();
     await c2.download(r.nodeId, s);
     expect(await sha256Hex(s.all())).toBe(await sha256Hex(src));

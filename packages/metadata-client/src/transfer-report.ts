@@ -92,6 +92,8 @@ export interface Report {
     peakMBps: Record<string, number>;
     concurrency: Record<string, { avg: number; max: number }>;
     stages: Record<string, Record<string, number>>;
+    /** zlecenie 2026-10-15-transfery: window changes, no-network periods, stuck-connection guard, resumes. */
+    network?: { windowCuts: number; windowMin: Record<string, number>; offline: number; offlineMs: number; probes: number; guard: Record<string, number>; resumes: number; byLane: Record<string, { n: number; MB: number }> };
   };
 }
 
@@ -252,6 +254,39 @@ export function buildReport(events: LogEvent[], o: { bucketS?: number; bad?: num
       say(`  ${src} ${dir}: avg ${r2(busy ? area / busy : 0)}, max ${max}${conf ? `, configured ${conf}` : ""}`);
     }
 
+  // ── network: weak link (window), no network (gate), stuck connection (guard), resumes ──
+  const wins = events.filter((e) => e.ev === "win");
+  const gates = events.filter((e) => e.ev === "gate");
+  const guards = events.filter((e) => e.ev === "guard");
+  // gate/guard events use `st` for their state (a word), request events for the HTTP status.
+  const stOf = (e: LogEvent) => String(e.st);
+  const resumes = events.filter((e) => e.ev === "resume");
+  const laned = reqs.filter((e) => typeof e.ln === "number");
+  let network: Report["summary"]["network"];
+  if (wins.length || gates.length || guards.length || resumes.length || laned.length) {
+    const windowMin: Record<string, number> = {};
+    for (const e of wins) windowMin[String(e.dir)] = Math.min(windowMin[String(e.dir)] ?? Infinity, Number(e.lim));
+    const guard: Record<string, number> = {};
+    for (const e of guards) guard[String(e.st)] = (guard[String(e.st)] ?? 0) + 1;
+    const byLane: Record<string, { n: number; MB: number }> = {};
+    for (const e of laned) {
+      const k = String(e.ln);
+      byLane[k] ??= { n: 0, MB: 0 };
+      byLane[k]!.n++;
+      byLane[k]!.MB = r1(byLane[k]!.MB + mb(e.b ?? 0));
+    }
+    const offlineMs = gates.filter((e) => stOf(e) === "open" && typeof e.waited === "number").reduce((a, e) => a + Number(e.waited), 0);
+    network = { windowCuts: wins.filter((e) => e.why !== "ok").length, windowMin, offline: gates.filter((e) => stOf(e) === "down" || stOf(e) === "offline").length, offlineMs, probes: gates.filter((e) => stOf(e) === "probe").length, guard, resumes: resumes.length, byLane };
+    say();
+    say("Network");
+    say(`  pieces in flight cut by network errors: ${network.windowCuts}×${Object.keys(windowMin).length ? `, lowest ${Object.entries(windowMin).map(([d, v]) => `${d} ${v}`).join(", ")}` : ""}`);
+    say(`  without network: ${network.offline}× for ${r1(offlineMs / 1000)} s in total, ${network.probes} probe request(s)`);
+    say(`  stuck-connection guard: ${Object.keys(guard).length ? Object.entries(guard).map(([k, v]) => `${k} ${v}`).join(", ") : "nothing"}`);
+    for (const e of guards) say(`    +${r1((e.t - t0) / 1000)} s ${e.st}${e.thr !== undefined ? ` (all on the connection ${r1(mb(Number(e.thr)))} MB/s` : ""}${e.base !== undefined ? `, usual ${r1(mb(Number(e.base)))} MB/s` : ""}${e.probe !== undefined ? `, probe ${r1(mb(Number(e.probe)))} MB/s` : ""}${e.thr !== undefined ? ")" : ""}`);
+    if (laned.length) say(`  downloads per connection: ${Object.entries(byLane).map(([k, v]) => `#${k} ${v.n} req, ${v.MB} MB`).join("; ")}`);
+    if (resumes.length) say(`  resumed transfers: ${resumes.length} (${resumes.map((e) => `${e.dir} ${e.have}/${e.n}`).join(", ")})`);
+  }
+
   // ── throughput over time, total and per channel (bytes of successful requests spread over their duration)
   const series = new Map<string, Map<number, number>>();
   const add = (key: string, from: number, to: number, b: number) => {
@@ -299,7 +334,7 @@ export function buildReport(events: LogEvent[], o: { bucketS?: number; bad?: num
     }
   }
 
-  return { text: lines.join("\n") + "\n", timelineCsv: csv.join("\n") + "\n", filesCsv: fileRows.join("\n") + "\n", summary: { events: events.length, files, requests, rateLimits, retries, peakMBps, concurrency, stages } };
+  return { text: lines.join("\n") + "\n", timelineCsv: csv.join("\n") + "\n", filesCsv: fileRows.join("\n") + "\n", summary: { events: events.length, files, requests, rateLimits, retries, peakMBps, concurrency, stages, network } };
 }
 
 const short = (id: string) => (id.length > 8 ? `…${id.slice(-6)}` : id);

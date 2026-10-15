@@ -8,6 +8,7 @@
 //
 // on* handlers: always a block body or `void …`. An on* handler that RETURNS false cancels the event
 // (an `e.key === "Enter" && …` arrow blocked typing in the webhook field); check.ts greps for it.
+import { uploadResumeKey } from "./resume-idb.js";
 import { renderSVG } from "uqr";
 import type { CoreEvent, OpOutcome, TrashRow, UiNotice } from "./app-core.js";
 import { applyStatic, fmtDate, fmtDateTime, fmtNum, fmtSize, getLang, isLang, setLang, storeLang, storedLang, t, tn, type Lang } from "./i18n.js";
@@ -40,6 +41,8 @@ function onCoreEvent(e: CoreEvent) {
   else if (e.type === "notices") showNotices(e.notices);
   else if (e.type === "cleanup" && route.name === "settings") void renderStorage();
   else if (e.type === "channel-move") channelsUi.onMoveEvent(e.status);
+  else if (e.type === "net") paintNet(e.state);
+  else if (e.type === "net-baseline") storeNet({ baseline: e.data });
 }
 export const core = connect(worker, onCoreEvent);
 (window as unknown as { ddnCore: typeof core }).ddnCore = core;
@@ -1029,6 +1032,7 @@ async function uploadAll(files: File[], into?: string) {
   box.hidden = false;
   ui("queue-close").hidden = true;
   uploading = { done: 0, total: files.length };
+  $("unfinished").hidden = true; // painted again when the queue ends (what is left unfinished then)
   // The whole batch: speed / time left over every byte of it (waits between files count too).
   const batch = new SpeedMeter(total, Date.now());
   const meta = () => {
@@ -1076,9 +1080,10 @@ async function uploadAll(files: File[], into?: string) {
       meta();
     });
     try {
-      await core.upload(f, f.name, folder, token);
+      const r = await core.upload(f, f.name, folder, token, uploadResumeKey(folder, f));
       state.className = "qstate done";
       state.textContent = t("queue.ok");
+      if (r.resumed) state.title = t("queue.resumed", { n: r.resumed });
       bar.className = "done";
     } catch (e) {
       // Cancelled is the user's choice, not a failure: muted text and bar like discordrive's CANCELLED.
@@ -1116,6 +1121,7 @@ async function uploadAll(files: File[], into?: string) {
   ui("queue-close").hidden = false;
   if (failed) toast(t("queue.failed", { failed, total: files.length }), "err");
   paintFailed();
+  void paintUnfinished();
   startQueueCountdown();
   await render();
 }
@@ -1198,6 +1204,106 @@ function wireFilesPage() {
   };
 }
 
+
+// ── network state, save data, stuck-connection guard, unfinished uploads (zlecenie 2026-10-15-transfery) ──
+const NET_KEY = "ddn.net";
+type NetPrefs = { saveData?: boolean; guard?: boolean; baseline?: unknown };
+function storedNet(): NetPrefs {
+  try {
+    return JSON.parse(localStorage.getItem(NET_KEY) ?? "{}") as NetPrefs;
+  } catch {
+    return {};
+  }
+}
+function storeNet(p: NetPrefs) {
+  try {
+    localStorage.setItem(NET_KEY, JSON.stringify({ ...storedNet(), ...p }));
+  } catch {
+    /* private mode */
+  }
+}
+let netState = "ok";
+let netResumeTimer = 0;
+/** One line in both transfer panels, in words (no codes): weak link / waiting for the network / resumed. */
+function paintNet(state: string) {
+  netState = state;
+  clearTimeout(netResumeTimer);
+  for (const id of ["queue-net", "dl-net"]) {
+    const el = $(id);
+    el.hidden = state === "ok";
+    el.dataset.state = state;
+    el.textContent = state === "weak" ? t("net.weak") : state === "offline" ? t("net.offline") : state === "resumed" ? t("net.resumed") : "";
+  }
+  if (state === "resumed") netResumeTimer = window.setTimeout(() => netState === "resumed" && paintNet("ok"), 5000);
+}
+/** Second CDN connection: lane.html in a hidden sandboxed iframe (opaque origin = its own connection). */
+function startLane() {
+  if (document.querySelector("[data-ddn=lane-frame]")) return;
+  const f = document.createElement("iframe");
+  f.hidden = true;
+  f.dataset.ddn = "lane-frame";
+  f.setAttribute("sandbox", "allow-scripts");
+  f.setAttribute("aria-hidden", "true");
+  f.tabIndex = -1;
+  f.src = "/lane.html";
+  addEventListener("message", (e) => {
+    if (e.source !== f.contentWindow || !(e.data as { ddnLaneReady?: number })?.ddnLaneReady) return;
+    const ch = new MessageChannel();
+    f.contentWindow!.postMessage({ ddnLane: 1 }, "*", [ch.port1]);
+    worker.postMessage({ ddnLane: 1 }, [ch.port2]);
+  });
+  document.body.append(f);
+}
+function wireNet() {
+  addEventListener("online", () => void core.setOnline(true));
+  addEventListener("offline", () => void core.setOnline(false));
+  if (!navigator.onLine) void core.setOnline(false);
+  const p = storedNet();
+  void core.setNetPrefs({ saveData: !!p.saveData, guard: p.guard !== false, baseline: p.baseline ?? null }).then(paintNetSettings);
+  const save = $<HTMLInputElement>("net-savedata");
+  const guard = $<HTMLInputElement>("net-guard");
+  save.onchange = () =>
+    void act(null, async () => {
+      storeNet({ saveData: save.checked });
+      paintNetSettings(await core.setNetPrefs({ saveData: save.checked }));
+    });
+  guard.onchange = () =>
+    void act(null, async () => {
+      storeNet({ guard: guard.checked });
+      paintNetSettings(await core.setNetPrefs({ guard: guard.checked }));
+    });
+  startLane();
+  $("unfinished-pick").onclick = () => $<HTMLInputElement>("file").click();
+  $("unfinished-forget").onclick = () =>
+    void act(null, async () => {
+      for (const u of await core.unfinishedUploads()) await core.forgetUnfinished(u.key);
+      await paintUnfinished();
+    });
+}
+type NetStatus = Awaited<ReturnType<typeof core.netStatus>>;
+function paintNetSettings(st: NetStatus | null) {
+  if (!st) return;
+  const save = $<HTMLInputElement>("net-savedata");
+  save.checked = st.saveData || st.browserMetered;
+  save.disabled = st.browserMetered;
+  $("net-savedata-t").textContent = st.browserMetered ? `${t("net.save.t")} ${t("net.save.auto")}` : t("net.save.t");
+  const guard = $<HTMLInputElement>("net-guard");
+  guard.checked = st.guard;
+  guard.disabled = st.metered;
+  const r = (v: number | null) => (v ? fmtRate(v) : t("net.info.none"));
+  $("net-info").textContent = t("net.info", { down: r(st.baseline.down), up: r(st.baseline.up), lanes: st.lanes, sw: st.guardStats.switches, probes: st.guardStats.probes });
+}
+async function paintUnfinished() {
+  const list = await core.unfinishedUploads().catch(() => []);
+  const box = $("unfinished");
+  box.hidden = list.length === 0 || !!uploading;
+  if (box.hidden) return;
+  $("unfinished-count").textContent = tn("unf.count", list.length);
+  $("unfinished-list").replaceChildren(
+    ...list.map((u) => h("li", { "data-ddn": "unfinished-item" }, h("span", { class: "n", title: u.name }, t("unf.item", { name: u.name, have: u.have, n: u.n })))),
+    h("li", {}, h("span", { class: "why" }, t("unf.t"))),
+  );
+}
 
 // ── downloads panel (zlecenie 2026-10-13-transfer §1): progress, speed, time left, cancel ──
 let dlRunning = 0;
@@ -1911,6 +2017,7 @@ async function paintConcurrency() {
 }
 async function renderDiagnostics() {
   void paintConcurrency();
+  void core.netStatus().then(paintNetSettings, () => null);
   const st = await core.transferLogStatus().catch(() => null);
   if (!st) return;
   $<HTMLInputElement>("diag-log").checked = st.on;
@@ -2521,6 +2628,7 @@ async function main() {
   wireTrash();
   wireStorage();
   wireDiagnostics();
+  wireNet();
   wireSecurity();
   $("dl-close").onclick = () => closeDownloads();
   $("share-copy").onclick = () => void copy($<HTMLTextAreaElement>("share-link").value, t("shareD.copied"));
@@ -2532,6 +2640,7 @@ async function main() {
   ui<HTMLDialogElement>("player-dialog").addEventListener("close", () => $<HTMLVideoElement>("player").pause());
   if ((await core.status()).hasAccount) await act(null, () => core.open());
   await applyTransferLog();
+  if ((await core.status()).signedIn) void paintUnfinished();
   // Link from a QR code scanned by a phone camera: …/#pair=ddn-pair1:…
   const hashPair = location.hash.startsWith("#pair=") ? decodeURIComponent(location.hash.slice(6)) : null;
   if (hashPair) {

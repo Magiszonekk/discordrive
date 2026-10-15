@@ -11,7 +11,7 @@
 //
 // No webhook URL ever reaches the client. Marker for the build-time mode check: ddn-server-blobs.
 
-import { guardedRead, netCall, retryFree, NetworkError, type LaneTiming, type NetControl } from "./net.js";
+import { guardedRead, netCall, retryFree, watchedPost, NetworkError, type LaneTiming, type NetControl } from "./net.js";
 import type { LaneFetch } from "./blob-store.js";
 import { sha256Hex } from "./file-crypto.js";
 import { AbortedError, type BlobGetContext, type BlobPutContext, type BlobStore } from "./blob-store.js";
@@ -113,13 +113,13 @@ export class ServerBlobStore implements BlobStore {
       const t0 = log ? nowMs() : 0;
       const ev = log ? { dir: "up", x: u, i, a, k: "server", b: data.byteLength, fl: log.fl.up } : null;
       try {
-        r = await netCall(this.net, "up", ctx.signal, () => this.api.request("PUT", `/v1/uploads/${u}/blobs/${i}`, {
+        r = await netCall(this.net, "up", ctx.signal, () => watchedPost(this.net, data.byteLength, () => this.api.request("PUT", `/v1/uploads/${u}/blobs/${i}`, {
           // A Blob, not the Uint8Array: Chromium sends a typed-array body at ~8.5 MB/s, a Blob at hundreds
           // (measured 2026-10-14, discord-transport.ts webhookForm). Same bytes, same content-length.
           body: new Blob([data as BlobPart]),
           headers: { "content-type": "application/octet-stream", "x-ddn-sha256": sha },
           signal: ctx.signal,
-        }));
+        })));
       } catch (e) {
         if (log) log.emit("req", { ...ev, dur: ms(t0), err: errText(e) });
         if (ctx.signal?.aborted) throw new AbortedError();
@@ -181,7 +181,18 @@ export class ServerBlobStore implements BlobStore {
     const log = ctx?.x !== undefined ? this.log : null;
     const ev = log ? { dir: "down", x: ctx!.x, i: ctx!.i ?? 0, hook: p.locationId, ch: p.channelId ?? null } : null;
     if (!this.proxyOnly) {
-      await this.prefetch([p]);
+      // Fresh link from the instance; without network it waits at the gate like every other request.
+      for (let a = 0; ; a++) {
+        try {
+          await netCall(this.net, "down", signal, () => this.prefetch([p]));
+          break;
+        } catch (e) {
+          if (signal?.aborted) throw new AbortedError();
+          if (retryFree(e)) continue;
+          if (a >= this.maxRetries) throw e;
+          await this.backoff(a + 1);
+        }
+      }
       const l = this.links.get(p.attachmentId);
       if (l) {
         const t0 = log ? nowMs() : 0;

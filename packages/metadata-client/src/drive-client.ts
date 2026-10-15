@@ -170,9 +170,16 @@ export interface ResumeStore {
   get(key: string): Promise<unknown>;
   put(key: string, value: unknown): Promise<void>;
   del(key: string): Promise<void>;
+  /** Every entry whose key starts with `prefix`. */
+  entries(prefix: string): Promise<[string, unknown][]>;
+  delPrefix(prefix: string): Promise<void>;
 }
 
-/** Journal of an unfinished upload: which fragments are already on Discord, and with which plaintext. */
+/**
+ * Journal of an unfinished upload: the header under `up:<resumeKey>`, and one small entry per stored
+ * fragment under `upf:<resumeKey>:<index>` (written as each fragment lands: O(1) per fragment, also for a
+ * 100 GB file with 10 000 fragments).
+ */
 export interface UploadJournal {
   v: 1;
   uploadId: string;
@@ -182,10 +189,14 @@ export interface UploadJournal {
   size: number;
   chunk: number;
   key: string;
-  /** Fragment index → its ChunkRef and the SHA-256 of its plaintext (a changed file is not mixed in). */
-  done: Record<string, { c: ChunkRef; ph: string }>;
   at: number;
 }
+/** One stored fragment of an unfinished upload, and the SHA-256 of its plaintext (a changed file is not mixed in). */
+export interface UploadJournalFrag {
+  c: ChunkRef;
+  ph: string;
+}
+export const resumeKeys = (resumeKey: string) => ({ head: `up:${resumeKey}`, frags: `upf:${resumeKey}:` });
 
 export interface UploadOptions {
   /** Plaintext bytes whose fragments are stored so far (called after each fragment and on stage changes). */
@@ -358,13 +369,26 @@ export class DriveClient {
     const deviceId = this.d.device.id;
     // Resume (zlecenie 2026-10-15-transfery §2): the same upload ID, file key and node ID as the unfinished
     // upload, if it is still open in the index and its lease can be taken again; otherwise a fresh start.
-    const rkey = opts.resumeKey && this.d.resume ? `up:${opts.resumeKey}` : null;
+    const rs = this.d.resume;
+    const rk = opts.resumeKey && rs ? resumeKeys(opts.resumeKey) : null;
     let jr: UploadJournal | null = null;
-    if (rkey) {
-      const j = (await this.d.resume!.get(rkey).catch(() => null)) as UploadJournal | null;
+    const prevFrags = new Map<number, UploadJournalFrag>();
+    const forget = async () => {
+      if (!rk) return;
+      await rs!.del(rk.head).catch(() => {});
+      await rs!.delPrefix(rk.frags).catch(() => {});
+    };
+    if (rk) {
+      const j = (await rs!.get(rk.head).catch(() => null)) as UploadJournal | null;
       const u = j?.v === 1 ? this.store.getUpload(j.uploadId) : undefined;
-      if (j && u?.status === "open" && j.size === src.size && j.chunk === this.chunkSize && j.parentId === parentId && j.name === nfc && (await this.d.arbiter.renewLease(j.uploadId, deviceId))) jr = j;
-      else if (j) await this.d.resume!.del(rkey).catch(() => {});
+      if (j && u?.status === "open" && j.size === src.size && j.chunk === this.chunkSize && j.parentId === parentId && j.name === nfc && (await this.d.arbiter.renewLease(j.uploadId, deviceId))) {
+        jr = j;
+        for (const [k, v] of await rs!.entries(rk.frags).catch(() => [] as [string, unknown][])) {
+          const i = Number(k.slice(rk.frags.length));
+          const f = v as UploadJournalFrag;
+          if (Number.isInteger(i) && f?.c && typeof f.ph === "string") prevFrags.set(i, f);
+        }
+      } else if (j) await forget();
     }
     const uploadId = jr?.uploadId ?? newId();
     const nodeId = jr?.nodeId ?? newId();
@@ -398,19 +422,9 @@ export class DriveClient {
       const key = jr ? await importFileKey(jr.key) : await newFileKey();
       const count = Math.max(1, Math.ceil(src.size / this.chunkSize));
       const chunks: ChunkRef[] = new Array(count);
-      const journal: UploadJournal | null = rkey ? (jr ?? { v: 1, uploadId, nodeId, parentId, name: nfc, size: src.size, chunk: this.chunkSize, key: key.rawB64, done: {}, at: Date.now() }) : null;
-      // The journal is rewritten at most every 2 s (and at the end of the file), not per fragment.
-      let jDirty = false;
-      let jAt = 0;
-      const saveJournal = async (force = false) => {
-        if (!journal || !jDirty || (!force && Date.now() - jAt < 2000)) return;
-        jDirty = false;
-        jAt = Date.now();
-        journal.at = jAt;
-        await this.d.resume!.put(rkey!, journal).catch(() => {});
-      };
-      if (journal && !jr) ((jDirty = true), await saveJournal(true));
-      if (jr) log?.emit("resume", { dir: "up", x: uploadId, have: Object.keys(jr.done).length, n: count });
+      const journal = !!rk;
+      if (rk && !jr) await rs!.put(rk.head, { v: 1, uploadId, nodeId, parentId, name: nfc, size: src.size, chunk: this.chunkSize, key: key.rawB64, at: Date.now() } satisfies UploadJournal).catch(() => {});
+      if (jr) log?.emit("resume", { dir: "up", x: uploadId, have: prevFrags.size, n: count });
       const hasher = await createSHA256();
       hasher.init();
       // The whole-file plaintext hash must be fed in order. Reads run in parallel (each fragment's own),
@@ -458,7 +472,7 @@ export class DriveClient {
             if (log) f1 = nowMs();
             // Resume: the same plaintext as in the unfinished upload → its stored fragment is taken over.
             const ph = journal ? await sha256Hex(data) : "";
-            const prev = jr?.done[String(i)];
+            const prev = prevFrags.get(i);
             if (prev && prev.ph === ph) {
               chunks[i] = prev.c;
               resumed++;
@@ -478,11 +492,7 @@ export class DriveClient {
             const placed = await this.blobs.put(ct, `${blobId}${BLOB_EXT}`, { uploadId, index: i, sha256: hash, signal, stats });
             stages.net--;
             chunks[i] = { index: i, blobId, ciphertextSizeBytes: ct.byteLength, ciphertextHash: hash, placements: [placed] };
-            if (journal) {
-              journal.done[String(i)] = { c: chunks[i]!, ph };
-              jDirty = true;
-              void saveJournal();
-            }
+            if (rk) void rs!.put(rk.frags + i, { c: chunks[i]!, ph } satisfies UploadJournalFrag).catch(() => {});
             const f4 = log ? nowMs() : 0;
             sentBytes += data.byteLength;
             // rd = from the worker taking the fragment to it being read and hashed in order; ph = the hash step.
@@ -504,7 +514,6 @@ export class DriveClient {
       const aborted = signal ? new Promise<void>((r) => (signal.aborted ? r() : signal.addEventListener("abort", () => r(), { once: true }))) : null;
       await (aborted ? Promise.race([done, aborted]) : done);
       failed = true;
-      await saveJournal(true);
       throwIfAborted(signal);
       if (firstErr) throw firstErr;
       await hashChain;
@@ -541,7 +550,7 @@ export class DriveClient {
         "upload_commit+create",
       );
       log?.emit("commit", { dir: "up", x: uploadId, dur: ms(tf) });
-      if (rkey) await this.d.resume!.del(rkey).catch(() => {});
+      await forget();
       endLog(true);
       return { nodeId, uploadId, version, chunks: count, posts: stats.posts, resumed };
     } catch (e) {
@@ -549,8 +558,8 @@ export class DriveClient {
       // Cancelled or failed before finalize: the store may drop what was sent (e2ee/plain: the server deletes).
       // A cancel by the user forgets the journal; a failure (network, tab closing) keeps it for a resume.
       const cancelled = e instanceof Error && e.name === "AbortError";
-      if (rkey && cancelled) await this.d.resume!.del(rkey).catch(() => {});
-      if (!committed && (cancelled || !rkey)) await this.blobs.abort?.(uploadId).catch(() => {});
+      if (cancelled) await forget();
+      if (!committed && (cancelled || !rk)) await this.blobs.abort?.(uploadId).catch(() => {});
       throw e;
     } finally {
       await this.d.arbiter.releaseLease(uploadId, deviceId);
@@ -675,7 +684,8 @@ export class DriveClient {
         while (launched < ordered.length && fetching < Math.min(conc, win.limit) && launched - writing < ahead) {
           const k = launched++;
           // Batch hint every 50 fragments (e2ee/plain: one link refresh call instead of 50).
-          if (k % 50 === 0) await this.blobs.prefetch?.(ordered.slice(k, k + 50).map((y) => y.placements?.[0] as DiscordPlacement).filter(Boolean));
+          // Only a hint: a failure here (no network) is retried per fragment inside get().
+          if (k % 50 === 0) await this.blobs.prefetch?.(ordered.slice(k, k + 50).map((y) => y.placements?.[0] as DiscordPlacement).filter(Boolean)).catch(() => {});
           fetching++;
           const pr = fetchOne(ordered[k]!);
           pr.then(

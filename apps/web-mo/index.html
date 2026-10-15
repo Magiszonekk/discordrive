@@ -211,6 +211,7 @@
           <div class="t"><b data-ddn-ui="queue-title" data-i18n="queue.title">Uploads</b><span data-ddn-ui="queue-meta"></span></div>
           <button class="iconbtn" type="button" data-ddn-ui="queue-close" data-i18n-attr="aria-label=queue.hide" hidden><svg class="i"><use href="#i-x"/></svg></button>
         </div>
+        <p class="netstate" data-ddn="queue-net" role="status" hidden></p>
         <ul class="qlist" data-ddn-ui="queue-list"></ul>
         <p class="hint" data-i18n="queue.note"></p>
       </section>
@@ -220,8 +221,17 @@
           <div class="t"><b data-ddn-ui="dl-title" data-i18n="dl.title">Downloads</b><span data-ddn-ui="dl-meta"></span></div>
           <button class="iconbtn" type="button" data-ddn="dl-close" data-i18n-attr="aria-label=queue.hide" hidden><svg class="i"><use href="#i-x"/></svg></button>
         </div>
+        <p class="netstate" data-ddn="dl-net" role="status" hidden></p>
         <ul class="qlist" data-ddn="dl-list"></ul>
         <p class="hint" data-i18n="dl.note"></p>
+      </section>
+      <!-- Uploads a reload or a lost network left unfinished: pick the same file again to continue (zlecenie 2026-10-15-transfery §2). -->
+      <section class="note warn upfail" data-ddn="unfinished" role="status" hidden>
+        <svg class="i"><use href="#i-info"/></svg>
+        <div class="upfail-b">
+          <div class="upfail-h"><b data-ddn="unfinished-count"></b><span class="row-btns"><button class="btn sm" type="button" data-ddn="unfinished-pick" data-i18n="unf.pick">Choose files to continue</button><button class="iconbtn" type="button" data-ddn="unfinished-forget" data-i18n-attr="aria-label=unf.forget, title=unf.forget"><svg class="i"><use href="#i-x"/></svg></button></span></div>
+          <ul class="upfail-list" data-ddn="unfinished-list"></ul>
+        </div>
       </section>
       <!-- Files that did not go in stay listed after the queue panel closed itself: why, Retry, dismiss. -->
       <section class="note warn upfail" data-ddn="upload-failed" role="status" hidden>
@@ -407,6 +417,8 @@
             <label class="ack"><input type="checkbox" data-ddn="diag-names"><span data-i18n="diag.names">Include file names</span></label>
             <p class="hint" data-i18n="diag.names.t"></p>
             <p class="hint" data-ddn="diag-info" role="status" aria-live="polite"></p>
+            <label class="ack"><input type="checkbox" data-ddn="net-savedata"><span data-i18n="net.save">Save data</span></label>
+            <p class="hint" data-ddn="net-savedata-t" data-i18n="net.save.t"></p>
             <details class="howto" data-ddn="diag-adv">
               <summary><svg class="i"><use href="#i-right"/></svg><span data-i18n="diag.adv">Advanced: pieces in flight</span></summary>
               <div class="stack">
@@ -417,6 +429,9 @@
                 </div>
                 <p class="hint" data-ddn="diag-conc-now" role="status" aria-live="polite"></p>
                 <div class="note warn" data-ddn="diag-conc-warn" hidden><svg class="i"><use href="#i-info"/></svg><p data-ddn-ui="diag-conc-warn-t"></p></div>
+                <label class="ack"><input type="checkbox" data-ddn="net-guard"><span data-i18n="net.guard">Replace a stuck connection</span></label>
+                <p class="hint" data-i18n="net.guard.t"></p>
+                <p class="hint" data-ddn="net-info" role="status" aria-live="polite"></p>
               </div>
             </details>
             <div class="row-btns"><button class="btn" type="button" data-ddn="diag-download"><svg class="i"><use href="#i-download"/></svg><span data-i18n="diag.download">Download logs</span></button><button class="btn" type="button" data-ddn="diag-clear"><svg class="i"><use href="#i-trash"/></svg><span data-i18n="diag.clear">Clear</span></button></div>

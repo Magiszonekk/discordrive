@@ -112,6 +112,12 @@ export class StaticSite {
     };
     // The service worker must be allowed to control the whole origin.
     if (rel === "/sw.js") h["service-worker-allowed"] = "/";
+    // The second CDN connection (web-mo src/lane.ts) runs in a sandboxed iframe of this app: only this
+    // page may be framed, and only by this origin (every other page stays frame-ancestors 'none' / DENY).
+    if (rel === "/lane.html") {
+      h["content-security-policy"] = String(h["content-security-policy"]).replace("frame-ancestors 'none'", "frame-ancestors 'self'");
+      h["x-frame-options"] = "SAMEORIGIN";
+    }
     if (req.headers["if-none-match"] === f.etag) {
       res.writeHead(304, h);
       return void res.end(), true;

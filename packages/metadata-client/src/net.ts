@@ -515,9 +515,14 @@ export class StuckGuard {
     return this.flight.reduce((a, b) => a + b, 0);
   }
 
+  /** Idle = nothing in flight for this long (the gap between one piece and the next is not "idle"). */
+  private static readonly IDLE_MS = 3000;
+  private idleTimer: unknown = null;
+
   /** A guarded request starts: which connection it goes on. */
   start(): GuardHandle {
     const now = this.clock.now();
+    if (this.idleTimer !== null) (this.clock.clearTimeout(this.idleTimer), (this.idleTimer = null));
     if (this.inFlight() === 0 && this.busySince === null) ((this.busySince = now), (this.peak = 0), (this.samples = []));
     let lane = this.lane;
     let probe = false;
@@ -550,8 +555,12 @@ export class StuckGuard {
       if (this.busySince !== null && now - this.busySince >= this.o.peakMs) this.peak = Math.max(this.peak, this.throughput(now, null, this.o.peakMs));
     }
     if (h.probe && this.probe) this.judge(h, r, now);
-    if (this.inFlight() === 0) this.idle(now);
-    else this.detect(now);
+    if (this.inFlight() > 0) return this.detect(now);
+    if (this.idleTimer === null)
+      this.idleTimer = this.clock.setTimeout(() => {
+        this.idleTimer = null;
+        if (this.inFlight() === 0) this.idle(now);
+      }, StuckGuard.IDLE_MS);
   }
 
   private judge(h: GuardHandle, r: { ok: boolean; bytes?: number; ttfb?: number }, now: number): void {
@@ -642,6 +651,11 @@ export class NetControl {
   readonly gate: NetGate;
   readonly win: { up: AdaptiveWindow; down: AdaptiveWindow };
   readonly guard: StuckGuard;
+  /**
+   * Uploads: only watched, for the reference speed (one connection lane: never probes). The browser
+   * shows no stuck-upload symptom (38–40 MB/s steady on one connection); the desktop agent would.
+   */
+  readonly guardUp: StuckGuard;
   readonly baseline = new SpeedBaseline();
   /** Settings → "Save data". */
   saveData = false;
@@ -674,6 +688,13 @@ export class NetControl {
         baseline: this.baseline,
         netType: () => this.netType_(),
       },
+      this.clock,
+      emit,
+      o.guard,
+    );
+    this.guardUp = new StuckGuard(
+      "up",
+      { lanes: () => 1, enabled: () => false, offline: () => !this.gate.open, baseline: this.baseline, netType: () => this.netType_() },
       this.clock,
       emit,
       o.guard,
@@ -774,6 +795,20 @@ export async function guardedRead(net: NetControl | null | undefined, timing: La
     return d;
   } catch (e) {
     net.guard.end(h, { ok: false, trouble: !signal?.aborted });
+    throw e;
+  }
+}
+
+/** An upload request watched for the reference speed (no probes, no other connection). */
+export async function watchedPost<T>(net: NetControl | null | undefined, bytes: number, fn: () => Promise<T>): Promise<T> {
+  if (!net) return fn();
+  const h = net.guardUp.start();
+  try {
+    const v = await fn();
+    net.guardUp.end(h, { ok: true, bytes });
+    return v;
+  } catch (e) {
+    net.guardUp.end(h, { ok: false });
     throw e;
   }
 }

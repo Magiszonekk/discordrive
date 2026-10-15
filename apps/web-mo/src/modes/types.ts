@@ -8,7 +8,7 @@
 // against ModeImpl below.
 
 import type { IndexStore } from "@ddv4/sync-core";
-import type { AccountKey, ArbiterApi, DriveClient, HttpApi, NetControl, ShareAttachment } from "@ddv4/metadata-client";
+import type { AccountKey, ArbiterApi, DriveClient, HttpApi, NetControl, ResumeStore, ShareAttachment } from "@ddv4/metadata-client";
 
 export type ModeName = "metadata-only" | "e2ee" | "plain";
 
@@ -34,6 +34,8 @@ export interface ModeCtx {
   serverTimeOf(seq: number): number | undefined;
   /** Network state shared by every client this tab builds (gate, windows, guard; zlecenie 2026-10-15-transfery). */
   net?: NetControl;
+  /** Unfinished uploads of this account (resume after a reload). */
+  resume?: ResumeStore;
 }
 
 /** One own channel (webhook) with what lies on it (zlecenie 2026-10-13-webhooki p. 1–2). */

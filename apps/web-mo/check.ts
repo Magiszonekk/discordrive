@@ -1138,6 +1138,116 @@ try {
   await nav(p, "files");
   r.contextMenu = cm;
 
+  // 10c'''. zlecenie 2026-10-15-transfery: the network goes away mid-download (context.setOffline): the panel
+  // says "waiting for the network" (no error); it comes back: "resumed", the file completes with the right
+  // SHA-256. The second connection (sandboxed iframe lane) downloads a file with Origin: null. Save data and
+  // the stuck-connection switch in Settings > Diagnostics. An upload broken by a reload continues: only the
+  // missing pieces are sent.
+  step("network");
+  {
+    const nw: Record<string, any> = {};
+    r.network = nw; // filled as it goes (a failure shows how far it got)
+    const core = (fn: string, ...a: unknown[]) => p.evaluate(([f, args]) => (window as unknown as { ddnCore: Record<string, (...x: unknown[]) => Promise<unknown>> }).ddnCore[f as string]!(...(args as unknown[])), [fn, a] as const);
+    // Own folder and file (earlier steps moved things around): 3 fragments of 10 MiB + a bit.
+    const nDir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-net-"));
+    const netFile = join(nDir, "siec.bin");
+    writeFileSync(netFile, (await import("node:crypto")).randomBytes(2 * 10 * 1024 * 1024 + 4096));
+    const nFolder = await core("mkdir", "Siec");
+    await p.goto(`${base}/folder/${nFolder}`);
+    await p.waitForSelector("body[data-ready='1']");
+    await p.setInputFiles("[data-ddn=file]", [netFile]);
+    await p.waitForFunction((done) => document.querySelector("[data-ddn-ui=queue-title]")?.textContent === done, L.uploaded, { timeout: 120_000 });
+    await p.waitForSelector("[data-ddn=row]");
+    const netRow = () => p.locator("[data-ddn=row]", { hasText: "siec.bin" }).first().locator("[data-ddn=download]");
+    // The lane iframe is there and attached (2 connections).
+    await p.waitForFunction(() => !!document.querySelector("iframe[data-ddn=lane-frame][sandbox='allow-scripts']"));
+    nw.lanes = await p
+      .waitForFunction(async () => ((await (window as unknown as { ddnCore: { netStatus(): Promise<{ lanes: number }> } }).ddnCore.netStatus()).lanes === 2 ? 2 : 0), null, { timeout: 15_000, polling: 200 })
+      .then(() => 2)
+      .catch(() => 1);
+    // Download over the second connection (as after a switch by the guard): CDN reads with Origin: null.
+    fake?.cdnOriginsSeen.clear();
+    await core("netUseLane", 1);
+    const [d1] = await Promise.all([p.waitForEvent("download", { timeout: 120_000 }), netRow().click()]);
+    nw.laneSha = sha(readFileSync((await d1.path())!)) === sha(readFileSync(netFile));
+    nw.laneOrigins = fake ? [...fake.cdnOriginsSeen] : null;
+    await core("netUseLane", 0);
+    // Offline in the middle of a download: a slow CDN, so it is still running when the network goes.
+    if (fake) fake.cdnDelayMs = 1500;
+    const dlP = Promise.all([p.waitForEvent("download", { timeout: 180_000 }), netRow().click()]);
+    await p.waitForSelector("[data-ddn=dl-item][data-state]:not([data-state=done]), [data-ddn=dl-item]:not([data-state])", { timeout: 30_000 });
+    await p.waitForTimeout(300);
+    await ctx.setOffline(true);
+    await p.waitForSelector("[data-ddn=dl-net]:not([hidden])[data-state=offline]", { timeout: 30_000 });
+    nw.offlineText = await p.textContent("[data-ddn=dl-net]");
+    await p.waitForTimeout(3000);
+    nw.noErrorWhileOffline = (await p.locator("[data-ddn=dl-item][data-state=err]").count()) === 0;
+    await shot(p, "30-waiting-for-network");
+    await ctx.setOffline(false);
+    nw.resumedShown = await p.waitForSelector("[data-ddn=dl-net][data-state=resumed]", { timeout: 30_000 }).then(() => true).catch(() => false);
+    if (fake) fake.cdnDelayMs = 0;
+    const [d2] = await dlP;
+    nw.offlineSha = sha(readFileSync((await d2.path())!)) === sha(readFileSync(netFile));
+    // Settings > Diagnostics: Save data on = 2 at once, stuck-connection switch off; both remembered.
+    await nav(p, "settings");
+    await p.click("[data-ddn=diag-adv] summary");
+    await p.waitForSelector("[data-ddn=net-guard]");
+    nw.guardDefault = await p.isChecked("[data-ddn=net-guard]");
+    await p.uncheck("[data-ddn=net-guard]");
+    await p.check("[data-ddn=net-savedata]");
+    await p.waitForTimeout(300);
+    nw.guardDisabledBySaveData = await p.isDisabled("[data-ddn=net-guard]");
+    const st1 = (await core("netStatus")) as { saveData: boolean; guard: boolean; metered: boolean; window: { upMax: number; downMax: number } };
+    nw.saveData = { on: st1.saveData && st1.metered, upMax: st1.window.upMax, downMax: st1.window.downMax, guard: st1.guard };
+    await p.reload();
+    await p.waitForSelector("body[data-ready='1']");
+    const st2 = (await core("netStatus")) as { saveData: boolean; guard: boolean };
+    nw.kept = st2.saveData === true && st2.guard === false;
+    await nav(p, "settings");
+    await p.click("[data-ddn=diag-adv] summary");
+    await p.uncheck("[data-ddn=net-savedata]");
+    await p.waitForSelector("[data-ddn=net-guard]:enabled");
+    await p.check("[data-ddn=net-guard]");
+    await p.waitForTimeout(300);
+    const st3 = (await core("netStatus")) as { saveData: boolean; guard: boolean; window: { downMax: number } };
+    nw.back = st3.saveData === false && st3.guard === true && st3.window.downMax > 2;
+    nw.info = await p.textContent("[data-ddn=net-info]");
+    // Resume an upload after a reload: slow posts, the tab reloads mid-upload, the same file again.
+    if (fake && !remote) {
+      await p.goto(`${base}/folder/${nFolder}`);
+      await p.waitForSelector("body[data-ready='1']");
+      const rDir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-resume-"));
+      const rFile = join(rDir, "wznow.bin");
+      writeFileSync(rFile, (await import("node:crypto")).randomBytes(3 * 10 * 1024 * 1024 + 4096)); // 4 fragments of 10 MiB
+      const posts0 = fake.posts;
+      fake.postDelayMs = 1500;
+      await core("setConcurrency", 1, null);
+      await p.setInputFiles("[data-ddn=file]", [rFile]);
+      const until = Date.now() + 90_000;
+      while (fake.posts - posts0 < 2 && Date.now() < until) await p.waitForTimeout(100);
+      await p.waitForTimeout(400);
+      nw.sentBefore = fake.posts - posts0;
+      await p.reload(); // the tab "breaks" mid-upload
+      await p.waitForSelector("body[data-ready='1']");
+      fake.postDelayMs = 0;
+      nw.unfinishedShown = await p.waitForSelector("[data-ddn=unfinished]:not([hidden])", { timeout: 15_000 }).then(() => true).catch(() => false);
+      nw.unfinishedText = await p.textContent("[data-ddn=unfinished-list]");
+      await shot(p, "31-unfinished-upload");
+      const posts1 = fake.posts;
+      await p.setInputFiles("[data-ddn=file]", [rFile]);
+      await p.waitForFunction((done) => document.querySelector("[data-ddn-ui=queue-title]")?.textContent === done, L.uploaded, { timeout: 120_000 });
+      nw.sentAfter = fake.posts - posts1;
+      nw.title = await p.getAttribute("[data-ddn-ui=queue-list] li:last-child .qstate", "title");
+      nw.unfinishedGone = await p.waitForSelector("[data-ddn=unfinished]", { state: "hidden", timeout: 10_000 }).then(() => true).catch(() => false);
+      await core("setConcurrency", null, null);
+      await p.waitForSelector("[data-ddn=row]:has-text('wznow.bin')", { timeout: 30_000 }).catch(() => {});
+      nw.rowsAfter = await p.$$eval("[data-ddn=row]", (e) => e.map((x) => x.textContent?.slice(0, 30)));
+      const [d3] = await Promise.all([p.waitForEvent("download", { timeout: 120_000 }), p.locator("[data-ddn=row]", { hasText: "wznow.bin" }).first().locator("[data-ddn=download]").click()]);
+      nw.resumeSha = sha(readFileSync((await d3.path())!)) === sha(readFileSync(rFile));
+    }
+    r.network = nw;
+  }
+
   // 10c''. owner's note 2026-10-14: the upload panel closes itself (~5 s after success, later after a
   // failure; hover pauses it) and a failed file stays listed (Details, Retry) after it closed.
   step("queue closes");
@@ -1506,6 +1616,20 @@ try {
         !!o && o.okClosedMs >= 4000 && o.okClosedMs < 9000 && o.hoverKeeps === true && o.closedAfterLeave === true &&
         o.errStillShownAt7s === true && o.failedBar.shown === true && /^1 /.test(String(o.failedBar.count)) && o.errClosedMs >= 10_000 && o.errClosedMs < 17_000 &&
         o.failedBarAfter === true && /^bad/.test(String(o.failedItem)) && o.retried === true && o.xCloses === true && o.dismissed === true
+      );
+    })(),
+    network: (() => {
+      const o = r.network as Record<string, any> | undefined;
+      if (!o) return false;
+      // 4 fragments + manifest; the reload stopped it after >= 2 posts: the resumed run sends only the rest.
+      // resumed = pieces taken over (from the queue item's tooltip); a snapshot post may add 1–2 to the count.
+      const resumed = Number(/\d+/.exec(String(o.title))?.[0] ?? 0);
+      const resumeOk = remote ? true : o.unfinishedShown === true && /wznow\.bin/.test(String(o.unfinishedText)) && o.sentBefore >= 2 && resumed >= 1 && resumed <= o.sentBefore && o.sentAfter <= 5 - resumed + 2 && o.unfinishedGone === true && o.resumeSha === true;
+      return (
+        o.lanes === 2 && o.laneSha === true && (o.laneOrigins === null || (o.laneOrigins as string[]).includes("null")) &&
+        /network|sieć|sieci/i.test(String(o.offlineText)) && o.noErrorWhileOffline === true && o.resumedShown === true && o.offlineSha === true &&
+        o.guardDefault === true && o.saveData.on === true && o.saveData.upMax <= 2 && o.saveData.downMax <= 2 && o.saveData.guard === false && o.guardDisabledBySaveData === true && o.kept === true && o.back === true && /\d/.test(String(o.info)) &&
+        resumeOk
       );
     })(),
     noPageErrors: errors.length === 0,

@@ -62,12 +62,14 @@ import {
   type UploadStages,
 } from "@ddv4/metadata-client";
 import { OpfsTransferLog, gzipText } from "./transfer-log-opfs.js";
+import { NetControl, type BaselineData, type LaneFetch, type NetUiState } from "@ddv4/metadata-client";
 import { fromBase64, toBase64 } from "@ddv4/processing";
 import { claimLeadership, openOpfsIndexStore, requestPersistentStorage } from "@ddv4/metadata-client/browser";
 // Resolved at build time to ONE mode (build.ts): the other modes are not in the bundle.
 import { mode } from "ddn:mode";
 import type { ChannelsView, ModeCleanup, ModeCtx, MoveStatus, RemovalImpact, StorageRun, StorageStatus, StorageTotals } from "./modes/types.js";
 import { keystore, type StoredAccount } from "./keystore.js";
+import { IdbResumeStore } from "./resume-idb.js";
 
 export interface CoreConfig {
   /** Test hook: send discord.com API calls to a local fake. Never set in production. */
@@ -106,6 +108,10 @@ export interface TrashRow {
 export type CoreEvent =
   | { type: "upload-progress"; token: string; done: number; total: number; stages?: UploadStages }
   | { type: "download-progress"; token: string; done: number; total: number }
+  /** Network state for the transfer panels: ok / weak (slowing down) / offline (waiting) / resumed. */
+  | { type: "net"; state: NetUiState }
+  /** The reference speed changed (the UI keeps it in localStorage for the next session). */
+  | { type: "net-baseline"; data: BaselineData }
   | { type: "share-progress"; done: number; total: number }
   | { type: "changed" }
   | { type: "cleanup"; running: boolean }
@@ -130,11 +136,17 @@ const SNAPSHOT_TICK_MS = 15_000;
 const CLEANUP_FIRST_MS = 60_000;
 const CLEANUP_EVERY_MS = 60 * 60_000;
 
-/** Phone or metered link (§6.2, Q4: no bases, no automatic cleanup). */
+type NavConn = { userAgent?: string; onLine?: boolean; connection?: { type?: string; saveData?: boolean; effectiveType?: string } };
+const nav = () => (globalThis as unknown as { navigator?: NavConn }).navigator;
+/** Settings → "Save data" (this browser's choice, sent by the UI). */
+let saveDataOn = false;
+/** Phone or metered link (§6.2, Q4: no bases, no automatic cleanup), or "Save data" on. */
 function meteredLink(): boolean {
-  const nav = (globalThis as unknown as { navigator?: { userAgent?: string; connection?: { type?: string; saveData?: boolean } } }).navigator;
-  return /Android|iPhone|iPad|Mobile/i.test(nav?.userAgent ?? "") || nav?.connection?.type === "cellular" || !!nav?.connection?.saveData;
+  const n = nav();
+  return saveDataOn || /Android|iPhone|iPad|Mobile/i.test(n?.userAgent ?? "") || n?.connection?.type === "cellular" || !!n?.connection?.saveData;
 }
+/** Network type when the browser tells it (Chromium: wifi / ethernet / cellular …); "" elsewhere. */
+const netType = () => nav()?.connection?.type ?? "";
 
 type PendingPair = {
   p: PendingPairing;
@@ -159,6 +171,13 @@ export class AppCore {
   private tlog: TransferLog | null = null;
   /** Settings → Diagnostics → fragments in flight (null = automatic / default); kept by the UI, applied to every client. */
   private conc: { upload: number | null; download: number | null } = { upload: null, download: null };
+  /**
+   * Network state of this tab, shared by every client it builds (zlecenie 2026-10-15-transfery §2–3):
+   * the no-network gate, adaptive windows, the stuck-connection guard and its reference speed.
+   */
+  readonly net = new NetControl({ metered: () => meteredLink(), netType });
+  private lanes: LaneFetch[] = [];
+  private resume: IdbResumeStore | null = null;
   private snapTimer: ReturnType<typeof setInterval> | null = null;
   private gcTimer: ReturnType<typeof setTimeout> | null = null;
   private gc: ModeCleanup | null = null;
@@ -181,7 +200,109 @@ export class AppCore {
   /** Set by the worker host: push events to the UI. */
   onEvent: (e: CoreEvent) => void = () => {};
 
-  constructor(private readonly cfg: CoreConfig = {}) {}
+  constructor(private readonly cfg: CoreConfig = {}) {
+    this.net.onState = (state) => this.onEvent({ type: "net", state });
+    this.net.baseline.onSave = (data) => this.onEvent({ type: "net-baseline", data });
+    // The worker sees the browser's online/offline events too (dedicated workers get them in Chromium/Firefox).
+    const g = globalThis as unknown as { addEventListener?: (t: string, f: () => void) => void };
+    g.addEventListener?.("online", () => this.net.gate.setOnline(true));
+    g.addEventListener?.("offline", () => this.net.gate.setOnline(false));
+    if (nav()?.onLine === false) this.net.gate.setOnline(false);
+  }
+
+  /** Uploads a reload or a lost network left unfinished (the UI asks to pick the files again). */
+  async unfinishedUploads(): Promise<{ key: string; name: string; size: number; have: number; n: number; folder: string }[]> {
+    const list = (await this.resume?.uploads().catch(() => [])) ?? [];
+    const out = [];
+    for (const { key, j, have } of list) {
+      // Only uploads still open in the index can continue; the rest is forgotten here.
+      if (this.store?.getUpload(j.uploadId)?.status !== "open") {
+        await this.resume!.forget(key).catch(() => {});
+        continue;
+      }
+      out.push({ key, name: j.name, size: j.size, have, n: Math.max(1, Math.ceil(j.size / j.chunk)), folder: j.parentId });
+    }
+    return out;
+  }
+
+  /** "Forget": the unfinished upload is dropped (its pieces are cleaned up with the expired lease). */
+  async forgetUnfinished(key: string) {
+    await this.resume?.forget(key);
+  }
+
+  // ── network (zlecenie 2026-10-15-transfery §2–3) ──
+
+  /** Settings: "Save data" and the stuck-connection guard; the reference speed kept by the UI. */
+  setNetPrefs(p: { saveData?: boolean; guard?: boolean; baseline?: unknown }) {
+    if (p.saveData !== undefined) saveDataOn = !!p.saveData;
+    if (p.guard !== undefined) this.net.guardOn = !!p.guard;
+    if (p.baseline !== undefined) this.net.baseline.load(p.baseline);
+    this.net.saveData = saveDataOn;
+    this.client?.syncWindows();
+    return this.netStatus();
+  }
+
+  /** Diagnostics/tests: send new downloads over connection `lane` (0 = own, 1 = the iframe) as if the guard had switched. */
+  netUseLane(lane: number) {
+    this.net.guard.lane = Math.max(0, Math.min(this.net.laneCount - 1, lane));
+    return this.net.guard.lane;
+  }
+
+  /** The UI's online/offline events (the page always gets them; a worker may not). */
+  setOnline(on: boolean) {
+    this.net.gate.setOnline(on);
+  }
+
+  netStatus() {
+    const now = Date.now();
+    return {
+      state: this.net.uiState(),
+      metered: meteredLink(),
+      saveData: saveDataOn,
+      browserMetered: meteredLink() && !saveDataOn,
+      guard: this.net.guardOn,
+      lanes: this.net.laneCount,
+      window: { up: this.net.win.up.limit, upMax: this.net.win.up.max, down: this.net.win.down.limit, downMax: this.net.win.down.max },
+      baseline: { up: this.net.baseline.value("up", now, netType()), down: this.net.baseline.value("down", now, netType()) },
+      guardStats: { ...this.net.guard.stats },
+    };
+  }
+
+  /**
+   * A second connection to the CDN (lane.ts in a sandboxed iframe, handed over by the UI as a MessagePort):
+   * the stuck-connection guard may move NEW downloads there. Several ports = several lanes.
+   */
+  attachLane(port: MessagePort) {
+    let seq = 0;
+    const wait = new Map<number, { ok: (r: Response) => void; err: (e: unknown) => void }>();
+    port.onmessage = (e: MessageEvent<{ id: number; st?: number; ttfb?: number; buf?: ArrayBuffer; err?: string; aborted?: boolean }>) => {
+      const w = wait.get(e.data?.id);
+      if (!w) return;
+      wait.delete(e.data.id);
+      if (e.data.err !== undefined) {
+        const x = e.data.aborted ? Object.assign(new Error("aborted"), { name: "AbortError" }) : new TypeError(`lane: ${e.data.err}`);
+        return w.err(x);
+      }
+      w.ok(new Response(e.data.buf ?? null, { status: e.data.st ?? 0, headers: { "x-ddn-ttfb": String(e.data.ttfb ?? 0) } }));
+    };
+    const lf: LaneFetch = (url, init) =>
+      new Promise<Response>((ok, err) => {
+        const id = ++seq;
+        if (init?.signal?.aborted) return err(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        wait.set(id, { ok, err });
+        init?.signal?.addEventListener("abort", () => {
+          if (!wait.has(id)) return;
+          wait.delete(id);
+          port.postMessage({ id, abort: true });
+          err(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        }, { once: true });
+        port.postMessage({ id, url });
+      });
+    this.lanes = [...this.lanes, lf];
+    this.client?.blobs.setCdnLanes?.(this.lanes);
+    this.net.laneCount = 1 + this.lanes.length;
+    return { lanes: this.net.laneCount };
+  }
 
   async status() {
     const a = this.acct ?? (await keystore.load()) ?? null;
@@ -255,6 +376,8 @@ export class AppCore {
       leader: () => this.leader,
       discordApiOrigin: this.cfg.discordApiOrigin,
       serverTimeOf: (seq) => this.serverTimes.get(seq),
+      net: this.net,
+      resume: (this.resume = new IdbResumeStore(a.accountId)),
     };
     await this.rebuildClient();
     this.version++;
@@ -333,6 +456,7 @@ export class AppCore {
     this.client = await mode.client(this.ctx!);
     this.client.setTransferLog(this.tlog);
     this.client.setConcurrency(this.conc);
+    this.client.blobs.setCdnLanes?.(this.lanes);
     this.gc = mode.cleanup(this.ctx!, this.client, { primary: () => this.leader, metered: meteredLink });
     await this.client.pull();
   }
@@ -587,12 +711,13 @@ export class AppCore {
   }
 
   /** Upload with byte progress pushed as "upload-progress" events tagged with `token`. Cancel: cancelUpload(token). */
-  async upload(file: Blob, name: string, parentId = ROOT_ID, token = "") {
+  async upload(file: Blob, name: string, parentId = ROOT_ID, token = "", resumeKey?: string) {
     let last = 0;
     const ac = new AbortController();
     if (token) this.uploads.set(token, ac);
     const r = await this.c().upload(blobSource(file), name, parentId, {
       signal: ac.signal,
+      resumeKey,
       onProgress: (done, total, stages) => {
         const t = Date.now();
         if (done > 0 && done < total && t - last < 100) return;
@@ -602,7 +727,7 @@ export class AppCore {
     }).finally(() => this.uploads.delete(token));
     this.version++;
     void this.snapshotSoon();
-    return { nodeId: r.nodeId, chunks: r.chunks, sha256: r.version.plaintextSha256 };
+    return { nodeId: r.nodeId, chunks: r.chunks, sha256: r.version.plaintextSha256, resumed: r.resumed };
   }
 
   /** What the instance does with plaintext (plain mode): the UI shows thumbnails/search only then. */

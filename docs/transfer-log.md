@@ -99,6 +99,27 @@ response headers, `st` HTTP status, `b` bytes, `hook`, `ch`, `fl`.
   (`shared` = the channel limit, `user` = the webhook bucket), `glob`, `cf: true` for a Cloudflare
   block of the IP.
 
+### Network (added 2026-10-15, zlecenie-2026-10-15-transfery)
+
+* `req` (download `k: "cdn"`): `ln` = which connection the request used when there are two (0 = the
+  app's own fetch, 1 = the sandboxed iframe lane, docs/evidence/2026-10-15-connections).
+* `file_start`: `win` pieces in flight allowed right now by the adaptive window (≤ `conc`), `lanes`
+  (download: connections available), `lean: true` when "Save data" / a metered link limits it to 2.
+* `win`: the window of one direction changed: `dir`, `lim` new limit, `max`, `why` = `net` / `timeout`
+  (halved after a network error, once per loss event) or `ok` (+1 after steady answers).
+* `gate`: no-network gate: `st` = `down` (`why: "errors"`, 3 network errors in a row) / `offline`
+  (`why: "event"`, the browser's offline event) / `probe` (`n`: one request to test the network) /
+  `open` (`why` = `answer` / `online`, `waited` ms without network).
+* `guard`: stuck-connection guard (downloads): `st` = `detect` (`thr` bytes/s of everything on the
+  connection over the last 30 s, `base` the device's usual speed, `dur`/`ttfb` median piece time and
+  first byte), `probe` (`from`, `to` connection, one needed piece goes on the other one), `switch` (the
+  probe was clearly faster: new requests use `to`; `probe` its speed), `line` (as slow: it is the line,
+  nothing changes, next check ≥ 5 min later), `fail` (the probe piece failed).
+* `resume`: a transfer continued after a reload: `dir`, `have` fragments already done, `n` total.
+
+The report (`npm run transfer-report`) has a **Network** section: window cuts and the lowest window,
+time without network and probes, the guard's steps with speeds, requests and MB per connection, resumes.
+
 ### Other
 
 * `manifest` (download): `dur` loading + decrypting the manifest.

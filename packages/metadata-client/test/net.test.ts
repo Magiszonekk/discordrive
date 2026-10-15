@@ -381,3 +381,61 @@ describe("NetControl.attempt", () => {
     expect(n.uiState()).toBe("ok");
   });
 });
+
+describe("transfer log + report", () => {
+  it("guard, gate and window events reach the log and the report's Network section", async () => {
+    const { MemoryLogSink, TransferLog } = await import("../src/index.js");
+    const { buildReport, parseLines } = await import("../src/transfer-report.js");
+    const mem = new MemoryLogSink();
+    const log = new TransferLog(mem.write, { src: "web" });
+    const r = await simulate(
+      {
+        piece: (lane, k) => {
+          const mbps = lane === 0 ? 14e6 : 75e6;
+          return { ttfb: 400, total: 400 + ((10 * 1024 * 1024) / (mbps / k)) * 1000 };
+        },
+      },
+      {},
+    );
+    for (const e of r.events) log.emit(String(e.ev), e);
+    log.emit("win", { dir: "down", lim: 4, max: 8, why: "net" });
+    log.emit("gate", { st: "down", why: "errors" });
+    log.emit("gate", { st: "open", why: "answer", waited: 4200 });
+    log.emit("resume", { dir: "up", have: 3, n: 10 });
+    const rep = buildReport(parseLines(mem.text()).events);
+    expect(rep.summary.network).toMatchObject({ windowCuts: 1, windowMin: { down: 4 }, offline: 1, offlineMs: 4200, resumes: 1 });
+    expect(rep.summary.network!.guard).toMatchObject({ detect: 1, probe: 1, switch: 1 });
+    expect(rep.text).toMatch(/stuck-connection guard: detect 1, probe 1, switch 1/);
+  });
+});
+
+describe("upload reference speed", () => {
+  it("uploads feed the 'up' reference (peaks of long busy periods) and never probe", async () => {
+    const { watchedPost } = await import("../src/net.js");
+    const c = new VClock();
+    const net = new NetControl({ clock: c });
+    const events: unknown[] = [];
+    net.emitTo = (ev) => events.push(ev);
+    // 8 posts in flight, each 10 MiB in 2 s → ~40 MB/s for 60 s
+    const BYTES = 10 * 1024 * 1024;
+    let live = 0;
+    const until = c.t + 60_000;
+    const one = (): void => {
+      live++;
+      void watchedPost(net, BYTES, () => new Promise<void>((r) => c.setTimeout(r, 2000))).then(() => {
+        live--;
+        if (c.t < until) one();
+      });
+    };
+    for (let i = 0; i < 8; i++) one();
+    for (let s = 0; s < 70; s++) {
+      c.advance(1000);
+      await flush();
+    }
+    expect(live).toBe(0);
+    expect(net.baseline.data.up.length).toBe(1);
+    expect(net.baseline.data.up[0]!.bps).toBeGreaterThan(35e6);
+    expect(net.baseline.data.up[0]!.bps).toBeLessThan(48e6);
+    expect(events.filter((e) => e === "guard")).toEqual([]);
+  });
+});

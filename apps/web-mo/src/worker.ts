@@ -8,6 +8,8 @@ let core: AppCore | null = null;
 self.onmessage = async (ev: MessageEvent<{ id: number; method: string; args: unknown[]; ddnPort?: string }>) => {
   // A port for a streamed download (ui.ts download → sw.ts), not an RPC call.
   if (ev.data?.ddnPort) return void core?.attachPort(ev.data.ddnPort, ev.ports[0]!);
+  // The second connection (lane.ts in a sandboxed iframe), zlecenie 2026-10-15-transfery §1.
+  if ((ev.data as { ddnLane?: number })?.ddnLane) return void core?.attachLane(ev.ports[0]!);
   const { id, method, args } = ev.data;
   try {
     if (method === "init") {
@@ -17,7 +19,7 @@ self.onmessage = async (ev: MessageEvent<{ id: number; method: string; args: unk
     }
     if (!core) throw new Error("not initialised");
     const fn = (core as unknown as Record<string, (...a: unknown[]) => unknown>)[method];
-    if (typeof fn !== "function" || method.startsWith("_") || method === "constructor" || method === "onEvent" || method === "attachPort") throw new Error(`no method ${method}`);
+    if (typeof fn !== "function" || method.startsWith("_") || method === "constructor" || method === "onEvent" || method === "attachPort" || method === "attachLane") throw new Error(`no method ${method}`);
     const result = await fn.apply(core, args);
     postMessage({ id, ok: true, result });
   } catch (e) {

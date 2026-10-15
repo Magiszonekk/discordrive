@@ -7,7 +7,7 @@ import type { ArbiterApi } from "./arbiter.js";
 import { AbortedError, type BlobGetContext, type BlobPutContext, type BlobStore } from "./blob-store.js";
 import { hostOf, ms, nowMs, reqErrFields, type TransferLog } from "./transfer-log.js";
 import { RateLimitedError } from "./discord-transport.js";
-import { guardedRead, netCall, retryFree, type LaneTiming, type NetControl } from "./net.js";
+import { guardedRead, netCall, retryFree, watchedPost, type LaneTiming, type NetControl } from "./net.js";
 import type { LaneFetch } from "./blob-store.js";
 import { DriveClient, type ResumeStore } from "./drive-client.js";
 import { ChannelPacer } from "./rate-limit.js";
@@ -164,7 +164,7 @@ export class WebhookBlobStore implements BlobStore {
       const timing: { ttfb?: number; st?: number } = {};
       const ev = log ? { dir: "up", x: tx!.x, i: tx!.i, a, hook: hook.id, ch: hook.channelId ?? null, b: data.byteLength, lim: ms(tq, tr), lst: this.pacer.state(key), fl: log.fl.up } : null;
       try {
-        const res = await netCall(this.net, "up", undefined, () => this.transport.postFile(hook, data, filename, undefined, log ? timing : undefined));
+        const res = await netCall(this.net, "up", undefined, () => watchedPost(this.net, data.byteLength, () => this.transport.postFile(hook, data, filename, undefined, log ? timing : undefined)));
         if (!hook.channelId) hook.channelId = res.channelId;
         this.pacer.onSuccess(key);
         if (log) log.emit("req", { ...ev, ch: res.channelId, dur: ms(tr), ttfb: timing.ttfb, st: timing.st ?? 200 });

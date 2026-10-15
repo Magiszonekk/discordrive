@@ -48,6 +48,8 @@ export class FakeDiscord {
   /** Benchmarks: extra time before a webhook post / a CDN read is answered (ms), like Discord's latency. */
   postDelayMs = 0;
   cdnDelayMs = 0;
+  /** Origin headers of CDN reads (tests: a sandboxed lane sends "null"). */
+  readonly cdnOriginsSeen = new Set<string>();
   /**
    * Cloudflare edge block of the webhook route until this time (ms): HTML 429, no
    * x-ratelimit-* headers, retry-after in seconds (ddrive 0d098ca). 0 = off.
@@ -168,6 +170,7 @@ export class FakeDiscord {
       const b = this.blobs.get(cdn[1]!);
       if (!b || !url.searchParams.get("hm")) return this.send(res, 404, { message: "Not Found" });
       this.cdnGets++;
+      this.cdnOriginsSeen.add(String(req.headers.origin ?? ""));
       if (this.cdnDelayMs) await new Promise((r) => setTimeout(r, this.cdnDelayMs));
       // Like the real CDN (measured 2026-10-09): CORS only for some types, by file extension.
       const ext = /\.([A-Za-z0-9]+)$/.exec(url.pathname)?.[1]?.toLowerCase() ?? "";

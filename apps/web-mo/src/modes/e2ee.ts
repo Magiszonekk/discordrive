@@ -49,6 +49,7 @@ export const mode: ModeImpl = {
       blobs,
       store: ctx.store,
       net: ctx.net,
+      resume: ctx.resume,
     });
   },
 
