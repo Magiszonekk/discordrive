@@ -42,9 +42,15 @@ const log = (s: string) => console.error(`[${new Date().toISOString().slice(11, 
 const runSrc = async (D: never, hooks: { id: string; url: string }[], mb: number, up: string, down: string[]) => {
   const DD = D as unknown as typeof import("@ddv4/metadata-client") & { Sequencer: new () => never };
   const size = Math.round(mb * 1e6);
-  const data = new Uint8Array(size);
-  for (let o = 0; o < size; o += 65536) crypto.getRandomValues(data.subarray(o, Math.min(size, o + 65536)));
-  const blob = new Blob([data]);
+  // Built from 16 MB parts (no second copy of the whole file in the page: small machines run this too).
+  let parts: Uint8Array[] | null = [];
+  for (let o = 0; o < size; o += 16e6) {
+    const part = new Uint8Array(Math.min(16e6, size - o));
+    for (let k = 0; k < part.length; k += 65536) crypto.getRandomValues(part.subarray(k, Math.min(part.length, k + 65536)));
+    parts.push(part);
+  }
+  const blob = new Blob(parts as BlobPart[]);
+  parts = null;
   const src = { size: blob.size, read: async (o: number, l: number) => new Uint8Array(await blob.slice(o, o + l).arrayBuffer()) };
   const mem = new DD.MemoryLogSink();
   const c = new DD.MetadataClient({
