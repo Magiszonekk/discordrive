@@ -77,6 +77,47 @@ describe("parallel download", () => {
     expect(calls).toBeLessThan(20 + 4);
   });
 
+  it("a slow head fragment does not stall the others (no waves): the slots keep refilling, memory stays bounded", async () => {
+    // Owner's log 2026-10-15: with the old limit (fetched + waiting-to-be-written ≤ N), one slow fragment
+    // at the head held every slot; nothing new started for ~25 s, then ~30 finished at once.
+    const { t, c } = setup({ downloadConcurrency: 4 });
+    const src = data(40_500); // 41 fragments of 1000
+    const up = await c.upload(memorySource(src), "f.bin");
+    let inFlight = 0;
+    let peak = 0;
+    let started = 0;
+    let startedWhileHeadSlow = 0;
+    let headDone = false;
+    let firstFrag = true;
+    const orig = t.fetchCdn.bind(t);
+    t.fetchCdn = async (u) => {
+      // The manifest is fetched first (its own GET); the next call is fragment 0, which is made slow.
+      const isHead = firstFrag && started === 1;
+      started++;
+      if (!headDone && !isHead && started > 1) startedWhileHeadSlow++;
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      try {
+        if (isHead) {
+          firstFrag = false;
+          await new Promise((r) => setTimeout(r, 120));
+          headDone = true;
+        } else await new Promise((r) => setTimeout(r, 5));
+        return await orig(u);
+      } finally {
+        inFlight--;
+      }
+    };
+    const s = sink();
+    await c.download(up.nodeId, s);
+    expect(await sha256Hex(s.all())).toBe(await sha256Hex(src));
+    expect(peak).toBeLessThanOrEqual(4);
+    // While fragment 0 was slow, the other 3 slots kept fetching far beyond the first 4 — bounded by the
+    // read-ahead window (2 × N, at least 16), not by "N in total".
+    expect(startedWhileHeadSlow).toBeGreaterThan(8);
+    expect(startedWhileHeadSlow).toBeLessThanOrEqual(16 + 1);
+  });
+
   it("cancel stops the fetches in flight", async () => {
     const { t, c } = setup({ downloadConcurrency: 3 });
     const up = await c.upload(memorySource(data(30_000)), "f.bin");

@@ -502,21 +502,55 @@ export class DriveClient {
         }
       };
       const inflight = new Map<number, Promise<Done>>();
+      // Fetches still on the network: the concurrency limit counts only these. Finished fragments that wait
+      // for an earlier one to be written (strict order) no longer block new fetches — before, one slow
+      // fragment at the head held all `conc` slots and the download ran in waves (owner's log 2026-10-15:
+      // ~25 s with 0 fragments finishing, then ~30 at once; 14 MB/s on a line that does 110). Memory is
+      // bounded separately: at most `ahead` fragments past the one being written.
+      let fetching = 0;
+      const ahead = Math.max(conc * 2, 16);
+      let writing = 0;
+      // A finished fetch frees a slot at once (even while the writer still waits for the head fragment).
+      const nudge = () => {
+        if (!ac.signal.aborted) void launch().catch(() => {});
+      };
       let launched = 0;
       // The first real failure (the others are then aborts caused by it) is what the caller sees.
       let firstErr: unknown = null;
-      const launch = async () => {
-        while (launched < ordered.length && inflight.size < conc) {
+      let launching = false;
+      let again = false;
+      const launch = async (): Promise<void> => {
+        if (launching) {
+          again = true; // a slot freed while a launch was in progress: run once more after it
+          return;
+        }
+        launching = true;
+        again = false;
+        try {
+        while (launched < ordered.length && fetching < conc && launched - writing < ahead) {
           const k = launched++;
           // Batch hint every 50 fragments (e2ee/plain: one link refresh call instead of 50).
           if (k % 50 === 0) await this.blobs.prefetch?.(ordered.slice(k, k + 50).map((y) => y.placements?.[0] as DiscordPlacement).filter(Boolean));
+          fetching++;
           const pr = fetchOne(ordered[k]!);
-          pr.catch((e) => {
-            if (!ac.signal.aborted) firstErr ??= e;
-            ac.abort(); // stop the rest at once
-          });
+          pr.then(
+            () => {
+              fetching--;
+              nudge();
+            },
+            (e) => {
+              fetching--;
+              if (!ac.signal.aborted) firstErr ??= e;
+              ac.abort(); // stop the rest at once
+              nudge();
+            },
+          );
           inflight.set(k, pr);
         }
+        } finally {
+          launching = false;
+        }
+        if (again && !ac.signal.aborted) return launch();
       };
       try {
         for (let i = 0; i < ordered.length; i++) {
@@ -524,6 +558,8 @@ export class DriveClient {
           throwIfAborted(signal);
           const d = await inflight.get(i)!;
           inflight.delete(i);
+          writing = i + 1;
+          nudge();
           const w0 = log ? nowMs() : 0;
           const pb = d.pt.byteLength;
           hasher.update(d.pt);
