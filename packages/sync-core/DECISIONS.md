@@ -535,3 +535,19 @@ serwer trzyma dodatkowo, dla tego jednego konta:
   wysłanych”, Szczegóły (nazwa + przyczyna), Ponów (wysyła te same pliki do ich folderów jeszcze raz),
   × czyści. Przerwane przez użytkownika nie trafiają do paska (to jego wybór), ale wydłużają czas panelu.
 - Panel pobierania dostanie to samo w zleceniu „transfer”.
+
+## Zlecenie 2026-10-15-transfery: drugie połączenie, słabe łącza, strażnik zatkanego połączenia
+
+### Eksperyment: drugie połączenie w przeglądarce (§1)
+- Wynik (`docs/evidence/2026-10-15-connections/`, `scripts/browser-conn-exp.mts`, Chromium 151, net log):
+  **ukryty iframe `sandbox="allow-scripts"` (nieprzezroczysty origin) dostaje własne połączenie** do
+  `cdn.discordapp.com` i `discord.com` (HTTP/3 domyślnie, HTTP/2 przy wyłączonym QUIC). CORS Discorda
+  przyjmuje `Origin: null` (CDN dla `.txt`, webhooki zawsze). Worker, service worker i strona dzielą jedno
+  połączenie; `credentials: "include"` daje osobne połączenie, ale CDN go nie wpuszcza (brak
+  `Allow-Credentials`); `credentialless` iframe działa tylko w Chromium; aliasy hostów (`ptb.`, `canary.`,
+  kropka na końcu, `discordapp.com/api`) odpadają (scalanie połączeń, 403, 400, CORS).
+- Przepustowość na tym serwerze (łącze ~11 MB/s) jest taka sama dla 1 i 2 połączeń (0 błędów) —
+  zysk na łączu właściciela trzeba zmierzyć u niego (komenda w README dowodów).
+- Decyzja: drugie połączenie = **„tor” w ukrytym iframe sandbox** serwowanym przez instancję
+  (`/lane.html`), z którym worker rozmawia przez MessagePort. Używa go strażnik (§3). Domyślnie wysyłanie
+  i pobieranie zostają na jednym torze.
