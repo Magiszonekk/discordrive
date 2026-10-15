@@ -36,7 +36,8 @@
     "doctor": "node apps/ddn-server/bin/discordrive.mjs doctor",
     "invite": "node apps/ddn-server/bin/discordrive.mjs invite",
     "uninstall-autostart": "node apps/ddn-server/bin/discordrive.mjs uninstall-autostart",
-    "update": "git pull --ff-only && npm install --no-audit --no-fund && npm run build -w @ddv4/web-mo"
+    "update": "git pull --ff-only && npm install --no-audit --no-fund && npm run build -w @ddv4/web-mo",
+    "conn-bench": "node scripts/conn-bench.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
