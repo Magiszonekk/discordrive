@@ -309,6 +309,15 @@ try {
     r.typedWebhook = (await p.inputValue("[data-ddn=webhook-url]")) === hookUrls[1];
     await p.click("[data-ddn=add-webhook]");
     await p.waitForFunction(() => document.querySelector("[data-ddn-ui=hook-count]")?.textContent?.startsWith("2"), null, { timeout: 30_000 });
+    // Several addresses pasted at once (owner, 2026-10-15): one per line in the clipboard → all added
+    // with one click, a duplicate of an existing channel is not counted twice.
+    if (fake) {
+      const many = [fake.addWebhook("1550000000000000103").url, fake.addWebhook("1550000000000000104").url, fake.addWebhook("1550000000000000105").url];
+      await pasteInto(p, "[data-ddn=webhook-url]", [...many, hookUrls[1]].join("\n"));
+      await p.click("[data-ddn=add-webhook]");
+      await p.waitForFunction(() => document.querySelector("[data-ddn-ui=hook-count]")?.textContent?.startsWith("5"), null, { timeout: 60_000 });
+      r.pasteManyWebhooks = { count: (await p.textContent("[data-ddn-ui=hook-count]"))?.trim(), fieldEmpty: (await p.inputValue("[data-ddn=webhook-url]")) === "" };
+    }
   }
   if (SERVER_SIDE) {
     // The instance pool is listed (count only), an own channel replaces it and can be removed again.
@@ -1324,6 +1333,9 @@ try {
   const checks: Record<string, boolean> = {
     noFalseReturningHandlers: lint.length === 0,
     keyboard: r.typedInvite === true && r.pastedWebhook === true && r.typedFolder === true && (SERVER_SIDE || !hookUrls[1] || r.typedWebhook === true) && r.pastedPairCode === true,
+    ...(!SERVER_SIDE && fake && hookUrls[1]
+      ? { pasteManyWebhooks: /^5/.test(String((r.pasteManyWebhooks as { count?: string } | undefined)?.count)) && (r.pasteManyWebhooks as { fieldEmpty: boolean }).fieldEmpty === true }
+      : {}),
     ...(MODE === "plain"
       ? {
           plainThumbnail: !!(r.thumbnail as { ok: boolean } | null)?.ok && Math.max((r.thumbnail as { w: number }).w, (r.thumbnail as { h: number }).h) <= 320 && (r.thumbnailAfterMs as number) < 30_000,

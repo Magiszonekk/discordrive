@@ -2187,15 +2187,62 @@ function wireKit() {
 }
 
 // ── channels ───────────────────────────────────────────────────────
+/**
+ * Webhook URLs found in pasted text: one per line, or separated by spaces/commas/semicolons, or glued
+ * together (a password field drops line breaks on paste). Deduplicated, in the order they were pasted.
+ */
+const WEBHOOK_RE = /https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/\d+\/[A-Za-z0-9_-]+/g;
+export function webhookUrlsIn(text: string): string[] {
+  return [...new Set(text.match(WEBHOOK_RE) ?? [])];
+}
+
 function wireHooks() {
   const input = $<HTMLInputElement>("webhook-url");
+  // Several addresses pasted at once (e.g. 10 lines copied together) are kept from the clipboard
+  // text itself, because a password input removes the line breaks.
+  let pasted: string[] = [];
+  input.addEventListener("paste", (e) => {
+    const text = e.clipboardData?.getData("text") ?? "";
+    const urls = webhookUrlsIn(text);
+    if (urls.length > 1) {
+      e.preventDefault();
+      pasted = urls;
+      input.value = urls.join(" ");
+      toast(tn("hooks.pastedMany", urls.length), "info");
+    } else pasted = [];
+  });
+  input.addEventListener("input", () => {
+    if (pasted.length && input.value !== pasted.join(" ")) pasted = [];
+  });
   $("add-webhook").onclick = (e) =>
     void act(e.currentTarget as HTMLElement, async () => {
       if (!input.value.trim()) throw new Error(t("hooks.pasteFirst"));
-      await core.addWebhook(input.value);
-      input.value = "";
+      const urls = pasted.length ? pasted : webhookUrlsIn(input.value);
+      if (urls.length <= 1) {
+        await core.addWebhook(urls[0] ?? input.value);
+        input.value = "";
+        pasted = [];
+        await render();
+        toast(t("hooks.added"));
+        return;
+      }
+      // One at a time: each is checked with Discord (GET webhook) and stored in the vault (CAS).
+      const failed: string[] = [];
+      let ok = 0;
+      for (const [i, url] of urls.entries()) {
+        toast(t("hooks.addingMany", { i: i + 1, n: urls.length }), "info");
+        try {
+          await core.addWebhook(url);
+          ok++;
+        } catch (err) {
+          failed.push(`${i + 1}: ${errText(err)}`);
+        }
+      }
+      pasted = failed.length ? urls.filter((_, i) => failed.some((f) => f.startsWith(`${i + 1}:`))) : [];
+      input.value = pasted.join(" ");
       await render();
-      toast(t("hooks.added"));
+      if (ok) toast(tn("hooks.addedMany", ok), "ok");
+      if (failed.length) toast(t("hooks.addedManyFailed", { n: failed.length, list: failed.join("; ") }), "err");
     });
   // Block body on purpose: an on* handler that returns false cancels the key, so an
   // `e.key === "Enter" && ...` arrow blocked typing and Ctrl+V in this field.
