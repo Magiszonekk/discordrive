@@ -43,9 +43,10 @@ const SCENARIOS = String(opt("scenarios", "h2-1,h2-N,h1-N")).split(",").map((s) 
 const PAUSE_S = Number(opt("pause", 30));
 const NO_DOWNLOAD = flag("no-download");
 const KEEP = flag("keep");
+const NO_SPEEDTEST = flag("no-speedtest");
 const file = argv[0];
 if (!file || flag("help")) {
-  console.log("usage: node scripts/conn-bench.mjs webhooks.txt [--count 30] [--conc 24] [--size 10] [--scenarios h2-1,h2-N,h1-N] [--pause 30] [--no-download] [--keep]");
+  console.log("usage: node scripts/conn-bench.mjs webhooks.txt [--count 30] [--conc 24] [--size 10] [--scenarios h2-1,h2-N,h1-N] [--pause 30] [--no-download] [--keep] [--no-speedtest]");
   process.exit(file ? 0 : 2);
 }
 const [major] = process.versions.node.split(".").map(Number);
@@ -71,6 +72,13 @@ const pct = (a, p) => {
 };
 const mb = (b) => b / 1e6;
 const UA = "DiscordBot (discordrive-next conn-bench, 1)";
+let goaways = 0;
+/** Why requests failed: "HTTP 503", "ERR_HTTP2_GOAWAY_SESSION", … (no URLs, no tokens). */
+const failReasons = new Map();
+const noteFail = (r) => {
+  const k = r.status ? `HTTP ${r.status}` : String(r.err?.code || r.err?.message || "network error").slice(0, 80);
+  failReasons.set(k, (failReasons.get(k) ?? 0) + 1);
+};
 
 /** HTTP/1.1 request on an agent: { status, headers, body, ttfb, dur } */
 function h1(agent, url, { method = "GET", headers = {}, body } = {}) {
@@ -100,9 +108,15 @@ class H2 {
   session(i) {
     const k = i % this.n;
     let s = this.sessions[k];
-    if (!s || s.closed || s.destroyed) {
+    if (!s || s.closed || s.destroyed || s.dead) {
       s = http2.connect(this.origin, { settings: { initialWindowSize: 6 * 1024 * 1024 } });
-      s.on("error", () => {});
+      const fresh = s;
+      fresh.on("error", () => (fresh.dead = true));
+      fresh.on("goaway", () => {
+        fresh.dead = true;
+        goaways++;
+      });
+      fresh.on("close", () => (fresh.dead = true));
       s.on("connect", () => {
         try {
           s.setLocalWindowSize(15 * 1024 * 1024);
@@ -119,7 +133,17 @@ class H2 {
       let ttfb = 0;
       let status = 0;
       let hdrs = {};
-      const req = this.session(lane).request({ ":method": method, ":path": u.pathname + u.search, "user-agent": UA, ...headers });
+      const sess = this.session(lane);
+      let req;
+      try {
+        req = sess.request({ ":method": method, ":path": u.pathname + u.search, "user-agent": UA, ...headers });
+      } catch (e) {
+        sess.dead = true;
+        return reject(e);
+      }
+      req.on("close", () => {
+        if (req.rstCode && req.rstCode !== http2.constants.NGHTTP2_NO_ERROR && !status) reject(new Error(`stream reset (code ${req.rstCode})`));
+      });
       req.setTimeout(120_000, () => req.close(http2.constants.NGHTTP2_CANCEL));
       req.on("response", (h) => {
         ttfb = now() - t0;
@@ -191,6 +215,7 @@ async function retry429(fn, stats) {
       await sleep(Math.min(wait, 60_000) + 50);
       continue;
     }
+    if (r.status !== 200 && r.status !== 204) noteFail(r);
     if ((r.status === 0 || r.status >= 500) && attempt < 3) {
       stats.retries++;
       await sleep(1000 * (attempt + 1));
@@ -299,6 +324,7 @@ function row(s) {
     ok: `${s.n}/${s.dir === "up" ? COUNT : s.n + s.errors}`,
     "MB/s": wall ? +(mb(s.bytes) / wall).toFixed(1) : 0,
     "Mb/s": wall ? Math.round((mb(s.bytes) * 8) / wall) : 0,
+    "% of line": line && wall && (s.dir === "up" ? line.upMBps : line.downMBps) > 0 ? Math.round((100 * mb(s.bytes)) / wall / (s.dir === "up" ? line.upMBps : line.downMBps)) : null,
     "time s": +wall.toFixed(1),
     "req p50 s": +(pct(s.durs, 50) / 1000).toFixed(2),
     "req p90 s": +(pct(s.durs, 90) / 1000).toFixed(2),
@@ -319,6 +345,41 @@ process.on("SIGINT", async () => {
   process.exit(130);
 });
 
+// ── line speed first (Cloudflare speed test, like speed.cloudflare.com): N parallel streams ~8 s
+// each way, so the Discord numbers below can be compared with what the line itself does now.
+async function speedtest(dir, streams = 8, seconds = 8) {
+  const end = now() + seconds * 1000;
+  let bytes = 0;
+  const t0 = now();
+  const chunk = new Uint8Array(25_000_000);
+  await Promise.all(
+    Array.from({ length: streams }, async () => {
+      while (now() < end) {
+        try {
+          if (dir === "down") {
+            const r = await fetch("https://speed.cloudflare.com/__down?bytes=25000000", { headers: { "user-agent": UA }, signal: AbortSignal.timeout(Math.max(1000, Math.ceil(end - now()))) });
+            if (!r.ok) break; // the speed test refused (e.g. too large a request): stop this stream
+            for await (const c of r.body) {
+              bytes += c.length;
+              if (now() >= end) break;
+            }
+          } else {
+            const tq = now();
+            const r = await fetch("https://speed.cloudflare.com/__up", { method: "POST", body: chunk, headers: { "user-agent": UA, "content-type": "application/octet-stream" }, signal: AbortSignal.timeout(60_000) });
+            await r.arrayBuffer();
+            if (r.ok) bytes += chunk.length;
+            if (now() - tq > 30_000) break;
+          }
+        } catch {
+          /* timeout at the end of the window, or a network error: stop this stream */
+          if (dir === "down") break;
+        }
+      }
+    }),
+  );
+  return { MBps: mb(bytes) / ((now() - t0) / 1000) };
+}
+
 // Validate the webhooks (GET returns the channel, no message is sent).
 {
   const agent = new https.Agent({ keepAlive: true, maxSockets: 4 });
@@ -334,6 +395,15 @@ const channels = new Set(hooks.map((h) => h.channel));
 console.log(`Webhooks: ${hooks.length}, channels: ${channels.size}${channels.size < hooks.length ? " (some webhooks share a channel and its limit)" : ""}`);
 console.log(`Per scenario: ${COUNT} × ${(SIZE / 1024 / 1024).toFixed(1)} MiB, ${CONC} in flight; scenarios: ${SCENARIOS.join(", ")}${NO_DOWNLOAD ? " (upload only)" : ""}`);
 console.log(`Discord limit for ${channels.size} channels ≈ ${(channels.size * 30 * SIZE / 60 / 1e6).toFixed(0)} MB/s sustained (after a short burst).\n`);
+
+let line = null;
+if (!NO_SPEEDTEST) {
+  process.stdout.write("Line speed (speed.cloudflare.com, 8 streams, ~8 s each way): ");
+  const d = await speedtest("down");
+  const u = await speedtest("up");
+  line = { downMBps: +d.MBps.toFixed(1), upMBps: +u.MBps.toFixed(1) };
+  console.log(`download ${line.downMBps} MB/s (${Math.round(line.downMBps * 8)} Mb/s), upload ${line.upMBps} MB/s (${Math.round(line.upMBps * 8)} Mb/s)\n`);
+}
 
 const rows = [];
 const upSets = [];
@@ -361,8 +431,11 @@ try {
 } finally {
   console.log("");
   console.table(rows);
+  if (failReasons.size || goaways) {
+    console.log(`Failed attempts by reason: ${[...failReasons].map(([k, n]) => `${k} × ${n}`).join(", ") || "none"}; HTTP/2 GOAWAY received: ${goaways}`);
+  }
   const out = `conn-bench-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
-  writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), node: process.versions.node, platform: process.platform, webhooks: hooks.length, channels: channels.size, count: COUNT, conc: CONC, sizeBytes: SIZE, rows }, null, 1));
+  writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), node: process.versions.node, platform: process.platform, webhooks: hooks.length, channels: channels.size, count: COUNT, conc: CONC, sizeBytes: SIZE, line, rows, failReasons: Object.fromEntries(failReasons), goaways }, null, 1));
   console.log(`Saved ${out} (no tokens or URLs in it).`);
   await cleanup();
 }
