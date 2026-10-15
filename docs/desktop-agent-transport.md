@@ -9,6 +9,14 @@ agent talks to Discord (webhooks + CDN) over the network. Source order:
 connection benchmark), `docs/evidence/2026-10-15-connections/README.md` (browser
 connection experiment), `docs/transfer-log.md` (log format to reuse).
 
+**Already built and reusable as is** (packages/metadata-client, Node + browser, tests in
+`test/net.test.ts`, `net-client.test.ts`, `resume.test.ts`): `net.ts` — `NetControl` (one per agent),
+`AdaptiveWindow`, `NetGate`, `SpeedBaseline`, `StuckGuard`, `netCall`/`guardedRead`/`watchedPost`;
+`DriveClient` resume (`ResumeStore`, upload journal per fragment, download `resume: {versionId, from,
+hash}`); `BlobStore.setCdnLanes()` for extra CDN connections. What the agent adds is the transport
+underneath (connection pool, GOAWAY handling, OS network/metered events, a file-backed ResumeStore and
+writes at offsets).
+
 ## 1. Why the agent cannot just copy the browser
 
 The browser and a Node agent hit different ceilings on the owner's line (~110 MB/s
@@ -86,8 +94,11 @@ Same mechanism and thresholds as the web app's guard (`zlecenie-2026-10-15-trans
 - MUST test with a real, needed fragment on a fresh connection instead of aborting
   anything — the probe fragment is a fragment that was going to be fetched anyway, so
   the guard costs ~0 extra bytes.
-- MUST switch only NEW requests to the new connection when it is clearly faster
-  (≥ 2x the per-fragment speed of the old one); in-flight requests on the old
+- MUST switch only NEW requests to the new connection when it is clearly faster: the web
+  guard (`StuckGuard`, `probeFactor` 1.2) switches when the probe piece ALONE is ≥ 1.2 × the
+  throughput of everything on the old connection together over the last 30 s (with 32 pieces on a
+  stuck 14 MB/s connection vs a fresh ~75 MB/s one this is >10×). The agent sees per-connection
+  speed directly, so it MAY compare per-connection throughput instead. In-flight requests on the old
   connection MUST be allowed to finish there, never aborted by the guard.
 - MUST treat "new connection is about the same speed" as "this is the line, not a
   stuck connection": do nothing, and do not retry the probe sooner than a few minutes.
@@ -118,15 +129,17 @@ The agent MUST implement the same mechanisms required for the web client in
   errors ⇒ pause the transfer queue, surface a "waiting for network" state, resume
   automatically when connectivity returns; retries use exponential backoff with
   jitter, never flooding requests.
-- **Resume after restart**: unlike the browser (which resumes only within a page
-  session unless OPFS/File System Access state exists), the agent has the files on
-  disk, so it MUST persist:
+- **Resume after restart**: the browser resumes uploads after a reload only once the user picks the
+  files again (no access to the file without a new pick) and cannot resume downloads saved through the
+  service worker. The agent has the files on disk, so it MUST resume both without asking, and persist:
   - an upload journal: which fragments have already been placed (webhook message /
-    attachment reference) plus the running SHA-256 state, so a restarted upload does
-    not re-send completed fragments or recompute the whole hash from scratch;
-  - a download journal: which fragments have already been written, with writes going
-    to the target file at the correct byte offset (not purely sequential/streamed),
-    so a restarted download can skip completed fragments.
+    attachment reference) and the SHA-256 of each fragment's plaintext (DriveClient already does this
+    through `ResumeStore`; the agent gives it a file/SQLite-backed store). The whole-file hash is
+    recomputed by reading the file again (cheap compared to sending);
+  - a download journal: the next fragment and the SHA-256 state after the fragments written so far
+    (`onWritten` → `resume: {versionId, from, hash}`), with the target file truncated to
+    `from × chunk` on restart, so a restarted download fetches only the rest and still checks the
+    whole-file SHA-256.
 - **Metered connection / save-data**: detect Windows `NetworkCostType`, Linux
   NetworkManager's `metered` property, or macOS `NWPath.isExpensive`, plus a user
   "save data" setting. When on: smaller default in-flight window, stuck-connection
@@ -155,10 +168,11 @@ The agent MUST implement the same mechanisms required for the web client in
   `docs/transfer-log.md`) as the web app, using `src: "agent"` for its own log lines
   (the log format already names `"cli"` for the CLI — the agent is a third source
   alongside it and `"web"`).
-- MUST add a `conn` (connection/session id) field to `req` events so a
-  `transfer-report` run over agent logs can show per-connection throughput and
-  isolate a stuck connection after the fact, not just per-channel/per-fragment
-  numbers.
+- MUST write the connection of every request: the web app already writes `ln` (lane: 0 = own,
+  1 = second connection) on CDN `req` events and the report sums requests/MB per lane; the agent
+  uses the same `ln` (its pool index / session number, also on uploads) so `transfer-report`
+  shows per-connection throughput and isolates a stuck connection after the fact. Also the
+  `win`, `gate`, `guard`, `resume` events (docs/transfer-log.md "Network").
 - MUST support `transfer-report` over its own log files the same way it works over
   browser/CLI logs today (`npm run transfer-report -- <files>`).
 - MUST follow the same privacy rules as `docs/transfer-log.md` §Privacy: no webhook
