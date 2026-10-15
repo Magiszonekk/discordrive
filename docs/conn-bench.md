@@ -33,3 +33,12 @@ If attempts fail, the reasons are listed at the end (HTTP status or connection e
 connection that Discord closes (HTTP/2 GOAWAY) is replaced by a new one.
 
 Output: a table, and `conn-bench-<time>.json` without tokens or URLs. Ctrl+C cleans up the messages.
+
+## Known: Node + one HTTP/2 connection + many large uploads
+
+Measured 2026-10-15: 32 uploads of 10 MiB at once over ONE Node HTTP/2 connection to discord.com get their
+streams reset by Discord/Cloudflare (`NGHTTP2_ENHANCE_YOUR_CALM`, `NGHTTP2_INTERNAL_ERROR`; 10 of 60 posted),
+while the same 32 over separate connections (`h2-N`) all go through (60/60, 0 errors). Chromium's own HTTP/2
+stack does not hit this (the web app posts 32 at once on one connection without errors). So the `h2-1`
+**upload** row in Node is not a fair stand-in for the browser at high concurrency — compare uploads with
+`h2-N` / `h1-N`, and use `h2-1` for downloads. A desktop agent must post over several connections.

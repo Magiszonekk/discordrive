@@ -76,7 +76,10 @@ let goaways = 0;
 /** Why requests failed: "HTTP 503", "ERR_HTTP2_GOAWAY_SESSION", … (no URLs, no tokens). */
 const failReasons = new Map();
 const noteFail = (r) => {
-  const k = r.status ? `HTTP ${r.status}` : String(r.err?.code || r.err?.message || "network error").slice(0, 80);
+  // For HTTP/2 stream errors the message carries the RST_STREAM code (e.g. NGHTTP2_REFUSED_STREAM).
+  const e = r.err;
+  const code = e?.code === "ERR_HTTP2_STREAM_ERROR" ? `${e.code} (${String(e.message).replace(/^.*code /, "")})` : e?.code || e?.message;
+  const k = r.status ? `HTTP ${r.status}` : String(code || "network error").slice(0, 100);
   failReasons.set(k, (failReasons.get(k) ?? 0) + 1);
 };
 
