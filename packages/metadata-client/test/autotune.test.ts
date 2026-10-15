@@ -90,7 +90,7 @@ describe("automatic pieces in flight", () => {
     const ev: Record<string, unknown>[] = [];
     const tu = new AutoTuner("up", { start: 4, cap: 32, shrink: true }, clock, (_e, f) => ev.push(f));
     const trace = simulate({ line: 11e6, perPiece: Infinity, delayMs: 300, tuner: tu, clock, pieces: 300 });
-    expect(Math.max(...trace.map((x) => x.n))).toBeLessThanOrEqual(6);
+    expect(Math.max(...trace.map((x) => x.n))).toBeLessThanOrEqual(8); // one doubling tried, nothing gained
     expect(tu.accepted).toBeLessThanOrEqual(4);
     expect(tu.accepted).toBeGreaterThanOrEqual(2);
     expect(ev.filter((e) => e.why === "gain").length).toBe(0);
@@ -120,6 +120,16 @@ describe("automatic pieces in flight", () => {
     expect(net.win.down.limit).toBe(8);
     expect(net.tune.down.target).toBe(8);
     expect(net.tune.down.changes.at(-1)?.why).toBe("errors");
+    // a value learned in an earlier session is the start (no doubling ramp from it); once measured, seeds are ignored
+    const sd = new AutoTuner("up", { start: 4, cap: 32 }, clock);
+    let accepted = 0;
+    sd.onAccept = (n) => (accepted = n);
+    sd.seed(14);
+    expect(sd.target).toBe(14);
+    simulate({ line: 100e6, perPiece: 8e6, delayMs: 10, tuner: sd, clock, pieces: 200 });
+    expect(accepted).toBeGreaterThanOrEqual(12);
+    sd.seed(3);
+    expect(sd.target).not.toBe(3);
     net.tune.down.setCap(5);
     expect(net.tune.down.target).toBe(5);
     const tu = new AutoTuner("down", { start: 4, cap: 6 }, clock);

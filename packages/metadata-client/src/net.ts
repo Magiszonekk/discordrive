@@ -223,7 +223,8 @@ export type TuneToken = { t0: number };
 
 /**
  * Pieces in flight for one direction, found by measuring instead of a fixed number: start small, step up
- * (× 1.5) while the total speed keeps growing (≥ 10 % per step), step back when it stops growing; uploads
+ * while the total speed keeps growing (≥ 10 % per step; × 2 in the first ramp and after a gain of ≥ 30 %,
+ * else × 1.5), step back when it stops growing; uploads
  * then try one step down (fewer pieces at the same speed is better: long uploads that only share a narrow
  * line gain nothing and break more easily). Every `recheckMs` the same check runs again from the current value, so
  * a line that got faster or slower is followed. Network errors cut the value (AdaptiveWindow halves the
@@ -347,13 +348,36 @@ export class AutoTuner {
   }
 
   private settle(now: number): void {
+    const wasChecking = this.phase !== "hold";
     this.phase = "hold";
     this.holdFrom = now;
     this.restart(now);
+    if (wasChecking && this.base) {
+      this.measured++;
+      this.lastGain = 0;
+      this.onAccept?.(this.base.n);
+    }
   }
 
+  /** Gain of the last step up (share); a big one, or the very first ramp, doubles instead of × factor. */
+  private lastGain = 0;
   private up(n: number): number {
-    return Math.min(this.cap, Math.max(n + 1, Math.round(n * this.o.factor)));
+    const f = this.lastGain >= 0.3 || this.measured === 0 ? 2 : this.o.factor;
+    return Math.min(this.cap, Math.max(n + 1, Math.round(n * f)));
+  }
+  /** Checks finished so far (0: the first ramp, which doubles like a TCP slow start). */
+  private measured = 0;
+  /** Called with the value a check settled on (the app remembers it for the next session). */
+  onAccept: ((n: number) => void) | null = null;
+
+  /** Start from a value learned earlier (another session): used until the first check measures it. */
+  seed(n: number): void {
+    if (!(n >= 1) || this.measured > 0 || this.changes.length > 0) return;
+    const v = Math.max(Math.min(this.o.min, this.cap), Math.min(this.cap, Math.round(n)));
+    if (v === this.target) return;
+    this.target = v;
+    this.measured = 1; // a known value: no doubling ramp from it
+    this.onTarget?.(v);
   }
   private down(n: number): number {
     return Math.max(this.o.min, Math.min(n - 1, Math.round(n / this.o.factor)));
@@ -368,6 +392,7 @@ export class AutoTuner {
     }
     if (this.phase === "up") {
       if (bps >= b.bps * (1 + this.o.minGain)) {
+        this.lastGain = b.bps > 0 ? bps / b.bps - 1 : 1;
         this.base = { n, bps };
         this.gained = true;
         return this.up(n) > n ? this.change(this.up(n), "gain", [b.n, b.bps], [n, bps], "up", now) : this.settle(now);

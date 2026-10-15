@@ -57,13 +57,8 @@ describe("parallel download", () => {
     // Fragment 5's attachment is gone for good (every retry fails); the others answer slowly.
     const bad = new Set<string>();
     let calls = 0;
-    const atts = t.getAttachments.bind(t);
-    let seen = 0;
-    t.getAttachments = async (h, m) => {
-      const a = await atts(h, m);
-      if (++seen === 7) bad.add(a[0]!.id); // 1st GET is the manifest, then fragments 0, 1, … in launch order
-      return a;
-    };
+    // Fragment 5 by its attachment ID (links are fetched ahead, not in strict launch order).
+    bad.add((await c.loadManifest(up.version.manifestRef)).manifest.chunks.find((x) => x.index === 5)!.placements![0]!.attachmentId as string);
     t.fetchCdn = async (u) => {
       calls++;
       if ([...bad].some((id) => u.includes(`/${id}?`))) throw new Error("boom 5");

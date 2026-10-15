@@ -43,6 +43,7 @@ function onCoreEvent(e: CoreEvent) {
   else if (e.type === "channel-move") channelsUi.onMoveEvent(e.status);
   else if (e.type === "net") paintNet(e.state);
   else if (e.type === "net-baseline") storeNet({ baseline: e.data });
+  else if (e.type === "net-tune") storeNet({ tune: e.data });
 }
 export const core = connect(worker, onCoreEvent);
 (window as unknown as { ddnCore: typeof core }).ddnCore = core;
@@ -1235,7 +1236,7 @@ function wireFilesPage() {
 
 // ── network state, save data, stuck-connection guard, unfinished uploads ──
 const NET_KEY = "ddn.net";
-type NetPrefs = { saveData?: boolean; guard?: boolean; baseline?: unknown };
+type NetPrefs = { saveData?: boolean; guard?: boolean; baseline?: unknown; tune?: { up?: number; down?: number } };
 function storedNet(): NetPrefs {
   try {
     return JSON.parse(localStorage.getItem(NET_KEY) ?? "{}") as NetPrefs;
@@ -1287,7 +1288,7 @@ function wireNet() {
   addEventListener("offline", () => void core.setOnline(false));
   if (!navigator.onLine) void core.setOnline(false);
   const p = storedNet();
-  void core.setNetPrefs({ saveData: !!p.saveData, guard: p.guard !== false, baseline: p.baseline ?? null }).then(paintNetSettings);
+  void core.setNetPrefs({ saveData: !!p.saveData, guard: p.guard !== false, baseline: p.baseline ?? null, tune: p.tune ?? null }).then(paintNetSettings);
   const save = $<HTMLInputElement>("net-savedata");
   const guard = $<HTMLInputElement>("net-guard");
   save.onchange = () =>

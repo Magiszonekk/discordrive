@@ -112,6 +112,7 @@ export type CoreEvent =
   | { type: "net"; state: NetUiState }
   /** The reference speed changed (the UI keeps it in localStorage for the next session). */
   | { type: "net-baseline"; data: BaselineData }
+  | { type: "net-tune"; data: { up: number; down: number } }
   | { type: "share-progress"; done: number; total: number }
   | { type: "changed" }
   | { type: "cleanup"; running: boolean }
@@ -213,6 +214,10 @@ export class AppCore {
   constructor(private readonly cfg: CoreConfig = {}) {
     this.net.onState = (state) => this.onEvent({ type: "net", state });
     this.net.baseline.onSave = (data) => this.onEvent({ type: "net-baseline", data });
+    // The automatic pieces in flight a check settled on: remembered by the UI, the next session starts there.
+    const tuned = () => this.onEvent({ type: "net-tune", data: { up: this.net.tune.up.accepted, down: this.net.tune.down.accepted } });
+    this.net.tune.up.onAccept = tuned;
+    this.net.tune.down.onAccept = tuned;
     // The worker sees the browser's online/offline events too (dedicated workers get them in Chromium/Firefox).
     const g = globalThis as unknown as { addEventListener?: (t: string, f: () => void) => void };
     g.addEventListener?.("online", () => this.net.gate.setOnline(true));
@@ -243,10 +248,14 @@ export class AppCore {
   // ── network (zlecenie 2026-10-15-transfery §2–3) ──
 
   /** Settings: "Save data" and the stuck-connection guard; the reference speed kept by the UI. */
-  setNetPrefs(p: { saveData?: boolean; guard?: boolean; baseline?: unknown }) {
+  setNetPrefs(p: { saveData?: boolean; guard?: boolean; baseline?: unknown; tune?: { up?: number; down?: number } | null }) {
     if (p.saveData !== undefined) saveDataOn = !!p.saveData;
     if (p.guard !== undefined) this.net.guardOn = !!p.guard;
     if (p.baseline !== undefined) this.net.baseline.load(p.baseline);
+    if (p.tune) {
+      if (typeof p.tune.up === "number") this.net.tune.up.seed(p.tune.up);
+      if (typeof p.tune.down === "number") this.net.tune.down.seed(p.tune.down);
+    }
     this.net.saveData = saveDataOn;
     this.client?.syncWindows();
     return this.netStatus();
