@@ -348,6 +348,7 @@ export const en: Record<string, string> = {
   "diag.empty": "The log is empty: turn recording on and upload or download something.",
   "diag.downloaded": "Log downloaded ({n} lines). Summary: npm run transfer-report -- <file>",
   "diag.cleared": "Log cleared",
+  "diag.clearedKept": "Log cleared. {n} file(s) are still open in another tab; their older lines are left out of the download.",
   "upf.count_one": "{n} file was not uploaded",
   "upf.count_other": "{n} files were not uploaded",
   "upf.show": "Details",

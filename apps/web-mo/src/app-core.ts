@@ -820,9 +820,12 @@ export class AppCore {
     return { ...(await gzipText(all)), lines: count(all), serverLines: count(srv) };
   }
 
-  async clearTransferLog(): Promise<void> {
-    await this.tlogStore?.clear();
+  async clearTransferLog(): Promise<{ kept: number }> {
+    // Also when logging is off now: the files from an earlier session are still in OPFS.
+    this.tlogStore ??= new OpfsTransferLog();
+    const r = await this.tlogStore.clear();
     if (!mode.clientSnapshots && this.http) await this.http.json("DELETE", "/v1/diagnostics/transfer-log").catch(() => null);
+    return r;
   }
 
   async readRange(nodeId: string, start: number, end: number) {

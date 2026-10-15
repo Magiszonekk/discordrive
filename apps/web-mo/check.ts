@@ -452,6 +452,41 @@ try {
       serverPosts: events.filter((e) => e.src === "server" && e.ev === "req" && e.k === "discord").length,
       report: { files: rep.summary.files, n429: rep.summary.rateLimits.n429, stages: Object.keys(rep.summary.stages) },
     };
+    // Clear (owner, 2026-10-15: "Clear removes only today's lines, the old ones stay"): an old part that
+    // another tab keeps open cannot be removed, so Clear must still leave its older lines out of the download.
+    {
+      // A part from an "earlier session", held open by another worker (like a forgotten tab from
+      // yesterday; sync access handles exist only in workers, exactly as the app writes its log).
+      // The worker file goes only into this check's own copy of dist (CSP: worker-src 'self').
+      writeFileSync(
+        join(dist, "test-hold-log.js"),
+        `(async () => {
+          const d = await (await navigator.storage.getDirectory()).getDirectoryHandle("ddn-transfer-logs", { create: true });
+          const f = await d.getFileHandle("2000-01-01T00-00-00-000Z-old000-000.jsonl", { create: true });
+          const h = await f.createSyncAccessHandle();
+          h.write(new TextEncoder().encode('{"v":1,"t":946684800000,"src":"web","ev":"file_start","dir":"up","x":"OLDSESSION","size":1,"n":1}\\n'), { at: 0 });
+          h.flush();
+          self.__h = h; // stays open: the browser refuses removeEntry on it
+          postMessage("open");
+        })().catch((e) => postMessage("err " + e));`,
+      );
+      await p.evaluate(async () => {
+        const w = new Worker("/test-hold-log.js");
+        (globalThis as { __oldWorker?: Worker }).__oldWorker = w;
+        const m = await new Promise<string>((res) => (w.onmessage = (e) => res(String(e.data))));
+        if (m !== "open") throw new Error(m);
+      });
+      await p.click("[data-ddn=diag-clear]");
+      await p.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => /cleared|Wyczyszczono/i.test(t.textContent ?? "")), null, { timeout: 15_000 });
+      const toastText = (await p.locator(".toast", { hasText: /cleared|Wyczyszczono/i }).last().textContent()) ?? "";
+      // Nothing logged since the clear: the old part (still on disk, held open) must not count — the
+      // download says "no entries" instead of giving yesterday's lines.
+      const lines = await p.evaluate(async () => (await (window as unknown as { ddnCore: { transferLogFile(): Promise<{ lines: number }> } }).ddnCore.transferLogFile()).lines);
+      await p.click("[data-ddn=diag-download]");
+      const emptyToast = await p.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => /No transfer|Brak wpis|empty|pusty/i.test(t.textContent ?? "")), null, { timeout: 15_000 }).then(() => true).catch(() => false);
+      r.transferLogClear = { lines, emptyToast, toastSaysKept: /still open|otwartych/.test(toastText) };
+      await p.evaluate(() => (globalThis as { __oldWorker?: Worker }).__oldWorker?.terminate());
+    }
     await nav(p, "files");
   }
 
@@ -1369,6 +1404,10 @@ try {
         r.diagOffByDefault === true && /\(\d+\)/.test(String(r.concAuto)) && (r.concSet as { download: number }).download === 6 && !!l && l.bad === 0 && l.noSecrets === true && l.upEnd && l.downEnd && l.ext === "bin" && l.fragsUp === 2 && l.reqsDown >= 2 &&
         (SERVER_SIDE ? l.serverLines > 0 && l.serverPosts >= 3 : l.serverLines === 0) && l.report.files.length >= 2 && /\.jsonl(\.gz)?$/.test(l.file)
       );
+    })(),
+    transferLogClear: (() => {
+      const c = r.transferLogClear as { lines: number; emptyToast: boolean; toastSaysKept: boolean } | undefined;
+      return !!c && c.lines === 0 && c.emptyToast && c.toastSaysKept;
     })(),
     video: !v.err && v.duration > 7 && v.seeked && v.t >= 5.5,
     paging: pg.page1 === 50 && pg.page2 === 14,

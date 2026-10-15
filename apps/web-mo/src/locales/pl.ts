@@ -367,6 +367,7 @@ export const pl: Record<string, string> = {
   "diag.empty": "Log jest pusty: włącz zapisywanie i wyślij albo pobierz plik.",
   "diag.downloaded": "Pobrano log ({n} linii). Podsumowanie: npm run transfer-report -- <plik>",
   "diag.cleared": "Wyczyszczono log",
+  "diag.clearedKept": "Wyczyszczono log. Plików otwartych w innej karcie: {n}; ich starsze wpisy nie trafią do pobranego logu.",
   "err.instance_busy": "Serwer nie może teraz połączyć się z Discordem. Spróbuj za kilka minut.",
   "err.discord_blocked": "Discord na jakiś czas blokuje serwer. Spróbuj później.",
   "err.webhook_in_use": "Ten webhook jest już używany przez inne konto.",

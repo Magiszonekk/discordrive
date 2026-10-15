@@ -10,6 +10,19 @@ import { MemoryLogSink } from "@ddv4/metadata-client";
 const DIR = "ddn-transfer-logs";
 export const MAX_BYTES = 50 * 1024 * 1024;
 const PART_BYTES = 8 * 1024 * 1024;
+/** Time of the last Clear (ms), in the log directory; not a .jsonl, so list() ignores it. */
+const CLEARED_FILE = "cleared-at";
+
+/** Lines of `text` whose "t" (ms) is at or after `since`; a line without "t" is kept. */
+export function keepSince(text: string, since: number): string {
+  let out = "";
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    const m = /"t":(\d+(?:\.\d+)?)/.exec(line);
+    if (!m || Number(m[1]) >= since) out += line + "\n";
+  }
+  return out;
+}
 
 type SyncHandle = { write(b: Uint8Array, o?: { at: number }): number; flush(): void; close(): void; getSize(): number };
 type FileH = FileSystemFileHandle & { createSyncAccessHandle(): Promise<SyncHandle> };
@@ -121,31 +134,80 @@ export class OpfsTransferLog {
     return out.sort((a, b) => (a.name < b.name ? -1 : 1));
   }
 
-  /** Every line this browser kept (all tabs), oldest file first. */
+  /** Every line this browser kept (all tabs), oldest file first; lines from before the last Clear are left out. */
   async text(): Promise<string> {
     await this.flush();
     if (this.mem) return this.mem.text();
+    const since = await this.clearedAt();
     const parts: string[] = [];
-    for (const f of await this.list()) parts.push(await f.file.text());
+    for (const f of await this.list()) {
+      const t = await f.file.text();
+      parts.push(since ? keepSince(t, since) : t);
+    }
     return parts.join("");
   }
 
   async size(): Promise<number> {
     if (this.mem) return this.mem.bytes;
+    if (await this.clearedAt()) return new TextEncoder().encode(await this.text()).byteLength;
     return (await this.list()).reduce((s, f) => s + f.size, 0) + this.buf.reduce((s, l) => s + l.length, 0);
   }
 
-  /** Delete every log file (this tab's open part is emptied and kept open). */
-  async clear(): Promise<void> {
+  /**
+   * Delete every log file (this tab's open part is closed first). A part that another tab (or a tab
+   * left open from an earlier session) still holds open cannot be removed — the browser refuses while
+   * its sync handle is open. So Clear also stores the time of the clear, and older lines are left out
+   * of the download no matter which file they sit in. Returns how many parts could not be removed.
+   */
+  async clear(): Promise<{ kept: number }> {
     await this.flush();
     this.mem?.clear();
     const d = await this.root();
-    if (!d) return;
+    if (!d) return { kept: 0 };
     if (this.h) {
       this.h.close();
       this.h = null;
     }
-    for (const f of await this.list()) await d.removeEntry(f.name).catch(() => {});
+    await this.setClearedAt(Date.now());
+    let kept = 0;
+    for (const f of await this.list()) await d.removeEntry(f.name).catch(() => void kept++);
+    if (!kept) await this.setClearedAt(0);
+    return { kept };
+  }
+
+  private clearedCache: number | undefined;
+  private async clearedAt(): Promise<number> {
+    if (this.clearedCache !== undefined) return this.clearedCache;
+    const d = await this.root();
+    let v = 0;
+    try {
+      const fh = await d!.getFileHandle(CLEARED_FILE);
+      v = Number((await (await fh.getFile()).text()).trim()) || 0;
+    } catch {
+      v = 0;
+    }
+    this.clearedCache = v;
+    return v;
+  }
+  private async setClearedAt(ms: number): Promise<void> {
+    this.clearedCache = ms;
+    const d = await this.root();
+    if (!d) return;
+    try {
+      if (!ms) {
+        await d.removeEntry(CLEARED_FILE).catch(() => {});
+        return;
+      }
+      const fh = (await d.getFileHandle(CLEARED_FILE, { create: true })) as FileH;
+      const h = await fh.createSyncAccessHandle();
+      const b = new TextEncoder().encode(String(ms));
+      (h as SyncHandle & { truncate(n: number): void }).truncate(0);
+      h.write(b, { at: 0 });
+      h.flush();
+      h.close();
+    } catch {
+      /* the in-memory value still filters this tab's downloads */
+    }
   }
 
   async stop(): Promise<void> {

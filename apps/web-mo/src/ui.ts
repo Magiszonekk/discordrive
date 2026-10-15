@@ -1960,9 +1960,9 @@ function wireDiagnostics() {
     });
   $("diag-clear").onclick = (e) =>
     void act(e.currentTarget as HTMLElement, async () => {
-      await core.clearTransferLog();
+      const r = await core.clearTransferLog();
       await renderDiagnostics();
-      toast(t("diag.cleared"));
+      toast(r?.kept ? t("diag.clearedKept", { n: r.kept }) : t("diag.cleared"));
     });
 }
 
