@@ -8,12 +8,10 @@ dist/
 .env.pre-*
 *.log
 .DS_Store
-packages/database/node_modules/.prisma
 test-results
 fixtures
 var/
 .tmp/
-.hermes/
 
 # TypeScript build outputs and incremental metadata
 *.tsbuildinfo
@@ -24,7 +22,5 @@ var/
 **/*.d.ts
 **/*.d.ts.map
 
-# Keep Vite ambient types tracked
-!apps/frontend/src/vite-env.d.ts
 # web-mo: colour-mode script of the Cobalt look (plain JS, not a build output)
 !apps/web-mo/cobalt/theme.js

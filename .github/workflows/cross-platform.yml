@@ -6,7 +6,7 @@ name: Cross-platform (Windows, Linux, macOS)
 on:
   push:
     branches:
-      - feat/metadata-only
+      - main
   pull_request:
     paths:
       - "apps/ddn-server/**"
