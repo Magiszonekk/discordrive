@@ -55,7 +55,7 @@ export const MAX_CONCURRENCY = 64;
  * per-channel limit makes more useless). Within the bounds the value is measured (net.ts AutoTuner).
  */
 export const AUTO_CONCURRENCY_MAX = 32;
-/** Starting value of the automatic setting; also the Range-read default. */
+/** Starting value of the automatic download setting; also the Range-read default. */
 export const DEFAULT_DOWNLOAD_CONCURRENCY = 4;
 /** Memory a piece in flight holds (ciphertext + plaintext / request body of a 10 MiB fragment). */
 export const BYTES_PER_PIECE = 20 * 1024 * 1024;

@@ -941,7 +941,9 @@ export class NetControl {
     };
     this.gate = new NetGate(this.clock, emit, o.gate);
     this.win = { up: new AdaptiveWindow("up", 8, this.clock, emit), down: new AdaptiveWindow("down", 4, this.clock, emit) };
-    this.tune = { up: new AutoTuner("up", { start: 4, shrink: true, ...o.tune }, this.clock, emit), down: new AutoTuner("down", { start: 4, ...o.tune }, this.clock, emit) };
+    // Uploads start at 8 (a measurement step there takes a piece's whole post time, so a ramp from 4 eats
+    // much of a 1 GB file on a fast line; on a narrow one the tuner goes down again), downloads at 4.
+    this.tune = { up: new AutoTuner("up", { start: 8, shrink: true, ...o.tune }, this.clock, emit), down: new AutoTuner("down", { start: 4, ...o.tune }, this.clock, emit) };
     // Network errors cut the window; the automatic value follows the cut and is measured again later.
     this.win.up.onCut = (l) => this.tune.up.loss(l);
     this.win.down.onCut = (l) => this.tune.down.loss(l);

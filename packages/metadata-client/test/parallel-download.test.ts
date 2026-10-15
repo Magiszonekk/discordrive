@@ -133,10 +133,11 @@ describe("parallel download", () => {
     expect(calls).toBeLessThan(30);
   });
 
-  it("concurrency: automatic starts at 4 within max(3, 2 × channels) and 32 (and memory); a setting overrides it", async () => {
+  it("concurrency: automatic starts at 8 (upload) / 4 (download) within max(3, 2 × channels) and 32 (and memory); a setting overrides it", async () => {
     expect(setup({ channels: 1 }).c.uploadConcurrency).toBe(3);
     expect(setup({ channels: 1 }).c.autoCap("up")).toBe(3);
-    expect(setup({ channels: 4 }).c.uploadConcurrency).toBe(4);
+    expect(setup({ channels: 4 }).c.uploadConcurrency).toBe(8);
+    expect(setup({ channels: 2 }).c.uploadConcurrency).toBe(4); // 2 × channels
     expect(setup({ channels: 4 }).c.autoCap("up")).toBe(8);
     expect(setup({ channels: 12 }).c.autoCap("up")).toBe(24);
     expect(setup({ channels: 30 }).c.autoCap("up")).toBe(32); // automatic stays ≤ 32
@@ -147,7 +148,7 @@ describe("parallel download", () => {
     expect(c.downloadConcurrency).toBe(4);
     expect(c.autoConcurrency).toEqual({ upload: false, download: true });
     c.setConcurrency({ upload: null, download: 6 });
-    expect(c.uploadConcurrency).toBe(4);
+    expect(c.uploadConcurrency).toBe(8);
     expect(c.downloadConcurrency).toBe(6);
     expect(c.autoConcurrency).toEqual({ upload: true, download: false });
     // memory: 8 pieces of ~20 MB at most

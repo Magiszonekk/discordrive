@@ -330,7 +330,7 @@ export const en: Record<string, string> = {
   "diag.names": "Include file names",
   "diag.names.t": "Off: only the file type (extension) is recorded. Turn on only if you want to share the log with names in it.",
   "diag.adv": "Advanced: pieces in flight",
-  "diag.adv.t": "How many pieces (≤ 10 MB each) are sent or fetched at once, 1–64. Empty = automatic: starts at 4 and goes up while the total speed still grows, back when it no longer does (at most 32, for uploads at most 2 per channel). Each piece in flight takes ~20 MB of memory.",
+  "diag.adv.t": "How many pieces (≤ 10 MB each) are sent or fetched at once, 1–64. Empty = automatic: starts at 8 (upload) or 4 (download) and goes up while the total speed still grows, back when it no longer does (at most 32, for uploads at most 2 per channel). Each piece in flight takes ~20 MB of memory.",
   "diag.up": "Upload",
   "diag.down": "Download",
   "diag.auto": "auto ({n})",

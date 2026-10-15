@@ -382,7 +382,7 @@ export const pl: Record<string, string> = {
   "diag.names": "Zapisuj nazwy plików",
   "diag.names.t": "Wyłączone: zapisywany jest tylko typ pliku (rozszerzenie). Włącz tylko, jeśli chcesz udostępnić log z nazwami.",
   "diag.adv": "Zaawansowane: fragmenty w locie",
-  "diag.adv.t": "Ile fragmentów (każdy ≤ 10 MB) jest wysyłanych albo pobieranych naraz, 1–64. Puste = automatycznie: zaczyna od 4 i zwiększa, dopóki łączna prędkość rośnie, cofa się, gdy już nie rośnie (najwyżej 32, przy wysyłaniu najwyżej 2 na kanał). Każdy fragment w locie zajmuje ~20 MB pamięci.",
+  "diag.adv.t": "Ile fragmentów (każdy ≤ 10 MB) jest wysyłanych albo pobieranych naraz, 1–64. Puste = automatycznie: zaczyna od 8 (wysyłanie) lub 4 (pobieranie) i zwiększa, dopóki łączna prędkość rośnie, cofa się, gdy już nie rośnie (najwyżej 32, przy wysyłaniu najwyżej 2 na kanał). Każdy fragment w locie zajmuje ~20 MB pamięci.",
   "diag.up": "Wysyłanie",
   "diag.down": "Pobieranie",
   "diag.auto": "auto ({n})",
