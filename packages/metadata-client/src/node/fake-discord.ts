@@ -64,6 +64,8 @@ export class FakeDiscord {
   cdnBytesPerSec = 0;
   cdnBytesPerSecPerRead = 0;
   private cdnSending = 0;
+  /** Time (ms) up to which the shared CDN line is booked. */
+  private cdnLineAt = 0;
   /** Origin headers of CDN reads (tests: a sandboxed lane sends "null"). */
   readonly cdnOriginsSeen = new Set<string>();
   /**
@@ -193,13 +195,17 @@ export class FakeDiscord {
       const cors = this.cdnCorsAll || CDN_CORS_EXT.has(ext) ? { "access-control-allow-origin": "*" } : {};
       res.writeHead(200, { "content-type": "application/octet-stream", ...cors, "content-length": b.byteLength });
       if (!this.cdnBytesPerSec && !this.cdnBytesPerSecPerRead) return void res.end(b);
-      // Paced body: each read gets min(own speed, line / reads being sent) in 32 KiB steps.
+      // Paced body in 32 KiB steps on an absolute schedule (coarse timers, e.g. Windows' ~16 ms, do not add
+      // up): this read at most its own speed, and all reads together at most the line (one shared schedule).
       this.cdnSending++;
       try {
+        const t0 = Date.now();
         for (let o = 0; o < b.byteLength; ) {
           const n = Math.min(32 * 1024, b.byteLength - o);
-          const share = Math.min(this.cdnBytesPerSecPerRead || Infinity, this.cdnBytesPerSec ? this.cdnBytesPerSec / this.cdnSending : Infinity);
-          await new Promise((r) => setTimeout(r, (n / share) * 1000));
+          const own = this.cdnBytesPerSecPerRead ? t0 + ((o + n) / this.cdnBytesPerSecPerRead) * 1000 : 0;
+          const line = this.cdnBytesPerSec ? (this.cdnLineAt = Math.max(this.cdnLineAt, Date.now()) + (n / this.cdnBytesPerSec) * 1000) : 0;
+          const wait = Math.max(own, line) - Date.now();
+          if (wait > 0) await new Promise((r) => setTimeout(r, wait));
           if (!res.write(b.subarray(o, o + n))) await new Promise((r) => res.once("drain", r));
           o += n;
         }

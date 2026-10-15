@@ -278,8 +278,7 @@ describe("end to end on a fake Discord: slow link GET, narrow CDN", () => {
       const secs = (Date.now() - t0) / 1000;
       expect(await sha256Hex(Buffer.concat(parts))).toBe(await sha256Hex(data));
       const rep = buildReport(parseLines(mem.text()).events);
-      // the plateau: ~8 reads fill the line (more where timers are coarse, e.g. Windows: each read is slower
-      // than its nominal speed); the value ends near it and never at the cap of 32
+      // the plateau: 8 reads fill the line; the value ends near it, never at the cap of 32
       const last = net.tune.down.accepted;
       expect(last).toBeGreaterThanOrEqual(6);
       expect(last).toBeLessThanOrEqual(16);
