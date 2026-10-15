@@ -11,6 +11,7 @@
 
 import type { DiscordPlacement } from "./types.js";
 import type { TransferLog } from "./transfer-log.js";
+import type { NetControl } from "./net.js";
 
 export interface BlobPutContext {
   /** Upload the blob belongs to (fragments and the manifest of one version). */
@@ -39,6 +40,10 @@ export interface BlobStore {
   lanes?(): number;
   /** Transfer log (Settings → Diagnostics); null = off. Set by DriveClient.setTransferLog. */
   log?: TransferLog | null;
+  /** Network state (gate, windows, stuck-connection guard). Set by DriveClient. */
+  net?: NetControl | null;
+  /** Extra connections for CDN reads (lane 1, 2, …; the page's own fetch is lane 0). */
+  setCdnLanes?(lanes: LaneFetch[]): void;
   /** Optional hint before reading many blobs in order (batch link refresh). */
   prefetch?(ps: DiscordPlacement[]): Promise<void>;
   /** All blobs of the upload are stored; about to commit (the server stops treating it as abandoned). */
@@ -46,6 +51,9 @@ export interface BlobStore {
   /** The upload failed or was cancelled before finalize: drop its blobs (best effort). */
   abort?(uploadId: string): Promise<void>;
 }
+
+/** A fetch on another connection (web: a sandboxed iframe, docs/evidence/2026-10-15-connections). */
+export type LaneFetch = (url: string, init?: { signal?: AbortSignal }) => Promise<Response>;
 
 export class AbortedError extends Error {
   constructor() {

@@ -7,6 +7,8 @@ import type { ArbiterApi } from "./arbiter.js";
 import { AbortedError, type BlobGetContext, type BlobPutContext, type BlobStore } from "./blob-store.js";
 import { hostOf, ms, nowMs, reqErrFields, type TransferLog } from "./transfer-log.js";
 import { RateLimitedError } from "./discord-transport.js";
+import { guardedRead, netCall, retryFree, type LaneTiming, type NetControl } from "./net.js";
+import type { LaneFetch } from "./blob-store.js";
 import { DriveClient } from "./drive-client.js";
 import { ChannelPacer } from "./rate-limit.js";
 import type { InvalidOpAlert } from "./policies.js";
@@ -53,6 +55,8 @@ export interface MetadataClientOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Q10: called once per device that reached INVALID_OP_WARN_AFTER invalid ops. */
   onInvalidOps?: (a: InvalidOpAlert) => void;
+  /** Network state (tests); default: a fresh one. */
+  net?: NetControl;
 }
 
 /** Blobs on the user's webhooks, paced per channel on this device (koncept §7, §8.2). */
@@ -62,6 +66,7 @@ export class WebhookBlobStore implements BlobStore {
   readonly hooks: Map<string, WebhookRef>;
   private rr = 0;
   log: TransferLog | null = null;
+  net: NetControl | null = null;
   private readonly maxRetries: number;
   private readonly sleep: (ms: number) => Promise<void>;
 
@@ -75,6 +80,15 @@ export class WebhookBlobStore implements BlobStore {
     this.pacer = o.pacer ?? new ChannelPacer({ now: o.now, sleep: o.sleep });
     this.maxRetries = o.maxRetries ?? 4;
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  }
+
+  setCdnLanes(lanes: LaneFetch[]): void {
+    (this.transport as { setCdnLanes?: (l: LaneFetch[]) => void }).setCdnLanes?.(lanes);
+    if (this.net) this.net.laneCount = 1 + lanes.length;
+  }
+
+  private backoff(attempt: number): Promise<void> {
+    return this.sleep(this.net ? this.net.backoffMs(attempt) : 500 * 2 ** (attempt - 1));
   }
 
   /** Distinct channels of the active webhooks (a channel is the unit of Discord's limit). */
@@ -148,7 +162,7 @@ export class WebhookBlobStore implements BlobStore {
       const timing: { ttfb?: number; st?: number } = {};
       const ev = log ? { dir: "up", x: tx!.x, i: tx!.i, a, hook: hook.id, ch: hook.channelId ?? null, b: data.byteLength, lim: ms(tq, tr), lst: this.pacer.state(key), fl: log.fl.up } : null;
       try {
-        const res = await this.transport.postFile(hook, data, filename, undefined, log ? timing : undefined);
+        const res = await netCall(this.net, "up", undefined, () => this.transport.postFile(hook, data, filename, undefined, log ? timing : undefined));
         if (!hook.channelId) hook.channelId = res.channelId;
         this.pacer.onSuccess(key);
         if (log) log.emit("req", { ...ev, ch: res.channelId, dur: ms(tr), ttfb: timing.ttfb, st: timing.st ?? 200 });
@@ -160,8 +174,9 @@ export class WebhookBlobStore implements BlobStore {
           if (e.global && e.retryAfterMs > 60_000) throw e;
           continue; // 429s do not count against maxRetries: the pacer slows down instead
         }
+        if (retryFree(e)) continue; // no network: it waits at the gate, the file does not fail
         if (++attempt > this.maxRetries) throw e;
-        await this.sleep(500 * 2 ** (attempt - 1));
+        await this.backoff(attempt);
       }
     }
   }
@@ -175,9 +190,9 @@ export class WebhookBlobStore implements BlobStore {
     for (let n = 0; ; n++) {
       let step = "link";
       let t0 = log ? nowMs() : 0;
-      const timing: { ttfb?: number; st?: number } = {};
+      const timing: LaneTiming = {};
       try {
-        const atts = await this.transport.getAttachments(hook, p.messageId, log ? timing : undefined);
+        const atts = await netCall(this.net, "down", signal, () => this.transport.getAttachments(hook, p.messageId, log ? timing : undefined));
         const a = atts.find((x) => x.id === p.attachmentId);
         if (!a) throw new Error("attachment missing from message");
         if (log) {
@@ -187,18 +202,20 @@ export class WebhookBlobStore implements BlobStore {
           delete timing.ttfb;
           delete timing.st;
         }
-        const data = await this.transport.fetchCdn(a.url, signal, log ? timing : undefined);
-        if (log) log.emit("req", { ...ev, a: n, k: "cdn", host: hostOf(a.url), b: data.byteLength, dur: ms(t0), ttfb: timing.ttfb, st: timing.st ?? 200, fl: log.fl.down });
+        step = "cdn";
+        const data = await netCall(this.net, "down", signal, () => guardedRead(this.net, timing, signal, (lane) => this.transport.fetchCdn(a.url, signal, timing, lane)));
+        if (log) log.emit("req", { ...ev, a: n, k: "cdn", host: hostOf(a.url), b: data.byteLength, dur: ms(t0), ttfb: timing.ttfb, st: timing.st ?? 200, ...(timing.lane !== undefined ? { ln: timing.lane } : {}), fl: log.fl.down });
         return data;
       } catch (e) {
-        if (log) log.emit("req", { ...ev, a: n, k: step, dur: ms(t0), ttfb: timing.ttfb, ...reqErrFields(e), fl: log.fl.down });
+        if (log) log.emit("req", { ...ev, a: n, k: step, dur: ms(t0), ttfb: timing.ttfb, ...(timing.lane !== undefined ? { ln: timing.lane } : {}), ...reqErrFields(e), fl: log.fl.down });
         if (signal?.aborted) throw new AbortedError();
         if (e instanceof RateLimitedError) {
           await this.sleep(e.retryAfterMs);
           continue;
         }
+        if (retryFree(e)) continue;
         if (++attempt > this.maxRetries) throw e;
-        await this.sleep(500 * 2 ** (attempt - 1));
+        await this.backoff(attempt);
       }
     }
   }

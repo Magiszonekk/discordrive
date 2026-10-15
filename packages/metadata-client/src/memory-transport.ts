@@ -65,7 +65,7 @@ export class MemoryTransport implements WebhookTransport {
     return m.attachments.map((a) => ({ id: a.id, url: this.link(a.id), size: a.data.byteLength }));
   }
 
-  async fetchCdn(url: string): Promise<Uint8Array> {
+  async fetchCdn(url: string, _signal?: AbortSignal, _timing?: unknown, _lane?: number): Promise<Uint8Array> {
     const m = /^mem:\/\/cdn\/(\d+)\?sig=\d+$/.exec(url);
     const b = m ? this.blobs.get(m[1]!) : undefined;
     if (!b) throw new Error("404 CDN");

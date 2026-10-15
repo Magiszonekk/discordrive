@@ -11,6 +11,8 @@
 //
 // No webhook URL ever reaches the client. Marker for the build-time mode check: ddn-server-blobs.
 
+import { guardedRead, netCall, retryFree, NetworkError, type LaneTiming, type NetControl } from "./net.js";
+import type { LaneFetch } from "./blob-store.js";
 import { sha256Hex } from "./file-crypto.js";
 import { AbortedError, type BlobGetContext, type BlobPutContext, type BlobStore } from "./blob-store.js";
 import { errText, hostOf, ms, nowMs, type TransferLog } from "./transfer-log.js";
@@ -44,6 +46,32 @@ export class ServerBlobStore implements BlobStore {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly fetchCdn: (url: string, signal?: AbortSignal, timing?: { ttfb?: number; st?: number }) => Promise<Uint8Array>;
   log: TransferLog | null = null;
+  net: NetControl | null = null;
+  /** Extra connections for CDN reads (web: sandboxed iframes, docs/evidence/2026-10-15-connections). */
+  private cdnLanes: LaneFetch[] = [];
+  setCdnLanes(lanes: LaneFetch[]): void {
+    this.cdnLanes = lanes;
+    if (this.net) this.net.laneCount = 1 + lanes.length;
+  }
+  private backoff(attempt: number): Promise<void> {
+    return this.sleep(this.net ? this.net.backoffMs(attempt) : 500 * 2 ** (attempt - 1));
+  }
+  /** CDN read on connection `lane` (0 = this page's fetch). */
+  private async cdnOn(lane: number, url: string, signal: AbortSignal | undefined, timing: LaneTiming): Promise<Uint8Array> {
+    const lf = lane > 0 ? this.cdnLanes[lane - 1] : undefined;
+    if (!lf) return this.fetchCdn(url, signal, timing);
+    const t0 = nowMs();
+    let r: Response;
+    try {
+      r = await lf(url, { signal });
+    } catch (e) {
+      if (signal?.aborted) throw new AbortedError();
+      throw new NetworkError(`cdn (lane): ${String((e as Error)?.message ?? e).slice(0, 80)}`);
+    }
+    ((timing.ttfb = Number(r.headers.get("x-ddn-ttfb") ?? ms(t0))), (timing.st = r.status));
+    if (!r.ok) throw new Error(`cdn: HTTP ${r.status}`);
+    return new Uint8Array(await r.arrayBuffer());
+  }
   /** Channels the instance posts this account's blobs to (from GET /v1/channels; sizes the upload concurrency). */
   channels = 1;
   lanes(): number {
@@ -85,18 +113,19 @@ export class ServerBlobStore implements BlobStore {
       const t0 = log ? nowMs() : 0;
       const ev = log ? { dir: "up", x: u, i, a, k: "server", b: data.byteLength, fl: log.fl.up } : null;
       try {
-        r = await this.api.request("PUT", `/v1/uploads/${u}/blobs/${i}`, {
+        r = await netCall(this.net, "up", ctx.signal, () => this.api.request("PUT", `/v1/uploads/${u}/blobs/${i}`, {
           // A Blob, not the Uint8Array: Chromium sends a typed-array body at ~8.5 MB/s, a Blob at hundreds
           // (measured 2026-10-14, discord-transport.ts webhookForm). Same bytes, same content-length.
           body: new Blob([data as BlobPart]),
           headers: { "content-type": "application/octet-stream", "x-ddn-sha256": sha },
           signal: ctx.signal,
-        });
+        }));
       } catch (e) {
         if (log) log.emit("req", { ...ev, dur: ms(t0), err: errText(e) });
         if (ctx.signal?.aborted) throw new AbortedError();
+        if (retryFree(e)) continue; // no network: waits at the gate
         if (++attempt > this.maxRetries) throw e;
-        await this.sleep(500 * 2 ** (attempt - 1));
+        await this.backoff(attempt);
         continue;
       }
       if (r.ok) {
@@ -156,16 +185,19 @@ export class ServerBlobStore implements BlobStore {
       const l = this.links.get(p.attachmentId);
       if (l) {
         const t0 = log ? nowMs() : 0;
-        const timing: { ttfb?: number; st?: number } = {};
+        const timing: LaneTiming = {};
         try {
-          const d = await this.fetchCdn(l.url, signal, log ? timing : undefined);
-          if (log) log.emit("req", { ...ev, k: "cdn", host: hostOf(l.url), b: d.byteLength, dur: ms(t0), ttfb: timing.ttfb, st: timing.st ?? 200, fl: log.fl.down });
+          const d = await netCall(this.net, "down", signal, () => guardedRead(this.net, timing, signal, (lane) => this.cdnOn(lane, l.url, signal, timing)));
+          if (log) log.emit("req", { ...ev, k: "cdn", host: hostOf(l.url), b: d.byteLength, dur: ms(t0), ttfb: timing.ttfb, st: timing.st ?? 200, ...(timing.lane !== undefined ? { ln: timing.lane } : {}), fl: log.fl.down });
           return d;
         } catch (e) {
-          if (log) log.emit("req", { ...ev, k: "cdn", host: hostOf(l.url), dur: ms(t0), ttfb: timing.ttfb, ...(timing.st ? { st: timing.st } : {}), err: errText(e), fl: log.fl.down });
+          if (log) log.emit("req", { ...ev, k: "cdn", host: hostOf(l.url), dur: ms(t0), ttfb: timing.ttfb, ...(timing.st ? { st: timing.st } : {}), ...(timing.lane !== undefined ? { ln: timing.lane } : {}), err: errText(e), fl: log.fl.down });
           if (signal?.aborted) throw new AbortedError();
+          // No network: wait at the gate and try the CDN again (do not fall back to the instance for that).
+          if (retryFree(e)) return this.get(p, signal, ctx);
           // A stale link or a CDN this browser cannot read (CORS): drop it and go through the instance.
           this.links.delete(p.attachmentId);
+          // A CDN this browser cannot read (CORS, a TypeError like an offline fetch): through the instance from now on.
           if (e instanceof TypeError) this.proxyOnly = true;
         }
       }
@@ -178,7 +210,20 @@ export class ServerBlobStore implements BlobStore {
     const log = ctx?.x !== undefined ? this.log : null;
     for (let attempt = 0; ; attempt++) {
       const t0 = log ? nowMs() : 0;
-      const r = await this.api.request("GET", `/v1/blobs/${p.attachmentId}?w=${p.locationId}&m=${p.messageId}`, { signal });
+      let r: Response;
+      try {
+        r = await netCall(this.net, "down", signal, () => this.api.request("GET", `/v1/blobs/${p.attachmentId}?w=${p.locationId}&m=${p.messageId}`, { signal }));
+      } catch (e) {
+        if (log) log.emit("req", { dir: "down", x: ctx!.x, i: ctx!.i ?? 0, a: attempt, k: "proxy", hook: p.locationId, dur: ms(t0), err: errText(e), fl: log.fl.down });
+        if (signal?.aborted) throw new AbortedError();
+        if (retryFree(e)) {
+          attempt--;
+          continue;
+        }
+        if (attempt >= this.maxRetries) throw e;
+        await this.backoff(attempt + 1);
+        continue;
+      }
       const ttfb = log ? ms(t0) : 0;
       if (r.ok) {
         const d = new Uint8Array(await r.arrayBuffer());

@@ -10,6 +10,7 @@
 //   fragments (lease renewed while they go) -> manifest blob ->
 //   blobs.finalize(U) -> group[upload_commit U, create(content)] [guard U] -> releaseLease(U).
 
+import { NetControl } from "./net.js";
 import { createSHA256 } from "hash-wasm";
 import {
   ROOT_ID,
@@ -146,6 +147,8 @@ export interface DriveClientOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Q10: called once per device that reached INVALID_OP_WARN_AFTER invalid ops. */
   onInvalidOps?: (a: InvalidOpAlert) => void;
+  /** Network state (tests: virtual clock); default: a fresh one. */
+  net?: NetControl;
 }
 
 /** Fragments of an upload per stage right now (live view: encrypting vs sending). */
@@ -191,6 +194,12 @@ export class DriveClient {
   protected readonly sleep: (ms: number) => Promise<void>;
   /** Transfer log (Settings → Diagnostics); null = off. */
   tlog: TransferLog | null = null;
+  /**
+   * Network state shared by uploads and downloads (zlecenie 2026-10-15-transfery §2–3): no-network
+   * gate, a window of pieces in flight per direction that shrinks on network errors and grows back,
+   * the stuck-connection guard for downloads, "save data".
+   */
+  readonly net: NetControl;
 
   constructor(protected readonly d: DriveClientOptions) {
     this.replica = new Replica({ device: d.device, store: d.store, newOpId: newId, now: d.now });
@@ -201,6 +210,23 @@ export class DriveClient {
     this.leaseRenewMs = d.leaseRenewMs ?? 60_000;
     this.now = d.now ?? (() => Date.now());
     this.sleep = d.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.net = d.net ?? new NetControl();
+    this.blobs.net = this.net;
+    this.net.emitTo = (ev, f) => this.tlog?.emit(ev, f);
+    this.syncWindows();
+  }
+
+  /** Window maxima follow the settings; "save data" / metered: at most 2 pieces in flight per direction. */
+  syncWindows(): void {
+    const lean = this.net.metered();
+    this.net.win.up.setMax(lean ? Math.min(2, this.uploadConcurrency) : this.uploadConcurrency);
+    this.net.win.down.setMax(lean ? Math.min(2, this.downloadConc) : this.downloadConc);
+  }
+
+  /** Settings → "Save data" (on top of what the browser reports as metered). */
+  setSaveData(on: boolean): void {
+    this.net.saveData = on;
+    this.syncWindows();
   }
 
   get store(): IndexStore {
@@ -226,6 +252,7 @@ export class DriveClient {
   setConcurrency(o: { upload?: number | null; download?: number | null }): void {
     if (o.upload !== undefined) this.concurrencyOpt = o.upload ? clampConc(o.upload) : null;
     if (o.download !== undefined) this.downloadConc = o.download ? clampConc(o.download) : DEFAULT_DOWNLOAD_CONCURRENCY;
+    this.syncWindows();
   }
 
   /** Pull the log tail from the arbiter. */
@@ -293,8 +320,10 @@ export class DriveClient {
     const log = this.tlog;
     const t0 = nowMs();
     const nFrags = Math.max(1, Math.ceil(src.size / this.chunkSize));
-    const conc = Math.min(this.uploadConcurrency, nFrags);
-    log?.emit("file_start", { dir: "up", x: uploadId, size: src.size, n: nFrags, chunk: this.chunkSize, conc, lanes: this.blobs.lanes?.() ?? null, mode: log.o.mode, ...log.nameFields(nfc) });
+    this.syncWindows();
+    const win = this.net.win.up;
+    const conc = Math.min(win.max, nFrags);
+    log?.emit("file_start", { dir: "up", x: uploadId, size: src.size, n: nFrags, chunk: this.chunkSize, conc, lanes: this.blobs.lanes?.() ?? null, win: win.limit, ...(this.net.metered() ? { lean: true } : {}), mode: log.o.mode, ...log.nameFields(nfc) });
     let sentBytes = 0;
     const endLog = (ok: boolean, e?: unknown) =>
       log?.emit("file_end", { dir: "up", x: uploadId, ok, size: src.size, b: sentBytes, dur: ms(t0), mbps: mbps(sentBytes, ms(t0)), posts: stats.posts, ...(ok ? {} : { err: e instanceof Error && e.name === "AbortError" ? "aborted" : errText(e) }) });
@@ -339,8 +368,11 @@ export class DriveClient {
       opts.onProgress?.(0, src.size, { ...stages });
       const worker = async () => {
         for (;;) {
+          // The adaptive window (weak link: fewer pieces in flight) gates taking the next fragment.
+          const free = await win.acquire(signal);
           const i = next++;
-          if (i >= count) return;
+          if (i >= count) return free();
+          try {
           throwIfAborted(signal);
           // Queued at once (same tick as taking i), so the hash stays in index order.
           const reading = readInOrder(i);
@@ -373,6 +405,9 @@ export class DriveClient {
             opts.onProgress?.(sentBytes, src.size, { ...stages });
           } finally {
             if (log) log.fl.up--;
+          }
+          } finally {
+            free();
           }
         }
       };
@@ -466,8 +501,10 @@ export class DriveClient {
     const x = v.uploadId;
     const t0 = nowMs();
     let total = 0;
-    const conc = Math.min(this.downloadConc, Math.max(1, v.chunkCount));
-    log?.emit("file_start", { dir: "down", x, size: v.sizeBytes, n: v.chunkCount, conc, mode: log.o.mode, ...log.nameFields(node.name) });
+    this.syncWindows();
+    const win = this.net.win.down;
+    const conc = Math.min(win.max, Math.max(1, v.chunkCount));
+    log?.emit("file_start", { dir: "down", x, size: v.sizeBytes, n: v.chunkCount, conc, win: win.limit, lanes: this.net.laneCount, ...(this.net.metered() ? { lean: true } : {}), mode: log.o.mode, ...log.nameFields(node.name) });
     try {
       const tm = log ? nowMs() : 0;
       const { manifest, key } = await this.loadManifest(v.manifestRef);
@@ -527,7 +564,8 @@ export class DriveClient {
         launching = true;
         again = false;
         try {
-        while (launched < ordered.length && fetching < conc && launched - writing < ahead) {
+        // The window (weak link: fewer at once) is read every time: it shrinks and grows during the download.
+        while (launched < ordered.length && fetching < Math.min(conc, win.limit) && launched - writing < ahead) {
           const k = launched++;
           // Batch hint every 50 fragments (e2ee/plain: one link refresh call instead of 50).
           if (k % 50 === 0) await this.blobs.prefetch?.(ordered.slice(k, k + 50).map((y) => y.placements?.[0] as DiscordPlacement).filter(Boolean));

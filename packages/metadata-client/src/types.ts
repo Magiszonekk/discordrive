@@ -41,6 +41,8 @@ export interface MessageAttachment {
 export interface ReqTiming {
   ttfb?: number;
   st?: number;
+  /** Connection (lane) used, when there is more than one. */
+  lane?: number;
 }
 
 export interface WebhookTransport {
@@ -48,8 +50,8 @@ export interface WebhookTransport {
   postFile(hook: WebhookRef, data: Uint8Array, filename: string, signal?: AbortSignal, timing?: ReqTiming): Promise<PostedAttachment>;
   /** GET a message sent by this webhook; returns fresh signed CDN links (koncept §7). */
   getAttachments(hook: WebhookRef, messageId: string, timing?: ReqTiming): Promise<MessageAttachment[]>;
-  /** Download a CDN link. */
-  fetchCdn(url: string, signal?: AbortSignal, timing?: ReqTiming): Promise<Uint8Array>;
+  /** Download a CDN link; `lane` = which connection (0 = default fetch, ≥1 = setCdnLanes). */
+  fetchCdn(url: string, signal?: AbortSignal, timing?: ReqTiming, lane?: number): Promise<Uint8Array>;
   /** GET the webhook itself: validates the URL and tells its channel/guild (no message is sent). */
   inspectWebhook(hook: WebhookRef): Promise<{ id: string; channelId: string; guildId: string | null; name: string }>;
   /**

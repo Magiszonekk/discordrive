@@ -6,6 +6,8 @@
 //    sent while x-ratelimit-remaining is still > 0, so headers alone cannot predict it).
 // The transport only reports; pacing lives in ChannelPacer (rate-limit.ts).
 
+import { NetworkError } from "./net.js";
+import type { LaneFetch } from "./blob-store.js";
 import type { MessageAttachment, PostedAttachment, ReqTiming, WebhookRef, WebhookTransport } from "./types.js";
 import { ms, nowMs } from "./transfer-log.js";
 
@@ -105,7 +107,8 @@ export class DiscordWebhookTransport implements WebhookTransport {
       if (timing) ((timing.ttfb = ms(t0)), (timing.st = res.status));
     } catch (e) {
       if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
-      throw new Error(`${what}: ${redactWebhookUrl(String((e as Error)?.message ?? e))}`);
+      // No HTTP answer at all (offline, reset, DNS, timeout): the link, not Discord (net.ts tells them apart).
+      throw new NetworkError(`${what}: ${timeout.aborted ? "timeout" : redactWebhookUrl(String((e as Error)?.message ?? e))}`, timeout.aborted);
     }
     if (res.status === 429) throw await rateLimitFrom(res);
     if (!res.ok) {
@@ -138,9 +141,37 @@ export class DiscordWebhookTransport implements WebhookTransport {
     return (j.attachments ?? []).map((a) => ({ id: a.id, url: a.url, size: a.size }));
   }
 
-  async fetchCdn(url: string, signal?: AbortSignal, timing?: ReqTiming): Promise<Uint8Array> {
-    const res = await this.req(url, { method: "GET" }, "cdn get", signal, timing);
-    return new Uint8Array(await res.arrayBuffer());
+  /** Extra connections for CDN reads (web: sandboxed iframes); lane 0 is this transport's own fetch. */
+  private cdnLanes: LaneFetch[] = [];
+  setCdnLanes(lanes: LaneFetch[]): void {
+    this.cdnLanes = lanes;
+  }
+
+  async fetchCdn(url: string, signal?: AbortSignal, timing?: ReqTiming, lane = 0): Promise<Uint8Array> {
+    const lf = lane > 0 ? this.cdnLanes[lane - 1] : undefined;
+    const res = lf ? await this.laneReq(lf, url, signal, timing) : await this.req(url, { method: "GET" }, "cdn get", signal, timing);
+    try {
+      return new Uint8Array(await res.arrayBuffer());
+    } catch (e) {
+      if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
+      throw new NetworkError(`cdn get: body: ${String((e as Error)?.message ?? e).slice(0, 80)}`);
+    }
+  }
+
+  /** A CDN GET on another connection; the lane reports its own time to first byte (x-ddn-ttfb). */
+  private async laneReq(lf: LaneFetch, url: string, signal?: AbortSignal, timing?: ReqTiming): Promise<Response> {
+    const timeout = AbortSignal.timeout(this.timeoutMs);
+    let res: Response;
+    try {
+      res = await lf(url, { signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
+    } catch (e) {
+      if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
+      throw new NetworkError(`cdn get (lane): ${timeout.aborted ? "timeout" : String((e as Error)?.message ?? e).slice(0, 80)}`, timeout.aborted);
+    }
+    if (timing) ((timing.ttfb = Number(res.headers.get("x-ddn-ttfb") ?? 0)), (timing.st = res.status));
+    if (res.status === 429) throw await rateLimitFrom(res);
+    if (!res.ok) throw new DiscordHttpError(res.status, "cdn get");
+    return res;
   }
 
   async inspectWebhook(hook: WebhookRef): Promise<{ id: string; channelId: string; guildId: string | null; name: string }> {
