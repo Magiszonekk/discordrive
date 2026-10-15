@@ -44,6 +44,10 @@ import { buildWeb, loadServerMode, serve } from "./serve.js";
 import { LOG_FILE, detectBackend, install as autostartInstall, lingerOff } from "./autostart.js";
 import { join } from "node:path";
 
+/** The threat model, one chapter per mode (shown under the mode step). Relative to the repository. */
+export const THREAT_MODEL_DOC = "docs/threat-model.md";
+export const THREAT_MODEL_SECTION: Record<InstanceMode, string> = { "metadata-only": "3", e2ee: "4", plain: "5" };
+
 export interface SetupFlags {
   yes?: boolean;
   dataDir?: string;
@@ -324,11 +328,14 @@ export async function setup(f: SetupFlags, p0?: Prompter): Promise<SetupResult> 
   } else {
     head(t("s.mode"));
     const label = { "metadata-only": t("s.mode.mo"), e2ee: t("s.mode.e2ee"), plain: t("s.mode.plain") };
+    // One line per mode: what the server sees (docs/threat-model.md, one chapter per mode).
+    const sees = { "metadata-only": t("s.mode.mo.sees"), e2ee: t("s.mode.e2ee.sees"), plain: t("s.mode.plain.sees") };
     c.mode = await p.choose(
       "",
-      MODES.map((m) => ({ value: m, label: avail.includes(m) ? label[m] : t("s.mode.soon", { mode: m }), disabled: !avail.includes(m) })),
+      MODES.map((m) => ({ value: m, label: avail.includes(m) ? label[m] : t("s.mode.soon", { mode: m }), detail: sees[m], disabled: !avail.includes(m) })),
       "metadata-only",
     );
+    p.info(t("s.mode.tm", { path: join(REPO_DIR, THREAT_MODEL_DOC), section: THREAT_MODEL_SECTION[c.mode] }));
   }
 
   // 2b. e2ee/plain: the instance's own channels (pool); URLs go to the encrypted table, not the config.

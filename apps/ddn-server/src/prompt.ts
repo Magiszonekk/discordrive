@@ -17,6 +17,8 @@ export interface Choice<T extends string> {
   value: T;
   label: string;
   hint?: string;
+  /** One more line under the option, always shown (e.g. what the server sees in a mode). */
+  detail?: string;
   disabled?: boolean;
 }
 export type Level = "ok" | "fail";
@@ -169,7 +171,10 @@ export function ttyPrompter(input: NodeJS.ReadableStream = process.stdin, output
     },
     async choose(q, options, dflt) {
       if (q) p.say(q);
-      options.forEach((o, i) => p.say(`  ${i + 1}) ${o.label}${o.value === dflt ? t("p.default") : ""}`));
+      options.forEach((o, i) => {
+        p.say(`  ${i + 1}) ${o.label}${o.value === dflt ? t("p.default") : ""}`);
+        if (o.detail) p.say(`     ${o.detail}`);
+      });
       for (;;) {
         const di = options.findIndex((o) => o.value === dflt) + 1;
         const a = await line(t("p.choose", { n: di }));

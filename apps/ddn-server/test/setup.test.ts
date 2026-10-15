@@ -8,11 +8,11 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAccountHttp, generateDeviceKey, newAccountKey } from "@ddv4/metadata-client";
 import { FakeDiscord } from "@ddv4/metadata-client/node";
-import { RISK_VERSION, configPath, loadConfig } from "../src/config.js";
+import { REPO_DIR, RISK_VERSION, configPath, loadConfig } from "../src/config.js";
 import { doctor, invite } from "../src/doctor.js";
 import { Cancelled, ttyPrompter } from "../src/prompt.js";
 import { serve } from "../src/serve.js";
-import { setup } from "../src/setup.js";
+import { THREAT_MODEL_DOC, setup } from "../src/setup.js";
 import { main, setupFlags } from "../src/cli.js";
 
 const tmp = () => mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-setup-"));
@@ -270,6 +270,12 @@ describe("discordrive setup (interactive, scripted stdin)", () => {
     expect(text).toContain("Only on this computer");
     // Mode step (stage 3): e2ee selectable, metadata only stays the default (Enter).
     expect(text).toContain("e2ee: files and names encrypted in the browser");
+    // One "what the server sees" line under every mode + the threat model chapter of the chosen one.
+    expect(text).toContain("The server sees: accounts, device public keys");
+    expect(text).toContain("The server sees: the same plus the webhooks");
+    expect(text).toContain("The server sees: everything (files, names, folders, file keys).");
+    expect(text).toMatch(/What the server and others can do in this mode: .*threat-model\.md, section 3/);
+    expect(existsSync(join(REPO_DIR, THREAT_MODEL_DOC))).toBe(true);
     expect(r.config.mode).toBe("metadata-only");
     expect(text).toContain("Skip for now");
     expect(text).toContain("Without a bot: no link sharing");

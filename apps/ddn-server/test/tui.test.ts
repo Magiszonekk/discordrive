@@ -164,7 +164,10 @@ describe.skipIf(!hasScript)("discordrive setup: arrow-key wizard in a pty", () =
       await t.until(/◉ e2ee: pliki i nazwy szyfrowane/);
       await t.send(KEY.up);
       await t.until(/◉ metadata only/);
+      // "What the server sees" stays visible under every option.
+      await t.until(/Serwer widzi: konta, klucze publiczne[\s\S]*Serwer widzi: to samo oraz webhooki[\s\S]*Serwer widzi: wszystko/);
       await t.send(KEY.enter);
+      await t.until(/Co w tym trybie może serwer i inni:[\s\S]*rozdział 3/);
       await t.until(/◉ Pomiń na razie/);
       await t.send(KEY.down, KEY.enter); // set the bot up now
       await t.until(/Token bota/);

@@ -9,8 +9,7 @@ plays video needs the same origin and HTTPS).
 See “Quick start” in the main [README](../../README.md): `git clone` → `npm run setup`.
 `bin/discordrive.mjs` is plain JS: it checks the Node version (≥ 22.13, with a readable
 message), installs only this app's dependencies on the first run
-(`npm ci --workspace @ddv4/ddn-server`, about 55 packages / 75 MB, without the Prisma/Postgres
-of the old ddv4), then loads the TS sources through tsx.
+(`npm ci --workspace @ddv4/ddn-server`, about 55 packages / 75 MB), then loads the TS sources through tsx.
 
 The wizard runs as an interactive terminal UI (@clack): choices with ↑/↓ and Enter shown as
 ◉/○, yes/no as a `Yes / No` toggle (←/→ or y/n; Polish mode also `t`), text fields with the
@@ -108,10 +107,9 @@ discordrive setup --yes --answers answers.json      # the same keys in JSON (acc
   `~/Library/LaunchAgents/discordrive-next.plist`; all with the full path to Node.
 - `<data dir>/discordrive.log`, `<data dir>/supervisor.pid`: background start via `supervise`.
 
-## Preview
-
-The public preview of the project runs behind nginx with TLS (websocket forwarded) and was
-configured with `discordrive setup` alone, in the “server with a domain” mode.
+Behind a reverse proxy (nginx, Caddy): terminate TLS there, forward the websocket (`/v1/notify`)
+and list the proxy's address under “trusted proxy”; `discordrive setup` in the “server with a
+domain” mode asks for all of it.
 
 ## Tests
 

@@ -129,6 +129,19 @@ describe("device sign-in with Ed25519 (decision #13)", () => {
     await expect(a.api.revokeDevice(b.deviceId)).rejects.toMatchObject({ status: 404 });
   });
 
+  it("documented limit (docs/threat-model.md §2.4): a revoked device that kept the account key can register again with the rescue key", async () => {
+    const { url } = await startServer();
+    const a = await newAccount(url);
+    const b = await addDevice(url, a);
+    await a.api.revokeDevice(b.deviceId);
+    await expect(b.api.read(0)).rejects.toMatchObject({ status: 401 });
+    // Revocation deletes B's public key, but the account key B held is not rotated: the rescue key
+    // derives from it, so B (or whoever copied its storage) can add a fresh device on its own.
+    const again = await generateDeviceKey();
+    const { deviceId } = await rescueRegisterDevice(url, accountKeyFromB64(a.key.rawB64), a.accountId, again);
+    expect((await a.api.listDevices()).map((d) => d.deviceId)).toContain(deviceId);
+  });
+
   it("rescue kit: with only the account key, a new device registers and reads the vault", async () => {
     const { url } = await startServer();
     const a = await newAccount(url);

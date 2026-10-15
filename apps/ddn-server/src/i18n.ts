@@ -167,6 +167,10 @@ export const en = {
   "d.poolNone": "none: users must add their own channels in Settings",
   "s.mode.e2ee": "e2ee: files and names encrypted in the browser (the server cannot read them), but the server holds the webhooks and uploads for users; snapshots and cleanup run on the server without an open tab. Needs channels for the instance (step below)",
   "s.mode.plain": "plain: no end-to-end encryption, the server reads files and names (thumbnails, previews, streaming and search on the server); otherwise like e2ee. Needs channels for the instance; ffmpeg optional (thumbnails)",
+  "s.mode.mo.sees": "The server sees: accounts, device public keys, how many operations, sizes and times. Not: files, names, webhooks.",
+  "s.mode.e2ee.sees": "The server sees: the same plus the webhooks and every encrypted piece on its way to Discord. Not: files, names.",
+  "s.mode.plain.sees": "The server sees: everything (files, names, folders, file keys).",
+  "s.mode.tm": "What the server and others can do in this mode: {path}, section {section}",
 
   // 3. bot
   "s.bot": "Sharing files by link (optional, can be skipped)",
@@ -561,6 +565,10 @@ export const pl: Record<CliKey, string> = {
   "d.poolNone": "brak: użytkownicy muszą dodać własne kanały w Ustawieniach",
   "s.mode.e2ee": "e2ee: pliki i nazwy szyfrowane w przeglądarce (serwer ich nie odczyta), ale serwer zna webhooki i wysyła za użytkowników; snapshoty i sprzątanie robi serwer bez otwartej karty. Wymaga kanałów dla instancji (krok niżej)",
   "s.mode.plain": "plain: bez szyfrowania end-to-end, serwer czyta pliki i nazwy (miniatury, podgląd, streaming i wyszukiwanie po stronie serwera); poza tym jak e2ee. Wymaga kanałów instancji; ffmpeg opcjonalny (miniatury)",
+  "s.mode.mo.sees": "Serwer widzi: konta, klucze publiczne urządzeń, liczbę operacji, rozmiary i czasy. Nie widzi: plików, nazw, webhooków.",
+  "s.mode.e2ee.sees": "Serwer widzi: to samo oraz webhooki i każdy zaszyfrowany fragment w drodze na Discorda. Nie widzi: plików, nazw.",
+  "s.mode.plain.sees": "Serwer widzi: wszystko (pliki, nazwy, foldery, klucze plików).",
+  "s.mode.tm": "Co w tym trybie może serwer i inni: {path}, rozdział {section}",
 
   "s.bot": "Udostępnianie plików linkiem (opcjonalne, można pominąć)",
   "s.bot1": "Żeby wysłać komuś link do pliku, serwer potrzebuje własnego bota Discorda: odświeża nim linki,",

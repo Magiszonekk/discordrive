@@ -110,8 +110,10 @@ export function tuiPrompter(input: NodeJS.ReadStream = process.stdin, output: No
       const message = title(q);
       const opt = (o: Choice<T>, active: boolean) => {
         const hint = o.hint ? ` (${o.hint})` : "";
-        if (o.disabled) return optLine(gray(RADIO_OFF), gray(o.label + hint));
-        return active ? optLine(green(RADIO_ON), o.label + hint) : optLine(dim(RADIO_OFF), dim(o.label));
+        // The detail line stays visible under every option (not only the active one).
+        const detail = o.detail ? "\n" + wrapTextWithPrefix(output, dim(o.detail), `${cyan(S_BAR)}    `) : "";
+        if (o.disabled) return optLine(gray(RADIO_OFF), gray(o.label + hint)) + detail;
+        return (active ? optLine(green(RADIO_ON), o.label + hint) : optLine(dim(RADIO_OFF), dim(o.label))) + detail;
       };
       const v = await new SelectPrompt<Choice<T>>({
         ...io,
