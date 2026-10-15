@@ -89,10 +89,15 @@ describe("transfer logs", () => {
     expect(r429[0]!.ra).toBeGreaterThan(0);
     expect(reqs.some((r) => (r.a ?? 0) > 0)).toBe(true);
     expect(events.some((e) => e.ev === "commit")).toBe(true);
-    // Download: link + CDN request per fragment (host only), fragment stages, file end.
+    // Download: a link fetched ahead per fragment (own `link` event: time, queue), the CDN request per
+    // fragment (host only) with where its link came from (lk) and how long it waited for it (lw).
     const dl = of("req", "down");
     expect(dl.filter((r) => r.k === "cdn").length).toBe(9);
-    expect(dl.filter((r) => r.k === "link").length).toBe(9);
+    expect(dl.filter((r) => r.k === "link").length).toBe(0);
+    const links = of("link", "down");
+    expect(links.length).toBe(9);
+    for (const l of links) for (const k of ["dur", "hook", "q", "act", "st"]) expect(l[k], `link.${k}`).toBeDefined();
+    for (const r of dl) expect(["hit", "wait", "miss"]).toContain(r.lk);
     expect(dl.find((r) => r.k === "cdn")!.host).toMatch(/^127\.0\.0\.1:\d+$/);
     for (const f of of("frag", "down")) for (const k of ["get", "hash", "dec", "wr"]) expect(f[k], `down frag.${k}`).toBeDefined();
     expect(of("file_end", "down")[0]).toMatchObject({ ok: true, b: 420_000 });

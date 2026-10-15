@@ -349,7 +349,13 @@ try {
   await p.click("[data-ddn=diag-log]");
   await p.waitForFunction(() => !document.querySelector<HTMLInputElement>("[data-ddn=diag-names]")!.disabled, null, { timeout: 10_000 });
   r.diagOn = await p.textContent("[data-ddn=diag-state]");
-  // Advanced: pieces in flight. Automatic by default (2 × channels, at least 3), a value applies at once.
+  // Settings → Network & transfers: its own section (not under Diagnostics) with save data, the guard and
+  // pieces in flight. Automatic by default (measured, starts at 4), a value applies at once.
+  r.netSection = await p.evaluate(() => {
+    const sec = document.querySelector("[data-ddn=net-sec]");
+    const diag = document.getElementById("diagnostics");
+    return { visible: !!sec && !(sec as HTMLElement).hidden, save: !!sec?.querySelector("[data-ddn=net-savedata]"), guard: !!sec?.querySelector("[data-ddn=net-guard]"), conc: !!sec?.querySelector("[data-ddn=diag-conc-up]"), notInDiag: !diag?.querySelector("[data-ddn=net-savedata]"), title: document.getElementById("net-h")?.textContent ?? "" };
+  });
   await p.click("[data-ddn=diag-adv] summary");
   await p.waitForFunction(() => /\d/.test(document.querySelector("[data-ddn=diag-conc-now]")?.textContent ?? ""));
   r.concAuto = await p.getAttribute("[data-ddn=diag-conc-up]", "placeholder");
@@ -1199,6 +1205,19 @@ try {
     nw.guardDisabledBySaveData = await p.isDisabled("[data-ddn=net-guard]");
     const st1 = (await core("netStatus")) as { saveData: boolean; guard: boolean; metered: boolean; window: { upMax: number; downMax: number } };
     nw.saveData = { on: st1.saveData && st1.metered, upMax: st1.window.upMax, downMax: st1.window.downMax, guard: st1.guard };
+    nw.chip = await p.textContent("[data-ddn=net-state]");
+    nw.concNow = await p.textContent("[data-ddn=diag-conc-now]");
+    // With save data on, the download panel says so (reason + link to the setting).
+    await p.goto(`${base}/folder/${nFolder}`);
+    await p.waitForSelector("body[data-ready='1']");
+    const [d4] = await Promise.all([p.waitForEvent("download", { timeout: 120_000 }), netRow().click()]);
+    await d4.path();
+    nw.leanPanel = await p.evaluate(() => {
+      const el = document.querySelector<HTMLElement>("[data-ddn=dl-lean]");
+      return { shown: !!el && !el.hidden, text: el?.textContent ?? "", why: el?.dataset.why ?? "", href: el?.querySelector("a")?.getAttribute("href") ?? "" };
+    });
+    await shot(p, "32-save-data-panel");
+    await nav(p, "settings");
     await p.reload();
     await p.waitForSelector("body[data-ready='1']");
     const st2 = (await core("netStatus")) as { saveData: boolean; guard: boolean };
@@ -1211,6 +1230,7 @@ try {
     await p.waitForTimeout(300);
     const st3 = (await core("netStatus")) as { saveData: boolean; guard: boolean; window: { downMax: number } };
     nw.back = st3.saveData === false && st3.guard === true && st3.window.downMax > 2;
+    nw.leanGone = await p.evaluate(() => document.querySelector<HTMLElement>("[data-ddn=dl-lean]")!.hidden);
     nw.info = await p.textContent("[data-ddn=net-info]");
     // Resume an upload after a reload: slow posts, the tab reloads mid-upload, the same file again.
     if (fake && !remote) {
@@ -1458,6 +1478,32 @@ try {
   } else ch.skipped = "no extra webhook";
   r.channels = ch;
 
+  // 10d. a browser without Ed25519 in WebCrypto (Chromium before 137): every sign-up card says "too old"
+  // with the versions instead of the raw "Algorithm: Unrecognized name", its buttons are off.
+  step("old browser");
+  {
+    const oc = await browser.newContext({ colorScheme: SCHEME });
+    await oc.addInitScript({
+      content: `window.__name = (f) => f; try { localStorage.setItem("ddn.lang", ${JSON.stringify(LANG)}) } catch {}
+        const g = crypto.subtle.generateKey.bind(crypto.subtle);
+        crypto.subtle.generateKey = (alg, ...a) => (String(alg && alg.name || alg).toLowerCase() === "ed25519" ? Promise.reject(new TypeError("Failed to execute 'generateKey' on 'SubtleCrypto': Algorithm: Unrecognized name")) : g(alg, ...a));`,
+    });
+    const op = await newPage(oc);
+    await op.goto(base);
+    await op.waitForSelector("body[data-ready='1']");
+    await op.waitForSelector("[data-ddn=old-browser]");
+    r.oldBrowser = await op.evaluate(() => {
+      const cards = [...document.querySelectorAll("[data-ddn=signed-out] .auth-card")];
+      const notes = cards.filter((c) => c.querySelector("[data-ddn=old-browser]"));
+      const btns = cards.flatMap((c) => [...c.querySelectorAll<HTMLButtonElement>(".auth-body button")]);
+      return { cards: notes.length, buttonsDisabled: btns.length > 0 && btns.every((b) => b.disabled), text: notes[0]?.textContent ?? "", noRawError: !/Unrecognized name/.test(document.body.innerText) };
+    });
+    await shot(op, "33-old-browser");
+    await oc.close();
+    // A current browser shows no such note.
+    (r.oldBrowser as Record<string, unknown>).modernNoNote = !(await p.$("[data-ddn=old-browser]"));
+  }
+
   // 11. what the server stores: no names in clear
   if (srv) {
     const tables = ["devices", "log", "shares", "vault", "s_blobs", "s_uploads", "inst_hooks", "s_snapshots", "password_keys"].filter((t) => srv!.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t));
@@ -1629,8 +1675,18 @@ try {
         o.lanes === 2 && o.laneSha === true && (o.laneOrigins === null || (o.laneOrigins as string[]).includes("null")) &&
         /network|sieć|sieci/i.test(String(o.offlineText)) && o.noErrorWhileOffline === true && o.resumedShown === true && o.offlineSha === true &&
         o.guardDefault === true && o.saveData.on === true && o.saveData.upMax <= 2 && o.saveData.downMax <= 2 && o.saveData.guard === false && o.guardDisabledBySaveData === true && o.kept === true && o.back === true && /\d/.test(String(o.info)) &&
+        // save data is said in the panel (2 at once + the reason + a link to the setting), and in the section chip
+        o.leanPanel.shown === true && /2/.test(o.leanPanel.text) && o.leanPanel.why === "setting" && /settings|ustawieniach/i.test(o.leanPanel.text) && o.leanPanel.href === "/settings#network" && o.leanGone === true && !!o.chip &&
         resumeOk
       );
+    })(),
+    netSection: (() => {
+      const n = r.netSection as Record<string, unknown> | undefined;
+      return !!n && n.visible === true && n.save === true && n.guard === true && n.conc === true && n.notInDiag === true && /Network|Sieć/.test(String(n.title));
+    })(),
+    oldBrowser: (() => {
+      const o = r.oldBrowser as Record<string, unknown> | undefined;
+      return !!o && o.cards === 4 && o.buttonsDisabled === true && /137/.test(String(o.text)) && /129/.test(String(o.text)) && /17/.test(String(o.text)) && /Ed25519/.test(String(o.text)) && o.noRawError === true && o.modernNoNote === true;
     })(),
     noPageErrors: errors.length === 0,
   };

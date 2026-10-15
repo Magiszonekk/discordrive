@@ -46,10 +46,20 @@ describe("weak and lost network (client)", () => {
       await new Promise((r) => setTimeout(r, 2));
       return orig(u);
     };
+    // Without network the link requests (fetched ahead, in the background) fail too.
+    const links = t.getAttachments.bind(t);
+    t.getAttachments = async (...a) => {
+      if (offline) {
+        failed++;
+        if (failed >= 12) offline = false;
+        throw new TypeError("Failed to fetch");
+      }
+      return links(...a);
+    };
     const s = sink();
     await c.download(up.nodeId, s);
     expect(await sha256Hex(s.all())).toBe(await sha256Hex(src));
-    expect(failed).toBe(12); // far more than maxRetries = 3: they waited at the gate instead of failing the file
+    expect(failed).toBeGreaterThanOrEqual(12); // far more than maxRetries = 3: they waited at the gate instead of failing the file
     expect(states).toContain("offline");
     expect(net.gate.open).toBe(true);
     expect(net.win.down.cuts).toBeGreaterThan(0);

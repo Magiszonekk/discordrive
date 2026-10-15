@@ -50,9 +50,15 @@ import type { DiscordPlacement } from "./types.js";
  * upload fragment in flight holds ~2 × 10 MiB (ciphertext + request body), a download one ~2 × 10 MiB.
  */
 export const MAX_CONCURRENCY = 64;
-/** The automatic upload value stays modest: 2 × channels (Discord's per-channel limit makes more useless). */
+/**
+ * Upper bound of the automatic value (both directions). Uploads are also bounded by 2 × channels (Discord's
+ * per-channel limit makes more useless). Within the bounds the value is measured (net.ts AutoTuner).
+ */
 export const AUTO_CONCURRENCY_MAX = 32;
+/** Starting value of the automatic setting; also the Range-read default. */
 export const DEFAULT_DOWNLOAD_CONCURRENCY = 4;
+/** Memory a piece in flight holds (ciphertext + plaintext / request body of a 10 MiB fragment). */
+export const BYTES_PER_PIECE = 20 * 1024 * 1024;
 
 /** Plaintext fragment size; same as discordrive (10 MiB on the wire incl. 28 B of IV + tag). */
 export const DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024 - 28;
@@ -135,12 +141,14 @@ export interface DriveClientOptions {
   store?: IndexStore;
   chunkSize?: number;
   /**
-   * Upload fragments in flight at once (a store may still gate per channel). Default: twice the
-   * channels the store spreads over (BlobStore.lanes), at least 3, at most MAX_CONCURRENCY.
+   * Upload fragments in flight at once (a store may still gate per channel). Default: automatic (measured,
+   * at most 2 × the channels the store spreads over and AUTO_CONCURRENCY_MAX).
    */
   concurrency?: number;
-  /** Download fragments in flight at once (fetched in parallel, written in order). Default 4. */
+  /** Download fragments in flight at once (fetched in parallel, written in order). Default: automatic. */
   downloadConcurrency?: number;
+  /** Memory the pieces in flight may hold (bytes); bounds the automatic value. Default 640 MiB (32 pieces). */
+  memoryBudget?: number;
   /** Renew the upload lease at least this often (ms). */
   leaseRenewMs?: number;
   now?: () => number;
@@ -239,9 +247,11 @@ export class DriveClient {
   readonly observer = new LogObserver();
   readonly blobs: BlobStore;
   protected readonly chunkSize: number;
-  /** Fixed upload concurrency (option / setting); null = automatic from the store's lanes. */
+  /** Fixed upload concurrency (option / setting); null = automatic (measured). */
   private concurrencyOpt: number | null;
-  private downloadConc: number;
+  /** Fixed download concurrency; null = automatic (measured). */
+  private downloadOpt: number | null;
+  private readonly memoryBudget: number;
   protected readonly leaseRenewMs: number;
   protected readonly now: () => number;
   protected readonly sleep: (ms: number) => Promise<void>;
@@ -259,21 +269,38 @@ export class DriveClient {
     this.blobs = d.blobs;
     this.chunkSize = d.chunkSize ?? DEFAULT_CHUNK_SIZE;
     this.concurrencyOpt = d.concurrency ? clampConc(d.concurrency) : null;
-    this.downloadConc = clampConc(d.downloadConcurrency ?? DEFAULT_DOWNLOAD_CONCURRENCY);
+    this.downloadOpt = d.downloadConcurrency ? clampConc(d.downloadConcurrency) : null;
+    this.memoryBudget = d.memoryBudget ?? 32 * BYTES_PER_PIECE;
     this.leaseRenewMs = d.leaseRenewMs ?? 60_000;
     this.now = d.now ?? (() => Date.now());
     this.sleep = d.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.net = d.net ?? new NetControl();
     this.blobs.net = this.net;
     this.net.emitTo = (ev, f) => this.tlog?.emit(ev, f);
+    this.net.tune.up.onTarget = () => this.syncWindows();
+    this.net.tune.down.onTarget = () => this.syncWindows();
     this.syncWindows();
   }
 
-  /** Window maxima follow the settings; "save data" / metered: at most 2 pieces in flight per direction. */
+  /** Bounds of the automatic value: memory, AUTO_CONCURRENCY_MAX, and for uploads 2 × channels (at least 3). */
+  autoCap(dir: "up" | "down"): number {
+    const mem = Math.max(2, Math.floor(this.memoryBudget / BYTES_PER_PIECE));
+    const lanes = dir === "up" ? Math.max(3, 2 * (this.blobs.lanes?.() ?? 1)) : AUTO_CONCURRENCY_MAX;
+    return Math.max(1, Math.min(AUTO_CONCURRENCY_MAX, mem, lanes));
+  }
+
+  /** Window maxima follow the settings (fixed or automatic); "save data" / metered: at most 2 per direction. */
   syncWindows(): void {
+    this.net.tune.up.setCap(this.autoCap("up"));
+    this.net.tune.down.setCap(this.autoCap("down"));
     const lean = this.net.metered();
     this.net.win.up.setMax(lean ? Math.min(2, this.uploadConcurrency) : this.uploadConcurrency);
-    this.net.win.down.setMax(lean ? Math.min(2, this.downloadConc) : this.downloadConc);
+    this.net.win.down.setMax(lean ? Math.min(2, this.downloadConcurrency) : this.downloadConcurrency);
+  }
+
+  /** The automatic value of this direction is in charge (no fixed setting, no save data). */
+  private tuning(dir: "up" | "down"): boolean {
+    return (dir === "up" ? this.concurrencyOpt : this.downloadOpt) === null && !this.net.metered();
   }
 
   /** Settings → "Save data" (on top of what the browser reports as metered). */
@@ -292,19 +319,25 @@ export class DriveClient {
     this.blobs.log = l;
   }
 
-  /** Fragments in flight at once for uploads: the setting, else max(3, 2 × the store's channels) (zlecenie 2026-10-13-transfer §3). */
+  /** Fragments in flight for uploads now: the setting, else the automatic (measured) value. */
   get uploadConcurrency(): number {
-    return this.concurrencyOpt ?? Math.min(AUTO_CONCURRENCY_MAX, clampConc(Math.max(3, 2 * (this.blobs.lanes?.() ?? 1))));
+    return this.concurrencyOpt ?? Math.min(this.net.tune.up.target, this.autoCap("up"));
   }
 
+  /** Fragments in flight for downloads now: the setting, else the automatic (measured) value. */
   get downloadConcurrency(): number {
-    return this.downloadConc;
+    return this.downloadOpt ?? Math.min(this.net.tune.down.target, this.autoCap("down"));
   }
 
-  /** Settings → Diagnostics → advanced: fragments in flight (null / 0 = automatic upload, default download). */
+  /** Which directions run on the automatic value. */
+  get autoConcurrency(): { upload: boolean; download: boolean } {
+    return { upload: this.concurrencyOpt === null, download: this.downloadOpt === null };
+  }
+
+  /** Settings → Network → pieces in flight (null / 0 = automatic). */
   setConcurrency(o: { upload?: number | null; download?: number | null }): void {
     if (o.upload !== undefined) this.concurrencyOpt = o.upload ? clampConc(o.upload) : null;
-    if (o.download !== undefined) this.downloadConc = o.download ? clampConc(o.download) : DEFAULT_DOWNLOAD_CONCURRENCY;
+    if (o.download !== undefined) this.downloadOpt = o.download ? clampConc(o.download) : null;
     this.syncWindows();
   }
 
@@ -400,7 +433,10 @@ export class DriveClient {
     this.syncWindows();
     const win = this.net.win.up;
     const conc = Math.min(win.max, nFrags);
-    log?.emit("file_start", { dir: "up", x: uploadId, size: src.size, n: nFrags, chunk: this.chunkSize, conc, lanes: this.blobs.lanes?.() ?? null, win: win.limit, ...(this.net.metered() ? { lean: true } : {}), mode: log.o.mode, ...log.nameFields(nfc) });
+    const auto = this.tuning("up");
+    // Workers: as many as the value may grow to; the window gates how many run (the automatic value moves it).
+    const workers = Math.min(nFrags, auto ? Math.max(win.max, this.autoCap("up")) : win.max);
+    log?.emit("file_start", { dir: "up", x: uploadId, size: src.size, n: nFrags, chunk: this.chunkSize, conc, ...(auto ? { auto: true } : {}), lanes: this.blobs.lanes?.() ?? null, win: win.limit, ...(this.net.metered() ? { lean: true } : {}), mode: log.o.mode, ...log.nameFields(nfc) });
     let sentBytes = 0;
     const endLog = (ok: boolean, e?: unknown) =>
       log?.emit("file_end", { dir: "up", x: uploadId, ok, size: src.size, b: sentBytes, dur: ms(t0), mbps: mbps(sentBytes, ms(t0)), posts: stats.posts, ...(ok ? {} : { err: e instanceof Error && e.name === "AbortError" ? "aborted" : errText(e) }) });
@@ -489,8 +525,18 @@ export class DriveClient {
             stages.enc--;
             stages.net++;
             opts.onProgress?.(sentBytes, src.size, { ...stages });
-            const placed = await this.blobs.put(ct, `${blobId}${BLOB_EXT}`, { uploadId, index: i, sha256: hash, signal, stats });
+            // Automatic value: the tuner sees every piece on the wire (bytes and time).
+            const tk = auto ? this.net.tune.up.begin() : null;
+            let placed: DiscordPlacement;
+            try {
+              placed = await this.blobs.put(ct, `${blobId}${BLOB_EXT}`, { uploadId, index: i, sha256: hash, signal, stats });
+            } catch (e) {
+              if (tk) this.net.tune.up.drop(tk);
+              throw e;
+            }
             stages.net--;
+            if (tk && this.tuning("up")) this.net.tune.up.end(tk, ct.byteLength, next < count);
+            else if (tk) this.net.tune.up.drop(tk);
             chunks[i] = { index: i, blobId, ciphertextSizeBytes: ct.byteLength, ciphertextHash: hash, placements: [placed] };
             if (rk) void rs!.put(rk.frags + i, { c: chunks[i]!, ph } satisfies UploadJournalFrag).catch(() => {});
             const f4 = log ? nowMs() : 0;
@@ -510,7 +556,7 @@ export class DriveClient {
       // while the others still post: fragments of a failed upload landing after it, and in the journal).
       // A cancel does not wait for the posts in flight (the user asked to stop now).
       let firstErr: unknown = null;
-      const done = Promise.all(Array.from({ length: conc }, () => worker().catch((e) => ((failed = true), (firstErr ??= e)))));
+      const done = Promise.all(Array.from({ length: workers }, () => worker().catch((e) => ((failed = true), (firstErr ??= e)))));
       const aborted = signal ? new Promise<void>((r) => (signal.aborted ? r() : signal.addEventListener("abort", () => r(), { once: true }))) : null;
       await (aborted ? Promise.race([done, aborted]) : done);
       failed = true;
@@ -612,7 +658,8 @@ export class DriveClient {
     this.syncWindows();
     const win = this.net.win.down;
     const conc = Math.min(win.max, Math.max(1, v.chunkCount));
-    log?.emit("file_start", { dir: "down", x, size: v.sizeBytes, n: v.chunkCount, conc, win: win.limit, lanes: this.net.laneCount, ...(this.net.metered() ? { lean: true } : {}), mode: log.o.mode, ...log.nameFields(node.name) });
+    const auto = this.tuning("down");
+    log?.emit("file_start", { dir: "down", x, size: v.sizeBytes, n: v.chunkCount, conc, ...(auto ? { auto: true } : {}), win: win.limit, lanes: this.net.laneCount, ...(this.net.metered() ? { lean: true } : {}), mode: log.o.mode, ...log.nameFields(node.name) });
     try {
       const tm = log ? nowMs() : 0;
       const { manifest, key } = await this.loadManifest(v.manifestRef);
@@ -644,7 +691,18 @@ export class DriveClient {
         if (log) log.fl.down++;
         try {
           const f0 = log ? nowMs() : 0;
-          const ct = await this.blobs.get(p, ac.signal, { x, i: c.index });
+          // Automatic value: the tuner sees every piece read (bytes and time).
+          const tk = auto ? this.net.tune.down.begin() : null;
+          let ct: Uint8Array;
+          try {
+            ct = await this.blobs.get(p, ac.signal, { x, i: c.index });
+          } catch (e) {
+            if (tk) this.net.tune.down.drop(tk);
+            throw e;
+          }
+          // `more`: the slots, not the end of the file or the write buffer, were the limit.
+          if (tk && this.tuning("down")) this.net.tune.down.end(tk, ct.byteLength, launched < ordered.length && launched - writing < ahead);
+          else if (tk) this.net.tune.down.drop(tk);
           const f1 = log ? nowMs() : 0;
           if (c.ciphertextHash && (await sha256Hex(ct)) !== c.ciphertextHash) throw new Error(`chunk ${c.index}: ciphertext hash mismatch`);
           const f2 = log ? nowMs() : 0;
@@ -661,7 +719,8 @@ export class DriveClient {
       // ~25 s with 0 fragments finishing, then ~30 at once; 14 MB/s on a line that does 110). Memory is
       // bounded separately: at most `ahead` fragments past the one being written.
       let fetching = 0;
-      const ahead = Math.max(conc * 2, 16);
+      // Read-ahead past the fragment being written (memory): follows the value, which may change during the download.
+      let ahead = Math.max(conc * 2, 16);
       let writing = 0;
       // A finished fetch frees a slot at once (even while the writer still waits for the head fragment).
       const nudge = () => {
@@ -680,12 +739,13 @@ export class DriveClient {
         launching = true;
         again = false;
         try {
-        // The window (weak link: fewer at once) is read every time: it shrinks and grows during the download.
-        while (launched < ordered.length && fetching < Math.min(conc, win.limit) && launched - writing < ahead) {
+        // The window (weak link: fewer at once; the automatic value) is read every time: it changes during the download.
+        while (launched < ordered.length && fetching < Math.min(win.max, win.limit) && launched - writing < (ahead = Math.max(win.max * 2, 16))) {
           const k = launched++;
-          // Batch hint every 50 fragments (e2ee/plain: one link refresh call instead of 50).
+          // Links ahead: every 25 fragments, a hint for the next 75 (metadata only: their links are fetched in
+          // the background while these download; e2ee/plain: one refresh call for the ones not cached yet).
           // Only a hint: a failure here (no network) is retried per fragment inside get().
-          if (k % 50 === 0) await this.blobs.prefetch?.(ordered.slice(k, k + 50).map((y) => y.placements?.[0] as DiscordPlacement).filter(Boolean)).catch(() => {});
+          if (k % 25 === 0) await this.blobs.prefetch?.(ordered.slice(k, k + 75).map((y) => y.placements?.[0] as DiscordPlacement).filter(Boolean), { x, first: k + from }).catch(() => {});
           fetching++;
           const pr = fetchOne(ordered[k]!);
           pr.then(
@@ -760,7 +820,7 @@ export class DriveClient {
   ): Promise<{ data: Uint8Array; size: number; start: number; end: number }> {
     const node = this.store.getNode(nodeId);
     if (!node || node.kind !== "file" || !node.content) throw new Error("not a file");
-    return readVersionRange(this, node.content, start, end, cache, this.downloadConc);
+    return readVersionRange(this, node.content, start, end, cache, this.downloadConcurrency);
   }
 
   /** Children of a folder (non-trashed), sorted by name. */

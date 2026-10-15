@@ -92,6 +92,8 @@ export class AdaptiveWindow {
   cuts = 0;
   /** Called when the limit changes (DriveClient: start more downloads at once). */
   onChange: (() => void) | null = null;
+  /** Called after a cut by network errors with the new limit (the automatic value follows it). */
+  onCut: ((limit: number) => void) | null = null;
 
   constructor(
     readonly dir: "up" | "down",
@@ -143,6 +145,7 @@ export class AdaptiveWindow {
     this.lastCutAt = now;
     this.cuts++;
     this.emit("win", { dir: this.dir, lim: this.limit, max: this.max_, why });
+    this.onCut?.(this.limit);
   }
 
   /** Weak link right now: cut below the maximum and an error within the last minute. */
@@ -177,6 +180,236 @@ export class AdaptiveWindow {
     const w = this.waiters.splice(0);
     for (const f of w) f();
     this.onChange?.();
+  }
+}
+
+// ── automatic pieces in flight (no thresholds in MB/s) ──────────────
+
+export interface TunerOptions {
+  /** First value (before anything is measured). */
+  start?: number;
+  /** Upper bound (memory: ~20 MB per piece in flight; uploads also 2 × channels). */
+  cap?: number;
+  /** One step: × this (at least ±1). */
+  factor?: number;
+  /** A step up is kept only if the total speed grew by at least this share. */
+  minGain?: number;
+  /** A step down is kept if the speed fell by less than this share (fewer pieces, same speed). */
+  maxLoss?: number;
+  /** A measurement window is at least this long… */
+  minSpanMs?: number;
+  /** …and at least this many piece durations (long uploads on a slow line). */
+  minPieces?: number;
+  /** After settling: measure again after this long. */
+  recheckMs?: number;
+  /**
+   * Also try fewer pieces when more gave nothing (uploads: long posts that only share a narrow line gain
+   * nothing and break more easily). Off for downloads: there, extra pieces cost nothing but memory.
+   */
+  shrink?: boolean;
+  /** Never below this. */
+  min?: number;
+}
+
+/**
+ * Why the value changed: `try` a step up from a measured value, `gain` the step helped (next one), `flat`
+ * it did not (back), `try-fewer` one step below, `fewer` that was as fast (kept), `worse` it was not
+ * (back), `errors` network errors cut it, `cap` the upper bound went down.
+ */
+export type TuneWhy = "try" | "gain" | "flat" | "try-fewer" | "fewer" | "worse" | "errors" | "cap";
+
+/** A piece in flight as the tuner sees it (from begin() to end()/drop()). */
+export type TuneToken = { t0: number };
+
+/**
+ * Pieces in flight for one direction, found by measuring instead of a fixed number: start small, step up
+ * (× 1.5) while the total speed keeps growing (≥ 10 % per step), step back when it stops growing; uploads
+ * then try one step down (fewer pieces at the same speed is better: long uploads that only share a narrow
+ * line gain nothing and break more easily). Every `recheckMs` the same check runs again from the current value, so
+ * a line that got faster or slower is followed. Network errors cut the value (AdaptiveWindow halves the
+ * pieces in flight; the tuner takes that as its new value and measures again later).
+ *
+ * Measuring: every piece's bytes are spread evenly over its own duration, and a window is closed only at
+ * the start of the oldest piece still running, so every byte inside the window is known (no error from
+ * pieces finishing in bursts). A window starts only once the pieces started under the previous value have
+ * finished, and is thrown away when the transfer ran out of pieces to start (end of a file, a small file,
+ * the download's write buffer): it compares the line with n pieces against the line with m pieces.
+ */
+export class AutoTuner {
+  target: number;
+  cap: number;
+  readonly o: Required<Omit<TunerOptions, "start" | "cap">>;
+  /** Accepted value and the speed measured with it (bytes/s). */
+  private base: { n: number; bps: number } | null = null;
+  /** What the running measurement is for: the current value, a step up, a step down, or nothing (settled). */
+  private phase: "base" | "up" | "down" | "hold" = "base";
+  private triedDown = false;
+  /** A step up helped in this check. */
+  private gained = false;
+  /** When the value last changed / the measurement restarted. */
+  private since: number;
+  /** Window start (null: pieces from before `since` still running). */
+  private ws: number | null = null;
+  private holdFrom = 0;
+  private readonly active = new Set<TuneToken>();
+  /** Finished pieces that may overlap the window. */
+  private done: { t0: number; t1: number; b: number }[] = [];
+  private lastDur = 0;
+  /** Called with the new value (DriveClient: the window maximum). */
+  onTarget: ((n: number) => void) | null = null;
+  /** The last value measurements accepted (the current one may be a step being tried). */
+  get accepted(): number {
+    return this.phase === "hold" || !this.base ? this.target : this.base.n;
+  }
+  /** Recent changes (diagnostics). */
+  readonly changes: { t: number; from: number; to: number; why: TuneWhy }[] = [];
+
+  constructor(
+    readonly dir: "up" | "down",
+    o: TunerOptions = {},
+    private readonly clock: NetClock = realClock,
+    private readonly emit: NetEmit = () => {},
+  ) {
+    this.o = { factor: o.factor ?? 1.5, minGain: o.minGain ?? 0.1, maxLoss: o.maxLoss ?? 0.05, minSpanMs: o.minSpanMs ?? 6000, minPieces: o.minPieces ?? 1.5, recheckMs: o.recheckMs ?? 60_000, shrink: o.shrink ?? false, min: Math.max(1, o.min ?? 2) };
+    this.cap = Math.max(1, Math.round(o.cap ?? 32));
+    this.target = Math.max(Math.min(this.o.min, this.cap), Math.min(this.cap, Math.round(o.start ?? 4)));
+    this.since = clock.now();
+  }
+
+  /** New upper bound (channels, memory): the value follows down at once, up only by measuring. */
+  setCap(cap: number): void {
+    cap = Math.max(1, Math.round(cap));
+    if (cap === this.cap) return;
+    this.cap = cap;
+    if (this.target > cap) this.change(cap, "cap", null, null, "hold");
+  }
+
+  /** Network errors left `limit` pieces in flight (AdaptiveWindow cut): that is the value now; measure again later. */
+  loss(limit: number): void {
+    const n = Math.max(1, Math.min(this.target, Math.round(limit)));
+    this.base = null;
+    if (n < this.target) this.change(n, "errors", null, null, "hold");
+    else this.settle(this.clock.now());
+  }
+
+  /** A piece starts (a slot is taken). */
+  begin(): TuneToken {
+    const tk = { t0: this.clock.now() };
+    this.active.add(tk);
+    return tk;
+  }
+
+  /** A piece failed or was cancelled: it no longer counts. */
+  drop(tk: TuneToken): void {
+    this.active.delete(tk);
+    this.restart(this.clock.now());
+  }
+
+  /** A piece finished with `b` bytes; `more` = the transfer still had pieces waiting to start (the slots were the limit). */
+  end(tk: TuneToken, b: number, more: boolean): void {
+    if (!this.active.delete(tk)) return;
+    const now = this.clock.now();
+    this.lastDur = now - tk.t0;
+    if (this.phase === "hold") {
+      if (!more || now - this.holdFrom < this.o.recheckMs) return;
+      this.phase = "base"; // check again: measure the current value first
+      this.triedDown = false;
+      this.gained = false;
+      return this.restart(now);
+    }
+    if (!more) return this.restart(now);
+    if (tk.t0 >= this.since || this.ws !== null) this.done.push({ t0: tk.t0, t1: now, b });
+    if (this.ws === null) {
+      // The window opens once every piece started under the previous value has finished.
+      let old = false;
+      for (const a of this.active) if (a.t0 < this.since) old = true;
+      if (old) return;
+      this.ws = now;
+      return;
+    }
+    // Close the window at the oldest piece still running: every byte before it is known.
+    let we = now;
+    for (const a of this.active) we = Math.min(we, a.t0);
+    const span = we - this.ws;
+    if (span < Math.max(this.o.minSpanMs, this.o.minPieces * this.lastDur)) return;
+    let bytes = 0;
+    for (const d of this.done) {
+      const ov = Math.min(d.t1, we) - Math.max(d.t0, this.ws);
+      if (ov > 0) bytes += (d.b * ov) / Math.max(1, d.t1 - d.t0);
+    }
+    this.decide((bytes / span) * 1000, now);
+  }
+
+  private restart(now: number): void {
+    this.since = now;
+    this.ws = null;
+    this.done = [];
+  }
+
+  private settle(now: number): void {
+    this.phase = "hold";
+    this.holdFrom = now;
+    this.restart(now);
+  }
+
+  private up(n: number): number {
+    return Math.min(this.cap, Math.max(n + 1, Math.round(n * this.o.factor)));
+  }
+  private down(n: number): number {
+    return Math.max(this.o.min, Math.min(n - 1, Math.round(n / this.o.factor)));
+  }
+
+  private decide(bps: number, now: number): void {
+    const n = this.target;
+    const b = this.base;
+    if (this.phase === "base" || !b) {
+      this.base = { n, bps };
+      return this.up(n) > n ? this.change(this.up(n), "try", [n, bps], null, "up", now) : this.tryDown(n, bps, now);
+    }
+    if (this.phase === "up") {
+      if (bps >= b.bps * (1 + this.o.minGain)) {
+        this.base = { n, bps };
+        this.gained = true;
+        return this.up(n) > n ? this.change(this.up(n), "gain", [b.n, b.bps], [n, bps], "up", now) : this.settle(now);
+      }
+      // No gain from the step: back to the accepted value. If this check had no gain at all, see whether
+      // fewer pieces do as well (after a gain the step below is already known to be slower).
+      this.change(b.n, "flat", [b.n, b.bps], [n, bps], "base", now);
+      return this.gained ? this.settle(now) : this.tryDown(b.n, b.bps, now);
+    }
+    // phase "down": about the same speed with fewer pieces → keep fewer
+    if (bps >= b.bps * (1 - this.o.maxLoss)) {
+      this.base = { n, bps };
+      this.log(b.n, n, "fewer", [b.n, b.bps], [n, bps]);
+      return this.settle(now);
+    }
+    this.change(b.n, "worse", [b.n, b.bps], [n, bps], "hold", now);
+    this.settle(now);
+  }
+
+  private tryDown(n: number, bps: number, now: number): void {
+    if (!this.o.shrink || this.triedDown || this.down(n) >= n) return this.settle(now);
+    this.triedDown = true;
+    this.base = { n, bps };
+    this.change(this.down(n), "try-fewer", [n, bps], null, "down", now);
+  }
+
+  /** `a`, `m`: [pieces, bytes/s] of the accepted value and of the value just measured (logs). */
+  private change(n: number, why: TuneWhy, a: [number, number] | null, m: [number, number] | null, phase: AutoTuner["phase"], now = this.clock.now()): void {
+    const from = this.target;
+    this.target = n;
+    this.phase = phase;
+    if (phase === "hold") this.holdFrom = now;
+    this.restart(now);
+    this.log(from, n, why, a, m);
+    if (n !== from) this.onTarget?.(n);
+  }
+
+  private log(from: number, to: number, why: TuneWhy, a: [number, number] | null, m: [number, number] | null): void {
+    this.changes.push({ t: this.clock.now(), from, to, why });
+    if (this.changes.length > 100) this.changes.shift();
+    // an/ab: pieces and speed (bytes/s) of the accepted value; mn/mb: of the value just measured.
+    this.emit("tune", { dir: this.dir, from, to, why, ...(a ? { an: a[0], ab: Math.round(a[1]) } : {}), ...(m ? { mn: m[0], mb: Math.round(m[1]) } : {}) });
   }
 }
 
@@ -637,6 +870,8 @@ export interface NetControlOptions {
   netType?: () => string;
   gate?: GateOptions;
   guard?: GuardOptions;
+  /** Automatic pieces in flight (tests: shorter measurements). */
+  tune?: TunerOptions;
 }
 
 export type NetUiState = "ok" | "weak" | "offline" | "resumed";
@@ -650,6 +885,8 @@ export class NetControl {
   readonly clock: NetClock;
   readonly gate: NetGate;
   readonly win: { up: AdaptiveWindow; down: AdaptiveWindow };
+  /** Automatic pieces in flight per direction (used when the setting is empty). */
+  readonly tune: { up: AutoTuner; down: AutoTuner };
   readonly guard: StuckGuard;
   /**
    * Uploads: only watched, for the reference speed (one connection lane: never probes). The browser
@@ -679,6 +916,10 @@ export class NetControl {
     };
     this.gate = new NetGate(this.clock, emit, o.gate);
     this.win = { up: new AdaptiveWindow("up", 8, this.clock, emit), down: new AdaptiveWindow("down", 4, this.clock, emit) };
+    this.tune = { up: new AutoTuner("up", { start: 4, shrink: true, ...o.tune }, this.clock, emit), down: new AutoTuner("down", { start: 4, ...o.tune }, this.clock, emit) };
+    // Network errors cut the window; the automatic value follows the cut and is measured again later.
+    this.win.up.onCut = (l) => this.tune.up.loss(l);
+    this.win.down.onCut = (l) => this.tune.down.loss(l);
     this.guard = new StuckGuard(
       "down",
       {

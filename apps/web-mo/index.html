@@ -69,6 +69,9 @@
     <div class="modes" data-ddn-ui="modes"></div>
   </div>
 
+  <!-- This browser cannot make the device's Ed25519 key (WebCrypto): copied into every sign-up card instead of a raw error. -->
+  <template data-ddn-ui="old-browser-tpl"><div class="note warn" data-ddn="old-browser" role="alert"><svg class="i"><use href="#i-alert"/></svg><p><b data-i18n="old.h">This browser is too old for DiscorDrive.</b> <span data-i18n="old.t"></span></p></div></template>
+
   <!-- Create account -->
   <section class="auth-card" data-auth="create" aria-labelledby="create-h">
     <div class="wordmark"><span class="logo" aria-hidden="true">D</span><b data-i18n="brand.name">DiscorDrive</b></div>
@@ -212,6 +215,7 @@
           <button class="iconbtn" type="button" data-ddn-ui="queue-close" data-i18n-attr="aria-label=queue.hide" hidden><svg class="i"><use href="#i-x"/></svg></button>
         </div>
         <p class="netstate" data-ddn="queue-net" role="status" hidden></p>
+        <p class="netstate" data-ddn="queue-lean" data-state="lean" role="status" hidden><span data-ddn-ui="queue-lean-t"></span> <a class="link" href="/settings#network" data-link data-i18n="lean.link">Settings</a></p>
         <ul class="qlist" data-ddn-ui="queue-list"></ul>
         <p class="hint" data-i18n="queue.note"></p>
       </section>
@@ -222,6 +226,7 @@
           <button class="iconbtn" type="button" data-ddn="dl-close" data-i18n-attr="aria-label=queue.hide" hidden><svg class="i"><use href="#i-x"/></svg></button>
         </div>
         <p class="netstate" data-ddn="dl-net" role="status" hidden></p>
+        <p class="netstate" data-ddn="dl-lean" data-state="lean" role="status" hidden><span data-ddn-ui="dl-lean-t"></span> <a class="link" href="/settings#network" data-link data-i18n="lean.link">Settings</a></p>
         <ul class="qlist" data-ddn="dl-list"></ul>
         <p class="hint" data-i18n="dl.note"></p>
       </section>
@@ -408,6 +413,31 @@
           </div>
         </section>
 
+        <!-- Network / transfers: save data, stuck-connection guard, pieces in flight (visible, not under Diagnostics). -->
+        <section id="network" aria-labelledby="net-h" data-ddn="net-sec">
+          <h2 class="sec-h"><span id="net-h" data-i18n="netS.h">Network &amp; transfers</span><span class="chip" data-ddn="net-state"></span></h2>
+          <p class="sec-lead" data-i18n="netS.lead"></p>
+          <div class="sec-body">
+            <label class="ack"><input type="checkbox" data-ddn="net-savedata"><span data-i18n="net.save">Save data</span></label>
+            <p class="hint" data-ddn="net-savedata-t" data-i18n="net.save.t"></p>
+            <label class="ack"><input type="checkbox" data-ddn="net-guard"><span data-i18n="net.guard">Replace a stuck connection</span></label>
+            <p class="hint" data-i18n="net.guard.t"></p>
+            <details class="howto" data-ddn="diag-adv">
+              <summary><svg class="i"><use href="#i-right"/></svg><span data-i18n="diag.adv">Advanced: pieces in flight</span></summary>
+              <div class="stack">
+                <p class="hint" data-i18n="diag.adv.t"></p>
+                <div class="inline">
+                  <label class="field"><span class="lab" data-i18n="diag.up">Upload</span><input class="input" type="number" min="0" max="64" step="1" inputmode="numeric" data-ddn="diag-conc-up"></label>
+                  <label class="field"><span class="lab" data-i18n="diag.down">Download</span><input class="input" type="number" min="0" max="64" step="1" inputmode="numeric" data-ddn="diag-conc-down"></label>
+                </div>
+                <div class="note warn" data-ddn="diag-conc-warn" hidden><svg class="i"><use href="#i-info"/></svg><p data-ddn-ui="diag-conc-warn-t"></p></div>
+              </div>
+            </details>
+            <p class="hint" data-ddn="diag-conc-now" role="status" aria-live="polite"></p>
+            <p class="hint" data-ddn="net-info" role="status" aria-live="polite"></p>
+          </div>
+        </section>
+
         <section id="diagnostics" aria-labelledby="diag-h">
           <h2 class="sec-h"><span id="diag-h" data-i18n="diag.h">Diagnostics</span><span class="chip" data-ddn="diag-state"></span></h2>
           <p class="sec-lead" data-i18n="diag.lead"></p>
@@ -417,23 +447,6 @@
             <label class="ack"><input type="checkbox" data-ddn="diag-names"><span data-i18n="diag.names">Include file names</span></label>
             <p class="hint" data-i18n="diag.names.t"></p>
             <p class="hint" data-ddn="diag-info" role="status" aria-live="polite"></p>
-            <label class="ack"><input type="checkbox" data-ddn="net-savedata"><span data-i18n="net.save">Save data</span></label>
-            <p class="hint" data-ddn="net-savedata-t" data-i18n="net.save.t"></p>
-            <details class="howto" data-ddn="diag-adv">
-              <summary><svg class="i"><use href="#i-right"/></svg><span data-i18n="diag.adv">Advanced: pieces in flight</span></summary>
-              <div class="stack">
-                <p class="hint" data-i18n="diag.adv.t"></p>
-                <div class="inline">
-                  <label class="field"><span class="lab" data-i18n="diag.up">Upload</span><input class="input" type="number" min="0" max="64" step="1" inputmode="numeric" data-ddn="diag-conc-up"></label>
-                  <label class="field"><span class="lab" data-i18n="diag.down">Download</span><input class="input" type="number" min="0" max="64" step="1" inputmode="numeric" data-ddn="diag-conc-down"></label>
-                </div>
-                <p class="hint" data-ddn="diag-conc-now" role="status" aria-live="polite"></p>
-                <div class="note warn" data-ddn="diag-conc-warn" hidden><svg class="i"><use href="#i-info"/></svg><p data-ddn-ui="diag-conc-warn-t"></p></div>
-                <label class="ack"><input type="checkbox" data-ddn="net-guard"><span data-i18n="net.guard">Replace a stuck connection</span></label>
-                <p class="hint" data-i18n="net.guard.t"></p>
-                <p class="hint" data-ddn="net-info" role="status" aria-live="polite"></p>
-              </div>
-            </details>
             <div class="row-btns"><button class="btn" type="button" data-ddn="diag-download"><svg class="i"><use href="#i-download"/></svg><span data-i18n="diag.download">Download logs</span></button><button class="btn" type="button" data-ddn="diag-clear"><svg class="i"><use href="#i-trash"/></svg><span data-i18n="diag.clear">Clear</span></button></div>
           </div>
         </section>

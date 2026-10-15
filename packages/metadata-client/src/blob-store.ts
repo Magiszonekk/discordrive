@@ -44,15 +44,19 @@ export interface BlobStore {
   net?: NetControl | null;
   /** Extra connections for CDN reads (lane 1, 2, …; the page's own fetch is lane 0). */
   setCdnLanes?(lanes: LaneFetch[]): void;
-  /** Optional hint before reading many blobs in order (batch link refresh). */
-  prefetch?(ps: DiscordPlacement[]): Promise<void>;
+  /**
+   * Hint before reading many blobs in this order: fetch their fresh links ahead (metadata only: in the
+   * background, while the current ones download; e2ee/plain: one batch refresh call). `x`/`first` name the
+   * transfer and the index of the first one (logs only).
+   */
+  prefetch?(ps: DiscordPlacement[], ctx?: { x?: string; first?: number }): Promise<void>;
   /** All blobs of the upload are stored; about to commit (the server stops treating it as abandoned). */
   finalize?(uploadId: string): Promise<void>;
   /** The upload failed or was cancelled before finalize: drop its blobs (best effort). */
   abort?(uploadId: string): Promise<void>;
 }
 
-/** A fetch on another connection (web: a sandboxed iframe, docs/evidence/2026-10-15-connections). */
+/** A fetch on another connection (web: a sandboxed iframe of this origin gets its own connection). */
 export type LaneFetch = (url: string, init?: { signal?: AbortSignal }) => Promise<Response>;
 
 export class AbortedError extends Error {

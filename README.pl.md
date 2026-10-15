@@ -39,6 +39,14 @@ Kreator jest domyślnie po angielsku; polski wybierzesz w pierwszym pytaniu
 ma przełącznik EN/PL w nagłówku. Otwórz ten adres, załóż konto, podłącz kanał Discorda
 według instrukcji na ekranie, zapisz zestaw ratunkowy i wyślij pierwszy plik.
 
+## Wymagania przeglądarki
+
+Aplikacja loguje każde urządzenie kluczem Ed25519, który tworzy przeglądarka (WebCrypto). Potrzebny
+jest **Chrome, Edge lub Brave 137 lub nowszy, Firefox 129 lub nowszy, Safari 17 lub nowsze** (także
+na telefonach). Starsza przeglądarka zamiast formularza pokaże „Ta przeglądarka jest za stara”;
+zaktualizuj ją. Zapasowej implementacji w JavaScripcie celowo nie ma: klucz zostaje w kryptografii
+samej przeglądarki.
+
 ## Tryby
 
 Wybierany w `npm run setup`, na zawsze dla danej instancji (inny tryb = nowa instancja w innym

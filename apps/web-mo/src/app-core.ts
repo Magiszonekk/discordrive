@@ -140,10 +140,20 @@ type NavConn = { userAgent?: string; onLine?: boolean; connection?: { type?: str
 const nav = () => (globalThis as unknown as { navigator?: NavConn }).navigator;
 /** Settings → "Save data" (this browser's choice, sent by the UI). */
 let saveDataOn = false;
-/** Phone or metered link (§6.2, Q4: no bases, no automatic cleanup), or "Save data" on. */
+/** Phone or metered link (no snapshot bases, no automatic cleanup), or "Save data" on. */
 function meteredLink(): boolean {
+  return leanWhy() !== null;
+}
+/**
+ * Why data is being saved right now (the panels say it): the switch in Settings, the browser reporting a
+ * metered link (Save-Data / cellular), or a phone; null = not saving.
+ */
+function leanWhy(): "setting" | "metered" | "phone" | null {
   const n = nav();
-  return saveDataOn || /Android|iPhone|iPad|Mobile/i.test(n?.userAgent ?? "") || n?.connection?.type === "cellular" || !!n?.connection?.saveData;
+  if (saveDataOn) return "setting";
+  if (n?.connection?.type === "cellular" || n?.connection?.saveData) return "metered";
+  if (/Android|iPhone|iPad|Mobile/i.test(n?.userAgent ?? "")) return "phone";
+  return null;
 }
 /** Network type when the browser tells it (Chromium: wifi / ethernet / cellular …); "" elsewhere. */
 const netType = () => nav()?.connection?.type ?? "";
@@ -260,6 +270,8 @@ export class AppCore {
       metered: meteredLink(),
       saveData: saveDataOn,
       browserMetered: meteredLink() && !saveDataOn,
+      /** Why data is saved (panels: "Saving data: at most 2 at once" + the reason); null = not saving. */
+      leanWhy: leanWhy(),
       guard: this.net.guardOn,
       lanes: this.net.laneCount,
       window: { up: this.net.win.up.limit, upMax: this.net.win.up.max, down: this.net.win.down.limit, downMax: this.net.win.down.max },
@@ -888,16 +900,29 @@ export class AppCore {
 
   // ── transfer logs (Settings → Diagnostics, zlecenie 2026-10-13-transfer §2) ──
 
-  /** Fragments in flight (advanced): upload null = automatic (max(3, 2 × channels)), download null = 4. */
+  /** Fragments in flight (Settings → Network): null = automatic (measured per direction). */
   setConcurrency(upload: number | null, download: number | null) {
     this.conc = { upload: upload || null, download: download || null };
     this.client?.setConcurrency(this.conc);
     return this.concurrency();
   }
 
-  concurrency(): { upload: number; download: number; auto: boolean; channels: number } {
+  /** Pieces in flight now; `auto`/`autoDown`: the automatic value; `lean`: save data caps both at 2. */
+  concurrency(): { upload: number; download: number; auto: boolean; autoDown: boolean; channels: number; lean: boolean; capUp: number; capDown: number } {
     const c = this.client;
-    return { upload: c?.uploadConcurrency ?? 3, download: c?.downloadConcurrency ?? 4, auto: this.conc.upload === null, channels: c?.blobs.lanes?.() ?? 1 };
+    const lean = this.net.metered();
+    const up = c?.uploadConcurrency ?? 4;
+    const down = c?.downloadConcurrency ?? 4;
+    return {
+      upload: lean ? Math.min(2, up) : up,
+      download: lean ? Math.min(2, down) : down,
+      auto: this.conc.upload === null,
+      autoDown: this.conc.download === null,
+      channels: c?.blobs.lanes?.() ?? 1,
+      lean,
+      capUp: c?.autoCap("up") ?? 32,
+      capDown: c?.autoCap("down") ?? 32,
+    };
   }
 
   /** Turn this browser's transfer log on/off (the UI keeps the choice); e2ee/plain: the instance's log for this account too. */

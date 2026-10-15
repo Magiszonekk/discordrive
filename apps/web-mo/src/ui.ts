@@ -117,6 +117,7 @@ const KNOWN_ERRORS = ["channel_critical", "need_other_channel", "file_unavailabl
 const errText = (e: unknown) => {
   const m = String((e as Error)?.message ?? e);
   console.warn("ddn:", m);
+  if (isOldCryptoError(m)) return `${t("old.h")} ${t("old.t")}`;
   if (/fetch|network/i.test(m)) return t("err.network");
   if (/not a pairing code|bad pairing code/i.test(m)) return t("err.pairCode");
   const code = KNOWN_ERRORS.find((c) => m.includes(c));
@@ -124,6 +125,32 @@ const errText = (e: unknown) => {
   if (/webhook/i.test(m)) return t("err.webhook");
   return /^[A-Z]/.test(m) && !/[_{}]/.test(m) ? m : t("err.generic", { msg: m.replace(/^[a-z_]+:\s*/, "") });
 };
+/** WebCrypto without Ed25519 (Chromium before 137, Firefox before 129, Safari before 17). */
+const isOldCryptoError = (m: string) => /Unrecognized name|Algorithm: Unrecognized|Ed25519.*(not supported|unsupported)|NotSupportedError.*Ed25519/i.test(m);
+/**
+ * Can this browser make the device key (Ed25519 in WebCrypto)? Every way in (create, join, rescue kit,
+ * password) makes one; without it the sign-up cards say "this browser is too old" instead of a raw error.
+ */
+async function ed25519Supported(): Promise<boolean> {
+  try {
+    await crypto.subtle.generateKey({ name: "Ed25519" } as Algorithm, false, ["sign", "verify"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function showOldBrowser() {
+  document.body.dataset.oldBrowser = "1";
+  const tpl = ui<HTMLTemplateElement>("old-browser-tpl");
+  for (const card of document.querySelectorAll<HTMLElement>("[data-ddn=signed-out] .auth-card")) {
+    if (card.querySelector("[data-ddn=old-browser]")) continue;
+    const note = tpl.content.firstElementChild!.cloneNode(true) as HTMLElement;
+    applyStatic(note);
+    card.querySelector(".auth-body")?.before(note);
+    for (const b of card.querySelectorAll<HTMLButtonElement>(".auth-body button")) b.disabled = true;
+  }
+}
+
 /** Most toasts on screen at once: older ones leave first, so a burst of operations never covers the page. */
 const MAX_TOASTS = 3;
 function toast(text: string, kind: "ok" | "err" | "info" = "ok", action?: { label: string; run: () => Promise<unknown> }) {
@@ -1030,6 +1057,7 @@ async function uploadAll(files: File[], into?: string) {
     return item;
   });
   box.hidden = false;
+  void paintLean();
   ui("queue-close").hidden = true;
   uploading = { done: 0, total: files.length };
   $("unfinished").hidden = true; // painted again when the queue ends (what is left unfinished then)
@@ -1205,7 +1233,7 @@ function wireFilesPage() {
 }
 
 
-// ── network state, save data, stuck-connection guard, unfinished uploads (zlecenie 2026-10-15-transfery) ──
+// ── network state, save data, stuck-connection guard, unfinished uploads ──
 const NET_KEY = "ddn.net";
 type NetPrefs = { saveData?: boolean; guard?: boolean; baseline?: unknown };
 function storedNet(): NetPrefs {
@@ -1266,6 +1294,7 @@ function wireNet() {
     void act(null, async () => {
       storeNet({ saveData: save.checked });
       paintNetSettings(await core.setNetPrefs({ saveData: save.checked }));
+      await paintConcurrency();
     });
   guard.onchange = () =>
     void act(null, async () => {
@@ -1281,8 +1310,30 @@ function wireNet() {
     });
 }
 type NetStatus = Awaited<ReturnType<typeof core.netStatus>>;
+/**
+ * Save data is on (the switch, a metered link, a phone): both transfer panels say so, with the reason and
+ * a link to the setting (otherwise a slow transfer looks like a slow line).
+ */
+function paintLeanWith(st: NetStatus | null) {
+  const why = st?.leanWhy ?? null;
+  for (const id of ["queue", "dl"]) {
+    const el = $(`${id}-lean`);
+    el.hidden = !why;
+    if (why) {
+      el.dataset.why = why;
+      ui(`${id}-lean-t`).textContent = t("lean.t", { why: t(`lean.why.${why}`) });
+    }
+  }
+}
+async function paintLean() {
+  paintLeanWith(await core.netStatus().catch(() => null));
+}
 function paintNetSettings(st: NetStatus | null) {
   if (!st) return;
+  paintLeanWith(st);
+  $("net-state").textContent = st.leanWhy ? t("netS.chip.lean") : "";
+  $("net-state").className = `chip${st.leanWhy ? " chip--accent" : ""}`;
+  $("net-state").hidden = !st.leanWhy;
   const save = $<HTMLInputElement>("net-savedata");
   save.checked = st.saveData || st.browserMetered;
   save.disabled = st.browserMetered;
@@ -1332,6 +1383,7 @@ function download(id: string, name: string) {
   const li = h("li", { "data-ddn": "dl-item" }, h("span", { class: "qname", title: name }, name), h("span", { class: "qside" }, cancel, state), h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, size, speed));
   list.prepend(li);
   box.hidden = false;
+  void paintLean();
   dlRunning++;
   dlMeta();
   let meter: SpeedMeter | null = null;
@@ -2008,16 +2060,21 @@ async function paintConcurrency() {
   const up = $<HTMLInputElement>("diag-conc-up");
   const down = $<HTMLInputElement>("diag-conc-down");
   if (document.activeElement !== up) ((up.value = st.upload ? String(st.upload) : ""), (up.placeholder = t("diag.auto", { n: c.upload })));
-  if (document.activeElement !== down) ((down.value = st.download ? String(st.download) : ""), (down.placeholder = String(c.download)));
-  $("diag-conc-now").textContent = t("diag.conc.now", { up: c.upload, down: c.download, ch: c.channels });
+  if (document.activeElement !== down) ((down.value = st.download ? String(st.download) : ""), (down.placeholder = t("diag.auto", { n: c.download })));
+  const how = (auto: boolean, cap: number) => (c.lean ? t("diag.conc.lean") : auto ? t("diag.conc.auto", { max: cap }) : t("diag.conc.fixed"));
+  $("diag-conc-now").textContent = t("diag.conc.now2", { up: c.upload, upHow: how(c.auto, c.capUp), down: c.download, downHow: how(c.autoDown, c.capDown), ch: c.channels });
   // Above ~2 × channels Discord's per-channel limit (~30 pieces/min) answers 429: more in flight gains nothing.
   const over = c.upload > 2 * c.channels && !c.auto;
   $("diag-conc-warn").hidden = !over;
   if (over) ui("diag-conc-warn-t").textContent = t("diag.conc.warn", { n: c.upload, ch: c.channels, max: 2 * c.channels });
 }
-async function renderDiagnostics() {
+/** Settings → Network & transfers (save data, guard, pieces in flight). */
+function renderNetwork() {
   void paintConcurrency();
   void core.netStatus().then(paintNetSettings, () => null);
+}
+async function renderDiagnostics() {
+  renderNetwork();
   const st = await core.transferLogStatus().catch(() => null);
   if (!st) return;
   $<HTMLInputElement>("diag-log").checked = st.on;
@@ -2612,6 +2669,7 @@ async function main() {
   }
   const pre = new URLSearchParams(location.search).get("invite");
   if (pre) $<HTMLInputElement>("invite").value = pre;
+  if (!(await ed25519Supported())) showOldBrowser();
   features = await core.features();
   await core.setShowUnavailable(storedShowUnavailable());
   wireSearch();
