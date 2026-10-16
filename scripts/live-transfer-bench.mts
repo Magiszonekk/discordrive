@@ -5,7 +5,7 @@
 // this checkout, so the same command measures the code before and after a change.
 //
 //   npx tsx scripts/live-transfer-bench.mts webhooks.txt [--mb 1000] [--down auto,16] [--up auto]
-//        [--out dir] [--label before]
+//        [--files 1] [--out dir] [--label before]
 //
 // webhooks.txt: webhook URLs of a TEST server, one per line. Every posted message is deleted at the
 // end. The output (summary JSON, transfer logs, report text) has no webhook tokens or CDN links.
@@ -31,6 +31,9 @@ if (!file) {
 const MB = Number(arg("mb", "1000"));
 const DOWN = arg("down", "auto,16").split(",");
 const UP = arg("up", "auto");
+// --files N: N uploads of the same size, one after another (the last one is downloaded); shows the next file
+// starting from what the automatic value learned on the previous one.
+const FILES = Math.max(1, Number(arg("files", "1")));
 const OUT = arg("out", "");
 const LABEL = arg("label", "run");
 const HOOK_RE = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/(\d+)\/[A-Za-z0-9_.-]+$/;
@@ -39,7 +42,7 @@ if (!hooks.length) throw new Error("no webhook URLs in file");
 const log = (s: string) => console.error(`[${new Date().toISOString().slice(11, 19)}] ${s}`);
 
 /** Runs in the page: upload `mb` MB, then each download setting; returns the transfer log and the placements to delete. */
-const runSrc = async (D: never, hooks: { id: string; url: string }[], mb: number, up: string, down: string[]) => {
+const runSrc = async (D: never, hooks: { id: string; url: string }[], mb: number, up: string, down: string[], files: number) => {
   const DD = D as unknown as typeof import("@ddv4/metadata-client") & { Sequencer: new () => never };
   const size = Math.round(mb * 1e6);
   // Built from 16 MB parts (no second copy of the whole file in the page: small machines run this too).
@@ -61,8 +64,23 @@ const runSrc = async (D: never, hooks: { id: string; url: string }[], mb: number
   });
   c.setTransferLog(new DD.TransferLog(mem.write, { src: "web", mode: "metadata-only" }));
   const placements: { hook: string; msg: string }[] = [];
-  const out: { up?: { MBps: number; conc: number; err?: string }; downs: { setting: string; MBps: number; err?: string }[] } = { downs: [] };
+  const out: { ups: { MBps: number; conc: number; err?: string }[]; up?: { MBps: number; conc: number; err?: string }; downs: { setting: string; MBps: number; err?: string }[] } = { ups: [], downs: [] };
   c.setConcurrency({ upload: up === "auto" ? null : Number(up) });
+  // Earlier uploads of the same size first (`files` > 1): the automatic value learned there carries over,
+  // like the next file in the app (the app also remembers it across sessions).
+  for (let k = 1; k < files; k++) {
+    const t1 = performance.now();
+    try {
+      const r = await c.upload(src, `warm-${k}.bin`);
+      out.ups.push({ MBps: Math.round((size / 1e6 / ((performance.now() - t1) / 1000)) * 100) / 100, conc: c.uploadConcurrency });
+      const { manifest } = await c.loadManifest(r.version.manifestRef);
+      for (const ch of manifest.chunks) for (const p of ch.placements ?? []) placements.push({ hook: (p as { locationId: string }).locationId, msg: (p as { messageId: string }).messageId });
+      const loc = DD.decodeManifestRef(r.version.manifestRef);
+      placements.push({ hook: loc.at.locationId, msg: loc.at.messageId });
+    } catch (e) {
+      out.ups.push({ MBps: 0, conc: c.uploadConcurrency, err: String((e as Error)?.message ?? e).slice(0, 160) });
+    }
+  }
   let t = performance.now();
   let nodeId = "";
   try {
@@ -109,11 +127,11 @@ try {
   await p.addScriptTag({ content: bundle.outputFiles[0]!.text });
   log(`${LABEL}: ${MB} MB over ${hooks.length} channel(s), upload ${UP}, downloads ${DOWN.join(",")}`);
   res = (await p.evaluate(
-    async ({ src, hooks, mb, up, down }) => {
+    async ({ src, hooks, mb, up, down, files }) => {
       const D = (globalThis as unknown as { DDN: never }).DDN;
-      return (new Function(`return (${src})`)() as (...a: unknown[]) => Promise<unknown>)(D, hooks, mb, up, down);
+      return (new Function(`return (${src})`)() as (...a: unknown[]) => Promise<unknown>)(D, hooks, mb, up, down, files);
     },
-    { src: runSrc.toString(), hooks, mb: MB, up: UP, down: DOWN },
+    { src: runSrc.toString(), hooks, mb: MB, up: UP, down: DOWN, files: FILES },
   )) as Res;
 } finally {
   await browser.close();
