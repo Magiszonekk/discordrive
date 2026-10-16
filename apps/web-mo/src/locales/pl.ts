@@ -784,8 +784,6 @@ export const pl: Record<string, string> = {
   "adm.state.blocked": "zablokowane{reason}",
   "adm.d.devices": "Urządzenia",
   "adm.d.devices.t": "Nazwy urządzeń są zapieczętowane kluczem konta: ten panel pokazuje tylko ich ID i czasy.",
-  "adm.col.invite": "Notatka zaproszenia",
-  "adm.col.devices": "Urządzenia",
   "adm.d.devAdded": "dodane {added}",
   "adm.d.revoke": "Odwołaj urządzenie",
   "adm.d.revoke.h": "Odwołać to urządzenie?",

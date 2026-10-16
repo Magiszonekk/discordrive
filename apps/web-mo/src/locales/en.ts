@@ -726,8 +726,6 @@ export const en: Record<string, string> = {
   "adm.state.blocked": "blocked{reason}",
   "adm.d.devices": "Devices",
   "adm.d.devices.t": "Device names are sealed with the account key: this panel shows only their IDs and times.",
-  "adm.col.invite": "Invite note",
-  "adm.col.devices": "Devices",
   "adm.d.devAdded": "added {added}",
   "adm.d.revoke": "Revoke device",
   "adm.d.revoke.h": "Revoke this device?",

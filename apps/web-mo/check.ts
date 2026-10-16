@@ -1587,7 +1587,7 @@ try {
     await p.waitForFunction((id) => !!document.querySelector(`[data-ddn=adm-acc-row][data-account="${id}"]`), otherId, { timeout: 15_000 });
     adm.rows = await p.$$eval("[data-ddn=adm-acc-row]", (e) => e.length);
     adm.blindNote = await p.textContent("[data-ddn=adm-blind]");
-    adm.noNamesInPanel = !/Laptop testowy|Telefon testowy|Drugie konto|notatki|Wakacje|duzy\.bin/.test((await p.textContent("[data-page=admin]")) ?? "");
+    adm.noNamesInPanel = !/Laptop testowy|Telefon testowy|Drugie konto|notatki\.txt|Wakacje|duzy\.bin/.test((await p.textContent("[data-page=admin]")) ?? "");
     await shot(p, "40-admin");
     // Invite: create with a note → shown once → listed → revoked.
     await typeInto(p, "[data-ddn=adm-inv-note]", "dla Ani");

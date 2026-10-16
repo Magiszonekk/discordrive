@@ -58,20 +58,18 @@ export function createAdminUi(d: AdminUiDeps) {
     const name = h("td", { class: "c-name" });
     const nm = h("span", { class: "nm" }, icon("shield"), h("span", { class: "mono", title: a.accountId }, shortId(a.accountId)));
     name.append(nm);
-    const tags = h("span", { class: "sub" }, [a.inviteNote === null ? "" : a.inviteNote || t("adm.noNote"), tn("adm.devices", a.devices)].filter(Boolean).join(" · "));
+    // The invite note and the device count under the ID (the "hint" line, on desktop and phone).
+    const tags = h("span", { class: "hint" }, [a.inviteNote === null ? "" : a.inviteNote || t("adm.noNote"), tn("adm.devices", a.devices)].filter(Boolean).join(" · "));
     name.append(tags);
     if (a.admin) name.append(" ", chip(t("adm.chip.admin"), "accent"));
     if (a.state === "blocked") name.append(" ", chip(t("adm.chip.blocked"), "warning", a.blockedReason ?? ""));
     if (a.accountId === d.me()) name.append(" ", chip(t("dev.me")));
-    // Desktop: own columns; phone: the line under the ID (.sub) carries the note and the devices.
-    const inv = h("td", { class: "c-date" }, a.inviteNote === null ? "-" : a.inviteNote || t("adm.noNote"));
-    const devs = h("td", { class: "size" }, fmtNum(a.devices));
     const note = h("td", { class: "size", title: server ? t("adm.size.t.pool") : t("adm.size.t") }, size(a));
     const when = h("td", { class: "c-date", title: seen(a.lastSeenAt) }, a.lastSeenAt ? fmtDate(a.lastSeenAt) : t("adm.never"));
     const open = h("button", { class: "btn sm", type: "button", "data-ddn": "adm-acc-open" }, t("adm.open"));
     open.onclick = () => void openAccount(a.accountId);
     const acts = h("td", { class: "c-acts" }, h("span", { class: "acts" }, open));
-    tr.append(name, inv, devs, note, when, acts);
+    tr.append(name, note, when, acts);
     return tr;
   }
 
