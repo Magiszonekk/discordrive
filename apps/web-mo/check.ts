@@ -309,7 +309,7 @@ try {
     r.typedWebhook = (await p.inputValue("[data-ddn=webhook-url]")) === hookUrls[1];
     await p.click("[data-ddn=add-webhook]");
     await p.waitForFunction(() => document.querySelector("[data-ddn-ui=hook-count]")?.textContent?.startsWith("2"), null, { timeout: 30_000 });
-    // Several addresses pasted at once (owner, 2026-10-15): one per line in the clipboard → all added
+    // Several addresses pasted at once: one per line in the clipboard → all added
     // with one click, a duplicate of an existing channel is not counted twice.
     if (fake) {
       const many = [fake.addWebhook("1550000000000000103").url, fake.addWebhook("1550000000000000104").url, fake.addWebhook("1550000000000000105").url];
@@ -458,7 +458,7 @@ try {
       serverPosts: events.filter((e) => e.src === "server" && e.ev === "req" && e.k === "discord").length,
       report: { files: rep.summary.files, n429: rep.summary.rateLimits.n429, stages: Object.keys(rep.summary.stages) },
     };
-    // Clear (owner, 2026-10-15: "Clear removes only today's lines, the old ones stay"): an old part that
+    // Clear removes only today's lines, the old ones stay: an old part that
     // another tab keeps open cannot be removed, so Clear must still leave its older lines out of the download.
     {
       // A part from an "earlier session", held open by another worker (like a forgotten tab from

@@ -46,7 +46,7 @@ import { errText, ms, nowMs, type TransferLog } from "./transfer-log.js";
 import type { DiscordPlacement } from "./types.js";
 
 /**
- * Upper bound of fragments in flight (owner, 2026-10-14: up to 64 to saturate a ~600 Mb/s line). Each
+ * Upper bound of fragments in flight (up to 64 to saturate a ~600 Mb/s line). Each
  * upload fragment in flight holds ~2 × 10 MiB (ciphertext + request body), a download one ~2 × 10 MiB.
  */
 export const MAX_CONCURRENCY = 64;

@@ -109,7 +109,7 @@ export class WebhookBlobStore implements BlobStore {
   private readonly rrInChannel = new Map<string, number>();
   /**
    * Webhooks that take new pieces: not retired, not excluded by the caller (a move posts only to the
-   * targets). The channel whose limiter frees up first (owner, 2026-10-14: free channels evenly, not
+   * targets). The channel whose limiter frees up first (free channels evenly, not
    * blindly in turn: a channel slowed by a 429 is skipped while others have tokens); ties rotate, and
    * the webhooks of one channel take turns.
    */

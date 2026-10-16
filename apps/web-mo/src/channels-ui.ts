@@ -222,7 +222,7 @@ export function createChannelsUi(d: ChannelsUiDeps) {
     ui("chd-opt-retire-t").textContent = imp.critical ? t("ch.opt.critical") : t("ch.opt.retire.t");
     ui("chd-opt-move-t").textContent = last ? t("ch.opt.move.no") : t("ch.opt.move.t", { size: fmtSize(imp.moveBytes), eta: fmtEta(imp.moveEtaMs) });
     ui("chd-opt-remove-t").textContent = imp.critical ? t("ch.opt.critical") : tn("ch.opt.remove.t", imp.files, { size: p.size });
-    // Default: retire (owner decision), else move for a critical / retired one.
+    // Default: retire, else move for a critical / retired one.
     const pick = [opt("retire"), opt("move"), opt("remove")].find((x) => !x.disabled);
     for (const x of [opt("retire"), opt("move"), opt("remove")]) x.checked = x === pick;
     paintChoice();

@@ -19,7 +19,7 @@
 //   remove   (anyway) W leaves the vault at once ("removed"); files with a piece there become
 //            unavailable (computed from vault + pieces, never an op), nothing is deleted. Pasting
 //            the same webhook again (same ID) makes them readable again at once on every device.
-// Critical (owner decision): W holds the pointer message or objects the current pointer reaches.
+// Critical: W holds the pointer message or objects the current pointer reaches.
 // Only "move" for it (retire/remove refused), and it is refused for the last active channel.
 
 import { DAY_MS, FRAGMENT_RETENTION_MS, type ChunkManifest, type Operation, type SingleOp } from "@ddv4/sync-core";
