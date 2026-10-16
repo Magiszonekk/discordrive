@@ -130,8 +130,11 @@ export class ShareStore {
   }
 
   private row(id: string): { meta: string; atts: Att[] } {
-    const r = this.db.prepare("SELECT meta, atts, revoked_at FROM shares WHERE id = ?").get(id) as { meta: string; atts: string; revoked_at: number | null } | undefined;
-    if (!r || r.revoked_at !== null) throw new AuthError(404, "no_such_share");
+    // Links of a blocked account stop working while it is blocked (they work again after unblocking).
+    const r = this.db.prepare("SELECT s.meta, s.atts, s.revoked_at, a.blocked_at FROM shares s LEFT JOIN accounts a ON a.id = s.account_id WHERE s.id = ?").get(id) as
+      | { meta: string; atts: string; revoked_at: number | null; blocked_at: number | null }
+      | undefined;
+    if (!r || r.revoked_at !== null || r.blocked_at !== null) throw new AuthError(404, "no_such_share");
     return { meta: r.meta, atts: JSON.parse(r.atts) as Att[] };
   }
 

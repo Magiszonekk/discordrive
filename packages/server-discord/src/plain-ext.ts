@@ -15,7 +15,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -114,6 +114,16 @@ export class PlainExtension implements ServerExtension {
 
   health(): Record<string, unknown> {
     return { plain: { thumbnails: !!this.ff, search: true, rangeStreaming: true } };
+  }
+
+  /** A deleted account: its replica (names, tree) and thumbnails go too. */
+  accountGone(acct: string): void {
+    if (!/^[a-z]+-[A-Za-z0-9_-]{22}$/.test(acct)) return;
+    this.replicas.get(acct)?.store.close();
+    this.replicas.delete(acct);
+    for (const f of [`${acct}.db`, `${acct}.db-wal`, `${acct}.db-shm`]) rmSync(join(this.replicaDir, f), { force: true });
+    for (const f of existsSync(this.thumbDir) ? readdirSync(this.thumbDir) : []) if (f.startsWith(`${acct}-`)) rmSync(join(this.thumbDir, f), { force: true });
+    for (const [k, v] of this.tickets) if (v.acct === acct) this.tickets.delete(k);
   }
 
   /** The account's replica, caught up with the server log. */

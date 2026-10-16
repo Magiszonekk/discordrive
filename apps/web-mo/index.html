@@ -59,6 +59,7 @@
   <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/></symbol>
   <symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></symbol>
   <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></symbol>
 </svg>
 
@@ -130,6 +131,18 @@
     <div class="auth-foot"><a class="link" href="/" data-link data-i18n="auth.back">Back to sign-up</a></div>
   </section>
 
+  <!-- The server no longer accepts this device: account blocked, or deleted / device revoked -->
+  <section class="auth-card" data-auth="lost" data-ddn="auth-lost" aria-labelledby="lost-h" hidden>
+    <div class="wordmark"><span class="logo" aria-hidden="true">D</span><b data-i18n="brand.name">DiscorDrive</b></div>
+    <h1 id="lost-h" data-ddn-ui="lost-h"></h1>
+    <p class="sub" data-ddn="auth-lost-text"></p>
+    <div class="auth-body">
+      <button class="btn primary block" data-ddn="auth-lost-retry" type="button" data-i18n="lost.retry">Try again</button>
+      <button class="btn block" data-ddn="auth-lost-forget" type="button" data-i18n="lost.forget">Remove the account from this browser</button>
+      <p class="hint" data-ddn-ui="lost-hint"></p>
+    </div>
+  </section>
+
   <!-- Restore from a rescue kit -->
   <section class="auth-card" data-auth="restore" data-ddn="rescue-dialog" aria-labelledby="rescue-h" hidden>
     <div class="wordmark"><span class="logo" aria-hidden="true">D</span><b data-i18n="brand.name">DiscorDrive</b></div>
@@ -179,6 +192,7 @@
       <a href="/trash" data-nav="trash" data-ddn="nav-trash" data-link><svg class="i"><use href="#i-trash"/></svg><span data-i18n="nav.trash">Trash</span></a>
       <a href="/devices" data-nav="devices" data-link><svg class="i"><use href="#i-phone"/></svg><span data-i18n="nav.devices">Devices</span></a>
       <a href="/settings" data-nav="settings" data-link><svg class="i"><use href="#i-settings"/></svg><span data-i18n="nav.settings">Settings</span></a>
+      <a href="/admin" data-nav="admin" data-ddn="nav-admin" data-link hidden><svg class="i"><use href="#i-shield"/></svg><span data-i18n="nav.admin">Admin</span></a>
     </nav>
     <div class="side-f">
       <div class="me"><p data-ddn-ui="me-name" title=""></p><span data-ddn="status" role="status" aria-live="polite"></span></div>
@@ -323,6 +337,76 @@
               <span class="sas-code" data-ddn="pair-sas"></span>
               <span class="hint" data-i18n="dev.sas.hint"></span>
             </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+
+    <!-- Admin (accounts with the admin flag only; the server checks it on every call) -->
+    <main class="page narrow" data-page="admin" aria-labelledby="adm-h" hidden>
+      <h1 class="page-title" id="adm-h" data-i18n="adm.h">Instance administration</h1>
+      <div class="note"><svg class="i"><use href="#i-info"/></svg><p data-ddn="adm-blind" data-ddn-ui="adm-blind"></p></div>
+      <div class="sections">
+        <section id="adm-accounts" aria-labelledby="adm-acc-h">
+          <h2 class="sec-h"><span id="adm-acc-h" data-i18n="adm.acc.h">Accounts</span><span class="chip" data-ddn="adm-acc-count"></span></h2>
+          <p class="sec-lead" data-ddn-ui="adm-acc-lead"></p>
+          <div class="sec-body">
+            <label class="field"><span class="lab" data-i18n="adm.acc.search">Search by ID or invite note</span><input class="input" data-ddn="adm-search" autocomplete="off" spellcheck="false"></label>
+            <div class="ftable-wrap">
+              <table class="ftable">
+                <thead><tr><th data-i18n="adm.col.account">Account</th><th class="r" data-i18n="adm.col.size">Size</th><th data-i18n="adm.col.seen">Last active</th><th><span class="sr" data-i18n="files.col.actions">Actions</span></th></tr></thead>
+                <tbody data-ddn="adm-accounts"></tbody>
+              </table>
+              <div class="empty" data-ddn-ui="adm-acc-none" hidden><span class="ic"><svg class="i"><use href="#i-search"/></svg></span><b data-i18n="adm.acc.none"></b><span></span></div>
+            </div>
+            <ul class="list" data-ddn="adm-deletions" hidden></ul>
+          </div>
+        </section>
+
+        <section id="adm-invites" aria-labelledby="adm-inv-h">
+          <h2 class="sec-h"><span id="adm-inv-h" data-i18n="adm.inv.h">Invite codes</span><span class="chip" data-ddn="adm-inv-count"></span></h2>
+          <p class="sec-lead" data-i18n="adm.inv.lead"></p>
+          <div class="sec-body">
+            <div class="inline">
+              <label class="field"><span class="lab" data-i18n="adm.inv.note">Note (who it is for)</span><input class="input" data-ddn="adm-inv-note" maxlength="200" autocomplete="off"></label>
+              <label class="field"><span class="lab" data-i18n="adm.inv.days">Valid (days)</span><input class="input" data-ddn="adm-inv-days" inputmode="numeric" value="7" autocomplete="off"></label>
+              <button class="btn primary tall" type="button" data-ddn="adm-inv-create"><span data-i18n="adm.inv.create">Create code</span></button>
+            </div>
+            <div class="stack" data-ddn="adm-inv-new" hidden>
+              <div class="note warn"><svg class="i"><use href="#i-alert"/></svg><p data-i18n="adm.inv.once"></p></div>
+              <label class="field"><span class="lab" data-i18n="adm.inv.code">New code</span><textarea class="codebox" data-ddn="adm-inv-code" readonly rows="1" spellcheck="false"></textarea></label>
+              <div class="row-btns"><button class="btn" type="button" data-ddn="adm-inv-copy" data-i18n="kit.copy">Copy</button><button class="btn" type="button" data-ddn="adm-inv-hide" data-i18n="adm.inv.hide">Hide</button></div>
+            </div>
+            <ul class="list" data-ddn="adm-invites"></ul>
+          </div>
+        </section>
+
+        <section id="adm-instance" aria-labelledby="adm-ins-h">
+          <h2 class="sec-h"><span id="adm-ins-h" data-i18n="adm.ins.h">Instance</span><span class="chip" data-ddn="adm-mode"></span></h2>
+          <div class="sec-body">
+            <dl class="about">
+              <div><dt class="label-mono" data-i18n="adm.ins.signup">Sign-up</dt><dd><div class="choice" role="radiogroup" data-ddn="adm-signup" data-i18n-attr="aria-label=adm.ins.signup"><button type="button" role="radio" data-signup="invite" data-i18n="adm.su.invite">Invite code</button><button type="button" role="radio" data-signup="open" data-i18n="adm.su.open">Open</button><button type="button" role="radio" data-signup="closed" data-i18n="adm.su.closed">Closed</button></div><p data-ddn-ui="adm-signup-t"></p></dd></div>
+              <div><dt class="label-mono" data-i18n="adm.ins.version">Version</dt><dd><span class="val mono" data-ddn="adm-version"></span></dd></div>
+              <div><dt class="label-mono" data-i18n="adm.ins.uptime">Running for</dt><dd><span class="val mono" data-ddn="adm-uptime"></span></dd></div>
+              <div><dt class="label-mono" data-i18n="adm.ins.accounts">Accounts</dt><dd><span class="val mono" data-ddn="adm-accounts-n"></span></dd></div>
+            </dl>
+            <h3 class="label-mono" data-i18n="adm.ins.health">Health (doctor)</h3>
+            <ul class="list" data-ddn="adm-doctor"></ul>
+            <div class="stack" data-ddn="adm-pool-box" hidden>
+              <h3 class="label-mono" data-i18n="adm.ins.pool">Instance channels (pool)</h3>
+              <ul class="list" data-ddn="adm-pool"></ul>
+            </div>
+          </div>
+        </section>
+
+        <section id="adm-log" aria-labelledby="adm-log-h">
+          <h2 class="sec-h"><span id="adm-log-h" data-i18n="adm.log.h">Administrative log</span></h2>
+          <p class="sec-lead" data-i18n="adm.log.lead"></p>
+          <div class="sec-body">
+            <div class="choice" role="radiogroup" data-ddn="adm-log-filter" data-i18n-attr="aria-label=adm.log.filter"><button type="button" role="radio" data-filter="" aria-checked="true" data-i18n="adm.log.all">All</button><button type="button" role="radio" data-filter="account." data-i18n="adm.log.accounts">Accounts</button><button type="button" role="radio" data-filter="invite." data-i18n="adm.log.invites">Invites</button><button type="button" role="radio" data-filter="signup." data-i18n="adm.log.signup">Sign-up</button></div>
+            <ul class="list" data-ddn="adm-log-list"></ul>
+            <div class="row-btns"><button class="btn sm" type="button" data-ddn="adm-log-more" hidden data-i18n="adm.log.more">Older</button></div>
           </div>
         </section>
       </div>
@@ -568,6 +652,23 @@
     </div>
     <label class="ack" data-ddn="chd-ack-row" hidden><input type="checkbox" data-ddn="chd-ack"><span data-ddn-ui="chd-ack-t"></span></label>
     <div class="modal-acts"><button class="btn" type="button" data-ddn-ui="chd-cancel" data-i18n="nf.cancel">Cancel</button><button class="btn primary" type="button" data-ddn="chd-go"></button></div>
+  </div>
+</dialog>
+
+<!-- Admin: one account (details, devices, actions) -->
+<dialog class="modal lg" data-ddn="adm-acc-dialog" aria-labelledby="adm-d-h">
+  <div class="modal-h"><h2 id="adm-d-h"><svg class="i"><use href="#i-shield"/></svg><span class="mono" data-ddn-ui="adm-d-title"></span></h2><button class="iconbtn" type="button" data-ddn-ui="adm-d-close" data-i18n-attr="aria-label=nf.cancel"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <div class="modal-b">
+    <dl class="about" data-ddn="adm-d-about"></dl>
+    <h3 class="label-mono" data-i18n="adm.d.devices">Devices</h3>
+    <p class="hint" data-i18n="adm.d.devices.t"></p>
+    <ul class="list" data-ddn="adm-d-devices"></ul>
+    <label class="field" data-ddn-ui="adm-d-reason-f"><span class="lab" data-i18n="adm.d.reason">Reason for blocking (optional, kept in the log)</span><input class="input" data-ddn="adm-d-reason" maxlength="200" autocomplete="off"></label>
+    <div class="modal-acts">
+      <button class="btn" type="button" data-ddn="adm-d-admin"></button>
+      <button class="btn" type="button" data-ddn="adm-d-block"></button>
+      <button class="btn danger" type="button" data-ddn="adm-d-delete"><svg class="i"><use href="#i-trash"/></svg><span data-i18n="adm.d.delete">Delete account</span></button>
+    </div>
   </div>
 </dialog>
 

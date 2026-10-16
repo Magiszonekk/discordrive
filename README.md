@@ -96,8 +96,8 @@ new account and uploading the files again. In metadata only, also delete and rec
 webhooks in Discord.
 
 **Another person.** Always their own account, never pairing. On a public instance the
-administrator gives them an invite code (`npm run invite`). Accounts are separate: nobody sees
-anyone else's files.
+administrator gives them an invite code (`npm run invite`, or the **Admin** screen in the web app
+for an account with the admin flag). Accounts are separate: nobody sees anyone else's files.
 - metadata only: they connect their own channels and webhooks. Best if they create them
   themselves: whoever creates a webhook knows its address, and the address is the secret that can
   post and delete messages.
@@ -119,7 +119,9 @@ whoever already has the link keeps access as long as the file's pieces exist on 
 | change settings | `npm run setup` |
 | something is wrong | `npm run doctor` |
 | stop starting it in the background | `npm run uninstall-autostart` |
-| invite code (public instance) | `npm run invite` |
+| invite code (public instance) | `npm run invite` (`-- --note "for Ann"`, `-- list`, `-- revoke <id>`) |
+| accounts: list, block, delete, admin | `npm run accounts -- list` (`block <id>`, `unblock <id>`, `delete <id>`, `admin <id> on`) |
+| who can create accounts | `npm run signup -- invite` (or `open`, `closed`; applies at once) |
 | update to the newest version | `npm run update`, then start the drive again |
 
 ## Updating

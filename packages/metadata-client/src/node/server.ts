@@ -18,7 +18,8 @@ import type { EncryptedEntry, EncryptedEnvelope } from "../op-crypto.js";
 import { PAIRING_TTL_MS } from "../pairing.js";
 import { AuthError, Ed25519Authenticator, type Authenticator, type Session } from "./auth.js";
 import { PasswordKeyStore, RateLimitedAuth } from "./password-keys.js";
-import { InviteStore } from "./invites.js";
+import { InviteError, InviteStore } from "./invites.js";
+import { AdminError, AdminStore, OPERATOR, type SignupPolicy } from "./admin.js";
 import { IpLimiter, clientIp, type BucketSpec } from "./ip-limit.js";
 import { NotifyHub } from "./notify.js";
 import { ShareStore, type BotRefresher } from "./shares.js";
@@ -65,6 +66,10 @@ export interface ServerExtension {
   route?(r: ExtRequest): Promise<boolean>;
   /** Extra fields for GET /v1/health. */
   health?(): Record<string, unknown>;
+  /** Extra fields for the admin panel's instance screen (e2ee/plain: the pool with usage). */
+  adminInfo?(): Record<string, unknown>;
+  /** An account was deleted and its pieces are gone: drop what the extension keeps for it (files, caches). */
+  accountGone?(accountId: string): void;
   /** Called after an entry is appended to an account's log. */
   onAppend?(accountId: string, entry: EncryptedEntry): void;
   /** May a device take/renew the lease of this upload? (e2ee: not after the server reaped it.) */
@@ -118,6 +123,12 @@ export interface ServerOptions {
   corsOrigins?: string[];
   /** Session token lifetime (default 1 h). */
   sessionTtlMs?: number;
+  /** The sign-up policy was changed from the admin panel (the instance saves it in its config). */
+  onSignupChange?: (policy: SignupPolicy) => void;
+  /** Health checks for the admin panel (the instance runs the same checks as `discordrive doctor`). */
+  doctor?: () => Promise<{ level: "ok" | "warn" | "fail"; what: string; detail: string }[]>;
+  /** How often the server notices administrative changes made by the CLI in the same database (ms; 0 = off). */
+  adminSweepMs?: number;
 }
 
 class HttpError extends Error {
@@ -142,8 +153,9 @@ export class DdnServer {
   readonly invites: InviteStore;
   readonly shares: ShareStore;
   readonly passwords: PasswordKeyStore;
+  readonly admin: AdminStore;
   private readonly limits: ServerLimits;
-  private readonly signup: "open" | "invite" | "closed";
+  private readonly signupDefault: SignupPolicy;
   private readonly ipLimits: Partial<Record<keyof typeof DEFAULT_RATE_LIMITS, IpLimiter>> = {};
   private readonly web: StaticSite | null;
   private readonly startedAt: number;
@@ -168,8 +180,9 @@ export class DdnServer {
     this.invites = new InviteStore(this.db, this.now);
     this.shares = new ShareStore(this.db, this.now, opts.bot ?? null, opts.cdnOrigins);
     this.passwords = new PasswordKeyStore(this.db, this.now);
+    this.admin = new AdminStore(this.db, this.now);
     this.limits = { ...DEFAULT_LIMITS, ...opts.limits };
-    this.signup = opts.signup ?? (opts.openSignup === false ? "closed" : "open");
+    this.signupDefault = opts.signup ?? (opts.openSignup === false ? "closed" : "open");
     if (opts.rateLimits !== false) {
       const spec = { ...DEFAULT_RATE_LIMITS, ...opts.rateLimits };
       for (const k of Object.keys(spec) as (keyof typeof spec)[]) this.ipLimits[k] = new IpLimiter(spec[k], this.now);
@@ -179,6 +192,46 @@ export class DdnServer {
     this.lockMode(opts.mode ?? "metadata-only");
     this.extensions = opts.extensions ?? [];
     for (const x of this.extensions) x.init?.(this);
+    if ((opts.adminSweepMs ?? 2000) > 0) {
+      this.sweepTimer = setInterval(() => this.adminSweep(), opts.adminSweepMs ?? 2000);
+      this.sweepTimer.unref?.();
+    }
+  }
+
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
+  private dataVersion = -1;
+
+  /** The live sign-up policy: changed by `discordrive signup` or the admin panel without a restart. */
+  get signup(): SignupPolicy {
+    return this.admin.signup(this.signupDefault);
+  }
+
+  /**
+   * End what a blocked or deleted account (or a revoked device) still has open in this process:
+   * notification sockets, long-polls, the cached log. Called after changes made here and, through
+   * PRAGMA data_version, after changes the operator CLI committed to the same database.
+   */
+  adminSweep(force = false): void {
+    let v: number;
+    try {
+      v = Number((this.db.prepare("PRAGMA data_version").get() as { data_version: number }).data_version);
+    } catch {
+      return; // closed
+    }
+    if (!force && v === this.dataVersion) return;
+    this.dataVersion = v;
+    const live = new Set((this.db.prepare("SELECT id FROM accounts WHERE blocked_at IS NULL").all() as { id: string }[]).map((r) => r.id));
+    for (const acct of this.notify.openAccounts()) {
+      if (!live.has(acct)) this.endAccount(acct);
+      else for (const dev of this.notify.openDevices(acct)) if (!this.db.prepare("SELECT 1 FROM devices WHERE id = ?").get(dev)) this.notify.closeAccount(acct, dev);
+    }
+    for (const acct of [...this.waiters.keys()]) if (!live.has(acct)) for (const w of [...(this.waiters.get(acct) ?? [])]) w();
+    for (const acct of [...this.seqs.keys()]) if (!this.admin.exists(acct)) this.seqs.delete(acct);
+  }
+
+  private endAccount(accountId: string): void {
+    this.notify.closeAccount(accountId);
+    for (const w of [...(this.waiters.get(accountId) ?? [])]) w();
   }
 
   readonly extensions: ServerExtension[];
@@ -390,10 +443,12 @@ export class DdnServer {
             ? e
             : e instanceof RateLimitedAuth
               ? new HttpError(429, "rate_limited", { "retry-after": String(e.retryAfterS) })
-              : e instanceof AuthError
+              : e instanceof AuthError || e instanceof AdminError
                 ? new HttpError(e.status, e.code)
-                : new HttpError(500, "internal");
-        if (!(e instanceof HttpError) && !(e instanceof AuthError)) console.error("ddn-server:", (e as Error)?.message);
+                : e instanceof InviteError
+                  ? new HttpError(e.code === "no_such_invite" ? 404 : e.code === "bad_invite_ref" ? 400 : 409, e.code)
+                  : new HttpError(500, "internal");
+        if (!(e instanceof HttpError) && !(e instanceof AuthError) && !(e instanceof AdminError) && !(e instanceof InviteError)) console.error("ddn-server:", (e as Error)?.message);
         send(res, he.status, { error: he.code }, he.headers);
       });
     });
@@ -421,6 +476,8 @@ export class DdnServer {
   }
 
   async close(): Promise<void> {
+    if (this.sweepTimer) clearInterval(this.sweepTimer);
+    this.sweepTimer = null;
     for (const x of this.extensions) await x.close?.();
     for (const set of this.waiters.values()) for (const w of [...set]) w();
     this.notify.closeAll();
@@ -480,12 +537,17 @@ export class DdnServer {
       this.limit("signup", req);
       if (this.signup === "closed") throw new HttpError(403, "signup_closed");
       const body = await json();
-      if (this.signup === "open") return send(res, 201, await this.auth.createAccount(body));
+      if (this.signup === "open") {
+        const r = await this.auth.createAccount(body);
+        this.admin.claimFirstAdmin(r.accountId);
+        return send(res, 201, r);
+      }
       const code = this.invites.claim((body as { invite?: unknown } | null)?.invite);
       if (!code) throw new HttpError(403, "invite_required");
       try {
         const r = await this.auth.createAccount(body);
         this.invites.markUsedBy(code, r.accountId);
+        this.admin.claimFirstAdmin(r.accountId);
         return send(res, 201, r);
       } catch (e) {
         this.invites.release(code);
@@ -509,6 +571,9 @@ export class DdnServer {
     if (!s) throw new HttpError(401, "unauthorized");
 
     if (method === "POST" && path === "/v1/notify-ticket") return send(res, 200, this.notify.issueTicket(s.accountId, s.deviceId));
+    // What this account may do on the instance (the web app shows "Admin" only when admin is true).
+    if (method === "GET" && path === "/v1/account") return send(res, 200, { accountId: s.accountId, deviceId: s.deviceId, admin: this.admin.isAdmin(s.accountId) });
+    if (path.startsWith("/v1/admin/")) return this.adminRoute(s, method, path, url, json, res);
     if (method === "POST" && path === "/v1/log") return send(res, 200, this.submit(s, await json()));
     if (method === "GET" && path === "/v1/log") {
       const after = intParam(url, "after", 0);
@@ -553,6 +618,7 @@ export class DdnServer {
     }
     if (dev && !dev[2] && method === "POST" && url.searchParams.get("action") === "revoke") {
       await this.auth.revokeDevice(s, dev[1]!, await json());
+      this.notify.closeAccount(s.accountId, dev[1]!);
       return send(res, 200, { ok: true });
     }
     if (method === "POST" && path === "/v1/shares") return send(res, 201, this.shares.create(s, await json()));
@@ -560,7 +626,97 @@ export class DdnServer {
     if (share && !share[2] && method === "DELETE") return (this.shares.revoke(s, share[1]!), send(res, 200, { ok: true }));
     throw new HttpError(404, "not_found");
   }
+
+  // --- administration (/v1/admin/...): the admin flag is checked here, on every call
+
+  private async adminRoute(s: Session, method: string, path: string, url: URL, json: () => Promise<unknown>, res: ServerResponse): Promise<void> {
+    if (!this.admin.isAdmin(s.accountId)) throw new HttpError(403, "not_admin");
+    const actor = s.accountId;
+    const a = this.admin;
+    if (method === "GET" && path === "/v1/admin/accounts") return send(res, 200, { accounts: a.accounts(), deletions: a.deletions() });
+    const acc = /^\/v1\/admin\/accounts\/(acct-[A-Za-z0-9_-]{22})(\/block|\/unblock|\/admin|\/devices\/([A-Za-z0-9_-]{4,80})\/revoke)?$/.exec(path);
+    if (acc) {
+      const id = acc[1]!;
+      const sub = acc[2] ?? "";
+      if (method === "GET" && !sub) {
+        const account = a.account(id);
+        if (!account) throw new HttpError(404, "no_such_account");
+        return send(res, 200, { account, devices: a.devices(id), deletion: a.deletion(id) });
+      }
+      if (method === "POST" && sub === "/block") {
+        if (id === s.accountId) throw new HttpError(409, "self_target");
+        if (a.isAdmin(id) && a.adminCount() <= 1) throw new HttpError(409, "last_admin");
+        a.block(id, String(((await json()) as { reason?: unknown })?.reason ?? ""), actor);
+        this.endAccount(id);
+        return send(res, 200, { account: a.account(id) });
+      }
+      if (method === "POST" && sub === "/unblock") return (a.unblock(id, actor), send(res, 200, { account: a.account(id) }));
+      if (method === "POST" && sub === "/admin") {
+        const b = (await json()) as { on?: unknown };
+        if (typeof b?.on !== "boolean") throw new HttpError(400, "bad_on");
+        // Granting or taking the flag: a fresh signature of this device (not only the session token).
+        await this.auth.verifyAdminAction(s, b.on ? "admin-on" : "admin-off", id, b);
+        a.setAdmin(id, b.on, actor, true);
+        return send(res, 200, { account: a.account(id) });
+      }
+      if (method === "POST" && acc[3]) {
+        const dev = acc[3];
+        await this.auth.verifyAdminAction(s, "revoke-device", `${id}/${dev}`, await json());
+        a.revokeDevice(id, dev, actor);
+        this.notify.closeAccount(id, dev);
+        return send(res, 200, { devices: a.devices(id) });
+      }
+      if (method === "DELETE" && !sub) {
+        if (id === s.accountId) throw new HttpError(409, "self_target");
+        await this.auth.verifyAdminAction(s, "delete-account", id, await json());
+        const d = a.deleteAccount(id, actor);
+        this.endAccount(id);
+        this.seqs.delete(id);
+        return send(res, 200, { deletion: d });
+      }
+    }
+    if (path === "/v1/admin/invites") {
+      if (method === "GET") return send(res, 200, { invites: this.invites.list() });
+      if (method === "POST") {
+        const b = (await json()) as { days?: unknown; note?: unknown };
+        const days = b?.days === undefined ? 7 : Number(b.days);
+        if (!Number.isFinite(days) || days <= 0 || days > 365) throw new HttpError(400, "bad_days");
+        const note = typeof b?.note === "string" ? b.note.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 200) : "";
+        const inv = this.invites.create(Math.round(days * 24 * 3600_000), note, actor);
+        a.log(actor, "invite.create", inv.id, { note, days });
+        return send(res, 201, inv);
+      }
+    }
+    if (method === "POST" && path === "/v1/admin/invites/revoke") {
+      const ref = String(((await json()) as { ref?: unknown })?.ref ?? "");
+      const inv = this.invites.revoke(ref);
+      a.log(actor, "invite.revoke", inv.id, { note: inv.note });
+      return send(res, 200, { invite: inv });
+    }
+    if (method === "GET" && path === "/v1/admin/instance") {
+      const extra = Object.assign({}, ...this.extensions.map((x) => x.adminInfo?.() ?? {}));
+      return send(res, 200, { ...extra, health: this.health(), accounts: a.accountCount(), admins: a.adminCount(), deletions: a.deletions(10) });
+    }
+    if (method === "PUT" && path === "/v1/admin/signup") {
+      const p = String(((await json()) as { policy?: unknown })?.policy ?? "") as SignupPolicy;
+      a.setSignup(p, actor);
+      this.opts.onSignupChange?.(p);
+      return send(res, 200, { signup: this.signup });
+    }
+    if (method === "GET" && path === "/v1/admin/doctor") {
+      if (!this.opts.doctor) return send(res, 200, { checks: null });
+      return send(res, 200, { checks: await this.opts.doctor() });
+    }
+    if (method === "GET" && path === "/v1/admin/log") {
+      const action = url.searchParams.get("action") ?? undefined;
+      if (action !== undefined && !/^[a-z_.]{1,40}$/.test(action)) throw new HttpError(400, "bad_action");
+      return send(res, 200, { entries: a.logList({ limit: Math.min(intParam(url, "limit", ADMIN_LOG_PAGE), 500), before: intParam(url, "before", 0), action }) });
+    }
+    throw new HttpError(404, "not_found");
+  }
 }
+
+export const ADMIN_LOG_PAGE = 100;
 
 /** The page was served by this server (Origin host = Host header). */
 function sameOrigin(origin: string, host: string | undefined): boolean {

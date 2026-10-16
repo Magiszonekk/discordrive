@@ -16,7 +16,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { InviteStore } from "@ddv4/metadata-client/node";
+import { AdminStore, InviteStore } from "@ddv4/metadata-client/node";
 import { health, hostUrl, isLocalAddress, isLoopback, localAddresses, nextFreePort, portState, validateBotToken } from "./checks.js";
 import {
   DEFAULT_PORT,
@@ -62,6 +62,8 @@ export interface SetupFlags {
   /** Replace a saved token without asking (with botTokenFile). */
   replaceBot?: boolean;
   invite?: boolean;
+  /** The first account created on this instance gets the admin flag (asked at the end; default yes). */
+  firstAdmin?: boolean;
   /** Run in the background at log-on (systemd --user / Task Scheduler / LaunchAgent / XDG autostart). `--systemd` is an alias. */
   autostart?: boolean;
   /** Start the server in this terminal after setup (foreground). */
@@ -540,12 +542,22 @@ export async function setup(f: SetupFlags, p0?: Prompter): Promise<SetupResult> 
     } else if (!old) p.warn(t("s.poolNone"));
   }
 
-  // Invite code
+  // Sign-up policy in the database too (the running server reads it there: `discordrive signup` and
+  // the admin panel change it without a restart); invite code; the first account as admin.
   let invite: SetupResult["invite"] = null;
-  if (c.signup === "invite" && (f.invite ?? (yes ? true : await p.confirm(t("s.inviteQ"), true)))) {
+  {
     const db = new DatabaseSync(dbPath(c));
+    db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     try {
-      invite = new InviteStore(db).create(undefined, "setup");
+      const adm = new AdminStore(db);
+      adm.setSignup(c.signup, null);
+      if (c.signup === "invite" && (f.invite ?? (yes ? true : await p.confirm(t("s.inviteQ"), true)))) invite = new InviteStore(db).create(undefined, "setup");
+      // Only on an instance without accounts (a re-run on a used instance never hands out the flag).
+      if (adm.accountCount() === 0) {
+        const on = f.firstAdmin ?? (yes ? true : await p.confirm(t("s.firstAdminQ"), true));
+        adm.setFirstAccountAdmin(on);
+        if (on) p.ok(t("s.firstAdminOk"));
+      }
     } finally {
       db.close();
     }

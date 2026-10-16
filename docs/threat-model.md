@@ -1,6 +1,6 @@
 # discordrive-next: threat model
 
-Status: 2026-10-15. Written from the code, not from the design notes: every claim names the file
+Status: 2026-10-16. Written from the code, not from the design notes: every claim names the file
 it comes from. When the code changes, this document must change with it.
 
 An instance runs in exactly one mode, chosen at `discordrive setup` and fixed for its life
@@ -203,6 +203,46 @@ the next page load reads the account key from IndexedDB (stored as raw bytes, `k
 sends it out. Nothing pins or signs the app's code today. In metadata only and e2ee, "the server
 cannot read your files" therefore means: **as long as the server delivers the genuine app**. A
 desktop app with its own code would close this gap for its users; the web app cannot.
+
+### 2.11 Operator and admin accounts
+
+Two kinds of people administer an instance (`node/admin.ts`, `apps/ddn-server/src/accounts.ts`):
+
+- **The operator**: whoever has a shell on the server. Commands `discordrive accounts | invite |
+  signup` work on `ddn.db` directly (also while the server runs). Shell access is the root of
+  trust: it already gives everything listed under "server takeover" for the mode (§3.4, §4.4,
+  §5.4), so these commands add nothing to it.
+- **Admin accounts**: ordinary accounts with the admin flag (`accounts.admin` in `ddn.db`). The
+  flag is set only from the server (`discordrive accounts admin <id> on`, or setup's "make the
+  first account the admin"); an admin may then grant it to other accounts. The server checks the
+  flag on **every** `/v1/admin/...` call (`node/server.ts` `adminRoute`); a regular account gets
+  403, a blocked one has no session (401) and cannot sign in (403 `account_blocked`). Deleting an
+  account, granting or removing the flag and revoking another account's device need a fresh
+  Ed25519 signature of the admin's device over the action and its target
+  (`authMessage.adminAction`), so a stolen session token or an open tab alone cannot do them. The
+  last admin cannot lose the flag from the panel, only from the server.
+
+What an admin sees is what the server stores anyway, never more: account and device IDs,
+creation and last-activity times, how many devices, sizes (bytes of the operation log, the
+vault, share links; in e2ee/plain also the bytes of the account's pieces on the instance's
+channels), the invite note the account was created with, the admin and blocked flags, invite
+codes (as IDs: only their SHA-256 is stored, a code is shown once when made), the pool and the
+administrative log. Device names stay sealed with the account key.
+
+| | metadata only | e2ee | plain |
+|---|---|---|---|
+| File names, folders, file keys | not on the server, not in the panel | not on the server (encrypted in the browser), not in the panel | on the server (§5.1) but **not shown** in the panel; the operator can read them from the data directory |
+| Webhooks | not on the server (vault sealed with the account key) | the pool and own channels are on the server (sealed with `instance.key`); the panel shows the pool's labels and usage, never URLs | as e2ee |
+| What "delete account" deletes | the account's rows on the server (log, devices, vault, sessions, shares, password key); **nothing on Discord**: the files are on the user's own channels and the user can restore the account from the rescue kit on another instance | the rows **and** the account's pieces and snapshot chain on the instance's channels, deleted in the background by the running server (`account_deletions`, resumed after a restart or a Discord outage); irreversible, the rescue kit cannot bring the files back | as e2ee, plus the server's replica of the account's index and its thumbnails |
+
+Blocking keeps every piece of data: the account's sessions are deleted, its open notification
+sockets closed and long-polls released at once (a CLI change is noticed through SQLite's
+`data_version` within about two seconds), sign-in, rescue-kit device registration, the password
+sign-in and the account's share links are refused until it is unblocked. Every administrative
+change is written to `admin_log` (actor = admin account ID or `operator`, action, target, time).
+
+What this does not protect against: an admin can block or delete any other account (that is the
+point), and a malicious operator is still the server itself (§2.10, the takeover sections).
 
 ## 3. metadata only
 

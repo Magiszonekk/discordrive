@@ -110,6 +110,8 @@ describe.skipIf(!hasScript)("discordrive setup: arrow-key wizard in a pty", () =
     await t.until(/Save\?\s+│\s+◉ Yes \/ ○ No/);
     await t.send(KEY.enter);
     await t.until(/browser app ready/, 60_000);
+    await t.until(/first account created on this instance its admin/);
+    await t.send(KEY.enter);
     await t.until(/Start the drive now, in this window\?/);
     await t.send(KEY.enter);
     await t.until(/Done\. Open in the browser:\s+http:\/\/localhost:\d+/, 30_000);
@@ -184,6 +186,8 @@ describe.skipIf(!hasScript)("discordrive setup: arrow-key wizard in a pty", () =
       await t.until(/Zapisać\?\s+│\s+◉ Tak \/ ○ Nie/);
       await t.send("t"); // Polish "tak"
       await t.until(/aplikacja przeglądarkowa gotowa/, 60_000);
+      await t.until(/pierwsze konto założone na tej instancji/);
+      await t.send(KEY.enter);
       await t.until(/Uruchomić dysk teraz, w tym oknie\?\s+│\s+◉ Tak \/ ○ Nie/);
       await t.send(KEY.right);
       await t.until(/○ Tak \/ ◉ Nie/);

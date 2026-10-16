@@ -127,4 +127,6 @@ export const authMessage = {
   addDevice: (c: Challenge, accountId: string, newDevicePub: string) => m("ddn-add-device-v1", c.instanceId, c.challengeId, c.nonce, accountId, newDevicePub),
   revokeDevice: (c: Challenge, accountId: string, deviceId: string) => m("ddn-revoke-device-v1", c.instanceId, c.challengeId, c.nonce, accountId, deviceId),
   rescueAddDevice: (c: Challenge, accountId: string, newDevicePub: string) => m("ddn-rescue-add-device-v1", c.instanceId, c.challengeId, c.nonce, accountId, newDevicePub),
+  /** Instance administration: a destructive action (delete an account, change the admin flag) confirmed by the admin's device. */
+  adminAction: (c: Challenge, accountId: string, deviceId: string, action: string, target: string) => m("ddn-admin-action-v1", c.instanceId, c.challengeId, c.nonce, accountId, deviceId, action, target),
 };
