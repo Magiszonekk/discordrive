@@ -110,6 +110,26 @@ describe("automatic pieces in flight", () => {
     expect(tu.accepted).toBeLessThan(32);
   });
 
+  it("a step that helped is remembered at once (the file may end before the check settles); the next session starts there", () => {
+    const clock = new VClock();
+    const seen: number[] = [];
+    const tu = new AutoTuner("up", { start: 8, cap: 32, shrink: true }, clock);
+    tu.onAccept = (n) => seen.push(n);
+    // 1 GB on a fast line: the upload ends while 32 is still being tried
+    simulate({ line: 45e6, perPiece: 2.5e6, delayMs: 300, tuner: tu, clock, pieces: 96, size: 10.5e6 });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.at(-1)).toBe(16);
+    // next session: starts at the remembered 16 and gets to 32 sooner than from 8
+    const c2 = new VClock();
+    const fresh = new AutoTuner("up", { start: 8, cap: 32, shrink: true }, c2);
+    const t1 = simulate({ line: 45e6, perPiece: 2.5e6, delayMs: 300, tuner: fresh, clock: c2, pieces: 96, size: 10.5e6 });
+    const c3 = new VClock();
+    const seeded = new AutoTuner("up", { start: 8, cap: 32, shrink: true }, c3);
+    seeded.seed(seen.at(-1)!);
+    const t2 = simulate({ line: 45e6, perPiece: 2.5e6, delayMs: 300, tuner: seeded, clock: c3, pieces: 96, size: 10.5e6 });
+    expect(t2.at(-1)!.t - 1_000_000).toBeLessThan((t1.at(-1)!.t - 1_000_000) * 0.95);
+  });
+
   it("network errors cut the value (window halves → tuner follows), memory/channel cap bounds it", () => {
     const clock = new VClock();
     const net = new NetControl({ clock, tune: { start: 16 } });
