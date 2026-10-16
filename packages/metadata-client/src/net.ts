@@ -367,7 +367,7 @@ export class AutoTuner {
   }
   /** Checks finished so far (0: the first ramp, which doubles like a TCP slow start). */
   private measured = 0;
-  /** Called with the value a check settled on (the app remembers it for the next session). */
+  /** Called with every value measurements accepted (a step that helped, or where a check settled); the app remembers it. */
   onAccept: ((n: number) => void) | null = null;
 
   /** Start from a value learned earlier (another session): used until the first check measures it. */
@@ -395,6 +395,9 @@ export class AutoTuner {
         this.lastGain = b.bps > 0 ? bps / b.bps - 1 : 1;
         this.base = { n, bps };
         this.gained = true;
+        // Remembered at once, not only when the check settles: a file often ends while the next step is
+        // still being tried (1 GB upload on a fast line), and the next session should start from here.
+        this.onAccept?.(n);
         return this.up(n) > n ? this.change(this.up(n), "gain", [b.n, b.bps], [n, bps], "up", now) : this.settle(now);
       }
       // No gain from the step: back to the accepted value. If this check had no gain at all, see whether
@@ -943,7 +946,9 @@ export class NetControl {
     this.win = { up: new AdaptiveWindow("up", 8, this.clock, emit), down: new AdaptiveWindow("down", 4, this.clock, emit) };
     // Uploads start at 8 (a measurement step there takes a piece's whole post time, so a ramp from 4 eats
     // much of a 1 GB file on a fast line; on a narrow one the tuner goes down again), downloads at 4.
-    this.tune = { up: new AutoTuner("up", { start: 8, shrink: true, ...o.tune }, this.clock, emit), down: new AutoTuner("down", { start: 4, ...o.tune }, this.clock, emit) };
+    // Uploads: a window of one piece time (≥ 4 s) per step instead of 1.5 (a post of 10 MiB takes several
+    // seconds, so 1.5 piece times per step left a 1 GB upload on a fast line still ramping when it ended).
+    this.tune = { up: new AutoTuner("up", { start: 8, shrink: true, minPieces: 1, minSpanMs: 4000, ...o.tune }, this.clock, emit), down: new AutoTuner("down", { start: 4, ...o.tune }, this.clock, emit) };
     // Network errors cut the window; the automatic value follows the cut and is measured again later.
     this.win.up.onCut = (l) => this.tune.up.loss(l);
     this.win.down.onCut = (l) => this.tune.down.loss(l);
