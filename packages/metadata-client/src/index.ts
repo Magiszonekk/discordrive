@@ -19,6 +19,19 @@ export {
 export { type BlobStore, type BlobPutContext, type BlobGetContext, type LaneFetch, AbortedError, throwIfAborted } from "./blob-store.js";
 export { DriveClient, piecesOf, readVersionRange, mbps, type DriveClientOptions, type DownloadOptions, type UploadStages, type ResumeStore, type UploadJournal, type UploadJournalFrag, resumeKeys } from "./drive-client.js";
 export { AdaptiveWindow, AutoTuner, NetControl, NetGate, NetworkError, SpeedBaseline, StuckGuard, guardedRead, isNetworkError, netCall, realClock, retryFree, type BaselineData, type GateState, type NetClock, type NetUiState, type TunerOptions, type TuneWhy } from "./net.js";
+export {
+  BackendBlobStore,
+  BackendRegistry,
+  DiscordWebhookBackend,
+  DiscordWebhooks,
+  discordSlot,
+  type BackendSlot,
+  type BackendStoreOptions,
+  type BlobBackend,
+  type BlobRuntime,
+  type PrefetchItem,
+} from "./backends.js";
+export { MemoryBackend, MemoryBucket, MEMORY_BACKEND_KIND, memoryBackendFactory } from "./memory-backend.js";
 export { LinkAhead, linkExpiry, type LinkAheadOptions, type LinkHow, type LinkItem } from "./link-ahead.js";
 export { TransferLog, MemoryLogSink, TRANSFER_LOG_VERSION, scrubText, errText as logErrText, hostOf, nowMs, type TransferLogOptions, type TransferDir, type TransferSource, type LimiterState } from "./transfer-log.js";
 // e2ee/plain clients: import { ServerBlobStore } from "@ddv4/metadata-client/server-blobs" (kept out of this index).
@@ -33,6 +46,7 @@ export {
   MANIFEST_SCHEMA_VERSION,
   decodeManifestRef,
   encodeManifestRef,
+  MANIFEST_REF_MAX,
   memorySource,
   newId,
   type ByteSink,
@@ -64,6 +78,8 @@ export {
   openVault,
   sealVault,
   toWebhookRefs,
+  backendDescriptors,
+  activeBackends,
   vaultAdvice,
   REQUIRED_CHANNELS,
   RECOMMENDED_CHANNELS,
@@ -75,6 +91,7 @@ export {
   type VaultPutResult,
   type VaultStore,
   type VaultWebhook,
+  type VaultBackend,
 } from "./vault.js";
 export {
   OpCodec,
@@ -110,6 +127,19 @@ export {
   emptyPointer,
   encodeRescueKit,
   decodeRescueKit,
+  encodeRescueKit3,
+  openRescueKit,
+  makeRescueKit,
+  restoreFromRescueKit,
+  clientBackends,
+  KIT_LIST_MAX,
+  mergeDescriptors,
+  sameBackends,
+  toPlacement,
+  type BackendDescriptor,
+  type BackendFactory,
+  type OpenedRescueKit,
+  type RescueKit3,
   encodeServerRescueKit,
   decodeServerRescueKit,
   readLogChain,

@@ -32,6 +32,8 @@ import {
   readLogChain,
   createPointerMessage,
   decideSnapshot,
+  discordSlot,
+  isDiscordPlacement,
   emptyPointer,
   readPointer,
   writeSnapshot,
@@ -154,14 +156,14 @@ export function serverBlobIO(hooks: InstanceHooks, sender: DiscordSender, accoun
       return { provider: "discord-webhook", locationId: p.locationId, channelId: p.channelId, messageId: p.messageId, attachmentId: p.attachmentId };
     },
     fetch: async (p) => {
+      if (!isDiscordPlacement(p)) throw new Error(`not a Discord placement: ${p.provider}`);
       const atts = await sender.attachments(hook(p.locationId), p.messageId);
       const a = atts.find((x) => x.id === p.attachmentId);
       if (!a) throw new Error("attachment missing");
       return sender.transport.fetchCdn(a.url);
     },
     remove: async (r) => sender.delete(hook(r.webhookId), r.messageId),
-    hook,
-    transport: sender.transport,
+    slot: (id) => discordSlot(sender.transport, hook(id)),
     partSize: 10 * 1024 * 1024,
   };
 }

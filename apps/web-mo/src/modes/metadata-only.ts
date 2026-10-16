@@ -17,11 +17,15 @@ import {
   WebhookVault,
   clientBlobIO,
   createPointerMessage,
-  decodeRescueKit,
-  encodeRescueKit,
+  makeRescueKit,
+  openRescueKit,
+  readPointer as readPtr,
+  writePointer,
+  sameBackends,
+  backendDescriptors,
+  activeBackends,
   inspectForVault,
   prepareShare,
-  readPointer,
   toWebhookRefs,
   vaultAdvice,
   type DriveClient,
@@ -39,19 +43,28 @@ const vault = (ctx: ModeCtx) => {
 };
 const mc = (c: DriveClient) => c as MetadataClient;
 
+/**
+ * The account's backend list as the pointer carries it: from the vault this tab last read (the pointer
+ * is rewritten with it whenever its copy is older). Null before the first vault read.
+ */
+const backendsOf = (ctx: ModeCtx) => () => {
+  const v = vault(ctx).cached;
+  return v ? { list: backendDescriptors(v.content), revision: v.revision } : null;
+};
+
 async function ensurePointer(ctx: ModeCtx, c: DriveClient) {
   let v = await vault(ctx).load();
   if (v.pointer) return v.pointer;
   const hooks = toWebhookRefs(v).filter((h) => !h.retired);
   if (!hooks.length) throw new Error("need_channel: add a channel with a webhook first");
   const io = clientBlobIO(mc(c), transport(ctx));
-  const mine = await createPointerMessage(io, ctx.key, ctx.acct.accountId, hooks[0]!);
+  const mine = await createPointerMessage(io, ctx.key, ctx.acct.accountId, hooks[0]!, backendsOf(ctx)());
   v = await vault(ctx).update((x) => {
     x.pointer ??= mine;
     return x;
   });
   // Another device won the race: drop ours.
-  if (v.pointer!.messageId !== mine.messageId) await transport(ctx).deleteMessage(mc(c).webhook(mine.webhookId), mine.messageId).catch(() => {});
+  if (v.pointer!.messageId !== mine.messageId) await mc(c).backend(mine.webhookId).slot.remove?.(mine.messageId).catch(() => {});
   return v.pointer!;
 }
 
@@ -254,14 +267,29 @@ export const mode: ModeImpl = {
   async rescueKit(ctx, c) {
     const ptr = await ensurePointer(ctx, c);
     const v = await vault(ctx).load();
-    const hook = v.webhooks.find((w) => w.id === ptr.webhookId);
-    if (!hook) throw new Error("pointer_hook_gone: the pointer message channel was removed from the vault");
-    return encodeRescueKit({ v: 1, accountId: ctx.acct.accountId, key: ctx.acct.accountKey, webhookUrl: hook.url, pointerMessageId: ptr.messageId });
+    const list = backendDescriptors(v);
+    if (!list.some((b) => b.id === ptr.webhookId)) throw new Error("pointer_hook_gone: the pointer message channel was removed from the vault");
+    // The pointer gets the current backend list now (not only at the next snapshot): the kit shown below
+    // must restore every channel even if no snapshot is written before the disaster.
+    const io = clientBlobIO(mc(c), transport(ctx));
+    const p = await readPtr(io, ctx.key, ctx.acct.accountId, ptr);
+    if ((p.vaultRevision ?? -1) < vault(ctx).revision || !sameBackends(p.backends, list)) {
+      await writePointer(io, ctx.key, ctx.acct.accountId, ptr, { ...p, backends: list, vaultRevision: vault(ctx).revision, writtenAt: Date.now() }, "same_coverage");
+    }
+    return makeRescueKit(ctx.acct.accountId, ctx.acct.accountKey, ptr, list);
+  },
+
+  kitVersion: 3,
+
+  async kitOutdated(ctx, savedFormat) {
+    // A kit made before format 3 names one webhook. With more than one channel the restore needs the
+    // pointer's list too; a pointer written by a current client has it, but a fresh kit is safer.
+    return (savedFormat ?? 1) < 3 && activeBackends(await vault(ctx).load()) > 1;
   },
 
   decodeKit(text) {
-    const k = decodeRescueKit(text);
-    return { accountId: k.accountId, key: k.key };
+    const k = openRescueKit(text);
+    return { accountId: k.accountId, key: k.key, format: k.v };
   },
 
   async snapshotTick(ctx, c, force) {
@@ -278,6 +306,7 @@ export const mode: ModeImpl = {
       const ptrHook = v.pointer.webhookId;
       s = new SnapshotScheduler({
         io: { ...clientBlobIO(mc(c), transport(ctx)), post: (d, f) => mc(c).postBlobTo(ptrHook, d, f) },
+        backends: backendsOf(ctx),
         key: ctx.key,
         accountId: ctx.acct.accountId,
         pointer: v.pointer,
@@ -301,10 +330,11 @@ export const mode: ModeImpl = {
       api: ctx.http.gc(),
       transport: transport(ctx),
       webhook: (id) => mc(c).webhook(id),
-      removedHook: (id) => !mc(c).webhooks.some((h) => h.id === id),
+      backend: (id) => mc(c).backend(id),
+      removedHook: (id) => !mc(c).registry.has(id),
       pointer: async () => {
         const v = await vault(ctx).load();
-        return v.pointer ? readPointer(clientBlobIO(mc(c), transport(ctx)), ctx.key, ctx.acct.accountId, v.pointer) : null;
+        return v.pointer ? readPtr(clientBlobIO(mc(c), transport(ctx)), ctx.key, ctx.acct.accountId, v.pointer) : null;
       },
       isPrimary: () => cc.primary(),
       metered: () => cc.metered(),
@@ -317,7 +347,7 @@ export const mode: ModeImpl = {
       const due = v.webhooks.filter((w) => w.drain);
       if (!due.length) return;
       const now = (await ctx.http.gc().status()).now;
-      const p = v.pointer ? await readPointer(clientBlobIO(mc(c), transport(ctx)), ctx.key, ctx.acct.accountId, v.pointer).catch(() => null) : null;
+      const p = v.pointer ? await readPtr(clientBlobIO(mc(c), transport(ctx)), ctx.key, ctx.acct.accountId, v.pointer).catch(() => null) : null;
       const bases = p ? [p.base, ...(p.history ?? [])].filter((b) => !!b).map((b) => b!.headSeq) : [];
       const oldest = bases.length ? Math.min(...bases) : Infinity;
       for (const w of due) await finishDrain({ client: mc(c), vault: vault(ctx), log: this_arbiter(ctx), transport: transport(ctx), key: ctx.key, accountId: ctx.acct.accountId }, w, now, oldest).catch(() => null);

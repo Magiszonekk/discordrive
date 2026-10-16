@@ -20,7 +20,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT_ID, applyEntries, initIndex, nameKey, type FileVersion, type NodeRecord } from "@ddv4/sync-core";
-import { decryptFragment, importFileKey, decryptManifest, decodeManifestRef, sha256Hex, type DiscordPlacement, type EncryptedEntry, type FileKey } from "@ddv4/metadata-client";
+import { decryptFragment, importFileKey, decryptManifest, decodeManifestRef, sha256Hex, isDiscordPlacement, type Placement, type EncryptedEntry, type FileKey } from "@ddv4/metadata-client";
 import type { ChunkManifest } from "@ddv4/sync-core";
 import { PlainOpCodec } from "@ddv4/metadata-client/plain-ops";
 import { SqliteIndexStore } from "@ddv4/metadata-client/node";
@@ -171,7 +171,9 @@ export class PlainExtension implements ServerExtension {
     return p;
   }
 
-  private async readPlacement(acct: string, p: DiscordPlacement): Promise<Uint8Array> {
+  private async readPlacement(acct: string, p: Placement): Promise<Uint8Array> {
+    // The instance stores on its own Discord webhooks only.
+    if (!isDiscordPlacement(p)) throw new HttpError(404, "no_such_blob");
     const row = this.o.blobs.blobByAttachment(acct, p.attachmentId);
     if (!row) throw new HttpError(404, "no_such_blob");
     return this.o.blobs.readBlob(row);
@@ -182,7 +184,7 @@ export class PlainExtension implements ServerExtension {
     const { manifest, key } = await this.loadManifest(acct, v.manifestRef);
     const c = [...manifest.chunks].sort((a, b) => a.index - b.index)[i];
     if (!c) throw new HttpError(416, "no_such_fragment");
-    const ct = await this.readPlacement(acct, c.placements![0] as DiscordPlacement);
+    const ct = await this.readPlacement(acct, c.placements![0] as Placement);
     if (c.ciphertextHash && (await sha256Hex(ct)) !== c.ciphertextHash) throw new Error(`fragment ${i}: hash mismatch`);
     return decryptFragment(key, ct);
   }

@@ -72,12 +72,17 @@ export interface FolderStats {
   bytes: number;
 }
 
-/** Location (webhook ID) of a version's manifest, from its manifestRef ("ddn1:[v,f,k,loc,…]"), without importing the client. */
+/**
+ * Location (backend ID) of a version's manifest, from its manifestRef ("ddn1:[v,f,k,loc,…]" for Discord,
+ * "ddn2:[2,f,k,provider,loc,…]" for other backends), without importing the client.
+ */
 export function manifestLoc(ref: string): string | null {
-  if (!ref.startsWith("ddn1:")) return null;
+  const v1 = ref.startsWith("ddn1:");
+  if (!v1 && !ref.startsWith("ddn2:")) return null;
   try {
     const a = JSON.parse(ref.slice(5)) as unknown[];
-    return Array.isArray(a) && a.length === 7 ? String(a[3]) : null;
+    if (!Array.isArray(a)) return null;
+    return v1 ? (a.length === 7 ? String(a[3]) : null) : a.length === 6 ? String(a[4]) : null;
   } catch {
     return null;
   }

@@ -1,4 +1,4 @@
-// Webhook vault.
+// Webhook vault: the account's storage backends.
 //
 // The user's webhooks (URL = token that can delete messages) are kept in one
 // blob encrypted with the account key (subkey "vault"). The server stores the
@@ -21,7 +21,8 @@
 
 import { sealJson, unsealJson, type AccountKey } from "./account-key.js";
 import { parseWebhookUrl } from "./discord-transport.js";
-import type { WebhookRef, WebhookTransport } from "./types.js";
+import { DISCORD_PROVIDER, type WebhookRef, type WebhookTransport } from "./types.js";
+import type { BackendDescriptor } from "./snapshots.js";
 
 export const VAULT_FORMAT = "ddn-webhook-vault";
 export const VAULT_FORMAT_VERSION = 1;
@@ -38,15 +39,15 @@ export interface VaultWebhook {
   label: string;
   addedAt: number;
   /**
-   * Retired (option 1): gets no new pieces, still read. Optional
+   * Retired: gets no new pieces, still read. Optional
    * field next to the old ones (no format bump): a tab on the previous bundle keeps it when it
    * edits the vault (update() clones the whole content) and simply ignores it.
    */
   retired?: boolean;
   /**
    * Moved away (option 2): nothing current is on it any more, but older log entries and kept snapshot
-   * bases still name its messages, so it stays (retired, URL kept, read only) until the retention
-   * has passed; then the cleanup deletes what the move replaced (relocate entries fromSeq..toSeq)
+   * bases still name its messages, so it stays (retired, URL kept, read only) until the snapshot
+   * retention (30 days) has passed; then the cleanup deletes what the move replaced (relocate entries fromSeq..toSeq)
    * and the webhook leaves the vault ("moved").
    */
   drain?: { at: number; fromSeq: number; toSeq: number; oldPointer?: { webhookId: string; messageId: string } };
@@ -62,11 +63,36 @@ export interface RemovedWebhook {
   how: "moved" | "removed";
 }
 
+/**
+ * A storage backend other than a Discord webhook. Optional list next to `webhooks` (no format bump: an
+ * older tab keeps unknown fields when it edits the vault, and simply does not use them). Discord
+ * webhooks stay in `webhooks` only.
+ */
+export interface VaultBackend {
+  /** Provider tag, e.g. "memory-bucket" (tests). */
+  kind: string;
+  id: string;
+  label: string;
+  addedAt: number;
+  /** Same meaning as for a webhook: read, gets no new blobs. */
+  retired?: boolean;
+  drain?: VaultWebhook["drain"];
+  /** Credentials (secret, like a webhook URL). */
+  secret: Record<string, string>;
+  /** Non-secret settings (e.g. the limiter key). */
+  meta?: Record<string, string>;
+}
+
 export interface VaultContent {
   format: typeof VAULT_FORMAT;
   version: number;
   webhooks: VaultWebhook[];
-  /** The account's snapshot pointer message, once created. Part of the rescue kit. */
+  /** Other storage backends (optional). */
+  backends?: VaultBackend[];
+  /**
+   * The account's snapshot pointer, once created. Part of the rescue kit. `webhookId` is the ID of the
+   * backend holding it (a webhook ID for Discord), `messageId` its slot there (Discord: the message).
+   */
   pointer?: { webhookId: string; messageId: string };
   /** Webhooks removed from the account, newest first (optional, like `retired`). */
   removed?: RemovedWebhook[];
@@ -122,7 +148,7 @@ export async function sealVault(key: AccountKey, accountId: string, revision: nu
 
 export async function openVault(key: AccountKey, accountId: string, s: SealedVault): Promise<VaultContent> {
   const v = await unsealJson<VaultContent>(await key.subkey("vault"), s.blob, aad(accountId, s.revision), "webhook vault");
-  if (v.format !== VAULT_FORMAT || v.version !== VAULT_FORMAT_VERSION || !Array.isArray(v.webhooks)) {
+  if (v.format !== VAULT_FORMAT || v.version !== VAULT_FORMAT_VERSION || !Array.isArray(v.webhooks) || (v.backends !== undefined && !Array.isArray(v.backends))) {
     throw new Error("unsupported vault format");
   }
   return v;
@@ -144,6 +170,7 @@ export interface VaultAdvice {
 export function vaultAdvice(v: VaultContent): VaultAdvice {
   const perChan = new Map<string, number>();
   for (const w of v.webhooks) if (!w.retired && !w.drain) perChan.set(w.channelId, (perChan.get(w.channelId) ?? 0) + 1);
+  for (const b of v.backends ?? []) if (!b.retired && !b.drain) perChan.set(b.meta?.paceKey ?? `${b.kind}:${b.id}`, (perChan.get(b.meta?.paceKey ?? `${b.kind}:${b.id}`) ?? 0) + 1);
   const channels = perChan.size;
   const sharedChannels = [...perChan].filter(([, n]) => n > 1).map(([c]) => c).sort();
   const ok = channels >= REQUIRED_CHANNELS;
@@ -155,12 +182,29 @@ export function vaultAdvice(v: VaultContent): VaultAdvice {
     message = `Channels: ${channels}. Discord limits uploads per channel (~30 pieces/min, ~4 MiB/s), so 3–4 channels, each with one webhook, make uploads faster.`;
   else message = `Channels: ${channels}. All set.`;
   if (sharedChannels.length) message += " Several webhooks in one channel do not speed up uploads; use separate channels.";
-  return { webhooks: v.webhooks.length, channels, ok, suggestMore, sharedChannels, message };
+  return { webhooks: v.webhooks.length + (v.backends?.length ?? 0), channels, ok, suggestMore, sharedChannels, message };
 }
 
 /** Every webhook of the vault (reading needs the retired ones too). */
 export function toWebhookRefs(v: VaultContent): WebhookRef[] {
   return v.webhooks.map((w) => ({ id: w.id, url: w.url, channelId: w.channelId, ...(w.retired ? { retired: true } : {}) }));
+}
+
+/**
+ * Every backend of the vault as a pointer/rescue-kit entry: what a device that has nothing but the
+ * account key needs to read the account's blobs. Retired and drained ones too (they still hold data);
+ * removed ones have no credentials left. Secret (webhook URLs): only ever stored sealed.
+ */
+export function backendDescriptors(v: VaultContent): BackendDescriptor[] {
+  return [
+    ...v.webhooks.map((w): BackendDescriptor => ({ kind: DISCORD_PROVIDER, id: w.id, url: w.url, channelId: w.channelId })),
+    ...(v.backends ?? []).map((b): BackendDescriptor => ({ kind: b.kind, id: b.id, secret: { ...b.secret }, ...(b.meta ? { meta: { ...b.meta } } : {}) })),
+  ];
+}
+
+/** Count of backends that take new blobs (the rescue-kit reminder: more than one = the old kit format is not enough). */
+export function activeBackends(v: VaultContent): number {
+  return v.webhooks.filter((w) => !w.retired && !w.drain).length + (v.backends ?? []).filter((b) => !b.retired && !b.drain).length;
 }
 
 /** Client view of the vault: decrypts, edits with CAS + retry, guards against rollback. */
@@ -180,6 +224,20 @@ export class WebhookVault {
 
   get revision(): number {
     return this.seenRevision;
+  }
+
+  /** The last content this device read or wrote (null before the first load). */
+  get cached(): { revision: number; content: VaultContent } | null {
+    return this.cache;
+  }
+
+  /** Add or replace a non-Discord backend. */
+  async addBackend(b: VaultBackend): Promise<VaultContent> {
+    return this.update((v) => {
+      v.backends = [...(v.backends ?? []).filter((x) => x.id !== b.id), b].sort((a, c) => (a.addedAt - c.addedAt) || (a.id < c.id ? -1 : 1));
+      if (v.removed) v.removed = v.removed.filter((x) => x.id !== b.id);
+      return v;
+    });
   }
 
   async load(): Promise<VaultContent> {
@@ -226,12 +284,15 @@ export class WebhookVault {
     });
   }
 
-  /** Remove; `how` is remembered in `removed` (no URL) so Settings can say what happened to its files. */
+  /** Remove (a webhook or another backend); `how` is remembered in `removed` (no credentials) so Settings can say what happened to its files. */
   async removeWebhook(id: string, how: RemovedWebhook["how"] = "removed", now = Date.now()): Promise<VaultContent> {
     return this.update((v) => {
       const w = v.webhooks.find((x) => x.id === id);
+      const b = (v.backends ?? []).find((x) => x.id === id);
       v.webhooks = v.webhooks.filter((x) => x.id !== id);
-      if (w) v.removed = [{ id: w.id, channelId: w.channelId, label: w.label, removedAt: now, how }, ...(v.removed ?? []).filter((x) => x.id !== id)].slice(0, 50);
+      if (v.backends) v.backends = v.backends.filter((x) => x.id !== id);
+      const gone = w ? { id: w.id, channelId: w.channelId, label: w.label } : b ? { id: b.id, channelId: b.meta?.paceKey ?? "", label: b.label } : null;
+      if (gone) v.removed = [{ ...gone, removedAt: now, how }, ...(v.removed ?? []).filter((x) => x.id !== id)].slice(0, 50);
       return v;
     });
   }
@@ -239,14 +300,14 @@ export class WebhookVault {
   /** The move finished: keep it retired and read-only until the cleanup's drain (see VaultWebhook.drain). */
   async setDrain(id: string, drain: VaultWebhook["drain"]): Promise<VaultContent> {
     return this.update((v) => {
-      for (const w of v.webhooks) if (w.id === id) ((w.retired = true), (w.drain = drain));
+      for (const w of [...v.webhooks, ...(v.backends ?? [])]) if (w.id === id) ((w.retired = true), (w.drain = drain));
       return v;
     });
   }
 
   async setRetired(id: string, retired: boolean): Promise<VaultContent> {
     return this.update((v) => {
-      for (const w of v.webhooks) if (w.id === id) (retired ? (w.retired = true) : delete w.retired);
+      for (const w of [...v.webhooks, ...(v.backends ?? [])]) if (w.id === id) (retired ? (w.retired = true) : delete w.retired);
       return v;
     });
   }

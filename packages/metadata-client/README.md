@@ -34,7 +34,17 @@ Etap 2 discordrive-next: klient trybu metadata only na rdzeniu `@ddv4/sync-core`
   logu, łańcuch od seq 1), baza (drzewo, gzip, dzielone na części), jedna wiadomość
   wskaźnikowa edytowana `PATCH`-em, która nigdy się nie cofa. Polityka `decideSnapshot`:
   1 min ciszy / max 5 min, baza przy 20 % lub 7 dniach, tylko na łączu nielimitowanym.
-  `restoreFromDiscord` + zestaw ratunkowy (`ddn-kit1:`) odtwarzają drzewo bez serwera.
+  `restoreFromDiscord` + zestaw ratunkowy (`ddn-kit3:`, starszy `ddn-kit1:` dalej
+  przyjmowany) odtwarzają drzewo bez serwera. Wskaźnik niesie kopię listy backendów z sejfu
+  (`backends` + `vaultRevision`, zapisywaną przy każdym zapisie wskaźnika; nowsza rewizja nie
+  jest nadpisywana starszą), więc sam zestaw wystarcza też przy wielu kanałach
+  (`restoreFromRescueKit`).
+- **Backendy magazynu** (`backends.ts`): `BlobBackend` (zapis, odczyt, kasowanie, slot
+  wskaźnika), `BackendRegistry` z sejfu, `BackendBlobStore` (round-robin po zapisywalnych,
+  limiter per `paceKey`). Discord = `DiscordWebhookBackend` (jeden webhook) na wspólnym
+  `DiscordWebhooks` (transport, linki z wyprzedzeniem). Inne backendy w sejfie w `backends[]`
+  obok `webhooks[]`; ich `manifestRef` to `ddn2:` (Discord bez zmian: `ddn1:`). Drugi rodzaj w
+  testach: `MemoryBackend` (`memory-backend.ts`).
   Retencja (`selectRetained`, `pruneSnapshots`): bieżąca baza + najnowsza z każdego z 7
   ostatnich dni + najstarsza z każdego z 4 tygodni przed nimi (~30 dni), segmenty od
   najstarszej trzymanej bazy; najpierw zapis wskaźnika, potem kasowanie wiadomości.

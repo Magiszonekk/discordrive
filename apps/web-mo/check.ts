@@ -276,7 +276,7 @@ try {
   await p.waitForSelector("[data-ddn=kit-dialog][open]", { timeout: 30_000 });
   await p.waitForFunction(() => (document.querySelector<HTMLTextAreaElement>("[data-ddn=kit-text]")?.value ?? "").length > 20);
   const kit = await p.inputValue("[data-ddn=kit-text]");
-  r.kitFormat = kit.startsWith(SERVER_SIDE ? "ddn-kit2:" : "ddn-kit1:");
+  r.kitFormat = kit.startsWith(SERVER_SIDE ? "ddn-kit2:" : "ddn-kit3:");
   r.kitQr = (await p.$$eval("[data-ddn=kit-qr] svg", (e) => e.length)) === 1;
   r.kitDoneDisabledBeforeAck = await p.isDisabled("[data-ddn=kit-done]");
   await p.keyboard.press("Escape");
@@ -342,6 +342,46 @@ try {
   }
   r.advice = await p.textContent("[data-ddn=advice]");
   await shot(p, "03b-settings");
+  if (!SERVER_SIDE && fake && hookUrls[1]) {
+    // A device that confirmed a kit before kit format 3 (one webhook in it) and an account with several
+    // channels: after the update the app asks ONCE to save a new kit; the next visit does not ask again.
+    // (The shown kit is also the one under "Show rescue kit" in Settings.)
+    step("kit reminder");
+    await p.evaluate(
+      () =>
+        new Promise<void>((ok, bad) => {
+          const o = indexedDB.open("ddn-keys", 1);
+          o.onerror = () => bad(o.error);
+          o.onsuccess = () => {
+            const t = o.result.transaction("kv", "readwrite");
+            const st = t.objectStore("kv");
+            const g = st.get("account");
+            g.onsuccess = () => {
+              const a = g.result as Record<string, unknown>;
+              delete a.kitFormat;
+              delete a.kitNudgedAt;
+              st.put(a, "account");
+            };
+            t.oncomplete = () => (o.result.close(), ok());
+            t.onerror = () => bad(t.error);
+          };
+        }),
+    );
+    await p.goto(base);
+    await p.waitForSelector("body[data-ready='1']");
+    await p.waitForSelector("[data-ddn=kit-dialog][open]", { timeout: 30_000 });
+    const renewKit = await p.inputValue("[data-ddn=kit-text]");
+    // Asked, not forced: the dialog closes without the acknowledgement.
+    r.kitReminder = { shown: await p.isVisible("[data-ddn=kit-renew]"), format: renewKit.slice(0, 9), closable: !(await p.isDisabled("[data-ddn=kit-done]")) };
+    await p.click("[data-ddn=kit-done]");
+    await p.waitForSelector("[data-ddn=kit-dialog][open]", { state: "detached" });
+    await p.reload();
+    await p.waitForSelector("body[data-ready='1']");
+    await p.waitForTimeout(2500);
+    (r.kitReminder as Record<string, unknown>).once = !(await p.isVisible("[data-ddn=kit-dialog][open]"));
+    await nav(p, "settings");
+    await p.waitForSelector("[data-page=settings] [data-ddn=channels-toggle]");
+  }
   // Cobalt fonts are local files (CSP: 'self' only) and really load: Space Grotesk / Inter / JetBrains Mono.
   r.fontsLoaded = await p.evaluate(async () => (await document.fonts.ready, [...new Set([...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family.replace(/"/g, "")))].sort()));
   // Settings → Diagnostics: transfer logs on; the upload and download below are logged.
@@ -1547,6 +1587,7 @@ try {
     invite: r.signupWithoutInviteRefused === true,
     mainTab: r.mainTab === true,
     kit: r.kitFormat === true && r.kitQr === true && r.kitDoneDisabledBeforeAck === true && r.kitNotDismissableByEsc === true && r.kitFileHasCode === true,
+    ...(!SERVER_SIDE && fake && hookUrls[1] ? { kitReminder: JSON.stringify(r.kitReminder) === JSON.stringify({ shown: true, format: "ddn-kit3:", closable: true, once: true }) } : {}),
     progress: (r.progressBigFile as string[]).length >= 2,
     download: r.downloadSha256Ok === true && (remote ? true : r.downloadStreamed === true),
     liveSpeed: (() => {

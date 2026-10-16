@@ -43,6 +43,10 @@ export interface StoredAccount {
   pointer?: { webhookId: string; messageId: string };
   /** When the user confirmed the rescue kit is saved (forced once per account; A). */
   kitSavedAt?: number;
+  /** Format of the kit confirmed then (absent: before formats were recorded, i.e. format 1 in metadata only). */
+  kitFormat?: number;
+  /** When this device last asked to save a new kit after a format change (asked once). */
+  kitNudgedAt?: number;
 }
 
 export const keystore = {

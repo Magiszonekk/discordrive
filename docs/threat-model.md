@@ -101,9 +101,15 @@ into a one-shot mailbox on the server (deleted on first read, 10 min). Both scre
   to revoke it (the app says so: `joinD.rejected`).
 - Pairing gives **the whole account**. It is for one's own devices only, never for another person.
 
-**Rescue kit**: `ddn-kit1:` (metadata only: account ID + account key + the pointer's webhook URL +
-pointer message ID) or `ddn-kit2:` (e2ee/plain: account ID + account key + server address)
-(`snapshots.ts`). The device key it registers is signed with the **rescue key**, an Ed25519 key
+**Rescue kit**: `ddn-kit3:` (metadata only: account ID + account key + the pointer's webhook URL +
+pointer message ID, plus the other webhook URLs of the account while the code stays short) or
+`ddn-kit2:` (e2ee/plain: account ID + account key + server address) (`snapshots.ts`). The older
+metadata-only `ddn-kit1:` (one webhook) is still accepted. Pieces, snapshot segments and bases are
+spread over every channel of the account, so the snapshot pointer carries a copy of the vault's
+channel list (sealed with the `snapshot` subkey, like the rest of the pointer): from a kit alone a
+device learns every channel and can read every file without the server. A webhook removed from the
+vault can stay in older pointers and kept bases for the snapshot retention (30 days); that is the
+same kind of secret the kit already holds. The device key it registers is signed with the **rescue key**, an Ed25519 key
 derived from the account key (HKDF `ddn-rescue-ed25519-v1`, `device-key.ts`) whose public half was
 registered with the account. Whoever holds a kit holds the account. A kit cannot be revoked (no
 key rotation).
