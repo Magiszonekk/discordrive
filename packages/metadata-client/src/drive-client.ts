@@ -2,7 +2,7 @@
 // operation log through the arbiter, per-file keys and fragment encryption in
 // the discordrive format, manifests on demand, download/Range reads.
 // WHERE the encrypted blobs go is a BlobStore chosen by the mode:
-//   metadata only -> WebhookBlobStore (client.ts, user's webhooks),
+//   metadata only -> WebhookBlobStore (client.ts, the user's backends: Discord webhooks, …),
 //   e2ee / plain  -> ServerBlobStore (server-blobs.ts, the instance posts).
 //
 // Upload protocol (rule 8, sync-core Sequencer comment):
@@ -43,7 +43,7 @@ import {
 } from "./file-crypto.js";
 import { LogObserver, type InvalidOpAlert } from "./policies.js";
 import { errText, ms, nowMs, type TransferLog } from "./transfer-log.js";
-import type { DiscordPlacement } from "./types.js";
+import { isDiscordPlacement, type OtherPlacement, type Placement } from "./types.js";
 
 /**
  * Upper bound of fragments in flight (up to 64 to saturate a ~600 Mb/s line). Each
@@ -72,6 +72,7 @@ export const DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024 - 28;
 export const BLOB_EXT = ".txt";
 export const MANIFEST_SCHEMA_VERSION = 1;
 const MANIFEST_REF_PREFIX = "ddn1:";
+const MANIFEST_REF2_PREFIX = "ddn2:";
 
 /** Random URL-safe ID accepted by sync-core isClientId (22 chars). */
 export function newId(): string {
@@ -97,20 +98,45 @@ export function memorySource(data: Uint8Array): ByteSource {
 /** What manifestRef decodes to. Lives only in the (encrypted, except plain) op payload and tree. */
 export interface ManifestLocator {
   v: 1;
-  /** File root key, base64 (key per file). */
+  /** File root key, base64 (one key per file). */
   k: string;
   /** Where the encrypted manifest is. */
-  at: DiscordPlacement;
+  at: Placement;
   /** Fragment format version. */
   f: number;
 }
 
+/** Longest manifestRef the sync core accepts (its `isRef`). */
+export const MANIFEST_REF_MAX = 512;
+
+/**
+ * Discord: `ddn1:[1,f,k,webhookId,channelId,messageId,attachmentId]`, byte for byte the format every
+ * existing device reads. Any other provider: `ddn2:[2,f,k,provider,locationId,[name,value,…]]` with the
+ * placement's own fields sorted by name (the decoder needs nothing else to rebuild the placement).
+ */
 export function encodeManifestRef(loc: ManifestLocator): string {
   const at = loc.at;
-  return `${MANIFEST_REF_PREFIX}${JSON.stringify([loc.v, loc.f, loc.k, at.locationId, at.channelId, at.messageId, at.attachmentId])}`;
+  if (isDiscordPlacement(at)) return `${MANIFEST_REF_PREFIX}${JSON.stringify([loc.v, loc.f, loc.k, at.locationId, at.channelId, at.messageId, at.attachmentId])}`;
+  const fields = Object.keys(at)
+    .filter((n) => n !== "provider" && n !== "locationId")
+    .sort()
+    .flatMap((n) => [n, String(at[n])]);
+  const ref = `${MANIFEST_REF2_PREFIX}${JSON.stringify([2, loc.f, loc.k, at.provider, at.locationId, fields])}`;
+  if (ref.length > MANIFEST_REF_MAX) throw new Error(`manifestRef too long (${ref.length} > ${MANIFEST_REF_MAX})`);
+  return ref;
 }
 
 export function decodeManifestRef(ref: string): ManifestLocator {
+  if (ref.startsWith(MANIFEST_REF2_PREFIX)) {
+    const a = JSON.parse(ref.slice(MANIFEST_REF2_PREFIX.length)) as unknown[];
+    const fields = a?.[5];
+    if (!Array.isArray(a) || a[0] !== 2 || a.length !== 6 || typeof a[1] !== "number" || typeof a[2] !== "string" || typeof a[3] !== "string" || typeof a[4] !== "string" || !Array.isArray(fields) || fields.length % 2 || !fields.every((x) => typeof x === "string")) {
+      throw new Error("bad manifestRef");
+    }
+    const at: OtherPlacement = { provider: a[3], locationId: a[4] };
+    for (let i = 0; i < fields.length; i += 2) if (fields[i] !== "provider" && fields[i] !== "locationId") at[fields[i] as string] = fields[i + 1] as string;
+    return { v: 1, f: a[1], k: a[2], at };
+  }
   if (!ref.startsWith(MANIFEST_REF_PREFIX)) throw new Error("unknown manifestRef format");
   const a = JSON.parse(ref.slice(MANIFEST_REF_PREFIX.length)) as unknown[];
   if (!Array.isArray(a) || a[0] !== 1 || a.length !== 7 || !a.every((x) => typeof x === "string" || typeof x === "number")) {
@@ -385,7 +411,7 @@ export class DriveClient {
   }
 
   /** Fetch one stored blob (fresh link, retries: the store's business). */
-  async fetchPlacement(p: DiscordPlacement): Promise<Uint8Array> {
+  async fetchPlacement(p: Placement): Promise<Uint8Array> {
     return this.blobs.get(p);
   }
 
@@ -527,7 +553,7 @@ export class DriveClient {
             opts.onProgress?.(sentBytes, src.size, { ...stages });
             // Automatic value: the tuner sees every piece on the wire (bytes and time).
             const tk = auto ? this.net.tune.up.begin() : null;
-            let placed: DiscordPlacement;
+            let placed: Placement;
             try {
               placed = await this.blobs.put(ct, `${blobId}${BLOB_EXT}`, { uploadId, index: i, sha256: hash, signal, stats });
             } catch (e) {
@@ -683,10 +709,10 @@ export class DriveClient {
       const ac = new AbortController();
       const onAbort = () => ac.abort();
       signal?.addEventListener("abort", onAbort);
-      type Done = { pt: Uint8Array; ct: number; t: [number, number, number, number]; p: DiscordPlacement };
+      type Done = { pt: Uint8Array; ct: number; t: [number, number, number, number]; p: Placement };
       const fetchOne = async (c: ChunkRef): Promise<Done> => {
         throwIfAborted(ac.signal);
-        const p = c.placements?.[0] as DiscordPlacement | undefined;
+        const p = c.placements?.[0] as Placement | undefined;
         if (!p) throw new Error(`chunk ${c.index}: no placement`);
         if (log) log.fl.down++;
         try {
@@ -745,7 +771,7 @@ export class DriveClient {
           // Links ahead: every 25 fragments, a hint for the next 75 (metadata only: their links are fetched in
           // the background while these download; e2ee/plain: one refresh call for the ones not cached yet).
           // Only a hint: a failure here (no network) is retried per fragment inside get().
-          if (k % 25 === 0) await this.blobs.prefetch?.(ordered.slice(k, k + 75).map((y) => y.placements?.[0] as DiscordPlacement).filter(Boolean), { x, first: k + from }).catch(() => {});
+          if (k % 25 === 0) await this.blobs.prefetch?.(ordered.slice(k, k + 75).map((y) => y.placements?.[0] as Placement).filter(Boolean), { x, first: k + from }).catch(() => {});
           fetching++;
           const pr = fetchOne(ordered[k]!);
           pr.then(
@@ -845,7 +871,7 @@ export function mbps(bytes: number, durMs: number): number {
 }
 
 /** Piece locations of a version (rules v3 PieceLoc): fragments per placement location + the manifest. Sorted, unique. */
-export function piecesOf(manifest: ChunkManifest, manifestAt: DiscordPlacement, manifestBytes: number): PieceLoc[] {
+export function piecesOf(manifest: ChunkManifest, manifestAt: Placement, manifestBytes: number): PieceLoc[] {
   const m = new Map<string, { n: number; bytes: number }>();
   const add = (loc: string, bytes: number) => {
     const x = m.get(loc) ?? { n: 0, bytes: 0 };
@@ -854,7 +880,7 @@ export function piecesOf(manifest: ChunkManifest, manifestAt: DiscordPlacement, 
     m.set(loc, x);
   };
   for (const c of manifest.chunks) {
-    const p = c.placements?.[0] as DiscordPlacement | undefined;
+    const p = c.placements?.[0] as Placement | undefined;
     if (p?.locationId) add(p.locationId, c.ciphertextSizeBytes);
   }
   add(manifestAt.locationId, manifestBytes);
@@ -888,7 +914,7 @@ export async function readVersionRange(
     const ck = `${v.versionId}:${i}`;
     let pt = cache?.get(ck);
     if (!pt) {
-      const ct = await c.blobs.get(ch.placements![0] as DiscordPlacement);
+      const ct = await c.blobs.get(ch.placements![0] as Placement);
       if (ch.ciphertextHash && (await sha256Hex(ct)) !== ch.ciphertextHash) throw new Error(`chunk ${i}: ciphertext hash mismatch`);
       pt = await decryptFragment(key, ct);
       cache?.set(ck, pt);

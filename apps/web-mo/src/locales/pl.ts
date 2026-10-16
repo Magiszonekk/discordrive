@@ -227,6 +227,7 @@ export const pl: Record<string, string> = {
   // okno zestawu ratunkowego
   "kit.h": "Zestaw ratunkowy",
   "kit.lead": "To jedyna droga do plików, gdy stracisz wszystkie urządzenia. Zawiera klucz konta i dostęp do kanału ze spisem. Trzymaj go jak hasło: na papierze albo w menedżerze haseł, nie na czacie.",
+  "kit.renew": "Zapisz ten nowy zestaw ratunkowy. Poprzedni wskazuje tylko jeden z Twoich kanałów; przy kilku kanałach może nie odzyskać wszystkich plików.",
   "kit.code": "Kod (do skopiowania)",
   "kit.copy": "Kopiuj",
   "kit.download": "Pobierz plik",

@@ -18,7 +18,8 @@ import { decodeManifestRef, type DriveClient } from "./drive-client.js";
 import { RateLimitedError } from "./discord-transport.js";
 import { decideTrashCleanup, trashCleanupOp } from "./policies.js";
 import { deletableUploadsWithRetention, emptyPointer, type Pointer } from "./snapshots.js";
-import type { DiscordPlacement, WebhookRef, WebhookTransport } from "./types.js";
+import type { Placement, WebhookRef, WebhookTransport } from "./types.js";
+import type { BlobBackend } from "./backends.js";
 
 /** Server side of the cleanup bookkeeping (GET/POST /v1/gc). */
 export interface CleanupApi {
@@ -44,8 +45,11 @@ export interface CleanupDeps {
   /** The log (reads the op that bound a released upload, for its manifest). */
   log: Pick<ArbiterApi, "read">;
   api: CleanupApi;
+  /** Deletes through the webhook when `backend` is not given. */
   transport: WebhookTransport;
   webhook(id: string): WebhookRef;
+  /** The backend of a placement's location (throws when unknown: the upload stays for later). */
+  backend?(id: string): BlobBackend;
   /** Webhooks removed from the account: their messages can never be deleted by us; skipped. */
   removedHook?(id: string): boolean;
   /** Current snapshot pointer (kept bases); null = no snapshots yet. */
@@ -226,7 +230,7 @@ export class Cleaner {
     let messages = 0;
     let bytes = 0;
     for (const ch of chunks) {
-      const p = ch.placements?.[0] as DiscordPlacement | undefined;
+      const p = ch.placements?.[0] as Placement | undefined;
       if (!p) continue;
       if (await this.deleteMessage(p)) messages++;
       bytes += ch.ciphertextSizeBytes;
@@ -235,15 +239,17 @@ export class Cleaner {
     return { messages, bytes };
   }
 
-  private async deleteMessage(p: DiscordPlacement): Promise<boolean> {
+  private async deleteMessage(p: Placement): Promise<boolean> {
     // Removed from the account ("remove anyway" or a finished drain): no URL left to delete with; the message stays on Discord.
     if (this.d.removedHook?.(p.locationId)) return false;
-    const hook = this.d.webhook(p.locationId); // throws when the webhook is unknown: the upload stays for later
+    // Throws when the backend is unknown: the upload stays for later.
+    const del = this.d.backend
+      ? ((b) => async () => (await b.remove(p)) === "deleted")(this.d.backend(p.locationId))
+      : ((hook) => async () => (await this.d.transport.deleteMessage(hook, (p as { messageId: string }).messageId), true))(this.d.webhook(p.locationId));
     const sleep = this.d.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
     for (let attempt = 0; ; attempt++) {
       try {
-        await this.d.transport.deleteMessage(hook, p.messageId);
-        return true;
+        return await del();
       } catch (e) {
         if (/404|Unknown Message/.test(String((e as Error)?.message ?? e))) return false;
         if (e instanceof RateLimitedError && attempt < 8) {

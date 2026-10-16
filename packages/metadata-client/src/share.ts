@@ -15,7 +15,7 @@ import { createSHA256 } from "hash-wasm";
 import type { ChunkManifest } from "@ddv4/sync-core";
 import { BLOB_EXT, decodeManifestRef, type ByteSink } from "./drive-client.js";
 import { decryptFragment, decryptManifest, encryptManifest, importFileKey, sha256Hex } from "./file-crypto.js";
-import type { DiscordPlacement, WebhookRef, WebhookTransport } from "./types.js";
+import { isDiscordPlacement, type Placement, type WebhookRef, type WebhookTransport } from "./types.js";
 
 export interface ShareMeta {
   v: 1;
@@ -63,13 +63,17 @@ export async function prepareShare(
     {
       loadManifest: o.loadManifest,
       attachments: async (loc, manifest) => {
-        const atts = await o.transport.getAttachments(o.hook(loc.at.locationId), loc.at.messageId);
-        const ma = atts.find((a) => a.id === loc.at.attachmentId);
+        // A share link reads Discord attachments through the instance's bot; other backends have no such path yet.
+        const onDiscord = (p: Placement | undefined) => !p || isDiscordPlacement(p);
+        if (!onDiscord(loc.at) || manifest.chunks.some((c) => !onDiscord(c.placements?.[0] as Placement | undefined))) throw new Error("share_unavailable: this file is stored on a backend that cannot be shared");
+        const atts = await o.transport.getAttachments(o.hook(loc.at.locationId), (loc.at as { messageId: string }).messageId);
+        const at = loc.at as { attachmentId: string; channelId: string };
+        const ma = atts.find((a) => a.id === at.attachmentId);
         if (!ma) throw new Error("manifest attachment missing");
-        const out: ShareAttachment[] = [{ channelId: loc.at.channelId, attachmentId: loc.at.attachmentId, filename: attachmentFilename(ma.url) }];
+        const out: ShareAttachment[] = [{ channelId: at.channelId, attachmentId: at.attachmentId, filename: attachmentFilename(ma.url) }];
         for (const c of manifest.chunks) {
-          const p = c.placements?.[0] as DiscordPlacement | undefined;
-          if (!p?.attachmentId || !p.channelId) throw new Error(`chunk ${c.index}: no placement`);
+          const p = c.placements?.[0] as Placement | undefined;
+          if (!p || !isDiscordPlacement(p) || !p.attachmentId || !p.channelId) throw new Error(`chunk ${c.index}: no placement`);
           out.push({ channelId: p.channelId, attachmentId: p.attachmentId, filename: `${c.blobId}${BLOB_EXT}` });
         }
         return out;

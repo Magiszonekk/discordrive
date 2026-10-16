@@ -18,7 +18,7 @@ import { AbortedError, type BlobGetContext, type BlobPutContext, type BlobStore 
 import { errText, hostOf, ms, nowMs, type TransferLog } from "./transfer-log.js";
 import type { HttpApi } from "./http-api.js";
 import { ServerError } from "./http-api.js";
-import type { DiscordPlacement } from "./types.js";
+import { isDiscordPlacement, type DiscordPlacement, type Placement } from "./types.js";
 
 export const SERVER_BLOB_STORE_MARKER = "ddn-server-blobs";
 
@@ -160,8 +160,10 @@ export class ServerBlobStore implements BlobStore {
   }
 
   /** Fresh links for up to 50 placements in one call (download loop calls this every 50). */
-  async prefetch(ps: DiscordPlacement[]): Promise<void> {
+  async prefetch(all: Placement[]): Promise<void> {
     if (this.proxyOnly) return;
+    // The instance stores on its own Discord webhooks only.
+    const ps = all.filter(isDiscordPlacement);
     const t = Date.now();
     const need = ps.filter((p) => !((this.links.get(p.attachmentId)?.until ?? 0) > t));
     for (let k = 0; k < need.length; k += 50) {
@@ -177,7 +179,9 @@ export class ServerBlobStore implements BlobStore {
     if (this.links.size > 20_000) for (const [k, v] of this.links) if (v.until <= t) this.links.delete(k);
   }
 
-  async get(p: DiscordPlacement, signal?: AbortSignal, ctx?: BlobGetContext): Promise<Uint8Array> {
+  async get(pl: Placement, signal?: AbortSignal, ctx?: BlobGetContext): Promise<Uint8Array> {
+    if (!isDiscordPlacement(pl)) throw new Error(`not a Discord placement: ${pl.provider}`);
+    const p: DiscordPlacement = pl;
     const log = ctx?.x !== undefined ? this.log : null;
     const ev = log ? { dir: "down", x: ctx!.x, i: ctx!.i ?? 0, hook: p.locationId, ch: p.channelId ?? null } : null;
     if (!this.proxyOnly) {

@@ -28,10 +28,11 @@ import type { ArbiterApi } from "./arbiter.js";
 import { BLOB_EXT, decodeManifestRef, encodeManifestRef, newId, piecesOf, type DriveClient } from "./drive-client.js";
 import { encryptManifest, importFileKey, decryptManifest, sha256Hex } from "./file-crypto.js";
 import { RateLimitedError } from "./discord-transport.js";
-import { chainObjects, clientBlobIO, readPointer, rehomeChain, type BaseRef, type BlobIO, type Pointer, type PointerLocation, type SegmentRef } from "./snapshots.js";
+import { chainObjects, clientBlobIO, readPointer, rehomeChain, toPlacement, type BaseRef, type BlobIO, type ObjRef, type Pointer, type PointerLocation, type SegmentRef } from "./snapshots.js";
 import type { SqlIndexStore } from "./sql-store.js";
-import type { DiscordPlacement, WebhookRef, WebhookTransport } from "./types.js";
-import type { VaultContent, VaultWebhook, WebhookVault } from "./vault.js";
+import type { Placement, WebhookRef, WebhookTransport } from "./types.js";
+import type { BlobBackend } from "./backends.js";
+import { backendDescriptors, type VaultContent, type VaultWebhook, type WebhookVault } from "./vault.js";
 
 /** Rough throughput of one channel for ETAs (~30 posts/min of ≤ 10 MiB). */
 export const BYTES_PER_S_PER_CHANNEL = 4 * 1024 * 1024;
@@ -41,12 +42,16 @@ export const RELOCATE_BATCH = 20;
 export const DRAIN_AFTER_MS = FRAGMENT_RETENTION_MS + DAY_MS;
 
 export interface ChannelClient extends DriveClient {
-  fetchPlacement(p: DiscordPlacement): Promise<Uint8Array>;
-  postBlob(d: Uint8Array, f: string): Promise<DiscordPlacement>;
-  postBlobExcept(d: Uint8Array, f: string, exclude: ReadonlySet<string>): Promise<DiscordPlacement>;
-  postBlobTo(hookId: string, d: Uint8Array, f: string): Promise<DiscordPlacement>;
+  fetchPlacement(p: Placement): Promise<Uint8Array>;
+  postBlob(d: Uint8Array, f: string): Promise<Placement>;
+  postBlobExcept(d: Uint8Array, f: string, exclude: ReadonlySet<string>): Promise<Placement>;
+  postBlobTo(hookId: string, d: Uint8Array, f: string): Promise<Placement>;
+  /** Backend from the vault by ID (throws if unknown). */
+  backend(id: string): BlobBackend;
   webhook(id: string): WebhookRef;
   readonly webhooks: WebhookRef[];
+  /** Every backend of the client (webhooks and others). */
+  readonly registry: { all(): { id: string }[] };
   /** Stop/resume posting to one webhook in this client (the vault flag is the durable part). */
   setHookRetired(id: string, retired: boolean): void;
 }
@@ -210,13 +215,13 @@ export class ChannelMover {
   private async go(webhookId: string, onProgress?: (s: MoveState) => void): Promise<MoveState> {
     const d = this.d;
     let v = await d.vault.load();
-    const hook = v.webhooks.find((w) => w.id === webhookId);
+    const hook = allBackends(v).find((w) => w.id === webhookId);
     const prev = this.state();
     if (!hook || hook.drain) {
       if (prev?.webhookId === webhookId && prev.state === "done") return prev;
       throw new Error("no_such_channel");
     }
-    const others = v.webhooks.filter((w) => w.id !== webhookId && !w.retired && !w.drain);
+    const others = allBackends(v).filter((w) => w.id !== webhookId && !w.retired && !w.drain);
     if (!others.length) throw new Error("need_other_channel");
     const io = clientBlobIO(d.client, d.transport);
     const crit = (await snapshotHooks(io, d.key, d.accountId, v).catch(() => new Map<string, CriticalWhat[]>())).get(webhookId) ?? [];
@@ -273,8 +278,8 @@ export class ChannelMover {
       v = await d.vault.load();
       const holds = (await snapshotHooks(io, d.key, d.accountId, v).catch(() => new Map<string, CriticalWhat[]>())).get(webhookId) ?? [];
       if (holds.length && v.pointer) {
-        const target = d.client.webhook(others[0]!.id);
-        const r = await rehomeChain(io, d.key, d.accountId, v.pointer, target, (data, f) => d.client.postBlobTo(target.id, data, f), this.now);
+        const target = { id: others[0]!.id };
+        const r = await rehomeChain(io, d.key, d.accountId, v.pointer, target, (data, f) => d.client.postBlobTo(target.id, data, f), this.now, { list: backendDescriptors(v), revision: d.vault.revision });
         await d.vault.update((x) => {
           x.pointer = r.loc;
           return x;
@@ -308,7 +313,7 @@ export class ChannelMover {
     const manifest = await decryptManifest(key, await c.fetchPlacement(loc.at));
     const chunks: ChunkManifest["chunks"] = [];
     for (const ch of manifest.chunks) {
-      const p = ch.placements?.[0] as DiscordPlacement | undefined;
+      const p = ch.placements?.[0] as Placement | undefined;
       if (!p || p.locationId !== from) {
         chunks.push(ch);
         continue;
@@ -324,6 +329,11 @@ export class ChannelMover {
   }
 }
 
+/** Webhooks and other backends of the vault (ID, label, retired/drain flags). */
+export function allBackends(v: VaultContent): (Pick<VaultWebhook, "id" | "label" | "retired" | "drain">)[] {
+  return [...v.webhooks, ...(v.backends ?? [])];
+}
+
 export function estimateMs(bytes: number, channels: number): number | null {
   if (channels <= 0) return null;
   return Math.round((bytes / (BYTES_PER_S_PER_CHANNEL * channels)) * 1000);
@@ -331,7 +341,7 @@ export function estimateMs(bytes: number, channels: number): number | null {
 
 /** metadata only "unavailable": uploads with a piece on a webhook outside the vault; refreshed into the local table. */
 export function refreshUnavailable(store: SqlIndexStore, v: VaultContent): { uploadId: string; webhookIds: string[] }[] {
-  const out = store.uploadsOutside(v.webhooks.map((w) => w.id));
+  const out = store.uploadsOutside(allBackends(v).map((w) => w.id));
   store.setUnavailable(out);
   return out.map((x) => ({ uploadId: x.uploadId, webhookIds: x.locs }));
 }
@@ -345,7 +355,7 @@ export function refreshUnavailable(store: SqlIndexStore, v: VaultContent): { upl
 export async function backfillPieces(c: ChannelClient, store: SqlIndexStore, budget = 100): Promise<{ filled: number; left: number }> {
   const todo = store.versionsWithoutPieces(budget);
   let filled = 0;
-  const known = new Set(c.webhooks.map((h) => h.id));
+  const known = new Set(c.registry.all().map((b) => b.id));
   for (const t of todo) {
     try {
       const loc = decodeManifestRef(t.manifestRef);
@@ -370,23 +380,22 @@ export async function backfillPieces(c: ChannelClient, store: SqlIndexStore, bud
  */
 export async function finishDrain(
   d: Pick<ChannelsDeps, "client" | "vault" | "log" | "transport" | "key" | "accountId"> & { sleep?: (ms: number) => Promise<void> },
-  w: VaultWebhook,
+  w: Pick<VaultWebhook, "id" | "drain">,
   now: number,
   oldestBaseSeq: number,
 ): Promise<{ messages: number; done: boolean }> {
   if (!w.drain || now - w.drain.at < DRAIN_AFTER_MS || oldestBaseSeq < w.drain.toSeq) return { messages: 0, done: false };
   let messages = 0;
-  const del = async (hookId: string, messageId: string) => {
-    let hook: WebhookRef;
+  const delAt = async (p: Placement) => {
+    let b: BlobBackend;
     try {
-      hook = d.client.webhook(hookId);
+      b = d.client.backend(p.locationId);
     } catch {
       return; // not in the vault (removed): cannot be deleted by us
     }
     for (let attempt = 0; ; attempt++) {
       try {
-        await d.transport.deleteMessage(hook, messageId);
-        messages++;
+        if ((await b.remove(p)) === "deleted") messages++;
         return;
       } catch (e) {
         if (/404|Unknown (Message|Webhook)/.test(String((e as Error)?.message ?? e))) return;
@@ -414,10 +423,10 @@ export async function finishDrain(
         // Pieces first, the old manifest last (a cut run repeats from the manifest).
         const m = await d.client.loadManifest(o.from).catch(() => null);
         for (const ch of m?.manifest.chunks ?? []) {
-          const p = ch.placements?.[0] as DiscordPlacement | undefined;
-          if (p?.locationId === w.id) await del(p.locationId, p.messageId);
+          const p = ch.placements?.[0] as Placement | undefined;
+          if (p?.locationId === w.id) await delAt(p);
         }
-        await del(loc.at.locationId, loc.at.messageId);
+        await delAt(loc.at);
       }
     }
     at = batch.at(-1)!.seq;
@@ -427,10 +436,15 @@ export async function finishDrain(
     const p = await readPointer(io, d.key, d.accountId, w.drain.oldPointer).catch(() => null);
     if (p) {
       const { segments, parts } = await chainObjects(io, d.key, d.accountId, p);
-      for (const s of segments) await del(s.ref.webhookId, s.ref.messageId);
-      for (const o of parts) await del(o.webhookId, o.messageId);
+      for (const s of segments) await delAt(toPlacement(s.ref));
+      for (const o of parts) await delAt(toPlacement(o as ObjRef));
     }
-    await del(w.drain.oldPointer.webhookId, w.drain.oldPointer.messageId);
+    const op = w.drain.oldPointer;
+    try {
+      if ((await d.client.backend(op.webhookId).slot.remove?.(op.messageId)) === "deleted") messages++;
+    } catch {
+      /* not in the vault any more, or already gone */
+    }
   }
   await d.vault.removeWebhook(w.id, "moved", now);
   return { messages, done: true };

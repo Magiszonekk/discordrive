@@ -783,6 +783,11 @@ async function renderNow() {
   if (route.name === "welcome" && wh.advice.ok && st.kitSaved && !$<HTMLDialogElement>("kit-dialog").open) return navigate("/", true);
   // The rescue kit is forced once, right after the first channel (wherever that was added).
   if (wh.advice.ok && !st.kitSaved && !$<HTMLDialogElement>("kit-dialog").open) void openKit(true);
+  // A kit saved in an older format that no longer restores the whole account: asked once per device.
+  else if (wh.advice.ok && st.kitSaved && !kitReminded && !$<HTMLDialogElement>("kit-dialog").open) {
+    kitReminded = true;
+    void core.kitReminder().then((ask) => (ask ? openKit(false, true) : undefined)).catch(() => {});
+  }
 
   if (route.name === "welcome") {
     showOnly("onboarding");
@@ -2276,20 +2281,22 @@ function qr(el: HTMLElement, text: string) {
 // ── rescue kit ─────────────────────────────────────────────────────
 let kitOpening = false;
 let kitConfirmed = false;
-async function openKit(forced: boolean) {
+let kitReminded = false;
+async function openKit(forced: boolean, renew = false) {
   const d = $<HTMLDialogElement>("kit-dialog");
   // Renders come in bursts (upload progress, websocket): open the forced kit once.
-  if (d.open || kitOpening || (forced && kitConfirmed)) return;
+  if (d.open || kitOpening || (forced && !renew && kitConfirmed)) return;
   kitOpening = true;
   let got: { kit: string; accountId: string };
   try {
     got = await core.rescueKit();
-    if (forced && (kitConfirmed || (await core.status()).kitSaved)) return;
+    if (forced && !renew && (kitConfirmed || (await core.status()).kitSaved)) return;
   } finally {
     kitOpening = false;
   }
   if (d.open) return;
   const { kit, accountId } = got;
+  $("kit-renew").hidden = !renew;
   $<HTMLTextAreaElement>("kit-text").value = kit;
   qr($("kit-qr"), kit);
   const ack = $<HTMLInputElement>("kit-ack");

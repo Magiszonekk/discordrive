@@ -215,6 +215,7 @@ export const en: Record<string, string> = {
   // rescue kit dialog
   "kit.h": "Rescue kit",
   "kit.lead": "This is the only way back to your files when you lose all devices. It contains the account key and access to the channel with the file list. Keep it like a password: on paper or in a password manager, not in a chat.",
+  "kit.renew": "Save this new rescue kit. The one you saved before names only one of your channels; with several channels it may not bring back every file.",
   "kit.code": "Code (to copy)",
   "kit.copy": "Copy",
   "kit.download": "Download file",

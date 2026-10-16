@@ -1180,6 +1180,7 @@ export class AppCore {
       devicePrivateKey: pd.dk.privateKey,
       // The account already has a confirmed kit (first device); this one can show it any time.
       kitSavedAt: Date.now(),
+      kitFormat: mode.kitVersion,
       sas: r.sas,
     };
     return { sas: r.sas };
@@ -1232,8 +1233,9 @@ export class AppCore {
       accountKey: r.key.rawB64,
       devicePublicKey: dk.publicKey,
       devicePrivateKey: dk.privateKey,
-      // The account already confirmed its rescue kit on the first device.
+      // The account already confirmed its rescue kit on the first device (that device reminds about an old one).
       kitSavedAt: Date.now(),
+      kitFormat: mode.kitVersion,
     });
   }
 
@@ -1254,6 +1256,8 @@ export class AppCore {
       devicePublicKey: dk.publicKey,
       devicePrivateKey: dk.privateKey,
       kitSavedAt: Date.now(),
+      // The kit just used: an old format here is worth the reminder.
+      kitFormat: kit.format ?? mode.kitVersion,
     });
   }
 
@@ -1304,7 +1308,23 @@ export class AppCore {
   async confirmKitSaved() {
     const a = this.acct!;
     a.kitSavedAt = Date.now();
+    a.kitFormat = mode.kitVersion;
     await keystore.save(a);
+  }
+
+  /**
+   * Ask (once per device) to save a new rescue kit: the kit confirmed here is of an older format that may
+   * not restore the whole account (metadata only: kit 1 names one webhook, the account has more channels).
+   * Marks the question as asked when it returns true.
+   */
+  async kitReminder(): Promise<boolean> {
+    const a = this.acct;
+    if (!a?.kitSavedAt || a.kitNudgedAt || !mode.kitOutdated || !this.ctx) return false;
+    if ((a.kitFormat ?? 0) >= (mode.kitVersion ?? 0)) return false;
+    if (!(await mode.kitOutdated(this.ctx, a.kitFormat).catch(() => false))) return false;
+    a.kitNudgedAt = Date.now();
+    await keystore.save(a);
+    return true;
   }
 
   private startSnapshots() {

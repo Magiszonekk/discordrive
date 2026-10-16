@@ -63,7 +63,7 @@ export interface WebhookTransport {
   deleteMessage(hook: WebhookRef, messageId: string): Promise<void>;
 }
 
-/** Where a fragment lives. Stored (encrypted) in the manifest; provider tag for future backends. */
+/** Where a blob lives on Discord. Stored (encrypted) in the manifest. */
 export interface DiscordPlacement {
   provider: "discord-webhook";
   /** Webhook ID (the client looks the URL up in its webhook vault). */
@@ -71,4 +71,24 @@ export interface DiscordPlacement {
   channelId: string;
   messageId: string;
   attachmentId: string;
+}
+
+/**
+ * Where a blob lives on any other storage backend: the provider tag, the backend ID (`locationId`, the
+ * same as `BlobBackend.id`) and the backend's own fields, all strings. The core never reads those
+ * fields; only the backend of that provider does.
+ */
+export interface OtherPlacement {
+  provider: string;
+  locationId: string;
+  [field: string]: string;
+}
+
+/** Where a blob lives: the `provider` tag says which backend kind reads it. */
+export type Placement = DiscordPlacement | OtherPlacement;
+
+export const DISCORD_PROVIDER = "discord-webhook";
+
+export function isDiscordPlacement(p: Placement): p is DiscordPlacement {
+  return p.provider === DISCORD_PROVIDER;
 }

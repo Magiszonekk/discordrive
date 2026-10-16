@@ -1,4 +1,4 @@
-// Snapshots on Discord and the pointer message.
+// Snapshots on the storage backends and the pointer.
 //
 // Objects (all sealed with the account subkey "snapshot", gzip before
 // encryption, each its own attachment posted through the paced client):
@@ -10,11 +10,17 @@
 //   base     - the decrypted tree (sync-core IndexSnapshot) at headSeq, split
 //              into parts no bigger than a fragment. Only devices on an
 //              unmetered link write bases.
-//   pointer  - ONE fixed message, edited (PATCH, attachment replaced) after
-//              every snapshot: the current base and the last segment. A
-//              client never replaces a pointer that covers more of the log.
-// Rescue kit = account ID + account key + one webhook URL + pointer
-// message ID: enough to rebuild the tree with no server at all.
+//   pointer  - ONE fixed slot (Discord: a message edited in place, PATCH with
+//              the attachment replaced) rewritten after every snapshot: the
+//              current base and the last segment. A client never replaces a
+//              pointer that covers more of the log. It also carries a copy of
+//              the account's backend list from the vault (`backends`, with the
+//              vault revision it came from): segments, bases and manifests are
+//              spread over every backend, so a device that has nothing but the
+//              rescue kit learns the others here.
+// Rescue kit = account ID + account key + the pointer's backend + slot (plus,
+// in kit 3, the backend list when the kit was made): enough to rebuild the tree
+// and read every file with no server at all.
 //
 // Policy: segment after 1 min of log silence, at the latest 5 min after
 // the first unsnapshotted entry, only when there are changes; base when the
@@ -22,8 +28,11 @@
 
 import { fromBase64, toBase64 } from "@ddv4/processing";
 import { deletableUploads, applyEntries, initIndex, loadSnapshot, takeSnapshot, type IndexSnapshot, type IndexStore, MemoryIndexStore } from "@ddv4/sync-core";
-import { seal, unseal, type AccountKey } from "./account-key.js";
-import type { DiscordPlacement, WebhookRef, WebhookTransport } from "./types.js";
+import { accountKeyFromB64, seal, unseal, type AccountKey } from "./account-key.js";
+import { DISCORD_PROVIDER, isDiscordPlacement, type OtherPlacement, type Placement, type WebhookRef, type WebhookTransport } from "./types.js";
+import { BackendRegistry, DiscordWebhooks, discordSlot, type BackendSlot, type BlobBackend } from "./backends.js";
+import type { LinkAheadOptions } from "./link-ahead.js";
+import { parseWebhookUrl } from "./discord-transport.js";
 import { OpCodec, type EncryptedEntry, type EncryptedLogApi } from "./op-crypto.js";
 
 export const SNAPSHOT_CONTAINER_VERSION = 1;
@@ -32,13 +41,33 @@ export const SEGMENT_MAX_DELAY_MS = 5 * 60_000;
 export const BASE_SEGMENT_RATIO = 0.2;
 export const BASE_MAX_AGE_MS = 7 * 24 * 3600_000;
 
-/** Where an object is: enough for anyone holding a vault webhook of that channel. */
+/**
+ * Where an object is. Discord: webhook ID + message + attachment (enough for anyone holding a vault
+ * webhook of that channel). Another backend: `webhookId` is its ID and `at` the whole placement.
+ */
 export interface ObjRef {
   webhookId: string;
   messageId: string;
   attachmentId: string;
-  /** Sealed size (bytes on Discord). */
+  /** Sealed size (bytes stored). */
   size: number;
+  /** Placement on a backend other than Discord. */
+  at?: OtherPlacement;
+}
+
+/**
+ * A backend as the pointer and the rescue kit carry it: what a device with nothing but the account key
+ * needs to read from it. Discord: the webhook URL (secret). Other kinds: their credentials (`secret`) and
+ * settings (`meta`). Only ever stored sealed (pointer) or in the rescue kit.
+ */
+export interface BackendDescriptor {
+  kind: string;
+  id: string;
+  /** Discord: the webhook URL. */
+  url?: string;
+  channelId?: string;
+  secret?: Record<string, string>;
+  meta?: Record<string, string>;
 }
 
 export interface SegmentRef extends ObjRef {
@@ -69,6 +98,13 @@ export interface Pointer {
   history?: BaseRef[];
   /** Segments with toSeq <= this were deleted from Discord (prune bookkeeping). */
   prunedUpTo?: number;
+  /**
+   * Copy of the account's backend list from the vault (optional: absent in pointers written before it
+   * existed or by an older client; the next write by a current client puts it back).
+   */
+  backends?: BackendDescriptor[];
+  /** Vault revision the `backends` copy came from (a newer copy is never replaced by an older one). */
+  vaultRevision?: number;
 }
 
 export interface PointerLocation {
@@ -107,26 +143,35 @@ async function unsealObj<T>(key: AccountKey, data: Uint8Array, aad: string, what
   return JSON.parse(dec.decode(await gunzip(await unseal(await key.subkey("snapshot"), data, aad, what)))) as T;
 }
 
-/** Discord access the snapshot code needs (MetadataClient provides it; restore builds a bare one). */
+/** Storage access the snapshot code needs (MetadataClient provides it; restore builds a bare one). */
 export interface BlobIO {
-  post(data: Uint8Array, filename: string): Promise<DiscordPlacement>;
-  /** Delete an object's message (retention). 404 = already gone, not an error. */
+  post(data: Uint8Array, filename: string): Promise<Placement>;
+  /** Delete an object (retention). Already gone = not an error. */
   remove(ref: ObjRef): Promise<void>;
-  fetch(p: DiscordPlacement): Promise<Uint8Array>;
-  hook(id: string): WebhookRef;
-  transport: WebhookTransport;
+  fetch(p: Placement): Promise<Uint8Array>;
+  /** The pointer slot of a backend. */
+  slot(backendId: string): BackendSlot;
+  /** A rescue IO learns the account's other backends from the pointer (read-only IOs only). */
+  learn?(list: BackendDescriptor[]): void;
   /** Max bytes per attachment (base parts). */
   partSize: number;
 }
 
-const toPlacement = (r: ObjRef): DiscordPlacement => ({
-  provider: "discord-webhook",
-  locationId: r.webhookId,
-  channelId: "",
-  messageId: r.messageId,
-  attachmentId: r.attachmentId,
-});
-const toRef = (p: DiscordPlacement, size: number): ObjRef => ({ webhookId: p.locationId, messageId: p.messageId, attachmentId: p.attachmentId, size });
+export const toPlacement = (r: ObjRef): Placement =>
+  r.at ?? {
+    provider: DISCORD_PROVIDER,
+    locationId: r.webhookId,
+    channelId: "",
+    messageId: r.messageId,
+    attachmentId: r.attachmentId,
+  };
+const toRef = (p: Placement, size: number): ObjRef =>
+  isDiscordPlacement(p) ? { webhookId: p.locationId, messageId: p.messageId, attachmentId: p.attachmentId, size } : { webhookId: p.locationId, messageId: "", attachmentId: "", size, at: { ...(p as OtherPlacement) } };
+
+/** Same backends (kind, ID, credentials) in the same order: no pointer rewrite needed. */
+export function sameBackends(a: BackendDescriptor[] | undefined, b: BackendDescriptor[] | undefined): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
 
 export function emptyPointer(): Pointer {
   return { v: 1, toSeq: 0, base: null, lastSegment: null, segmentBytesSinceBase: 0, writtenAt: 0 };
@@ -134,15 +179,21 @@ export function emptyPointer(): Pointer {
 
 // --- pointer message
 
-export async function createPointerMessage(io: BlobIO, key: AccountKey, accountId: string, hook: WebhookRef): Promise<PointerLocation> {
-  const r = await io.transport.postFile(hook, await sealObj(key, emptyPointer(), AAD.pointer(accountId)), "ddn-pointer.txt");
-  return { webhookId: hook.id, messageId: r.messageId };
+/** A new pointer slot on backend `at` (Discord: a message through the webhook). `init`: the backend list. */
+export async function createPointerMessage(
+  io: BlobIO,
+  key: AccountKey,
+  accountId: string,
+  at: { id: string },
+  init?: { list: BackendDescriptor[]; revision: number } | null,
+): Promise<PointerLocation> {
+  const p: Pointer = init ? { ...emptyPointer(), backends: init.list, vaultRevision: init.revision } : emptyPointer();
+  const slot = await io.slot(at.id).create(await sealObj(key, p, AAD.pointer(accountId)), "ddn-pointer.txt");
+  return { webhookId: at.id, messageId: slot };
 }
 
 export async function readPointer(io: BlobIO, key: AccountKey, accountId: string, loc: PointerLocation): Promise<Pointer> {
-  const atts = await io.transport.getAttachments(io.hook(loc.webhookId), loc.messageId);
-  if (atts.length !== 1) throw new Error("pointer message: expected one attachment");
-  const p = await unsealObj<Pointer>(key, await io.transport.fetchCdn(atts[0]!.url), AAD.pointer(accountId), "pointer");
+  const p = await unsealObj<Pointer>(key, await io.slot(loc.webhookId).read(loc.messageId), AAD.pointer(accountId), "pointer");
   if (p.v !== 1) throw new Error("unsupported pointer version");
   return p;
 }
@@ -161,6 +212,9 @@ export async function writePointer(
   mode: "advance" | "same_coverage" = "advance",
 ): Promise<"written" | "kept_newer"> {
   const cur = await readPointer(io, key, accountId, loc);
+  // The backend list: a copy from a newer vault revision is never replaced by an older one (another device
+  // saw the vault later), nor dropped by a writer that has none.
+  if ((cur.vaultRevision ?? -1) > (next.vaultRevision ?? -1) || (cur.backends && !next.backends)) next = { ...next, backends: cur.backends, vaultRevision: cur.vaultRevision };
   if (mode === "same_coverage") {
     if (cur.toSeq !== next.toSeq || (cur.base?.headSeq ?? -1) !== (next.base?.headSeq ?? -1)) return "kept_newer";
   } else {
@@ -168,7 +222,7 @@ export async function writePointer(
     const newerBase = (next.base?.headSeq ?? -1) > (cur.base?.headSeq ?? -1);
     if (cur.toSeq > next.toSeq || (cur.toSeq === next.toSeq && !newerBase)) return "kept_newer";
   }
-  await io.transport.editMessageFile(io.hook(loc.webhookId), loc.messageId, await sealObj(key, next, AAD.pointer(accountId)), "ddn-pointer.txt");
+  await io.slot(loc.webhookId).write(loc.messageId, await sealObj(key, next, AAD.pointer(accountId)), "ddn-pointer.txt");
   return "written";
 }
 
@@ -215,6 +269,11 @@ export interface SnapshotDeps {
   /** The device's tree (for bases); must be at least at the head being snapshotted. */
   store: IndexStore;
   now: () => number;
+  /**
+   * The account's backend list from the vault and its revision (null = unknown now). Every pointer
+   * write carries it; metadata only (the e2ee/plain instance keeps its webhooks itself).
+   */
+  backends?: () => { list: BackendDescriptor[]; revision: number } | null;
 }
 
 export interface SnapshotResult {
@@ -272,6 +331,8 @@ export async function writeSnapshot(d: SnapshotDeps, kind: "segment" | "base"): 
 
   if (posts === 0) return { kind: "none", pointer: cur, written: "nothing", posts };
   next.writtenAt = d.now();
+  const mine = d.backends?.();
+  if (mine) ((next.backends = mine.list), (next.vaultRevision = mine.revision));
   const written = await writePointer(d.io, d.key, d.accountId, d.pointer, next);
   return { kind: next.base && next.base !== cur.base ? "base" : "segment", pointer: next, written, posts };
 }
@@ -344,7 +405,7 @@ export interface PruneResult {
  * oldest kept base are found by walking back from that base's segmentAtBase,
  * stopping at prunedUpTo, so each run touches only what is new to delete.
  */
-export async function pruneSnapshots(io: BlobIO, key: AccountKey, accountId: string, loc: PointerLocation, now: () => number): Promise<PruneResult> {
+export async function pruneSnapshots(io: BlobIO, key: AccountKey, accountId: string, loc: PointerLocation, now: () => number, backends?: SnapshotDeps["backends"]): Promise<PruneResult> {
   const cur = await readPointer(io, key, accountId, loc);
   const all = [cur.base, ...(cur.history ?? [])].filter((b): b is BaseRef => !!b);
   const { keep, drop } = selectRetained(all);
@@ -359,7 +420,8 @@ export async function pruneSnapshots(io: BlobIO, key: AccountKey, accountId: str
     ref = body.prev;
   }
   if (drop.length === 0 && segDrop.length === 0) return { written: "nothing", basesDropped: 0, partsDeleted: 0, segmentsDeleted: 0 };
-  const next: Pointer = { ...cur, history: keep.filter((b) => b !== cur.base), prunedUpTo: Math.max(done, segDrop.length ? pruneTo : done), writtenAt: now() };
+  const mine = backends?.();
+  const next: Pointer = { ...cur, history: keep.filter((b) => b !== cur.base), prunedUpTo: Math.max(done, segDrop.length ? pruneTo : done), writtenAt: now(), ...(mine ? { backends: mine.list, vaultRevision: mine.revision } : {}) };
   const written = await writePointer(io, key, accountId, loc, next, "same_coverage");
   if (written !== "written") return { written, basesDropped: 0, partsDeleted: 0, segmentsDeleted: 0 };
   let partsDeleted = 0;
@@ -368,7 +430,7 @@ export async function pruneSnapshots(io: BlobIO, key: AccountKey, accountId: str
   return { written, basesDropped: drop.length, partsDeleted, segmentsDeleted: segDrop.length };
 }
 
-// --- moving the chain to another channel (critical webhook)
+// --- moving the chain to another channel (the channel holding it is critical)
 
 /** Every object the current pointer can reach: kept segments (walked back to prunedUpTo), base parts, segmentAtBase. */
 export async function chainObjects(io: BlobIO, key: AccountKey, accountId: string, p: Pointer): Promise<{ segments: { ref: SegmentRef; body: SegmentBody }[]; parts: ObjRef[] }> {
@@ -396,13 +458,15 @@ export async function rehomeChain(
   key: AccountKey,
   accountId: string,
   oldLoc: PointerLocation,
-  hook: WebhookRef,
-  post: (data: Uint8Array, filename: string) => Promise<DiscordPlacement>,
+  hook: { id: string },
+  post: (data: Uint8Array, filename: string) => Promise<Placement>,
   now: () => number,
+  /** The account's backend list for the new pointer (metadata only). */
+  list?: { list: BackendDescriptor[]; revision: number } | null,
 ): Promise<{ loc: PointerLocation; pointer: Pointer; old: ObjRef[] }> {
   const p = await readPointer(io, key, accountId, oldLoc);
   const { segments } = await chainObjects(io, key, accountId, p);
-  const k = (r: { webhookId: string; messageId: string }) => `${r.webhookId}/${r.messageId}`;
+  const k = (r: ObjRef) => `${r.webhookId}/${r.messageId || JSON.stringify(r.at ?? null)}`;
   const seg = new Map<string, SegmentRef>();
   const old: ObjRef[] = [];
   for (const { ref, body } of [...segments].reverse()) {
@@ -434,11 +498,12 @@ export async function rehomeChain(
     history: p.history ? await Promise.all(p.history.map((h) => base(h).then((x) => x!))) : p.history,
     lastSegment: p.lastSegment ? (seg.get(k(p.lastSegment)) ?? p.lastSegment) : null,
     writtenAt: now(),
+    ...(list ? { backends: list.list, vaultRevision: list.revision } : {}),
   };
   const loc = await createPointerMessage(io, key, accountId, hook);
   // A fresh message holds an empty pointer: write the copy unconditionally (writePointer would keep an
   // equally empty one for an account without snapshots yet).
-  await io.transport.editMessageFile(hook, loc.messageId, await sealObj(key, next, AAD.pointer(accountId)), "ddn-pointer.txt");
+  await io.slot(hook.id).write(loc.messageId, await sealObj(key, next, AAD.pointer(accountId)), "ddn-pointer.txt");
   old.push({ webhookId: oldLoc.webhookId, messageId: oldLoc.messageId, attachmentId: "", size: 0 });
   return { loc, pointer: next, old };
 }
@@ -481,6 +546,7 @@ export async function restoreFromDiscord(
   atSeq?: number,
 ): Promise<RestoreResult> {
   const pointer = await readPointer(io, key, accountId, loc);
+  io.learn?.(pointer.backends ?? []);
   const target = atSeq ?? pointer.toSeq;
   if (target > pointer.toSeq || target < 0) throw new Error(`cannot restore seq ${target}: snapshots cover up to ${pointer.toSeq}`);
   const bases = [pointer.base, ...(pointer.history ?? [])].filter((b): b is BaseRef => !!b).sort((a, b) => b.headSeq - a.headSeq);
@@ -522,6 +588,7 @@ export async function restoreFromDiscord(
  */
 export async function readLogChain(io: BlobIO, key: AccountKey, accountId: string, loc: PointerLocation): Promise<{ pointer: Pointer; entries: EncryptedEntry[] }> {
   const pointer = await readPointer(io, key, accountId, loc);
+  io.learn?.(pointer.backends ?? []);
   const segs: SegmentBody[] = [];
   let ref = pointer.lastSegment;
   let expectTo = pointer.toSeq;
@@ -540,6 +607,7 @@ export async function readLogChain(io: BlobIO, key: AccountKey, accountId: strin
 
 // --- rescue kit
 
+/** Kit 1 (metadata only): the pointer's webhook and message. Read forever; new kits are kit 3. */
 export interface RescueKit {
   v: 1;
   accountId: string;
@@ -551,9 +619,31 @@ export interface RescueKit {
 }
 
 /**
- * Rescue kit of the e2ee and plain modes: the webhooks belong to the
- * instance, so the kit carries the account key and the instance address only. Registers a new
- * device with the rescue key, like kit 1.
+ * Kit 3 (metadata only): the pointer's backend and slot, plus the account's backend list when the kit
+ * was made (the pointer carries the current list too; a restore takes both).
+ */
+export interface RescueKit3 {
+  v: 3;
+  accountId: string;
+  key: string;
+  backend: BackendDescriptor;
+  slot: string;
+  backends?: BackendDescriptor[];
+}
+
+/** Any metadata-only kit in one shape: where the pointer is and every backend the kit knows. */
+export interface OpenedRescueKit {
+  accountId: string;
+  key: string;
+  pointer: PointerLocation;
+  backends: BackendDescriptor[];
+  /** Format it came in (1 = old kit: one webhook). */
+  v: 1 | 3;
+}
+
+/**
+ * Rescue kit of the e2ee and plain modes: the webhooks belong to the instance, so the kit carries the
+ * account key and the instance address only. Registers a new device with the rescue key, like kit 1.
  */
 export interface ServerRescueKit {
   v: 2;
@@ -562,83 +652,191 @@ export interface ServerRescueKit {
   server: string;
 }
 
+const b64u = (b: Uint8Array) => toBase64(b).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+function fromB64u(t: string): unknown {
+  let b = t.replace(/-/g, "+").replace(/_/g, "/");
+  while (b.length % 4) b += "=";
+  return JSON.parse(dec.decode(fromBase64(b)));
+}
+const kitPrefix = (t: string) => /^ddn-kit(\d+):/.exec(t)?.[1];
+
 export function encodeServerRescueKit(k: ServerRescueKit): string {
-  return "ddn-kit2:" + toBase64(enc.encode(JSON.stringify(k))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return "ddn-kit2:" + b64u(enc.encode(JSON.stringify(k)));
 }
 
 export function decodeServerRescueKit(s: string): ServerRescueKit {
   const t = s.trim();
-  if (!t.startsWith("ddn-kit2:")) throw new Error(t.startsWith("ddn-kit1:") ? "kit of a metadata-only instance" : "not a rescue kit");
-  let b = t.slice(9).replace(/-/g, "+").replace(/_/g, "/");
-  while (b.length % 4) b += "=";
-  const k = JSON.parse(dec.decode(fromBase64(b))) as ServerRescueKit;
+  if (!t.startsWith("ddn-kit2:")) throw new Error(kitPrefix(t) === "1" || kitPrefix(t) === "3" ? "kit of a metadata-only instance" : "not a rescue kit");
+  const k = fromB64u(t.slice(9)) as ServerRescueKit;
   if (k.v !== 2 || !k.accountId || !k.key || !k.server) throw new Error("bad rescue kit");
   return k;
 }
 
 /** Compact text form for printing/QR: "ddn-kit1:" + base64url(JSON). Secret. */
 export function encodeRescueKit(k: RescueKit): string {
-  return "ddn-kit1:" + toBase64(enc.encode(JSON.stringify(k))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return "ddn-kit1:" + b64u(enc.encode(JSON.stringify(k)));
 }
 
+/** Kit 1 only (its own fields). Use openRescueKit to read every metadata-only kit. */
 export function decodeRescueKit(s: string): RescueKit {
   const t = s.trim();
-  if (!t.startsWith("ddn-kit1:")) throw new Error(t.startsWith("ddn-kit2:") ? "kit of an e2ee/plain instance" : "not a rescue kit");
-  let b = t.slice(9).replace(/-/g, "+").replace(/_/g, "/");
-  while (b.length % 4) b += "=";
-  const k = JSON.parse(dec.decode(fromBase64(b))) as RescueKit;
+  if (!t.startsWith("ddn-kit1:")) throw new Error(t.startsWith("ddn-kit2:") ? "kit of an e2ee/plain instance" : t.startsWith("ddn-kit3:") ? "kit format 3: use openRescueKit" : "not a rescue kit");
+  const k = fromB64u(t.slice(9)) as RescueKit;
   if (k.v !== 1 || !k.accountId || !k.key || !k.webhookUrl || !k.pointerMessageId) throw new Error("bad rescue kit");
   return k;
 }
 
+/** "ddn-kit3:" + base64url(JSON). Secret (account key and every webhook URL). */
+export function encodeRescueKit3(k: RescueKit3): string {
+  return "ddn-kit3:" + b64u(enc.encode(JSON.stringify(k)));
+}
+
+function validDescriptor(d: unknown): d is BackendDescriptor {
+  const x = d as BackendDescriptor;
+  return !!x && typeof x === "object" && typeof x.kind === "string" && typeof x.id === "string" && (x.kind !== DISCORD_PROVIDER || typeof x.url === "string");
+}
+
+/** Read a metadata-only rescue kit (format 1 or 3). */
+export function openRescueKit(s: string): OpenedRescueKit {
+  const t = s.trim();
+  const v = kitPrefix(t);
+  if (v === "2") throw new Error("kit of an e2ee/plain instance");
+  if (v === "1") {
+    const k = decodeRescueKit(t);
+    const hook = parseWebhookUrl(k.webhookUrl);
+    return { v: 1, accountId: k.accountId, key: k.key, pointer: { webhookId: hook.id, messageId: k.pointerMessageId }, backends: [{ kind: DISCORD_PROVIDER, id: hook.id, url: hook.url }] };
+  }
+  if (v !== "3") throw new Error("not a rescue kit");
+  const k = fromB64u(t.slice(9)) as RescueKit3;
+  if (k.v !== 3 || !k.accountId || !k.key || !validDescriptor(k.backend) || !k.slot || (k.backends !== undefined && !(Array.isArray(k.backends) && k.backends.every(validDescriptor)))) throw new Error("bad rescue kit");
+  return { v: 3, accountId: k.accountId, key: k.key, pointer: { webhookId: k.backend.id, messageId: k.slot }, backends: mergeDescriptors([k.backend], k.backends ?? []) };
+}
+
+/** Union by backend ID, the first list wins (the kit's own entry, then newer lists). */
+export function mergeDescriptors(...lists: BackendDescriptor[][]): BackendDescriptor[] {
+  const out = new Map<string, BackendDescriptor>();
+  for (const l of lists) for (const d of l) if (!out.has(d.id)) out.set(d.id, d);
+  return [...out.values()];
+}
+
 // --- BlobIO adapters
 
-/** BlobIO over a MetadataClient (paced posts, retried fetches). */
+/** BlobIO over a MetadataClient (paced posts, retried fetches, its backends). */
 export function clientBlobIO(
-  c: { postBlob(d: Uint8Array, f: string): Promise<DiscordPlacement>; fetchPlacement(p: DiscordPlacement): Promise<Uint8Array>; webhook(id: string): WebhookRef },
-  transport: WebhookTransport,
+  c: { postBlob(d: Uint8Array, f: string): Promise<Placement>; fetchPlacement(p: Placement): Promise<Uint8Array>; backend(id: string): BlobBackend },
+  _transport?: WebhookTransport,
   partSize = 10 * 1024 * 1024,
 ): BlobIO {
   return {
     post: (d, f) => c.postBlob(d, f),
     fetch: (p) => c.fetchPlacement(p),
-    remove: (r) => removeQuietly(transport, c.webhook(r.webhookId), r.messageId),
-    hook: (id) => c.webhook(id),
-    transport,
+    remove: async (r) => void (await c.backend(r.webhookId).remove(toPlacement(r))),
+    slot: (id) => c.backend(id).slot,
     partSize,
   };
 }
 
-async function removeQuietly(t: WebhookTransport, hook: WebhookRef, messageId: string): Promise<void> {
-  try {
-    await t.deleteMessage(hook, messageId);
-  } catch (e) {
-    if (!/404|Unknown Message/.test(String((e as Error)?.message ?? e))) throw e;
-  }
-}
+/** Builds a read-only backend from a descriptor (a kind the app knows: Discord built in, others passed in). */
+export type BackendFactory = (d: BackendDescriptor) => BlobBackend | null;
 
-/** Read-only BlobIO from a rescue kit: one webhook, no server, no index. */
-export function rescueBlobIO(transport: WebhookTransport, hook: WebhookRef): BlobIO {
-  const get = (id: string) => {
-    if (id !== hook.id) throw new Error(`object behind webhook ${id}, rescue kit has ${hook.id}`);
-    return hook;
+/**
+ * Read-only BlobIO from a rescue kit: no server, no index, no vault. It starts with the kit's backends and
+ * learns the rest from the pointer (`learn`, called by restore after reading it).
+ */
+export function rescueBlobIO(
+  transport: WebhookTransport,
+  kit: WebhookRef | BackendDescriptor[],
+  o: { factory?: BackendFactory; links?: LinkAheadOptions } = {},
+): BlobIO & { registry: BackendRegistry; known(): BackendDescriptor[] } {
+  const dw = new DiscordWebhooks(transport, { log: null, net: null }, { links: o.links });
+  const registry = new BackendRegistry();
+  const descs = new Map<string, BackendDescriptor>();
+  const add = (d: BackendDescriptor) => {
+    if (registry.has(d.id)) return;
+    let b: BlobBackend | null = null;
+    if (d.kind === DISCORD_PROVIDER && d.url) b = dw.backend({ id: d.id, url: d.url, ...(d.channelId ? { channelId: d.channelId } : {}) });
+    else b = o.factory?.(d) ?? null;
+    if (b) (registry.add(b), descs.set(d.id, d));
+  };
+  for (const d of Array.isArray(kit) ? kit : [{ kind: DISCORD_PROVIDER, id: kit.id, url: kit.url }]) add(d);
+  const get = (id: string): BlobBackend => {
+    const b = registry.byId(id);
+    if (!b) throw new Error(`object behind backend ${id}, which neither the rescue kit nor the pointer names`);
+    return b;
   };
   return {
+    registry,
+    known: () => [...descs.values()],
     post: () => Promise.reject(new Error("read-only")),
     remove: () => Promise.reject(new Error("read-only")),
-    fetch: async (p) => {
-      const atts = await transport.getAttachments(get(p.locationId), p.messageId);
-      const a = atts.find((x) => x.id === p.attachmentId);
-      if (!a) throw new Error("attachment missing");
-      return transport.fetchCdn(a.url);
+    fetch: (p) => get(p.locationId).get(p),
+    slot: (id) => {
+      const b = get(id);
+      return { ...b.slot, create: () => Promise.reject(new Error("read-only")), write: () => Promise.reject(new Error("read-only")) };
     },
-    hook: get,
-    transport,
+    learn: (list) => list.forEach(add),
     partSize: 0,
   };
 }
 
-// --- scheduler (only while a client is open)
+/** The Discord pointer slot of one webhook (servers and tests without a client). */
+export { discordSlot };
+
+/**
+ * Kit text above this length leaves the backend list out (the pointer carries it; keeps the QR code
+ * readable): about 5 webhooks fit.
+ */
+export const KIT_LIST_MAX = 1600;
+
+/**
+ * The rescue kit of a metadata-only account (format 3): the pointer's backend and slot, and the other
+ * backends when the text stays under `maxLen`. Make sure the pointer carries the current list first
+ * (writePointer with the vault's list): a kit without the list relies on it.
+ */
+export function makeRescueKit(accountId: string, keyB64: string, pointer: PointerLocation, list: BackendDescriptor[], maxLen = KIT_LIST_MAX): string {
+  const own = list.find((b) => b.id === pointer.webhookId);
+  if (!own) throw new Error("pointer_hook_gone: the pointer's channel was removed from the vault");
+  // The channel ID is learned again from Discord; leaving it out keeps the code (and its QR) shorter.
+  const lean = ({ channelId: _c, ...d }: BackendDescriptor): BackendDescriptor => d;
+  const base: RescueKit3 = { v: 3, accountId, key: keyB64, backend: lean(own), slot: pointer.messageId };
+  const others = list.filter((b) => b.id !== own.id).map(lean);
+  const full = encodeRescueKit3(others.length ? { ...base, backends: others } : base);
+  return full.length <= maxLen ? full : encodeRescueKit3(base);
+}
+
+/** Descriptors split into what a MetadataClient takes: Discord webhooks, and other backends built by `factory`. */
+export function clientBackends(list: BackendDescriptor[], factory?: BackendFactory): { webhooks: WebhookRef[]; backends: BlobBackend[] } {
+  const webhooks: WebhookRef[] = [];
+  const backends: BlobBackend[] = [];
+  for (const d of list) {
+    if (d.kind === DISCORD_PROVIDER) {
+      if (d.url) webhooks.push({ id: d.id, url: d.url, ...(d.channelId ? { channelId: d.channelId } : {}) });
+    } else {
+      const b = factory?.(d);
+      if (b) backends.push(b);
+    }
+  }
+  return { webhooks, backends };
+}
+
+/**
+ * Everything a device that has nothing but the rescue kit can rebuild, with no server and no vault: the
+ * tree (at `atSeq`, default the newest snapshot) and every backend the kit and the pointer name (with
+ * them, every file can be read again).
+ */
+export async function restoreFromRescueKit(
+  kitText: string,
+  transport: WebhookTransport,
+  o: { factory?: BackendFactory; store?: IndexStore; atSeq?: number; links?: LinkAheadOptions } = {},
+): Promise<RestoreResult & { kit: OpenedRescueKit; key: AccountKey; backends: BackendDescriptor[] }> {
+  const kit = openRescueKit(kitText);
+  const key = accountKeyFromB64(kit.key);
+  const io = rescueBlobIO(transport, kit.backends, o);
+  const r = await restoreFromDiscord(io, key, kit.accountId, kit.pointer, o.store, o.atSeq);
+  return { ...r, kit, key, backends: io.known() };
+}
+
+// --- scheduler (metadata only: only while a client is open)
 
 export interface SchedulerDeps extends SnapshotDeps {
   /** Device writes snapshots at all (main device / main tab). */
@@ -670,18 +868,42 @@ export class SnapshotScheduler {
       const lastAt = this.d.serverTimeOf(head) ?? this.d.now();
       const firstAt = this.d.serverTimeOf(this.pointer.toSeq + 1) ?? lastAt;
       const decision = decideSnapshot(this.d.now(), head, this.pointer, { lastEntryAt: lastAt, firstPendingAt: firstAt }, { unmetered: this.d.unmetered(), force });
-      if (decision === "none") return null;
+      if (decision === "none") {
+        await this.refreshBackends();
+        return null;
+      }
       const r = await writeSnapshot(this.d, decision);
       this.history.push(r);
       // Re-read after a refused write (another device was ahead), else trust what we wrote.
       this.pointer = r.written === "written" ? r.pointer : await readPointer(this.d.io, this.d.key, this.d.accountId, this.d.pointer);
       if (r.kind === "base" && r.written === "written") {
-        this.lastPrune = await pruneSnapshots(this.d.io, this.d.key, this.d.accountId, this.d.pointer, this.d.now);
+        this.lastPrune = await pruneSnapshots(this.d.io, this.d.key, this.d.accountId, this.d.pointer, this.d.now, this.d.backends);
         this.pointer = await readPointer(this.d.io, this.d.key, this.d.accountId, this.d.pointer);
       }
       return r;
     } finally {
       this.running = false;
     }
+  }
+
+  /** Last outcome of refreshBackends (tests, diagnostics). */
+  lastListWrite: "written" | "kept_newer" | "same" | null = null;
+
+  /**
+   * The pointer's copy of the backend list is older than the vault this device sees (or missing: written
+   * by an older client): rewrite the pointer with the current list, coverage unchanged (same_coverage, so
+   * a snapshot written meanwhile by another device is never undone).
+   */
+  async refreshBackends(): Promise<void> {
+    const mine = this.d.backends?.();
+    const p = this.pointer;
+    if (!mine || !p) return;
+    if ((p.vaultRevision ?? -1) > mine.revision || ((p.vaultRevision ?? -1) === mine.revision && sameBackends(p.backends, mine.list))) {
+      this.lastListWrite = "same";
+      return;
+    }
+    const next: Pointer = { ...p, backends: mine.list, vaultRevision: mine.revision, writtenAt: this.d.now() };
+    this.lastListWrite = await writePointer(this.d.io, this.d.key, this.d.accountId, this.d.pointer, next, "same_coverage");
+    this.pointer = this.lastListWrite === "written" ? next : await readPointer(this.d.io, this.d.key, this.d.accountId, this.d.pointer);
   }
 }

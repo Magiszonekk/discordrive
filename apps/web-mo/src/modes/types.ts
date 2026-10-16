@@ -223,8 +223,15 @@ export interface ModeImpl {
   discordUsage?(ctx: ModeCtx, client: DriveClient): Promise<number | null>;
   /** The rescue kit text (secret) of this account. */
   rescueKit(ctx: ModeCtx, client: DriveClient): Promise<string>;
+  /** Format number of the kits this mode makes now (stored with the confirmation on this device). */
+  readonly kitVersion?: number;
+  /**
+   * The kit this device confirmed (format `savedFormat`, undefined = before formats were recorded) may not
+   * restore the whole account any more: the UI asks once to save a new one.
+   */
+  kitOutdated?(ctx: ModeCtx, savedFormat: number | undefined): Promise<boolean>;
   /** Account ID and key from a kit text; throws on a kit of another mode. */
-  decodeKit(text: string): { accountId: string; key: string };
+  decodeKit(text: string): { accountId: string; key: string; format?: number };
   /** Whether this mode needs the main tab to write snapshots (metadata only). */
   readonly clientSnapshots: boolean;
   /** What the instance does with plaintext (plain only): thumbnails, server search, server Range streaming. */

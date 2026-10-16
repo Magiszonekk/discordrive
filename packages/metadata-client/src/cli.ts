@@ -277,12 +277,12 @@ export async function runCli(argv: string[], env: CliEnv): Promise<number> {
     return 0;
   }
   if (cmd === "rescue") {
-    // Rescue kit file: "ddn-kit1:..." (snapshots.encodeRescueKit). Registers THIS device with the rescue key.
+    // Rescue kit file: "ddn-kit3:..." or the older "ddn-kit1:..." (snapshots.openRescueKit). Registers THIS device with the rescue key.
     const [kitFile] = args;
     if (!serverUrl || !kitFile) throw new Error("usage: rescue --server URL <kit-file>");
     if (existsSync(join(env.stateDir, "account.json"))) throw new Error("state dir already has an account");
-    const { decodeRescueKit } = await import("./snapshots.js");
-    const kit = decodeRescueKit(readFileSync(kitFile, "utf8"));
+    const { openRescueKit } = await import("./snapshots.js");
+    const kit = openRescueKit(readFileSync(kitFile, "utf8"));
     const url = assertLocalUrl(serverUrl);
     ensureDir(env.stateDir);
     const key = accountKeyFromB64(kit.key);
@@ -364,10 +364,14 @@ export async function runCli(argv: string[], env: CliEnv): Promise<number> {
     return 0;
   }
   if (cmd === "kit") {
-    // Rescue kit without the pointer (snapshots not scheduled by the CLI yet): account ID + key.
-    const { encodeRescueKit } = await import("./snapshots.js");
-    const hook = (await st.vault.load()).webhooks[0];
-    out(encodeRescueKit({ v: 1, accountId: st.accountId, key: st.key.rawB64, webhookUrl: hook?.url ?? "-", pointerMessageId: "-" }));
+    // Rescue kit (format 3): the pointer's backend and slot when the account has a pointer, plus every backend.
+    const { encodeRescueKit3 } = await import("./snapshots.js");
+    const { backendDescriptors } = await import("./vault.js");
+    const v = await st.vault.load();
+    const list = backendDescriptors(v);
+    const own = list.find((b) => b.id === v.pointer?.webhookId) ?? list[0];
+    if (!own) throw new Error("vault has no webhooks: `ddn webhook add <url-file>`");
+    out(encodeRescueKit3({ v: 3, accountId: st.accountId, key: st.key.rawB64, backend: own, slot: v.pointer?.messageId ?? "-", backends: list.filter((b) => b.id !== own.id) }));
     return 0;
   }
 

@@ -1,6 +1,6 @@
 // Shared by the e2ee and plain browser modes: channels and share addresses come from the
 // instance (it holds the webhooks and named the attachments). Never imported by metadata only.
-import { REQUIRED_CHANNELS, RECOMMENDED_CHANNELS, purgeExpiredTrash, releasedUploads, type DiscordPlacement, type DriveClient, type ShareAttachment } from "@ddv4/metadata-client";
+import { REQUIRED_CHANNELS, RECOMMENDED_CHANNELS, purgeExpiredTrash, releasedUploads, type Placement, type DriveClient, type ShareAttachment } from "@ddv4/metadata-client";
 import { expiredTrash, inTrash } from "@ddv4/sync-core";
 import type { ChannelRow, ChannelsView, CleanupCtx, ModeCleanup, ModeCtx, MoveStatus, RemovalImpact, RemovedChannel, StorageStatus } from "./types.js";
 
@@ -121,9 +121,9 @@ export async function serverDiscordUsage(ctx: ModeCtx): Promise<number | null> {
 }
 
 /** Attachment addresses of a version from the instance (it named the attachments). */
-export async function serverShareAttachments(ctx: ModeCtx, c: DriveClient, manifestRef: string, decode: (ref: string) => { at: DiscordPlacement }): Promise<ShareAttachment[]> {
+export async function serverShareAttachments(ctx: ModeCtx, c: DriveClient, manifestRef: string, decode: (ref: string) => { at: Placement }): Promise<ShareAttachment[]> {
   const { manifest } = await c.loadManifest(manifestRef);
-  const ids = [decode(manifestRef).at.attachmentId, ...[...manifest.chunks].sort((a, b) => a.index - b.index).map((ch) => (ch.placements?.[0] as DiscordPlacement).attachmentId)];
+  const ids = [decode(manifestRef).at.attachmentId, ...[...manifest.chunks].sort((a, b) => a.index - b.index).map((ch) => (ch.placements?.[0] as Placement).attachmentId)];
   const r = await ctx.http.json<{ attachments: ShareAttachment[] }>("POST", "/v1/blobs/describe", { attachmentIds: ids });
   return r.body.attachments;
 }
