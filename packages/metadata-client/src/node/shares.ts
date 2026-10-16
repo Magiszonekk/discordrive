@@ -1,4 +1,4 @@
-// Share links in metadata-only mode (koncept §3.7).
+// Share links in metadata-only mode.
 //
 // The owner's client registers the attachment addresses (channel ID,
 // attachment ID, file name) of ONE file's manifest and fragments, plus an
@@ -10,7 +10,7 @@
 //
 // The server learns only the attachment addresses of shared files. Revoking
 // stops new recipients here; whoever already has the addresses and the key
-// keeps access while the fragments exist (§3.7, documented in the UI).
+// keeps access while the fragments exist (documented in the UI).
 
 import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";

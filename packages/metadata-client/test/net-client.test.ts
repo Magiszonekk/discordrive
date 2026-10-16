@@ -1,4 +1,4 @@
-// zlecenie 2026-10-15-transfery §2–3 through the real client: a download that loses the network midway
+// Through the real client: a download that loses the network midway
 // waits and finishes (the failures during the outage do not use up its retries), the window of pieces in
 // flight shrinks on network errors, and on a metered link / with the guard off the download sends exactly
 // one CDN request per fragment and none on the second connection.

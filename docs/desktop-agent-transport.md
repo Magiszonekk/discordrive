@@ -1,13 +1,13 @@
 # Desktop agent transport requirements (Node)
 
 Status: requirements only, no code. Covers the background "ddn agent" process for
-the desktop app (koncept.md §7.5.4, stage 2: web UI in a wrapper + local Node agent on
+the desktop app (stage 2: web UI in a wrapper + local Node agent on
 the same packages as the CLI — metadata-client, sync-core, SQLite). Scope: how the
-agent talks to Discord (webhooks + CDN) over the network. Source order:
-`zlecenie-2026-10-15-transfery.md` §4 (this document's mandate), koncept.md §7.5.4
-(measurements and decision), `conn-bench.md` / `scripts/conn-bench.mjs` (Node
-connection benchmark), `docs/evidence/2026-10-15-connections/README.md` (browser
-connection experiment), `docs/transfer-log.md` (log format to reuse).
+agent talks to Discord (webhooks + CDN) over the network. The measurements and rules
+below come from `conn-bench.md` / `scripts/conn-bench.mjs` (Node
+connection benchmark), the browser second-connection experiment (`scripts/browser-conn-exp.mts`),
+`docs/transfer-log.md` (log format to reuse), and the stuck-connection
+guard already implemented in `packages/metadata-client/src/net.ts`.
 
 **Already built and reusable as is** (packages/metadata-client, Node + browser, tests in
 `test/net.test.ts`, `net-client.test.ts`, `resume.test.ts`): `net.ts` — `NetControl` (one per agent),
@@ -24,14 +24,14 @@ down / ~68 MB/s up, speed.cloudflare.com):
 
 | path | measured | source |
 |---|---|---|
-| Browser download, 32 in flight, one HTTP/2 connection | ~14 MB/s for 150 s (stuck connection), then 57–77 MB/s after it was dropped | zlecenie §(browser 5.37 GB test) |
-| Browser upload, one connection | ~38–40 MB/s, 0×429 | zlecenie, koncept §7.5.4 |
-| Node download, ONE HTTP/2 connection, 1 minute | 112 MB/s (102% of line) | koncept §7.5.4 (second conn-bench run) |
-| Node download, N HTTP/2 connections | 63 MB/s (worse) | koncept §7.5.4 |
-| Node upload, one HTTP/2 connection | ~31–40 MB/s; 32×10 MiB on one connection → `RST_STREAM` (`ENHANCE_YOUR_CALM`, `INTERNAL_ERROR`) | koncept §7.5.4, conn-bench.md |
-| Node upload, several separate HTTP/2 connections (`h2-N`) | 61.1 MB/s (489 Mb/s, 91% of 67.4 MB/s line), 0 errors; same 32×10 MiB all pass | koncept §7.5.4 (third conn-bench run, with a VPS proxy) |
-| Node upload, split across two IPs (direct + proxy) | 42.7 + 18.3 = 61.1 MB/s total — same as one IP | koncept §7.5.4 → **no per-IP limit on upload** |
-| Node upload, HTTP/1.1, N sockets (`h1-N`) | ~34.9 MB/s, within ~15% of `h2-N` | koncept §7.5.4, conn-bench.md |
+| Browser download, 32 in flight, one HTTP/2 connection | ~14 MB/s for 150 s (stuck connection), then 57–77 MB/s after it was dropped | browser measurement, 5.37 GB test |
+| Browser upload, one connection | ~38–40 MB/s, 0×429 | browser measurement |
+| Node download, ONE HTTP/2 connection, 1 minute | 112 MB/s (102% of line) | Node measurement (second conn-bench run) |
+| Node download, N HTTP/2 connections | 63 MB/s (worse) | Node measurement |
+| Node upload, one HTTP/2 connection | ~31–40 MB/s; 32×10 MiB on one connection → `RST_STREAM` (`ENHANCE_YOUR_CALM`, `INTERNAL_ERROR`) | Node measurement, conn-bench.md |
+| Node upload, several separate HTTP/2 connections (`h2-N`) | 61.1 MB/s (489 Mb/s, 91% of 67.4 MB/s line), 0 errors; same 32×10 MiB all pass | Node measurement (third conn-bench run, with a VPS proxy) |
+| Node upload, split across two IPs (direct + proxy) | 42.7 + 18.3 = 61.1 MB/s total — same as one IP | Node measurement, two IPs → **no per-IP limit on upload** |
+| Node upload, HTTP/1.1, N sockets (`h1-N`) | ~34.9 MB/s, within ~15% of `h2-N` | Node measurement, conn-bench.md |
 
 Conclusion used throughout this document: **upload needs several separate
 connections** (Discord/Cloudflare resets streams on one HTTP/2 connection at high
@@ -71,8 +71,8 @@ one-connection limit — Node on one connection reached the full line.
 
 ## 4. Stuck-connection guard (same rules as web)
 
-Same mechanism and thresholds as the web app's guard (`zlecenie-2026-10-15-transfery.md`
-§3), applied per connection the agent manages:
+Same mechanism and thresholds as the web app's guard (implemented in
+`packages/metadata-client/src/net.ts`), applied per connection the agent manages:
 
 - MUST NOT use fixed MB/s thresholds. Users have very different lines.
 - MUST maintain a device baseline from real transfers only (no separate speed test):
@@ -117,10 +117,10 @@ Same mechanism and thresholds as the web app's guard (`zlecenie-2026-10-15-trans
   stream cap (not by treating it as a generic network error, and not by abandoning
   the connection strategy altogether).
 
-## 6. Weak-link mechanisms (same as web, koncept §7.5.4 reuses §2 of the order)
+## 6. Weak-link mechanisms (same as web)
 
-The agent MUST implement the same mechanisms required for the web client in
-`zlecenie-2026-10-15-transfery.md` §2, applied to its own connections:
+The agent MUST implement the same mechanisms required for the web client
+(weak/unstable links, `packages/metadata-client/src/net.ts`), applied to its own connections:
 
 - **Adaptive in-flight window (AIMD)**, separate for upload and download: halve the
   window on network errors/timeouts, at most once per window, floor of 2; on a
@@ -143,14 +143,14 @@ The agent MUST implement the same mechanisms required for the web client in
 - **Metered connection / save-data**: detect Windows `NetworkCostType`, Linux
   NetworkManager's `metered` property, or macOS `NWPath.isExpensive`, plus a user
   "save data" setting. When on: smaller default in-flight window, stuck-connection
-  guard forced off, and no background snapshots or trash cleanup (koncept already
-  specifies this for the device in general — the agent must not override it just
+  guard forced off, and no background snapshots or trash cleanup (already
+  specified for the device in general — the agent must not override it just
   because it runs when the UI is closed).
 
 ## 7. Per-channel pacing and 429 handling (unchanged)
 
 - The Discord rate limit is per channel (~30 posts/min, roughly ~5 MB/s/channel for
-  10 MiB fragments; koncept measurements, §7 of koncept.md), not per webhook. The
+  10 MiB fragments; see `packages/metadata-client/src/rate-limit.ts`), not per webhook. The
   agent MUST keep the same per-channel pacer/limiter design as the server and
   browser, spreading fragments across the account's channels — adding more
   connections per channel does not raise that channel's own message-rate ceiling.
@@ -191,7 +191,7 @@ and to re-check the per-session stream cap against any Discord-side changes.
 
 to keep the browser-side baseline (single vs. two-lane download/upload) comparable
 to the agent's numbers, so the app can still tell the user how much faster the
-desktop agent is versus the web UI (koncept §7.5.4 decision: web UI stays, with a
+desktop agent is versus the web UI (web UI stays, with a
 note that it's slower than the desktop app).
 
 Re-run both after any Discord/Cloudflare-side behavior change (new error codes, new
@@ -201,10 +201,8 @@ per-connection limits) since these numbers are empirical, not documented by Disc
 
 | claim | source |
 |---|---|
-| Stage/decision: desktop app = web UI wrapper + local Node agent, stage 2 | `koncept.md` §7.5.4 |
-| Line speed, Node single/N connection results, upload RST_STREAM, no per-IP limit | `koncept.md` §7.5.4 (conn-bench runs 1–3) |
-| This document's mandate and required content | `zlecenie-2026-10-15-transfery.md` §4 |
-| Per-channel limit (~30/min), weak-link mechanisms (§2), stuck-connection guard rules (§3) | `zlecenie-2026-10-15-transfery.md` §2, §3 |
+| Line speed, Node single/N connection results, upload RST_STREAM, no per-IP limit | `conn-bench.md` (conn-bench runs 1–3) |
+| Per-channel limit (~30/min), weak-link mechanisms, stuck-connection guard rules | `packages/metadata-client/src/net.ts`, `packages/metadata-client/src/rate-limit.ts` |
 | conn-bench scenarios (`h2-1`/`h2-N`/`h1-N`), GOAWAY/RST_STREAM handling, 111-upload loss, proxy/IP split test | `docs/conn-bench.md` |
-| Browser second-connection experiment (sandboxed iframe, HTTP/3 default, per-context connection map) | `docs/evidence/2026-10-15-connections/README.md` |
+| Browser second-connection experiment (sandboxed iframe, HTTP/3 default, per-context connection map) | `scripts/browser-conn-exp.mts` |
 | Transfer log format, fields, privacy rules | `docs/transfer-log.md` |

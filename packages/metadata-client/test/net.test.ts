@@ -1,4 +1,4 @@
-// zlecenie 2026-10-15-transfery §2–3: adaptive window, no-network gate, reference speed, stuck-connection
+// Adaptive window, no-network gate, reference speed, stuck-connection
 // guard — in virtual time. The guard scenarios: one stuck connection (first byte fast, body slow) vs a
 // weak link (everything slow + errors) vs a metered link; the guard acts only in the first, and in the
 // others never sends a request on another connection.

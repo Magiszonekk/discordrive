@@ -1,4 +1,4 @@
-// Server side of the optional password-protected account key (password-key.ts, koncept §3.8).
+// Server side of the optional password-protected account key (password-key.ts).
 //
 // Per account at most one row: login name (unique, case-folded), Argon2id parameters + salt,
 // the account key sealed with the password wrap key, and SHA-256 of the auth proof. The server

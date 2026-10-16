@@ -1,7 +1,7 @@
 # Cobalt (the look of discordrive)
 
 The same theme as the current discordrive app (old-drive.example.com, `discordrive/apps/frontend`,
-`design.md` = Cobalt / Hallmark), owner decision 2026-10-12 (replaces nordic).
+`design.md` = Cobalt / Hallmark), replaces nordic.
 
 - `tokens.css`: discordrive's `tokens.css` (`@theme` block as plain custom properties, light + dark) and
   `index.css` (base, scrollbars, focus ring, `.chip`, `.reveal`), plus `@font-face` for the local fonts.

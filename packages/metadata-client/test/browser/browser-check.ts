@@ -1,4 +1,4 @@
-// The metadata-only client in a real browser engine (koncept §4.1: browser +
+// The metadata-only client in a real browser engine (browser +
 // CLI are the MVP clients). Bundles src/index.ts for the browser (fails if
 // anything Node-only leaks in), then in headless Chromium:
 //   Ed25519 device key generated in the page (non-extractable), account

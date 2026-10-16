@@ -1,5 +1,5 @@
 // Application core of the metadata-only browser client, running in a
-// dedicated Worker (koncept §4.1): the tree lives in SQLite on OPFS (only a
+// dedicated Worker: the tree lives in SQLite on OPFS (only a
 // worker may open it), the UI thread only renders what it asks for, page by page.
 // Only the main tab (Web Locks) owns OPFS and writes snapshots; other tabs run
 // on an in-memory replica of the same server log (they read, the server
@@ -116,7 +116,7 @@ export type CoreEvent =
   | { type: "share-progress"; done: number; total: number }
   | { type: "changed" }
   | { type: "cleanup"; running: boolean }
-  /** Moving a channel (zlecenie 2026-10-13-webhooki): progress of the job (this tab in metadata only, the instance in e2ee/plain). */
+  /** Moving a channel: progress of the job (this tab in metadata only, the instance in e2ee/plain). */
   | { type: "channel-move"; status: MoveStatus }
   /** Rule notices about changes of OTHER devices addressed to this one (Q1: your file went to the trash with a folder). */
   | { type: "notices"; notices: UiNotice[] };
@@ -183,7 +183,7 @@ export class AppCore {
   /** Settings → Diagnostics → fragments in flight (null = automatic / default); kept by the UI, applied to every client. */
   private conc: { upload: number | null; download: number | null } = { upload: null, download: null };
   /**
-   * Network state of this tab, shared by every client it builds (zlecenie 2026-10-15-transfery §2–3):
+   * Network state of this tab, shared by every client it builds:
    * the no-network gate, adaptive windows, the stuck-connection guard and its reference speed.
    */
   readonly net = new NetControl({ metered: () => meteredLink(), netType });
@@ -245,7 +245,7 @@ export class AppCore {
     await this.resume?.forget(key);
   }
 
-  // ── network (zlecenie 2026-10-15-transfery §2–3) ──
+  // ── network ──
 
   /** Settings: "Save data" and the stuck-connection guard; the reference speed kept by the UI. */
   setNetPrefs(p: { saveData?: boolean; guard?: boolean; baseline?: unknown; tune?: { up?: number; down?: number } | null }) {
@@ -417,7 +417,7 @@ export class AppCore {
     this.startUpkeep();
   }
 
-  // ── cleanup (§6.2, Q4; zlecenie 2026-10-13 p. 2) ────────────────────
+  // ── cleanup (Q4) ────────────────────
 
   /** Automatic run in the main tab (the Q4 gates decide inside; other tabs only when nobody cleaned for 7 days). */
   private scheduleCleanup(ms: number) {
@@ -450,7 +450,7 @@ export class AppCore {
     }
   }
 
-  /** Arbiter that remembers server times of entries (snapshot timing, §6.2). */
+  /** Arbiter that remembers server times of entries (snapshot timing). */
   private timedArbiter(inner: ArbiterApi): ArbiterApi {
     const remember = (e: LogEntry) => {
       this.serverTimes.set(e.seq, e.serverTime);
@@ -523,7 +523,7 @@ export class AppCore {
     return mode.channels(this.ctx!, stats ? (this.client ?? undefined) : undefined);
   }
 
-  // ── removing a channel (zlecenie 2026-10-13-webhooki p. 1) ─────────
+  // ── removing a channel ─────────
 
   /** The remove dialog: what lies on the channel, whether it is critical, whether a move is possible. */
   async channelImpact(id: string): Promise<RemovalImpact> {
@@ -662,7 +662,7 @@ export class AppCore {
   }
 
   /**
-   * One page of a folder (§4.1: only what is visible is in RAM): folders first, then files, each by
+   * One page of a folder (only what is visible is in RAM): folders first, then files, each by
    * the sort (name / size / date, either direction). Keyset paging with the same cursor
    * ([fo, key, nameKey, id]) in both stores: OPFS (main tab, an index per sort) and the in-memory
    * replica (secondary tab), so paging behaves the same in every tab.
@@ -835,7 +835,7 @@ export class AppCore {
   }
 
   /**
-   * Download straight to disk (zlecenie 2026-10-13-transfer §3): the decrypted fragments go in order
+   * Download straight to disk: the decrypted fragments go in order
    * through a MessagePort to the service worker, whose streamed response the browser saves as a
    * download. Only what the stream asks for is sent (one fragment per pull), so the tab holds at most
    * the fragments in flight, whatever the file size. The whole-file SHA-256 is checked before the
@@ -907,7 +907,7 @@ export class AppCore {
     return !!ac;
   }
 
-  // ── transfer logs (Settings → Diagnostics, zlecenie 2026-10-13-transfer §2) ──
+  // ── transfer logs (Settings → Diagnostics) ──
 
   /** Fragments in flight (Settings → Network): null = automatic (measured per direction). */
   setConcurrency(upload: number | null, download: number | null) {
@@ -1088,7 +1088,7 @@ export class AppCore {
 
   /**
    * The trash: nodes trashed on their own whose folder is not in the trash (purging the folder
-   * covers the rest), newest first, with the day they go for good (30 days, §6.2).
+   * covers the rest), newest first, with the day they go for good (30 days).
    */
   trashList(): TrashRow[] {
     const s = this.c().store;
@@ -1143,7 +1143,7 @@ export class AppCore {
 
   // ── devices ────────────────────────────────────────────────────────
 
-  /** Pair a new device that shows `code` (§3.8). Returns the 6-digit code to compare. */
+  /** Pair a new device that shows `code`. Returns the 6-digit code to compare. */
   async pairAccept(code: string) {
     const a = this.acct!;
     const http = this.http!;
@@ -1198,7 +1198,7 @@ export class AppCore {
     this.pending = null;
   }
 
-  // ── optional password-protected account key (§3.8, zlecenie 2026-10-13 p. 3) ──
+  // ── optional password-protected account key ──
 
   async passwordKeyStatus() {
     return this.http!.passwordKeyStatus();
@@ -1237,7 +1237,7 @@ export class AppCore {
     });
   }
 
-  /** New device from the rescue kit (§3.5): registers this device with the rescue key. */
+  /** New device from the rescue kit: registers this device with the rescue key. */
   async joinWithKit(serverUrl: string, kitText: string, deviceName: string): Promise<void> {
     const kit = mode.decodeKit(kitText);
     const key = accountKeyFromB64(kit.key);
@@ -1291,7 +1291,7 @@ export class AppCore {
     await this.http!.revokeDevice(id);
   }
 
-  // ── rescue kit + snapshots (§3.5, §6.2) ────────────────────────────
+  // ── rescue kit + snapshots ────────────────────────────
 
   /** The rescue kit text (secret): metadata only = key + pointer webhook + message; e2ee/plain = key + instance. */
   async rescueKit(): Promise<{ kit: string; accountId: string }> {
@@ -1313,7 +1313,7 @@ export class AppCore {
     this.snapTimer = setInterval(() => void this.snapshotSoon(), SNAPSHOT_TICK_MS);
   }
 
-  /** One scheduler tick (main tab only, metadata only; writes when §6.2 says so, or now if forced). */
+  /** One scheduler tick (main tab only, metadata only; writes on the usual schedule, or now if forced). */
   async snapshotSoon(force = false) {
     if (!this.leader || !this.client || !mode.snapshotTick) return null;
     try {
@@ -1325,7 +1325,7 @@ export class AppCore {
     }
   }
 
-  // ── sharing (§3.7) ─────────────────────────────────────────────────
+  // ── sharing ─────────────────────────────────────────────────
 
   async shareFile(nodeId: string, origin: string): Promise<{ link: string; shareId: string }> {
     if (this.unavailableInfo(nodeId)) throw new Error("file_unavailable");

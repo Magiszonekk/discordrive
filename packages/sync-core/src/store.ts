@@ -1,4 +1,4 @@
-// Index storage abstraction (koncept §4.1).
+// Index storage abstraction.
 //
 // The tree lives on disk on every device (SQLite on OPFS in the browser, a
 // file in CLI/desktop). The core only needs this small synchronous interface;
@@ -128,7 +128,7 @@ export class MemoryIndexStore implements IndexStore {
 /**
  * Write buffer over another store. apply() runs every log entry inside an
  * overlay and commits only if the whole entry succeeded, which gives
- * all-or-nothing group operations (§4) and no half-applied single ops.
+ * all-or-nothing group operations and no half-applied single ops.
  */
 export class OverlayStore implements IndexStore {
   private meta: IndexMeta | null = null;

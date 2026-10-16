@@ -115,7 +115,7 @@
     <div class="auth-foot"><a class="link" href="/" data-ddn="join-cancel" data-link data-i18n="auth.back">Back to sign-up</a></div>
   </section>
 
-  <!-- Sign in with password (optional, §3.8: only for accounts that turned it on) -->
+  <!-- Sign in with password (optional; only for accounts that turned it on) -->
   <section class="auth-card" data-auth="signin" data-ddn="signin-dialog" aria-labelledby="signin-h" hidden>
     <div class="wordmark"><span class="logo" aria-hidden="true">D</span><b data-i18n="brand.name">DiscorDrive</b></div>
     <h1 id="signin-h" data-i18n="signin.h">Sign in with password</h1>
@@ -230,7 +230,7 @@
         <ul class="qlist" data-ddn="dl-list"></ul>
         <p class="hint" data-i18n="dl.note"></p>
       </section>
-      <!-- Uploads a reload or a lost network left unfinished: pick the same file again to continue (zlecenie 2026-10-15-transfery §2). -->
+      <!-- Uploads a reload or a lost network left unfinished: pick the same file again to continue. -->
       <section class="note warn upfail" data-ddn="unfinished" role="status" hidden>
         <svg class="i"><use href="#i-info"/></svg>
         <div class="upfail-b">
@@ -280,7 +280,7 @@
       </div>
     </main>
 
-    <!-- Trash: items deleted in the last 30 days (koncept §6.2); restore or delete for good. -->
+    <!-- Trash: items deleted in the last 30 days; restore or delete for good. -->
     <main class="page" data-page="trash" aria-labelledby="trash-h" hidden>
       <div class="files-h">
         <div class="titles">
@@ -548,7 +548,7 @@
   </div>
 </dialog>
 
-<!-- Remove a channel (zlecenie 2026-10-13-webhooki p. 1): impact + three options -->
+<!-- Remove a channel: impact + three options -->
 <dialog class="modal lg" data-ddn="channel-dialog" aria-labelledby="chd-h">
   <div class="modal-h"><h2 id="chd-h"><svg class="i"><use href="#i-hash"/></svg><span data-ddn-ui="chd-title"></span></h2><button class="iconbtn" type="button" data-ddn-ui="chd-close" data-i18n-attr="aria-label=nf.cancel"><svg class="i"><use href="#i-x"/></svg></button></div>
   <div class="modal-b">
@@ -579,7 +579,7 @@
   <video data-ddn="player" controls muted playsinline></video>
 </dialog>
 
-<!-- File preview (zlecenie 2026-10-13-webhooki p. 4; logic in src/preview.ts): ←/→ previous/next file, Esc closes -->
+<!-- File preview (logic in src/preview.ts): ←/→ previous/next file, Esc closes -->
 <dialog class="player preview" data-ddn="preview-dialog" aria-labelledby="preview-title">
   <div class="player-h"><b id="preview-title" data-ddn="preview-title"></b><button class="iconbtn" type="button" data-ddn="preview-prev" data-i18n-attr="aria-label=pv.prev, title=pv.prev"><svg class="i"><use href="#i-left"/></svg></button><button class="iconbtn" type="button" data-ddn="preview-next" data-i18n-attr="aria-label=pv.next, title=pv.next"><svg class="i"><use href="#i-right"/></svg></button><button class="iconbtn accent" type="button" data-ddn="preview-download" data-i18n-attr="aria-label=pv.download, title=pv.download"><svg class="i"><use href="#i-download"/></svg></button><button class="iconbtn" type="button" data-ddn="preview-close" data-i18n-attr="aria-label=pv.close, title=pv.close"><svg class="i"><use href="#i-x"/></svg></button></div>
   <div class="pv-body" data-ddn="preview-body"></div>

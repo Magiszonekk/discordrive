@@ -17,7 +17,7 @@ export const RISK_VERSION = 1;
 export const DEFAULT_PORT = 3020;
 export const UNIT_NAME = "discordrive-next.service";
 export type SignupPolicy = "invite" | "open" | "closed";
-/** Modes an instance can be built for (koncept §2). One instance = one mode, forever. */
+/** Modes an instance can be built for. One instance = one mode, forever. */
 export const MODES = ["metadata-only", "e2ee", "plain"] as const;
 export type InstanceMode = (typeof MODES)[number];
 /** Modes this checkout can build (plain comes after e2ee). */
@@ -27,7 +27,7 @@ export function availableModes(): InstanceMode[] {
 
 export interface InstanceConfig {
   version: 1;
-  /** Fixed when the instance is created (koncept §2); the build and the database must match it. */
+  /** Fixed when the instance is created; the build and the database must match it. */
   mode: InstanceMode;
   /** Public address users open (https://… behind a reverse proxy). */
   publicUrl: string;
@@ -38,7 +38,7 @@ export interface InstanceConfig {
   signup: SignupPolicy;
   /** Default language of the web app and the CLI (users can switch in the browser). */
   language: CliLang;
-  /** Instance bot token for share links (§3.7). Secret; null = sharing off. */
+  /** Instance bot token for share links. Secret; null = sharing off. */
   botToken: string | null;
   /** Display info about the bot (from GET /users/@me at setup time). */
   bot?: { id: string; username: string } | null;

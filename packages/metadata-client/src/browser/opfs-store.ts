@@ -1,9 +1,9 @@
-// Tree layer in the browser (koncept §4.1): SqlIndexStore on SQLite-WASM with
+// Tree layer in the browser: SqlIndexStore on SQLite-WASM with
 // the OPFS SAH-pool VFS. Synchronous like node:sqlite, so apply() stays
 // synchronous; must run in a dedicated Worker (OPFS sync access handles).
 //
 // The tree lives on disk (OPFS), not in RAM; the browser is a cache, not the
-// backup (§4.1): the client asks for persistent storage but relies on the
+// backup: the client asks for persistent storage but relies on the
 // server log and the Discord snapshots for "nothing gets lost".
 
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
@@ -73,7 +73,7 @@ function driver(db: Db): SqlDriver {
 
 // One SAH pool per directory per worker: the VFS holds the OPFS access handles
 // for its whole pool, so installing it twice (or in two workers at once) fails.
-// Only one worker of the origin may own the pool: the main-tab worker (§4.1).
+// Only one worker of the origin may own the pool: the main-tab worker.
 const pools = new Map<string, Promise<{ OpfsSAHPoolDb: new (f: string) => Db; getCapacity(): number; wipeFiles(): Promise<void> }>>();
 
 function pool(opts: OpfsStoreOptions) {
@@ -102,7 +102,7 @@ export async function openOpfsIndexStore(opts: OpfsStoreOptions): Promise<SqlInd
   return store;
 }
 
-/** Ask the browser not to evict our storage (§4.1). Returns whether it is persistent. */
+/** Ask the browser not to evict our storage. Returns whether it is persistent. */
 export async function requestPersistentStorage(): Promise<boolean> {
   try {
     return (await navigator.storage?.persisted?.()) || ((await navigator.storage?.persist?.()) ?? false);

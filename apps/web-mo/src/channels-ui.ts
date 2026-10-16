@@ -1,4 +1,4 @@
-// Settings → Channels & webhooks and Settings → Storage (zlecenie 2026-10-13-webhooki p. 1–3), as one
+// Settings → Channels & webhooks and Settings → Storage, as one
 // module with a few hooks in ui.ts:
 //  - the channel list: per channel files/size, chips Critical / Retired, a "Remove or retire" button;
 //  - the remove dialog: the counted impact (files with pieces only there, by name, scrollable), three

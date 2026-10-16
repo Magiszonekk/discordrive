@@ -1,4 +1,4 @@
-// plain instance (docs/stage3-modes.md §7): e2ee + the server reads the operation log
+// plain instance: e2ee + the server reads the operation log
 // (names, tree, file keys): thumbnails and previews (ffmpeg, optional), server-side Range
 // streaming and search by name. Same webhook pool / channels / background work as e2ee.
 import { existsSync } from "node:fs";

@@ -1,4 +1,4 @@
-// discordrive-next sync core: data model (koncept §4, §4.1, §5).
+// discordrive-next sync core: data model.
 
 export type NodeId = string;
 export type OpId = string;
@@ -7,7 +7,7 @@ export type VersionId = string;
 export type NodeKind = "file" | "folder";
 
 /**
- * Rules version implemented by this build. Recorded in every log entry (§5.4).
+ * Rules version implemented by this build. Recorded in every log entry.
  *
  * History:
  *  1 - first stage-1 rules (provisional answers to the stage-1 questions).
@@ -15,7 +15,7 @@ export type NodeKind = "file" | "folder";
  *      nodes along (Q1), silent trash skip (Q2), partial purge keeping unseen
  *      nodes (Q3), conflict copy in the author's local time (Q6), identical
  *      content is not a conflict (Q7), group ops skip only "skipped" members (Q9).
- *  3 - zlecenie 2026-10-13-webhooki: `relocate` (the same content of a version moved
+ *  3 - `relocate` (the same content of a version moved
  *      to other storage locations: new manifestRef, no conflict, no content change)
  *      and optional piece locations (`pieces`) in content. Entries of rules 2 replay
  *      exactly as before (applyEntry branches on entry.rulesVersion).
@@ -46,7 +46,7 @@ export interface DeviceInfo {
 // Content (tree layer only keeps a pointer; the chunk list lives in the manifest layer)
 
 /**
- * Where the pieces (fragments + manifest) of one version are, summed per location (zlecenie 2026-10-13-webhooki:
+ * Where the pieces (fragments + manifest) of one version are, summed per location:
  * per-channel stats, unavailable files and the remove-channel impact come from the local index, without loading
  * manifests). Backend-neutral: `loc` is the placement's locationId (the webhook ID on Discord). Sorted by `loc`,
  * unique. Optional: versions written before rules v3 have none (a device backfills them locally from the manifests).
@@ -68,7 +68,7 @@ export interface ContentRef {
   /** Plaintext size in bytes (display). */
   sizeBytes: number;
   /**
-   * Opaque locator of the (encrypted) manifest in the manifest layer (§4.1).
+   * Opaque locator of the (encrypted) manifest in the manifest layer.
    * The tree never contains chunk lists.
    */
   manifestRef: string;
@@ -164,7 +164,7 @@ export interface IndexMeta {
 }
 
 // ---------------------------------------------------------------------------
-// Operations (§4). All reference node IDs, never paths.
+// Operations. All reference node IDs, never paths.
 
 export interface CreateOp {
   type: "create";
@@ -267,21 +267,21 @@ export type Operation = SingleOp | GroupOp;
 export interface OpEnvelope {
   opId: OpId;
   rulesVersion: number;
-  /** Last log position the author had applied when it created the op (§4). */
+  /** Last log position the author had applied when it created the op. */
   baseSeq: number;
   device: DeviceInfo;
-  /** Device clock, display only (§5.2.1). */
+  /** Device clock, display only. */
   createdAt: number;
   /**
    * Author's UTC offset in minutes at createdAt (CEST = 120). Display only:
    * the rule-7 conflict copy name shows the author's local time (Q6).
    * Integer in [-1080, 1080]; missing = 0. Encrypted with the payload, like
-   * createdAt and device (not in the server's plaintext list, koncept §3.3).
+   * createdAt and device (not in the server's plaintext list).
    */
   tzOffsetMin?: number;
   /**
    * Rule 8: uploads this op touches (begin/commit/abort, or content bound by
-   * create/new_content_version). Plaintext, like the leases themselves (§3.3).
+   * create/new_content_version). Plaintext, like the leases themselves.
    * The server accepts the op only while the submitting device holds an
    * unexpired lease on each of them; apply() rejects upload-touching ops
    * that do not list their upload here.

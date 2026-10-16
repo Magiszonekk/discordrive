@@ -8,7 +8,7 @@ let core: AppCore | null = null;
 self.onmessage = async (ev: MessageEvent<{ id: number; method: string; args: unknown[]; ddnPort?: string }>) => {
   // A port for a streamed download (ui.ts download → sw.ts), not an RPC call.
   if (ev.data?.ddnPort) return void core?.attachPort(ev.data.ddnPort, ev.ports[0]!);
-  // The second connection (lane.ts in a sandboxed iframe), zlecenie 2026-10-15-transfery §1.
+  // The second connection (lane.ts in a sandboxed iframe).
   if ((ev.data as { ddnLane?: number })?.ddnLane) return void core?.attachLane(ev.ports[0]!);
   const { id, method, args } = ev.data;
   try {

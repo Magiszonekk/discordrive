@@ -1,5 +1,5 @@
-// `discordrive channels`: the operator's side of removing a channel (zlecenie 2026-10-13-webhooki
-// p. 1, owner decision 6). Pool webhooks (scope "pool") belong to the operator: the same rules as
+// `discordrive channels`: the operator's side of removing a channel.
+// Pool webhooks (scope "pool") belong to the operator: the same rules as
 // an account's own channels (Settings → Channels), over every account with blobs or snapshot
 // chains on the webhook.
 //

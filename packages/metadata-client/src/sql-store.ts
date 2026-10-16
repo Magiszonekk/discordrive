@@ -1,4 +1,4 @@
-// Tree layer on disk (koncept §4.1): one IndexStore implementation over a
+// Tree layer on disk: one IndexStore implementation over a
 // minimal synchronous SQL driver, shared by
 //   - Node/CLI: node:sqlite (node/sqlite-store.ts),
 //   - browser:  SQLite-WASM on OPFS, SAH-pool VFS, in a dedicated worker
@@ -29,7 +29,7 @@ export interface SqlDriver {
 }
 
 /**
- * 1: tree + uploads. 2 (zlecenie 2026-10-13-webhooki): derived tables next to it, migrated in place
+ * 1: tree + uploads. 2: derived tables next to it, migrated in place
  * (a schema-1 database is opened and extended, nothing is rebuilt):
  *   pieces       where the pieces of each version are, per location (from content.pieces, rules v3,
  *                or filled by the client from the manifest: setPieces) - per-channel stats, the
@@ -42,7 +42,7 @@ export interface SqlDriver {
  * The derived rows never feed back into the tree (apply() does not read them).
  */
 const SCHEMA_VERSION = 3;
-// 3 (zlecenie 2026-10-14-ui): sort columns on nodes (fo: 0 folder / 1 file, sz: size, mt: modified),
+// 3: sort columns on nodes (fo: 0 folder / 1 file, sz: size, mt: modified),
 //   filled from the record by putNode, with one index per sort (parent_id, fo, key, name_key, id), so
 //   every sort pages by keyset over an index (no OFFSET, no temp B-tree), folders first.
 
@@ -258,7 +258,7 @@ export class SqlIndexStore implements IndexStore {
   }
 
   /**
-   * Settings → Storage (zlecenie 2026-10-13-webhooki p. 2): all files (not in the trash), the trash,
+   * Settings → Storage: all files (not in the trash), the trash,
    * the unavailable ones (any place; they are counted in their group too). One indexed pass each.
    */
   storageTotals(): { files: number; bytes: number; trashFiles: number; trashBytes: number; unavailableFiles: number; unavailableBytes: number; pieceBytes: number; piecesKnown: number } {
@@ -401,7 +401,7 @@ export class SqlIndexStore implements IndexStore {
   /**
    * One page of a folder: folders first, then files, each group by the sort key (name: case-folded
    * name; size; date = the current version's createdAt), ties by name then ID in the same direction.
-   * Keyset paging over the per-sort index (koncept §4.1: no OFFSET, only the visible rows in RAM): one
+   * Keyset paging over the per-sort index (no OFFSET; only the visible rows in RAM): one
    * range scan per group (fo is an equality there, so a descending sort is the same index read backwards).
    * Cursor: JSON [fo, key, name_key, id] (key null for the name sort).
    */

@@ -1,4 +1,4 @@
-// Removing a channel (webhook) in metadata only (zlecenie 2026-10-13-webhooki p. 1).
+// Removing a channel (webhook) in metadata only.
 //
 // Everything runs in the client: the server never holds a webhook and cannot read the tree.
 //   impact   what lies on webhook W: files with a piece there (local index, pieces table), its
@@ -13,7 +13,7 @@
 //               its kept history (rehomeChain), the vault points at the new pointer message, a new
 //               rescue kit is forced (the old one names a pointer that is no longer updated);
 //            4. W is marked "drain" in the vault: retired, read only, out of every count. Older log
-//               entries and the snapshot bases kept for 30 days still name its messages (§6.2: a
+//               entries and the snapshot bases kept for 30 days still name its messages (a
 //               restored base must never point at a deleted message), so the old messages are
 //               deleted by the cleanup once the retention passed; then W leaves the vault ("moved").
 //   remove   (anyway) W leaves the vault at once ("removed"); files with a piece there become
@@ -33,7 +33,7 @@ import type { SqlIndexStore } from "./sql-store.js";
 import type { DiscordPlacement, WebhookRef, WebhookTransport } from "./types.js";
 import type { VaultContent, VaultWebhook, WebhookVault } from "./vault.js";
 
-/** Rough throughput of one channel for ETAs (koncept §7: ~30 posts/min of ≤ 10 MiB). */
+/** Rough throughput of one channel for ETAs (~30 posts/min of ≤ 10 MiB). */
 export const BYTES_PER_S_PER_CHANNEL = 4 * 1024 * 1024;
 /** Versions moved per relocate group op (one log entry; Q9 leaves stale members out). */
 export const RELOCATE_BATCH = 20;
@@ -363,7 +363,7 @@ export async function backfillPieces(c: ChannelClient, store: SqlIndexStore, bud
 
 /**
  * The cleanup's last step for a drained webhook W: once the retention passed (DRAIN_AFTER_MS since the
- * move AND every kept snapshot base was taken after it, the §6.2 rule deletableUploadsWithRetention
+ * move AND every kept snapshot base was taken after it, the rule deletableUploadsWithRetention
  * applies to released fragments), delete what the move left behind - the pieces on W of the manifests
  * the relocates in fromSeq..toSeq replaced, those old manifests, and the old snapshot chain when the
  * move re-homed it - then W leaves the vault ("moved").

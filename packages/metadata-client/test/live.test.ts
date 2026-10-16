@@ -1,4 +1,4 @@
-// Live slice on the TEST server a test Discord server only (koncept §7 environment).
+// Live slice on the TEST server a test Discord server only (environment).
 // Runs only with DDN_LIVE=1 and DDN_LIVE_WEBHOOK_FILE pointing at a webhook URL
 // file created by tools/testbot.py. Never prints the URL.
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";

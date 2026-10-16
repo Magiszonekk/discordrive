@@ -1,4 +1,4 @@
-// Optional password-protected account key (koncept §3.8, Bitwarden model; zlecenie 2026-10-13 p. 3).
+// Optional password-protected account key (Bitwarden model).
 //
 // Off by default. When the user turns it on (Settings → Security), the browser:
 //   1. derives 32 bytes from the password with Argon2id (discordrive's parameters: 64 MiB, 3

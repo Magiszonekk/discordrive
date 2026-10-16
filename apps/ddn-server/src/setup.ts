@@ -73,7 +73,7 @@ export interface SetupFlags {
   lang?: CliLang;
   /** Tests: Discord API on a fake. */
   discordApiOrigin?: string;
-  /** Mode of a NEW instance (koncept §2); an existing instance keeps its mode. Default metadata-only. */
+  /** Mode of a NEW instance; an existing instance keeps its mode. Default metadata-only. */
   mode?: InstanceMode;
   /** e2ee/plain: file with webhook URLs for the instance pool, one per line (never on the command line). */
   webhooksFile?: string;
@@ -311,7 +311,7 @@ export async function setup(f: SetupFlags, p0?: Prompter): Promise<SetupResult> 
     }
   } else c.trustProxy = f.trustProxy ?? [];
 
-  // 2. Mode: chosen once, for a new instance only (koncept §2: one instance = one mode, forever).
+  // 2. Mode: chosen once, for a new instance only (one instance = one mode; forever).
   // "Existing" = the config says so or the database was already started (it locks the mode).
   const locked: InstanceMode | null = old?.mode ?? null;
   const avail = availableModes();

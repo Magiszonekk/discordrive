@@ -1,4 +1,4 @@
-// Transfer logs in the browser (zlecenie 2026-10-13-transfer §2), written by the app worker into
+// Transfer logs in the browser, written by the app worker into
 // OPFS: directory ddn-transfer-logs/, one file per tab session and part (name starts with the time,
 // so a sort by name is oldest first), each ≤ PART_BYTES, all together ≤ MAX_BYTES (oldest parts
 // deleted). Lines are buffered and flushed every second. A sync access handle is exclusive to one

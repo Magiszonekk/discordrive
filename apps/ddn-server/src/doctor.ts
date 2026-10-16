@@ -57,7 +57,7 @@ export async function doctor(dataDir: string, out: (s: string) => void = console
       if (fm !== null && fm & 0o077) add("warn", t("d.fileMode", { file: f }), t("d.fileModeBad", { mode: `0${fm.toString(8)}` }));
     }
   }
-  // Mode (koncept §2): the build of web + server matches the config; the database agrees.
+  // Mode: the build of web + server matches the config; the database agrees.
   try {
     const sm = await loadServerMode(c);
     const db0 = existsSync(dbPath(c)) ? new DatabaseSync(dbPath(c), { readOnly: true }) : null;

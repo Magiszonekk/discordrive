@@ -67,7 +67,7 @@ export async function createAccountHttp(
 }
 
 /**
- * Optional password sign-in (§3.8): parameters for a login, then the sealed account key for a
+ * Optional password sign-in: parameters for a login, then the sealed account key for a
  * correct proof. The caller opens the key locally and registers its device with the rescue key.
  */
 export async function passwordParams(baseUrl: string, login: string, f: typeof fetch = defaultFetch): Promise<{ kdf: unknown }> {
@@ -77,7 +77,7 @@ export async function passwordSealedKey(baseUrl: string, login: string, proof: s
   return post<{ accountId: string; sealedKey: string }>(f, `${baseUrl}/v1/auth/password/key`, { login, proof });
 }
 
-/** Rescue kit (§3.5): register a new device with the rescue key, no other device needed. */
+/** Rescue kit: register a new device with the rescue key, no other device needed. */
 export async function rescueRegisterDevice(
   baseUrl: string,
   account: AccountKey,
@@ -238,7 +238,7 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     return { status: "conflict", current: c ? { revision: c.revision, blob: fromBase64(c.blob) } : null };
   }
 
-  /** Pairing (§3.8): this signed-in device vouches for the new device's public key. */
+  /** Pairing: this signed-in device vouches for the new device's public key. */
   async addDevice(newDevicePublicKey: string): Promise<{ deviceId: string }> {
     const c = await this.challenge();
     return (
@@ -259,7 +259,7 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     await this.call("PUT", `/v1/devices/${deviceId}/name`, { nameSealed });
   }
 
-  // --- optional password-protected account key (§3.8)
+  // --- optional password-protected account key
   async passwordKeyStatus(): Promise<{ enabled: boolean; login: string | null; updatedAt: number | null }> {
     return (await this.call<{ enabled: boolean; login: string | null; updatedAt: number | null }>("GET", "/v1/password-key")).body;
   }
@@ -285,7 +285,7 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     };
   }
 
-  // --- shares (§3.7)
+  // --- shares
   async createShare(body: { attachments: { channelId: string; attachmentId: string; filename: string }[]; meta: string; ownerNote: string }): Promise<{ shareId: string }> {
     return (await this.call<{ shareId: string }>("POST", "/v1/shares", body)).body;
   }
@@ -306,7 +306,7 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
   }
 
   /**
-   * Push notifications (§3.4 role 4): a WebSocket that says "the log head is
+   * Push notifications (role 4): a WebSocket that says "the log head is
    * now N". Needs a global WebSocket (browsers, Node 22+). Reconnects with
    * backoff until `close()`. `onHead` is also called once after every
    * (re)connect with -1, so the caller pulls whatever it missed.

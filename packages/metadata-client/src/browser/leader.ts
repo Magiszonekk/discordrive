@@ -1,9 +1,9 @@
-// Main tab (koncept §4.1: one tab syncs, writes snapshots and owns the OPFS
+// Main tab (one tab syncs, writes snapshots and owns the OPFS
 // database; the others read through it). Web Locks: the lock is held for the
 // tab's lifetime and released by the browser when the tab closes or crashes,
 // so the next waiting tab takes over without timeouts or heartbeats.
 // Same lock also serialises all uploads of the device on one ChannelPacer
-// (koncept §7: the rate limit is per channel, tabs must not compete).
+// (the rate limit is per channel; tabs must not compete).
 
 export interface Leadership {
   readonly isLeader: boolean;

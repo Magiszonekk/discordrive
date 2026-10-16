@@ -1,4 +1,4 @@
-// @ddv4/metadata-client: discordrive-next stage 2, metadata-only mode (koncept §3, §6.5).
+// @ddv4/metadata-client: discordrive-next stage 2, metadata-only mode.
 
 export * from "./types.js";
 export { MemoryTransport } from "./memory-transport.js";

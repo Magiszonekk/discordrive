@@ -1,4 +1,4 @@
-// Index invariants (koncept §5.4). Used by the randomized test and usable by
+// Index invariants. Used by the randomized test and usable by
 // clients as a self-check after loading a snapshot.
 
 import { nameKey, validateName } from "./names.js";

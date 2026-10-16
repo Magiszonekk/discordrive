@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Connection benchmark (koncept §7.5.4, owner 2026-10-15): is the browser's speed limit the single
+// Connection benchmark (owner 2026-10-15): is the browser's speed limit the single
 // HTTP/2 connection it uses for every request to discord.com / cdn.discordapp.com?
 //
 // Runs on the user's own computer (Node 22+, no dependencies), with the user's own webhooks, and
@@ -241,7 +241,7 @@ function transport(kind, origin) {
   throw new Error(`unknown scenario ${kind}`);
 }
 
-// Per-channel pacing like the app (koncept §7: ~30 posts/min per channel, small burst).
+// Per-channel pacing like the app (~30 posts/min per channel; small burst).
 const buckets = new Map();
 async function takeToken(channel) {
   let b = buckets.get(channel);

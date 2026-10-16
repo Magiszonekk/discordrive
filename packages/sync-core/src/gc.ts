@@ -1,4 +1,4 @@
-// Garbage collection decisions (koncept §6.2, rule 8). Pure functions over the
+// Garbage collection decisions (rule 8). Pure functions over the
 // index; the caller does the actual deleting (Discord) and issues the ops.
 
 import { inTrash } from "./apply.js";
@@ -6,9 +6,9 @@ import type { IndexStore } from "./store.js";
 import type { NodeId, UploadId } from "./types.js";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-/** Trash retention (§6.2: „Kosz: 30 dni”). */
+/** Trash retention („Kosz: 30 dni”). */
 export const TRASH_RETENTION_MS = 30 * DAY_MS;
-/** Fragments of purged/superseded versions stay this long, so every kept base snapshot still resolves (§6.2). */
+/** Fragments of purged/superseded versions stay this long, so every kept base snapshot still resolves. */
 export const FRAGMENT_RETENTION_MS = 30 * DAY_MS;
 
 /**

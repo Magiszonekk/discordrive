@@ -1,5 +1,5 @@
-// `discordrive channels`: the operator removes/retires/moves POOL webhooks of an e2ee instance
-// (zlecenie 2026-10-13-webhooki p. 1, owner decision 6). The CLI works on the database only, next
+// `discordrive channels`: the operator removes/retires/moves POOL webhooks of an e2ee instance.
+// The CLI works on the database only, next
 // to the running server (separate connection); the server sees retire/remove at once (PRAGMA
 // data_version) and executes a queued move on its background pass.
 import { mkdtempSync, writeFileSync } from "node:fs";

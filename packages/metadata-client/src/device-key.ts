@@ -1,4 +1,4 @@
-// Device signing keys and auth messages (koncept §3.3, decision #13 of 2026-10-06).
+// Device signing keys and auth messages (decision #13 of 2026-10-06).
 //
 // Every device has its own Ed25519 key pair. The server stores only public
 // keys; signing in = signing a random one-shot challenge, which yields a

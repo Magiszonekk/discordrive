@@ -1,4 +1,4 @@
-// Randomized test (koncept §5.4): thousands of mixed, concurrent operation
+// Randomized test: thousands of mixed, concurrent operation
 // sequences from several devices against one server, then invariants.
 //
 // Each fast-check case is a list of abstract actions. An interpreter turns
@@ -18,7 +18,7 @@
 //  I4 no content lost without a delete operation whose author had seen it
 //     (or an identical-content replacement, Q7); unseen content never
 //     disappears silently: it stays visible, or it went to the trash together
-//     with a folder and its author was notified (§5.2.3 exception, Q1 + #11),
+//     with a folder and its author was notified (exception; Q1 + #11),
 //  I5 no file points at physically deleted fragments,
 //  I6 snapshot + log tail == full log (also through JSON serialization).
 //
@@ -450,7 +450,7 @@ export function runCase(actions: Action[], stats: Stats): void {
 
   // I1 + I2 + I3: replay the full log, checking every prefix.
   // Also: an entry that was not applied (skipped/rejected) must not change
-  // the state at all (all-or-nothing, §4), only headSeq.
+  // the state at all (all-or-nothing), only headSeq.
   const full = initIndex(new MemoryIndexStore());
   const results: ApplyResult[] = [];
   for (const e of log) {

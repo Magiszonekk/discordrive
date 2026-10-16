@@ -20,7 +20,7 @@ const DAY = 24 * 3600_000;
 const ACCT = "acct-ret";
 const HOOK = { id: "888888888888888888", url: "mem://hook/8" };
 
-describe("snapshot retention (§6.2: 7 daily + 4 weekly bases)", () => {
+describe("snapshot retention (7 daily + 4 weekly bases)", () => {
   it("selectRetained keeps the current base, one per day for 7 days, one per week for 4 weeks", () => {
     const t0 = Date.UTC(2026, 6, 6); // a Monday
     const bases: BaseRef[] = [];
@@ -35,7 +35,7 @@ describe("snapshot retention (§6.2: 7 daily + 4 weekly bases)", () => {
     expect(keep.length).toBe(7 + 4); // current base is also the newest daily
     const oldest = keep.at(-1)!;
     const back = (t0 + 60 * DAY - oldest.createdAt) / DAY;
-    expect(back).toBeGreaterThan(28); // ~30 days back (§6.2)
+    expect(back).toBeGreaterThan(28); // ~30 days back
     expect(back).toBeLessThan(36);
   });
 
@@ -115,7 +115,7 @@ describe("snapshot retention (§6.2: 7 daily + 4 weekly bases)", () => {
   });
 });
 
-describe("fragment deletion respects kept bases (§6.2)", () => {
+describe("fragment deletion respects kept bases", () => {
   it("a released upload is deletable only after 30 days and once every kept base is newer than the release", async () => {
     const { deletableUploadsWithRetention, emptyPointer } = await import("../src/index.js");
     const { MemoryIndexStore, initIndex } = await import("@ddv4/sync-core");

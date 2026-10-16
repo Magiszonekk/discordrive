@@ -48,7 +48,7 @@ describe("DiscordWebhookTransport against FakeDiscord", () => {
     await expect(inspectForVault(t, h1.url.replace(/\/[^/]+$/, "/" + "Z".repeat(68)))).rejects.toMatchObject({ status: 401 });
   });
 
-  it("a per-channel limit (like §7) is absorbed by the pacer; the upload completes", async () => {
+  it("a per-channel limit is absorbed by the pacer; the upload completes", async () => {
     fake = new FakeDiscord();
     const origin = await fake.listen();
     fake.perChannelPerMin = 6;

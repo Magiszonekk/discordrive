@@ -1,4 +1,4 @@
-// Removing a channel (webhook) of the e2ee/plain instance (zlecenie 2026-10-13-webhooki p. 1).
+// Removing a channel (webhook) of the e2ee/plain instance.
 //
 // Three ways out for a webhook W (account scope: Settings → Channels; pool scope: the operator,
 // `discordrive channels`):
@@ -32,7 +32,7 @@ import { POOL, type InstanceHooks, type HookInfo } from "./instance-hooks.js";
 import type { SenderHook } from "./sender.js";
 import { snapshotTables } from "./snapshots-ext.js";
 
-/** Rough throughput of one channel for ETAs (koncept §7: ~30 posts/min of ≤ 10 MiB → a few MiB/s). */
+/** Rough throughput of one channel for ETAs (~30 posts/min of ≤ 10 MiB → a few MiB/s). */
 export const MOVE_BYTES_PER_S_PER_CHANNEL = 4 * 1024 * 1024;
 export const MOVE_POSTS_PER_MIN_PER_CHANNEL = 30;
 /** A paused job (Discord unavailable, network) is retried this long after the failure. */

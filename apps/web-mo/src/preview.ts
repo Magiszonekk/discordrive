@@ -1,4 +1,4 @@
-// File preview (zlecenie 2026-10-13-webhooki p. 4): a full-screen dialog over the file list with
+// File preview: a full-screen dialog over the file list with
 // ←/→ (keys and buttons) to the previous / next FILE of the folder (folders skipped, across the
 // keyset pages of core.list), Esc to close and a Download button.
 //

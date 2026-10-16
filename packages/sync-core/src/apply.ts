@@ -1,16 +1,16 @@
-// Deterministic application of log entries to the index (koncept §5).
+// Deterministic application of log entries to the index.
 //
 // Contract:
-//  - The result depends only on the current state and the entry (§5.2.2). No
+//  - The result depends only on the current state and the entry. No
 //    clocks, no randomness, no locale, no engine-dependent Unicode tables.
 //    Iteration over children is always sorted by ID.
-//  - Order comes only from entry.seq assigned by the server (§5.2.1).
+//  - Order comes only from entry.seq assigned by the server.
 //  - A malformed or semantically invalid operation is never an exception: it
 //    is consumed as a deterministic no-op ("rejected") with a notice, so one
 //    bad client cannot stall every replica. Exceptions mean a bug in the core
 //    (or a log gap / unsupported rules version).
 //  - Each entry is applied in a write overlay and committed atomically. A
-//    group op (§4, owner decision Q9, DECISIONS.md): members skipped by a
+//    group op (owner decision Q9; DECISIONS.md): members skipped by a
 //    conflict rule are left out (each in its own nested overlay, so a skipped
 //    member never leaves traces) and the rest applies, with one summary
 //    notice; a rejected (invalid) member rolls back the whole group.
@@ -693,7 +693,7 @@ function opTrash(ctx: Ctx, op: TrashOp): Outcome {
   }
   if (node.trashed) return "noop";
   if (node.content && ctx.unseen(contentMark(node.content))) {
-    // Rule 3 in the other order, owner decision Q2: new content the author
+    // Rule 3 in the other order, decision Q2 in packages/sync-core/DECISIONS.md: new content the author
     // has not seen keeps the file alive (with rule 3's order the file would
     // come back from the trash anyway). The notice is silent.
     ctx.notice({ code: "trash_skipped_unseen_content", nodeId: node.id });
@@ -709,8 +709,8 @@ function contentMark(c: FileVersion): ChangeMark {
 }
 
 /**
- * Rule 4 in the other order, owner decisions Q1 and #11 (koncept §5.2.3
- * exception): trashing a folder trashes the WHOLE folder, including nodes the
+ * Rule 4 in the other order, owner decisions Q1 and #11 (the folder-exception
+ * rule): trashing a folder trashes the WHOLE folder, including nodes the
  * trashing author had not seen (added, moved in or restored after its
  * baseSeq) and files with unseen new content. Nothing is rescued to
  * „Odzyskane”; instead every device whose unseen change went to the trash

@@ -1,4 +1,4 @@
-// Metadata-only client (koncept §3.1): DriveClient whose blobs go straight
+// Metadata-only client: DriveClient whose blobs go straight
 // between the device and the user's webhooks (WebhookBlobStore); only the
 // index operation goes through the arbiter. Works in Node and in the browser
 // (fetch + WebCrypto). Marker for the build-time mode check: ddn-webhook-vault.
@@ -39,7 +39,7 @@ export interface MetadataClientOptions {
   device: DeviceInfo;
   arbiter: ArbiterApi;
   transport: WebhookTransport;
-  /** Webhooks from the user's vault (koncept §3.2). Fragments are spread over their channels. */
+  /** Webhooks from the user's vault. Fragments are spread over their channels. */
   webhooks: WebhookRef[];
   store?: IndexStore;
   pacer?: ChannelPacer;
@@ -66,7 +66,7 @@ export interface MetadataClientOptions {
   links?: LinkAheadOptions;
 }
 
-/** Blobs on the user's webhooks, paced per channel on this device (koncept §7, §8.2). */
+/** Blobs on the user's webhooks, paced per channel on this device. */
 export class WebhookBlobStore implements BlobStore {
   readonly marker = WEBHOOK_VAULT_MARKER;
   readonly pacer: ChannelPacer;

@@ -1,4 +1,4 @@
-// Background snapshots of the e2ee/plain instance (koncept §6.2, docs/stage3-modes.md §6).
+// Background snapshots of the e2ee/plain instance.
 //
 // The server writes, for every account with new log entries, the same segment chain the
 // metadata-only client writes (snapshots.ts: writeSnapshot, pointer message edited in place),
@@ -14,7 +14,7 @@
 // the database an operator can rebuild every account's log from Discord with the instance key,
 // the pool webhooks and that file (readLogChain + Sequencer initialLog; test in snapshots test).
 //
-// Removing channels (zlecenie 2026-10-13-webhooki p. 1, owner decision 3): a webhook holding an
+// Removing channels: a webhook holding an
 // account's pointer message or a segment of its chain is "critical". s_snap_objs records where
 // every object of a chain lies (written on every segment; chains from before it are walked once,
 // backfillSnapshotObjects). New segments go only to the pointer's webhook, so an account's chain
@@ -413,7 +413,7 @@ export class SnapshotsExtension implements ServerExtension {
 
 /**
  * Rebuild one account's encrypted log from Discord after the server database is gone
- * (operator path, docs/stage3-modes.md §6): instance key + webhooks + pointer location.
+ * (operator path): instance key + webhooks + pointer location.
  */
 export async function rebuildAccountLog(instanceKey: Buffer, hooks: InstanceHooks, sender: DiscordSender, accountId: string, loc: PointerLocation): Promise<EncryptedEntry[]> {
   const { entries } = await readLogChain(serverBlobIO(hooks, sender, accountId), serverSnapshotKey(instanceKey, accountId), accountId, loc);

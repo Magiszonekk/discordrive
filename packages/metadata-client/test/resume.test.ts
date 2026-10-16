@@ -1,4 +1,4 @@
-// Resume after a reload (zlecenie 2026-10-15-transfery §2). Upload: a "tab" dies midway (network gone for
+// Resume after a reload. Upload: a "tab" dies midway (network gone for
 // good); a new client on the same index + journal sends only the missing fragments, under the same upload ID,
 // and the file is complete and correct. A changed file is not mixed in; a cancel forgets the journal.
 // Download: stopped after k fragments, continued from k with the saved hash state → the same SHA-256.

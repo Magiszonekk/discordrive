@@ -1,6 +1,6 @@
-// discordrive-next metadata-only server (koncept §3.4): arbiter of the
+// discordrive-next metadata-only server: arbiter of the
 // encrypted operation log, webhook vault storage, upload leases.
-// Sees only what §3.3 allows: account/devices, opId, rulesVersion, baseSeq,
+// Sees only the plaintext fields its contract allows: account/devices, opId, rulesVersion, baseSeq,
 // leaseGuard, sizes of encrypted blobs, server times.
 //
 // Reference implementation for stage 2: node:http + node:sqlite, binds to
@@ -54,7 +54,7 @@ export const DEFAULT_RATE_LIMITS: Record<"auth" | "signup" | "mailbox" | "share"
 const MAX_WAIT_S = 30;
 
 /**
- * A mode plugs its server side in here (stage 3, docs/stage3-modes.md): e2ee/plain add
+ * A mode plugs its server side in here (stage 3): e2ee/plain add
  * instance webhooks, blob upload/download and background work. Metadata only adds nothing.
  */
 export interface ServerExtension {
@@ -107,7 +107,7 @@ export interface ServerOptions {
   rateLimits?: Partial<typeof DEFAULT_RATE_LIMITS> | false;
   /** Serve the built web app from the same origin. */
   web?: StaticOptions;
-  /** Instance bot for share links (§3.7). Without it shares answer 503. */
+  /** Instance bot for share links. Without it shares answer 503. */
   bot?: BotRefresher;
   /** Allowed CDN origin of shared attachments (tests: the fake Discord). */
   cdnOrigins?: string[];
@@ -159,7 +159,7 @@ export class DdnServer {
       CREATE TABLE IF NOT EXISTS vault (account_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, blob TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS pairing (id TEXT PRIMARY KEY, msg TEXT NOT NULL, created_at INTEGER NOT NULL);
       -- Cleanup bookkeeping (metadata only: the client deletes fragments, the server remembers
-      -- which uploads are done and when the account was last cleaned; upload IDs are plaintext, §3.3).
+      -- which uploads are done and when the account was last cleaned; upload IDs are plaintext already).
       CREATE TABLE IF NOT EXISTS gc_runs (account_id TEXT PRIMARY KEY, last_run_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS gc_done (account_id TEXT NOT NULL, upload_id TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (account_id, upload_id));
     `);
@@ -184,7 +184,7 @@ export class DdnServer {
   readonly extensions: ServerExtension[];
 
   /**
-   * One instance = one mode, forever (koncept §2): the first start writes the mode into the
+   * One instance = one mode, forever: the first start writes the mode into the
    * database; a later start with another mode refuses to run instead of misreading the data.
    */
   private lockMode(mode: string): void {
@@ -335,7 +335,7 @@ export class DdnServer {
     return out;
   }
 
-  // --- cleanup bookkeeping (metadata only, zlecenie 2026-10-13 p. 2)
+  // --- cleanup bookkeeping (metadata only)
 
   gcStatus(s: Session): { now: number; lastRunAt: number | null; firstEntryAt: number | null; doneCount: number } {
     const run = this.db.prepare("SELECT last_run_at FROM gc_runs WHERE account_id = ?").get(s.accountId) as { last_run_at: number } | undefined;
@@ -359,7 +359,7 @@ export class DdnServer {
     if (b.run === true) this.db.prepare("INSERT INTO gc_runs (account_id, last_run_at) VALUES (?, ?) ON CONFLICT(account_id) DO UPDATE SET last_run_at = excluded.last_run_at").run(s.accountId, this.now());
   }
 
-  // --- pairing mailbox (§3.8): one opaque message per pairingId, deleted on read, 10 min TTL.
+  // --- pairing mailbox: one opaque message per pairingId, deleted on read, 10 min TTL.
   // Writing needs a session (an existing device); reading does not (the new
   // device has no credential yet; the pairingId is a 128-bit secret from the QR).
 
@@ -627,7 +627,7 @@ async function readJson(req: IncomingMessage, max = MAX_BODY_BYTES): Promise<unk
   }
 }
 
-/** Only the plaintext fields the server may see, with strict shapes (§3.3). */
+/** Only the plaintext fields the server may see, with strict shapes. */
 function validateEnvelope(b: unknown, maxPayload = MAX_PAYLOAD_B64): EncryptedEnvelope {
   const e = b as Record<string, unknown>;
   if (!e || typeof e !== "object") throw new HttpError(400, "bad_envelope");

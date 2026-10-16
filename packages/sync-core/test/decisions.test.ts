@@ -21,7 +21,7 @@ import {
 import { A, B, C, H1, H2, Scenario, codes, visibleCodes } from "./helpers.js";
 import { checkNoSilentLoss, checkTrashSawContent } from "./oracles.js";
 
-describe("rules version (§5.4)", () => {
+describe("rules version", () => {
   it("decisions bumped the rules version; v1 logs are no longer replayable", () => {
     expect(RULES_VERSION).toBe(3);
     expect(MIN_REPLAY_RULES_VERSION).toBe(2);
@@ -180,7 +180,7 @@ describe("Q1: trashing a folder takes unseen nodes along, with a notice", () => 
   });
 });
 
-describe("#11: Q1 literally, the whole folder goes (koncept §5.2.3 exception)", () => {
+describe("#11: Q1 literally, the whole folder goes (the folder exception)", () => {
   /** Laptop (A) and phone (B) see Raporty/q3.xlsx; B edits q3 and adds q4 offline; A trashes Raporty. */
   function raporty() {
     const s = new Scenario();

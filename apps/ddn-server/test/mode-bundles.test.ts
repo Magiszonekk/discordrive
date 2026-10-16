@@ -1,4 +1,4 @@
-// Build-time mode (koncept §2, docs/stage3-modes.md §2): every mode's web bundle and server
+// Build-time mode: every mode's web bundle and server
 // bundle contains its own marker and none of the code that belongs to other modes. Greps the
 // real build output for markers that live next to that code:
 //   ddn-mode-marker:<mode>  the mode file itself (web modes/<mode>.ts, server modes/<mode>.ts)

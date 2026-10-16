@@ -1,4 +1,4 @@
-// Rules v3 (zlecenie 2026-10-13-webhooki): `relocate` moves a version to other storage
+// Rules v3: `relocate` moves a version to other storage
 // locations without touching its content, and content may carry piece locations. Rules-2
 // entries replay exactly as before.
 import { describe, expect, it } from "vitest";

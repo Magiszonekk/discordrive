@@ -1,4 +1,4 @@
-// Video streaming through a service worker (koncept §3.1) in headless Chromium:
+// Video streaming through a service worker in headless Chromium:
 // a real WebM is uploaded (encrypted, 64 KiB fragments) in Node; the page
 // installs a service worker that decrypts fragments on demand and answers
 // Range requests; <video> must load metadata, play, and seek near the end

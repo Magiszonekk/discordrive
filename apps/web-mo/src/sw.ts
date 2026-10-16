@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-// Service worker: /ddn/file/<id> with Range (koncept §3.1). It has no
+// Service worker: /ddn/file/<id> with Range. It has no
 // keys or index itself; it asks a controlled page, which forwards to the app
 // worker (AppCore.readRange). Keeps the single OPFS owner rule intact.
 import { parseRange, STREAM_PREFIX, MAX_OPEN_RANGE } from "@ddv4/metadata-client";
@@ -19,7 +19,7 @@ async function ask(clientId: string, msg: unknown): Promise<{ ok: boolean; resul
   });
 }
 
-// ── streamed downloads (zlecenie 2026-10-13-transfer §3) ──
+// ── streamed downloads ──
 // The page hands over a MessagePort whose other end is the app worker, then opens
 // /ddn/download/<token> in a hidden frame; the response streams the decrypted file, one fragment per
 // pull (backpressure down to the fragment fetches), and the browser saves it as a download.

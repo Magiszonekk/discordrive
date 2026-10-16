@@ -1,4 +1,4 @@
-// Share links, client side (koncept §3.7).
+// Share links, client side.
 //
 // Owner: collects the attachment addresses of ONE file version (manifest
 // first, then fragments in order), seals {name, size, sha256, mime} with that

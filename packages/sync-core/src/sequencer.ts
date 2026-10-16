@@ -1,4 +1,4 @@
-// Server-side arbiter model (koncept §3.4 role 3, §5.1, §5.4, rule 8, rule 9).
+// Server-side arbiter model (role 3; rule 8; rule 9).
 //
 // The real server stores the log in Postgres and sees only the plaintext
 // envelope fields (opId, rulesVersion, baseSeq, sizes); the op payload is
@@ -11,7 +11,7 @@ import type { OpEnvelope, UploadId } from "./types.js";
 /**
  * The envelope fields the arbiter reads. In metadata-only mode everything
  * else (device, clocks, the op) is an encrypted payload the server cannot
- * read (koncept §3.3, DECISIONS Q6), so the Sequencer is generic over the
+ * read (DECISIONS Q6), so the Sequencer is generic over the
  * envelope type; the default is the plaintext OpEnvelope used by tests.
  */
 export interface SequencedEnvelope {
@@ -27,7 +27,7 @@ export type SubmitResult<E extends SequencedEnvelope = OpEnvelope> =
   | { status: "accepted"; entry: Sequenced<E> }
   /** Rule 9: known opId. Returns the original entry so a retrying client can confirm it. */
   | { status: "duplicate"; entry: Sequenced<E> }
-  /** §5.4: client rules too old (or unknown to this server). Client must update before writing. */
+  /** Client rules too old (or unknown to this server). Client must update before writing. */
   | { status: "rules_version_rejected"; minRulesVersion: number; maxRulesVersion: number }
   /** Rule 8: the device does not hold an unexpired lease on a guarded upload. */
   | { status: "lease_rejected"; uploadId: UploadId };
@@ -114,7 +114,7 @@ export class Sequencer<E extends SequencedEnvelope = OpEnvelope> {
     return this.log.slice(Math.max(0, afterSeq), Math.max(0, afterSeq) + limit);
   }
 
-  // --- Upload leases (outside the log, plaintext on the server; §3.3, rule 8)
+  // --- Upload leases (outside the log; plaintext on the server; rule 8)
   //
   // Protocol (rule 8):
   //  uploader: renewLease(U) -> upload_begin [guard U], wait until it is in

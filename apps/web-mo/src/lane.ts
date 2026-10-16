@@ -1,5 +1,5 @@
-// A second connection to Discord's CDN for the web app (zlecenie 2026-10-15-transfery §1, evidence in
-// docs/evidence/2026-10-15-connections): this page runs in a hidden <iframe sandbox="allow-scripts">.
+// A second connection to Discord's CDN for the web app: this page runs in a hidden
+// <iframe sandbox="allow-scripts">.
 // Its origin is opaque, so Chromium keys its connections apart from the app's (Network State
 // Partitioning): the same request from here goes over ANOTHER HTTP/2 / HTTP/3 connection. Discord's CDN
 // answers `Origin: null` with CORS for the fragment type we use (.txt).

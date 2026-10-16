@@ -326,7 +326,7 @@ let resetJoin: (() => void) | null = null;
 const SKIP_KEY = "ddn.skip-welcome";
 
 const currentFolder = () => (route.name === "files" ? route.folder : "root");
-// View (List / Tiles) and sort of the file list, remembered per device (zlecenie 2026-10-14-ui p. 2-3).
+// View (List / Tiles) and sort of the file list, remembered per device.
 type View = "list" | "tiles";
 type SortBy = "name" | "size" | "date";
 const VIEW_KEY = "ddn.view";
@@ -492,7 +492,7 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
   const name = h("td", { class: "c-name" });
   const acts = h("span", { class: "acts" });
   const iconBtn = (ic: string, label: string, title: string, tone = "") => h("button", { class: `iconbtn${tone ? ` ${tone}` : ""}`, type: "button", "aria-label": label, title }, icon(ic));
-  // Move to trash right next to Download (zlecenie 2026-10-14-ui p. 1): no question (the trash can be
+  // Move to trash right next to Download: no question (the trash can be
   // undone), the toast offers Undo. Phone list cards keep it in the menu (CSS), there is no room.
   const trashBtn = () => {
     const b = iconBtn("trash", t("act.trash.aria", { name: r.name }), t("act.trash"), "danger quiet row-trash");
@@ -618,7 +618,7 @@ async function openPlayer(id: string, name: string, size: number) {
   if (!d.open) d.showModal();
   void v.play().catch(() => {});
 }
-// File preview (zlecenie 2026-10-13-webhooki p. 4): logic in preview.ts; ←/→ walk the open folder
+// File preview: logic in preview.ts; ←/→ walk the open folder
 // (or the search hits in plain).
 let searchRows: PreviewRow[] = [];
 const channelsUi = createChannelsUi({
@@ -933,7 +933,7 @@ function wireSearch() {
 }
 
 // ── upload queue (UploadProgress) ───────────────────────────────────
-// The panel closes itself when the queue is done (owner's note 2026-10-14): ~5 s when everything went
+// The panel closes itself when the queue is done: ~5 s when everything went
 // in, longer after a failure or a cancel (time to read it); hover / focus pause the countdown, × closes
 // at once, a new upload cancels it. Files that failed stay in the warning bar (Details, Retry).
 const QUEUE_CLOSE_OK_MS = 5000;
@@ -1357,7 +1357,7 @@ async function paintUnfinished() {
   );
 }
 
-// ── downloads panel (zlecenie 2026-10-13-transfer §1): progress, speed, time left, cancel ──
+// ── downloads panel: progress, speed, time left, cancel ──
 let dlRunning = 0;
 let dlCloseTimer = 0;
 function dlMeta() {
@@ -1524,7 +1524,7 @@ async function moveItems(ids: string[], target: string, targetName: string, firs
 }
 
 // ── menus: the row menu (⋯) and the context menu (right click, Menu key / Shift+F10, long press) ──
-// One floating menu ([data-ddn=row-menu]) for all of them (zlecenie 2026-10-14-ui p. 2). Under a button
+// One floating menu ([data-ddn=row-menu]) for all of them. Under a button
 // (⋯) or at the pointer; arrows / Home / End move, Esc closes, focus goes back to where it came from.
 type MenuRow = { id: string; name: string; kind: "file" | "folder"; size: number | null; unavailable?: string[] };
 type MenuEntry = { ic: string; label: string; key: string; run: () => void; danger?: boolean; checked?: boolean } | "sep" | { group: string };
@@ -1980,7 +1980,7 @@ function wireSelection() {
   });
 }
 
-// ── Settings → Storage (cleanup of the trash and of old fragments, §6.2 / Q4) ──
+// ── Settings → Storage (cleanup of the trash and of old fragments; / Q4) ──
 let storageSeq = 0;
 async function renderStorage() {
   // Calls overlap (cleanup start/end events, renders): only the newest answer is painted.
@@ -2021,7 +2021,7 @@ function wireStorage() {
     });
 }
 
-// ── Settings → Diagnostics: transfer logs (zlecenie 2026-10-13-transfer §2) ──
+// ── Settings → Diagnostics: transfer logs ──
 const TLOG_KEY = "ddn.transferLog";
 function storedTransferLog(): { on: boolean; names: boolean } {
   try {
@@ -2131,7 +2131,7 @@ function wireDiagnostics() {
     });
 }
 
-// ── Settings → Security: optional password-protected account key (§3.8) ──
+// ── Settings → Security: optional password-protected account key ──
 let pwEnabled = false;
 async function renderSecurity() {
   const st = await core.passwordKeyStatus().catch(() => null);

@@ -1,4 +1,4 @@
-// Texts per mode (zlecenie 2026-10-13 p. 4): what the web app says must be true in its mode.
+// Texts per mode: what the web app says must be true in its mode.
 // The build resolves the dictionaries per mode (build.ts resolveTexts), so a bundle carries only
 // the texts its mode shows. Plain: the server reads files and names, so no text may suggest
 // end-to-end encryption or a server that cannot see the content (lint like the on* one).

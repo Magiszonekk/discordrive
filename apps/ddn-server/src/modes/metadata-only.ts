@@ -1,4 +1,4 @@
-// Metadata-only instance: the server is an encrypted cache (koncept §3.4). Nothing to add.
+// Metadata-only instance: the server is an encrypted cache. Nothing to add.
 import type { ServerMode } from "./types.js";
 
 export const MODE_MARKER = "ddn-mode-marker:metadata-only";

@@ -1,4 +1,4 @@
-// Index snapshots (koncept §6.2): the tree layer only (§4.1: manifests are
+// Index snapshots: the tree layer only (manifests are
 // stored next to the fragments and never inside the snapshot).
 //
 // The snapshot is canonical: nodes and uploads sorted by ID, object keys in a

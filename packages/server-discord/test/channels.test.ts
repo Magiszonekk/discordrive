@@ -1,4 +1,4 @@
-// Removing a channel on the e2ee/plain instance (zlecenie 2026-10-13-webhooki p. 1): per-channel
+// Removing a channel on the e2ee/plain instance: per-channel
 // stats, critical detection (pointer, segments, backfill of an older chain), retire, move and
 // remove (resumable, aliases for the clients' old placements, share links, chain rewrite), remove
 // anyway (computed unavailability, re-paste, bot recovery), plain reads after a move, pool scope.

@@ -1,4 +1,4 @@
-// Minimal WebSocket push for new log entries (koncept §3.4 role 4).
+// Minimal WebSocket push for new log entries (role 4).
 // RFC 6455 server side over node:http "upgrade", no dependency. The server
 // only sends small text frames ({"type":"head","seq":N}); the client then
 // reads the entries through the normal authenticated HTTP API, so the socket

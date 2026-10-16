@@ -69,8 +69,8 @@ function sink(): ByteSink & { data(): Uint8Array } {
   };
 }
 
-describe("snapshots on Discord + pointer message (koncept §6.2)", () => {
-  it("segments + base + segments restore the exact tree with no server (rescue kit, §3.5)", async () => {
+describe("snapshots on Discord + pointer message", () => {
+  it("segments + base + segments restore the exact tree with no server (rescue kit)", async () => {
     const w = world();
     const a = w.mk("dev-A");
     const io = clientBlobIO(a, w.transport, 400); // tiny parts: the base is split

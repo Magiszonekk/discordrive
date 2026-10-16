@@ -1,4 +1,4 @@
-// Live speed and time left of a transfer (zlecenie 2026-10-13-transfer §1): a moving average over
+// Live speed and time left of a transfer: a moving average over
 // the last WINDOW_MS of byte progress samples, ETA from it. Pure (the clock is passed in), so the
 // tests drive it without timers.
 

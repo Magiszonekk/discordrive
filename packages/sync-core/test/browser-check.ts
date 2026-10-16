@@ -1,4 +1,4 @@
-// Cross-engine determinism check (koncept §5.2.2): replay the same random logs
+// Cross-engine determinism check: replay the same random logs
 // in Node and in a real browser engine (headless Chromium via Playwright) and
 // compare the canonical states byte for byte.
 //

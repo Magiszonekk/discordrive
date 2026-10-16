@@ -1,7 +1,6 @@
 # @ddv4/metadata-client
 
-Etap 2 discordrive-next: klient trybu metadata only (koncept §3) na rdzeniu `@ddv4/sync-core`.
-Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
+Etap 2 discordrive-next: klient trybu metadata only na rdzeniu `@ddv4/sync-core`.
 
 ## Co działa (przekrój 1)
 
@@ -13,25 +12,25 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
 - **Download**: `manifestRef` → manifest (świeży link CDN przez `GET` wiadomości webhookiem)
   → fragmenty, sprawdzenie `ciphertextHash` każdego fragmentu, rozmiaru i SHA-256 całości.
 - **Limiter** (`ChannelPacer`): jeden kubełek na **kanał** (limit Discorda jest per kanał, ~30
-  wiadomości/min; pomiar w koncepcie §7), start 30/min, po 429 `shared` blokada na
+  wiadomości/min), start 30/min, po 429 `shared` blokada na
   `retry_after` i spadek tempa ×0,8, powolny powrót do 36/min.
 - **Klucz konta** (`account-key.ts`): losowe 256 bitów, podklucze HKDF `ddn-vault-v1`,
   `ddn-op-v1`, `ddn-snapshot-v1`; AES-256-GCM z AAD wiążącym szyfrogram z kontekstem.
-- **Sejf webhooków** (§3.2, `vault.ts`): jeden zaszyfrowany blob na konto, serwer trzyma
+- **Sejf webhooków** (`vault.ts`): jeden zaszyfrowany blob na konto, serwer trzyma
   tylko `{revision, blob}`. Zapis compare-and-swap (dwa urządzenia naraz: oba wpisy
   zostają), ochrona przed cofnięciem rewizji przez serwer, AAD = konto + rewizja.
   Dodanie webhooka sprawdza URL przez `GET` webhooka (bez wysyłania wiadomości) i zapisuje
   ID kanału. Kreator (decyzja #12): wymagany 1 kanał, zachęta do 3–4.
-- **Zaszyfrowany log operacji** (§3.3, `op-crypto.ts`): serwer widzi tylko `opId`,
+- **Zaszyfrowany log operacji** (`op-crypto.ts`): serwer widzi tylko `opId`,
   `rulesVersion`, `baseSeq`, `leaseGuard` i rozmiar `payload`; reszta (urządzenie, czasy,
   operacja z nazwami i kluczami plików) jest zaszyfrowana, a AAD wiąże ją z kontem i
   jawnymi polami. Wpis, którego nie da się odszyfrować, każda replika zamienia w ten sam
   `invalid_op`. Dzierżawy sprawdzane względem urządzenia sesji, nie zaszyfrowanej koperty.
-- **Drzewo na dysku** (§4.1, `node/sqlite-store.ts`, wbudowane `node:sqlite`): unikalność
+- **Drzewo na dysku** (`node/sqlite-store.ts`, wbudowane `node:sqlite`): unikalność
   nazw wymuszana indeksem częściowym, stronicowanie keyset po `(name_key, id)`. Ten sam stan
   co `MemoryIndexStore` na losowych logach z symulacji etapu 1 (40 w `npm test`,
   `SQLITE_RUNS=500` sprawdzone). CLI trzyma `index.db` i przy starcie pobiera tylko ogon logu.
-- **Snapshoty i wiadomość wskaźnikowa** (§6.2, `snapshots.ts`): segmenty (zaszyfrowane wpisy
+- **Snapshoty i wiadomość wskaźnikowa** (`snapshots.ts`): segmenty (zaszyfrowane wpisy
   logu, łańcuch od seq 1), baza (drzewo, gzip, dzielone na części), jedna wiadomość
   wskaźnikowa edytowana `PATCH`-em, która nigdy się nie cofa. Polityka `decideSnapshot`:
   1 min ciszy / max 5 min, baza przy 20 % lub 7 dniach, tylko na łączu nielimitowanym.
@@ -42,12 +41,12 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   Przywracanie na dowolny moment w tym oknie (`restoreFromDiscord(..., atSeq)`).
   `deletableUploadsWithRetention`: fragmenty kasowane dopiero, gdy żadna trzymana baza ich nie
   wskazuje. `SnapshotScheduler.tick()` (tylko urządzenie główne; telefon tylko segmenty).
-- **Serwer** (§3.4, `node/server.ts`, `node:http` + `node:sqlite`, tylko 127.0.0.1): arbiter
+- **Serwer** (`node/server.ts`, `node:http` + `node:sqlite`, tylko 127.0.0.1): arbiter
   zaszyfrowanego logu (Sequencer per konto, duplikaty, wersja reguł, dzierżawy względem
   urządzenia z sesji), sejf (CAS), urządzenia (dodanie, odwołanie), long-poll
   `GET /v1/log?wait=` oraz WebSocket `/v1/notify` (bez zależności, RFC 6455; wysyła tylko
   „head = N”, dane idą zwykłym API; wejście jednorazowym biletem z `POST /v1/notify-ticket`,
-  więc token sesji nie trafia do URL-a). `HttpApi.subscribe` łączy się ponownie z backoffem. Przyjmuje tylko jawne pola z §3.3 (inne pola koperty = 400).
+  więc token sesji nie trafia do URL-a). `HttpApi.subscribe` łączy się ponownie z backoffem. Przyjmuje tylko jawne pola koperty (inne pola = 400).
   Klient: `HttpApi` (fetch, Node + przeglądarka).
 - **Logowanie urządzeń** (decyzja #13, `device-key.ts`, `node/auth.ts`): para Ed25519 na
   urządzenie, serwer zna tylko klucze publiczne. Logowanie = podpis jednorazowego wyzwania
@@ -61,7 +60,7 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   łączu taryfowym; grupa purge, Q9), Q10 licznik `invalid_op` per urządzenie z jednym
   komunikatem po 5, Q5 ostrzeżenie o cudzej nazwie nie-NFC. `MetadataClient.observer`
   zasilany przy każdym `pull`.
-- **Parowanie urządzeń** (§3.8, `pairing.ts`): kod/QR `ddn-pair1:` z efemerycznym kluczem
+- **Parowanie urządzeń** (`pairing.ts`): kod/QR `ddn-pair1:` z efemerycznym kluczem
   ECDH P-256 i kluczem publicznym Ed25519 nowego urządzenia; stare urządzenie rejestruje ten
   klucz swoim podpisem i szyfruje do nowego urządzenia klucz konta, serwer przekazuje jedną nieczytelną wiadomość (skrzynka
   jednorazowa, 10 min). Obie strony pokazują 6-cyfrowy kod (SAS): podmiana klucza przez
@@ -98,7 +97,7 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
   websocket przyjmuje ten sam origin.
 - **Nazwy urządzeń** (`device-names.ts`): zaszyfrowane kluczem konta, `PUT /v1/devices/<id>/name`.
 - **Postęp uploadu**: `MetadataClient.upload(src, name, parent, { onProgress })`.
-- **Udostępnianie** (§3.7, `share.ts` + `node/shares.ts`): `prepareShare` → `POST /v1/shares`,
+- **Udostępnianie** (`share.ts` + `node/shares.ts`): `prepareShare` → `POST /v1/shares`,
   link `/s/<id>#<klucz pliku>`; odbiorca `openShare` → `GET /v1/shares/<id>/urls` (serwer
   odświeża linki botem instancji, `DiscordBotRefresher`), pobranie z CDN, SHA-256.
 - **Nazwy załączników `.txt`** (`BLOB_EXT`): CDN Discorda daje CORS tylko dla części
@@ -111,7 +110,7 @@ Plan i kolejność: [PLAN-etap2.md](PLAN-etap2.md).
 npm test -w @ddv4/metadata-client          # w pamięci (MemoryTransport), bez sieci
 DDN_LIVE=1 DDN_LIVE_WEBHOOK_FILE=~/.config/discordrive-next/webhooks/<nazwa>.url \
   npx vitest run test/live.test.ts         # na żywo, TYLKO webhook z serwera a test Discord server; sprząta po sobie
-node scripts/webhook-ratelimit.mjs run ... # pomiar limitów (koncept §7)
+node scripts/webhook-ratelimit.mjs run ... # pomiar limitów
 CHROMIUM_PATH=... npm run check:browser    # klient w headless Chromium + serwer HTTP na 127.0.0.1
 npm run server                             # goły serwer testowy: DDN_DB, DDN_PORT; tylko 127.0.0.1
                                            # instancja z aplikacją: apps/ddn-server (`discordrive setup`)

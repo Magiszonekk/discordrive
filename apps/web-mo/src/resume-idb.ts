@@ -1,4 +1,4 @@
-// Unfinished transfers on this device (zlecenie 2026-10-15-transfery §2: resume after a reload).
+// Unfinished transfers on this device (resume after a reload).
 // IndexedDB of this origin, one object store, plain JSON values; used from the app worker.
 // An upload's header holds the file key of the unfinished version (the device already keeps the
 // account key in IndexedDB the same way, keystore.ts); one small entry per stored fragment.

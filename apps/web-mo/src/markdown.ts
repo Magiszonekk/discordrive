@@ -1,4 +1,4 @@
-// Small, safe Markdown renderer for the file preview (zlecenie 2026-10-13-webhooki p. 4).
+// Small, safe Markdown renderer for the file preview.
 //
 // It never parses HTML: the output is a tree of a few whitelisted element names with text leaves
 // (MdNode), which preview.ts turns into DOM nodes with createElement / createTextNode. Raw HTML in

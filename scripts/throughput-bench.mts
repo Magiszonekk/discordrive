@@ -1,4 +1,4 @@
-// Throughput of the transfer path without Discord's limits (zlecenie 2026-10-13-transfer §3):
+// Throughput of the transfer path without Discord's limits:
 // how many MB/s Node and Chromium really process per stage (read, AES-GCM encrypt/decrypt,
 // SHA-256 WebCrypto and hash-wasm) and end to end (upload to / download from the local fake
 // Discord over HTTP, pacer without limits). Answers whether the web UI could be the bottleneck at

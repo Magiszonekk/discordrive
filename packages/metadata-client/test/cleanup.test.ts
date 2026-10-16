@@ -1,4 +1,4 @@
-// Trash + fragment cleanup in metadata only (zlecenie 2026-10-13 p. 2, koncept §6.2, Q4):
+// Trash + fragment cleanup in metadata only (Q4):
 // purge + retention -> the fragments disappear from (fake) Discord, those a kept base snapshot
 // still points at stay, a restore from that snapshot still downloads; the Q4 gates (main device,
 // metered link, 7 days) and the server bookkeeping (another device does not delete twice).

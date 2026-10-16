@@ -1,4 +1,4 @@
-// What a mode adds to the instance process (docs/stage3-modes.md §2). The instance loads
+// What a mode adds to the instance process. The instance loads
 // apps/ddn-server/dist/<mode>/server-mode.mjs, built by build-server.ts from ONE of
 // modes/<mode>.ts: a metadata-only instance never loads the server sender, an e2ee/plain one
 // never loads what only another mode needs. Workspace packages stay external (one copy of
@@ -9,7 +9,7 @@ import type { InstanceConfig } from "../config.js";
 
 export interface ServerModeParts {
   extensions: ServerExtension[];
-  /** Share-link refresher (§3.7); null = shares only with the instance bot. */
+  /** Share-link refresher; null = shares only with the instance bot. */
   shareRefresher: BotRefresher | null;
 }
 

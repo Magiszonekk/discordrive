@@ -1,4 +1,4 @@
-// Everything the e2ee instance adds to DdnServer, wired together (docs/stage3-modes.md):
+// Everything the e2ee instance adds to DdnServer, wired together:
 // instance webhooks (pool + account channels, sealed with instance.key), the server sender,
 // blobs through the instance, background cleanup and snapshots. Used by the e2ee server
 // mode bundle (apps/ddn-server/src/modes/e2ee.ts) and by tests.
@@ -31,7 +31,7 @@ export interface ServerBlobsModeOptions {
 
 export interface ServerBlobsMode {
   extensions: ServerExtension[];
-  /** Share links: refresh through the bot, or the webhooks when there is none (§3.7). */
+  /** Share links: refresh through the bot, or the webhooks when there is none. */
   shareRefresher: BotRefresher;
   hooks(): InstanceHooks;
   blobs: BlobsExtension;

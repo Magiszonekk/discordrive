@@ -129,7 +129,7 @@ describe("device sign-in with Ed25519 (decision #13)", () => {
     await expect(a.api.revokeDevice(b.deviceId)).rejects.toMatchObject({ status: 404 });
   });
 
-  it("documented limit (docs/threat-model.md §2.4): a revoked device that kept the account key can register again with the rescue key", async () => {
+  it("documented limit (docs/threat-model.md): a revoked device that kept the account key can register again with the rescue key", async () => {
     const { url } = await startServer();
     const a = await newAccount(url);
     const b = await addDevice(url, a);

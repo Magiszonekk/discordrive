@@ -1,4 +1,4 @@
-// Main-tab election (koncept §4.1) in headless Chromium: 3 tabs of one origin,
+// Main-tab election in headless Chromium: 3 tabs of one origin,
 // exactly one leader; closing it hands leadership to another tab; a second
 // browser context (another profile) has its own leader.
 import { build } from "esbuild";

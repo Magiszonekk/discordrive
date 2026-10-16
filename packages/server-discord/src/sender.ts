@@ -1,7 +1,7 @@
-// Server-side Discord sender for the e2ee and plain modes (docs/stage3-modes.md §4).
+// Server-side Discord sender for the e2ee and plain modes.
 //
 // Carried over (and cut down) from the production code, without Prisma/Redis:
-//  - per-CHANNEL pacing (koncept §7, measured 2026-10-06: ~30 messages/min per channel,
+//  - per-CHANNEL pacing (~30 messages/min per channel,
 //    shared by every webhook in it; 429 `shared` while x-ratelimit-remaining > 0, so pacing
 //    must be proactive) -> ChannelPacer from @ddv4/metadata-client, one per process;
 //  - rotation: each blob goes to the channel whose bucket frees up first (not blind

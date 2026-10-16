@@ -1,4 +1,4 @@
-// Manifest layer (koncept §4.1).
+// Manifest layer.
 //
 // The tree stores only FileVersion.manifestRef. The chunk list of a version
 // is immutable, lives next to the fragments (encrypted, on Discord in
@@ -7,7 +7,7 @@
 // cache; fetching and decryption are injected (ManifestSource), so the core
 // has no Discord or crypto dependency.
 //
-// Format compatibility (§6.2, approved): the chunk list mirrors
+// Format compatibility (approved): the chunk list mirrors
 // FileChunkManifestPlaintext from @ddv4/types (schemaVersion, chunkSizeBytes,
 // chunks[index, blobId, ciphertextSizeBytes, ciphertextHash]) and adds the
 // placement fields metadata-only mode needs because there is no server-side
@@ -91,7 +91,7 @@ export class ManifestCache {
   }
 }
 
-/** Rough in-memory size: ~120 B per chunk (koncept §4: 70–120 B serialized) + overhead. */
+/** Rough in-memory size: ~120 B per chunk (70–120 B serialized) + overhead. */
 export function estimateManifestBytes(m: ChunkManifest): number {
   return 64 + m.chunks.length * 160;
 }

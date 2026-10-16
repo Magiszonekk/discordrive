@@ -13,7 +13,7 @@ const until = async (cond: () => boolean, ms = 5000) => {
   }
 };
 
-describe("websocket notifications (koncept §3.4 role 4)", () => {
+describe("websocket notifications", () => {
   it("device B learns about A's op within moments and pulls it; other accounts hear nothing", async () => {
     const { srv, url } = await startServer();
     const a = await newAccount(url);

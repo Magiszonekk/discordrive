@@ -124,7 +124,7 @@ export function suffixedName(name: string, kind: NodeKind, n: number): string {
 }
 
 /**
- * Author's local wall-clock time (owner decision Q6): `createdAt` shifted by
+ * Author's local wall-clock time (decision Q6 in packages/sync-core/DECISIONS.md): `createdAt` shifted by
  * the author's UTC offset from the envelope, minute precision, no ':'
  * (Windows), no zone label. Deterministic: only UTC getters on a shifted
  * instant, never the replica's own timezone.

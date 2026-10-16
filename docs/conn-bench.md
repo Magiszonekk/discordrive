@@ -1,4 +1,4 @@
-# conn-bench: one HTTP/2 connection vs many (koncept §7.5.4)
+# conn-bench: one HTTP/2 connection vs many
 
 Question: is the browser slow because it sends every request to discord.com / cdn.discordapp.com over
 **one** HTTP/2 connection? A desktop agent (or the discordrive server) uses many connections.

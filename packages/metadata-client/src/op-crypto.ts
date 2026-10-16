@@ -1,15 +1,15 @@
-// Encrypted operation log (koncept §3.3, DECISIONS Q6/Q8).
+// Encrypted operation log (DECISIONS Q6/Q8).
 //
 // What the server (arbiter) gets per operation:
 //   opId, rulesVersion, baseSeq, leaseGuard  - plaintext, it needs them
 //                                              (dedup, min client version,
-//                                              leases; baseSeq per §3.3)
+//                                              leases; baseSeq is plaintext by the same contract)
 //   payload                                  - AES-256-GCM, account subkey "op":
 //                                              device, createdAt, tzOffsetMin, op
 // The AAD binds the payload to the account and to every plaintext field, so
 // the server cannot move a payload to another envelope or alter opId/baseSeq/
 // leaseGuard without the clients noticing. It still assigns seq and
-// serverTime (its role as arbiter, §3.4) and could withhold or reorder
+// serverTime (its role as arbiter) and could withhold or reorder
 // entries; that costs availability, not confidentiality.
 //
 // An entry that does not decrypt is turned into the same invalid operation on
