@@ -1,4 +1,4 @@
-// @ddv4/sync-core: discordrive-next shared core (koncept §4, §5, §6.2).
+// @ddv4/sync-core: discordrive-next shared core.
 // No Discord, no database driver, no UI. Runs in Node and in the browser.
 
 export * from "./types.js";

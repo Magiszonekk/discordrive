@@ -1,4 +1,4 @@
-// Blobs through the instance (e2ee and plain modes, docs/stage3-modes.md §5).
+// Blobs through the instance (e2ee and plain modes).
 //
 // put:  PUT /v1/uploads/<U>/blobs/<i> with the ciphertext (one fragment, ≤ 10 MiB) and its
 //       SHA-256; the server checks this device's lease on U, posts on Discord with the
@@ -47,7 +47,7 @@ export class ServerBlobStore implements BlobStore {
   private readonly fetchCdn: (url: string, signal?: AbortSignal, timing?: { ttfb?: number; st?: number }) => Promise<Uint8Array>;
   log: TransferLog | null = null;
   net: NetControl | null = null;
-  /** Extra connections for CDN reads (web: sandboxed iframes, docs/evidence/2026-10-15-connections). */
+  /** Extra connections for CDN reads (web: sandboxed iframes). */
   private cdnLanes: LaneFetch[] = [];
   setCdnLanes(lanes: LaneFetch[]): void {
     this.cdnLanes = lanes;

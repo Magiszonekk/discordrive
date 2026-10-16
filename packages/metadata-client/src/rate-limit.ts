@@ -1,4 +1,4 @@
-// Client-side pacing of webhook posts (koncept §8.2, measured in §7 on 2026-10-06).
+// Client-side pacing of webhook posts (measured 2026-10-06).
 //
 // Facts the design rests on:
 //  - the binding limit is per CHANNEL (~30 messages/min sustained, after an

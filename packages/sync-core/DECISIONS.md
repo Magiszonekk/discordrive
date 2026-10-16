@@ -1,10 +1,8 @@
 # @ddv4/sync-core: decyzje właściciela (etap 1)
 
 Wcześniej był tu plik `QUESTIONS.md` z pytaniami Q1–Q11 i zachowaniem tymczasowym
-(`PROVISIONAL`). Właściciel odpowiedział 2026-10-05. Pełna treść decyzji:
-`~/Desktop/discordrive-next/decyzje-sync-core-2026-10-05.md` (poza repo, obok
-`koncept.md`; wpis w dzienniku konceptu z 2026-10-05). Konflikt Q1 z §5.2.3
-rozstrzygnięty 2026-10-06 (owner inbox #11, niżej przy Q1).
+(`PROVISIONAL`). Właściciel odpowiedział 2026-10-05. Konflikt Q1 z folderowym
+wyjątkiem rozstrzygnięty 2026-10-06 (owner inbox #11, niżej przy Q1).
 
 Decyzje Q1–Q3, Q6, Q7 i Q9 zmieniają reguły deterministyczne, dlatego
 **`RULES_VERSION = 2`** (`src/types.ts`). Testy jednostkowe każdej zmienionej reguły
@@ -37,15 +35,15 @@ usunięcie folderu usuwa **cały** folder.
 - Wyrzucenie do kosza jest odwracalne przez 30 dni, a Q3 chroni takie węzły przed
   natychmiastowym purge przez autora, który ich nie widział.
 
-### Rozstrzygnięcie #11 (2026-10-06): Q1 dosłownie, wyjątek w §5.2.3
-Pytanie: Q1 kłóciło się z §5.2.3 konceptu („nowa treść zawsze ląduje w widocznym
-miejscu”) i z niezmiennikiem I4 testu losowego, a do tego było niespójne z Q2 (kosz
+### Rozstrzygnięcie #11 (2026-10-06): Q1 dosłownie, wyjątek dla niewidzianej treści
+Pytanie: Q1 kłóciło się z zasadą „nowa treść zawsze ląduje w widocznym
+miejscu” i z niezmiennikiem I4 testu losowego, a do tego było niespójne z Q2 (kosz
 samego pliku z niewidzianą treścią jest pomijany, kosz folderu z tym plikiem nie).
 Właściciel wybrał opcję 1: zostaje jak jest. Uzasadnienie: prostota. Kto usuwa folder,
 usuwa całość, jak w galerii na telefonie; zwykle jedno konto = jedna osoba, a urządzenia
 są zsynchronizowane, więc to przypadek rzadki. Odrzucone: opcja 2 (niewidziana nowa
 treść do „Odzyskane”) i opcja 3 (Q2 dostosowane do Q1).
-- **Koncept §5.2.3** dostał wyjątek: niewidziana treść nie znika po cichu. Albo zostaje
+- **Zasada „nowa treść zawsze ląduje w widocznym miejscu”** dostała wyjątek: niewidziana treść nie znika po cichu. Albo zostaje
   na miejscu, albo trafia do kosza razem z usuwanym folderem, a jej autor dostaje
   powiadomienie; z kosza da się ją przywrócić.
 - **Niezmiennik I4** (`checkTrashSawContent` w `test/oracles.ts`): plik z bieżącą treścią
@@ -106,8 +104,7 @@ Decyzja: wariant 3. `raport (konflikt, Laptop, 2026-09-29 16.05).docx`, bez „U
   `createdAt + tzOffsetMin` formatowane wyłącznie getterami UTC, więc każda replika daje
   identyczną nazwę niezależnie od własnej strefy.
 - `tzOffsetMin` należy do zaszyfrowanej części koperty, razem z `createdAt` i `device`.
-  Jawne dla serwera są tylko `opId`, `rulesVersion`, `baseSeq` i `leaseGuard` (kontrakt
-  §3.3), więc w metadata only serwer nie poznaje strefy urządzenia.
+  Jawne dla serwera są tylko `opId`, `rulesVersion`, `baseSeq` i `leaseGuard`, więc w metadata only serwer nie poznaje strefy urządzenia.
 
 ## Q7. Konflikt treści: brak `baseVersionId` = konflikt, ale identyczna treść = brak konfliktu
 Decyzja: wariant 1 z wyjątkiem. Gdy nowa wersja ma ten sam hash treści co bieżąca, nie
@@ -146,7 +143,7 @@ Nieaktualne (poprawione w koncepcie wcześniej).
 ## Etap 2 (metadata only, `@ddv4/metadata-client`)
 
 ### #12 (2026-10-06): kanały z webhookami przy zakładaniu konta
-Limit zapytań Discorda jest na kanał (~30 wiadomości/min, koncept §7). Kreator wymaga
+Limit zapytań Discorda jest na kanał (~30 wiadomości/min). Kreator wymaga
 1 kanału z webhookiem i zachęca do 3–4. Klient rozkłada fragmenty po kanałach z sejfu, z
 osobnym limiterem na kanał (`ChannelPacer`, `vaultAdvice`).
 
@@ -161,25 +158,24 @@ podpisu zawiera cel, ID instancji serwera i wyzwanie; odwołanie i dodanie urzą
 wymagają świeżego podpisu, sama sesja nie wystarcza.
 
 
-### Rozstrzygnięte samodzielnie 2026-10-09 (zlecenie: preview + setup)
-Decyzje wykonawcze, których koncept i zlecenie nie przesądzały. Żadna nie zmienia kontraktu §3.3.
+### 2026-10-09: preview + setup
+Decyzje wykonawcze, które wcześniejsze decyzje nie przesądzały. Żadna nie zmienia kontraktu serwera.
 
 - **Nazwy urządzeń: zaszyfrowane kluczem konta** (podklucz HKDF `ddn-device-name-v1`, AAD =
-  konto + ID urządzenia). Serwer trzyma nieczytelny blob (`devices.name_sealed`), więc §3.3
+  konto + ID urządzenia). Serwer trzyma nieczytelny blob (`devices.name_sealed`), więc kontrakt
   bez zmian. Nazwę ustawia samo urządzenie po pierwszym zalogowaniu; każde urządzenie konta
   może zmienić nazwę dowolnego urządzenia tego konta.
 - **Rozszerzenie nazw załączników na Discordzie: `.txt` zamiast `.bin`.** Pomiar na żywo
   2026-10-09 (a test Discord server): CDN Discorda wysyła `Access-Control-Allow-Origin` tylko dla
   części typów, wybieranych po rozszerzeniu (`.txt/.log/.json/.csv/.webm/.mp4/.png` tak;
   `.bin/.dat/.zip`/bez rozszerzenia nie), niezależnie od nagłówków żądania i `Content-Type`
-  podanego przy wysyłce. Przeglądarka nie odczyta więc fragmentu `.bin` (koncept §3.1 z
-  2026-09-23 zakładał `ACAO: *` dla wszystkiego). Bajty bez zmian (ten sam szyfrogram, format
-  §6.2/discordrive zgodny), zmienia się tylko nazwa pliku. `.txt` sprawdzony do 10 MiB i
+  podanego przy wysyłce. Przeglądarka nie odczyta więc fragmentu `.bin` (wcześniejsze założenie
+  z 2026-09-23 zakładało `ACAO: *` dla wszystkiego). Bajty bez zmian (ten sam szyfrogram, format
+  zgodny z discordrive), zmienia się tylko nazwa pliku. `.txt` sprawdzony do 10 MiB i
   z `Range` (206 + ACAO). Uwaga: przy `Accept-Encoding: br` CDN kompresuje `.txt` w locie;
   przeglądarka i `fetch` w Node dekompresują przezroczyście, więc treść jest ta sama.
   Ryzyko: Discord może zmienić listę typów z CORS; wtedy rezerwą jest pobieranie przez
-  serwer instancji (jak w e2ee) albo inna lista rozszerzeń. Do wpisania w koncept §7
-  (propozycja dla właściciela). Stare `.bin` (testy sprzed zmiany) są dalej czytelne z
+  serwer instancji (jak w e2ee) albo inna lista rozszerzeń. Stare `.bin` (testy sprzed zmiany) są dalej czytelne z
   Node/CLI, ale nie z przeglądarki.
 - **Rejestracja na instancji publicznej: jednorazowe kody zaproszenia** (`ddn-inv-XXXX-…`,
   16 znaków Crockford base32 = 80 bitów, ważne 7 dni, w bazie tylko SHA-256, wpisywanie
@@ -201,10 +197,10 @@ Decyzje wykonawcze, których koncept i zlecenie nie przesądzały. Żadna nie zm
   poleceń; `--bot-token` jest odrzucany). Baza `ddn.db` 0600 (umask 077).
 - **Zestaw ratunkowy wymuszony raz na konto** zaraz po pierwszym kanale (nie da się zamknąć
   Esc, „Dalej” dopiero po zaznaczeniu potwierdzenia). Wtedy powstaje wiadomość wskaźnikowa
-  (ID w sejfie webhooków, pole `pointer`), a główna karta zaczyna snapshoty wg §6.2
+  (ID w sejfie webhooków, pole `pointer`), a główna karta zaczyna snapshoty wg reguł retencji
   (telefon = tylko segmenty). Urządzenia dołączone parowaniem albo zestawem nie są pytane
   ponownie; zestaw da się zawsze pokazać z panelu Urządzenia.
-- **Udostępnianie (§3.7)**: klient wysyła adresy załączników jednego pliku (manifest +
+- **Udostępnianie**: klient wysyła adresy załączników jednego pliku (manifest +
   fragmenty) i `meta` zaszyfrowane kluczem tego pliku (nazwa, rozmiar, SHA-256), plus
   notatkę dla właściciela zaszyfrowaną kluczem konta (podklucz `share-note`). Link
   `/s/<22 znaki>#<klucz pliku base64url>`. Serwer odświeża linki botem (`refresh-urls`, po 50),
@@ -245,9 +241,9 @@ Decyzje wykonawcze, których koncept i zlecenie nie przesądzały. Żadna nie zm
   podpowiedzi „włączysz w npm run setup”.
 - **Instrukcja Discorda w aplikacji** (kreator kanałów): 5 kroków od konta przez własny
   serwer, kanał i webhook (gdzie kliknąć), że URL webhooka to sekret, czemu 3–4 kanały, oraz
-  uwaga o regulaminie Discorda (koncept §6.5 „Ryzyko”: informować przy zakładaniu konta).
+  uwaga o regulaminie Discorda („Ryzyko”: informować przy zakładaniu konta).
 
-### Rozstrzygnięte samodzielnie 2026-10-12 (zlecenie: angielski domyślnie + przełącznik PL)
+### 2026-10-12: angielski domyślnie + przełącznik PL
 - **Kolejność języka w przeglądarce**: wybór użytkownika (`localStorage` `ddn.lang`) >
   `language` instancji (`config.json`, przekazany w `/config.js` jako `DDN_CONFIG.language` i w
   `/v1/health`) > angielski. `navigator.language` celowo nie jest brany pod uwagę (test w
@@ -351,10 +347,10 @@ Decyzje wykonawcze, których koncept i zlecenie nie przesądzały. Żadna nie zm
   `start` + drugi `start` + `doctor`, i prawdziwa rejestracja startu w tle
   (`DDN_CI_REAL_AUTOSTART=1`, `test/autostart-real.test.ts`).
 
-## Etap 3 (tryby e2ee i plain, `docs/stage3-modes.md`)
+## Etap 3 (tryby e2ee i plain)
 
 Wariant B (decyzja właściciela 2026-10-12): tryby nowego rdzenia, nie stare `apps/api` +
-`apps/frontend`. Pełny projekt: `docs/stage3-modes.md`. Rozstrzygnięte samodzielnie:
+`apps/frontend`. Rozstrzygnięte samodzielnie:
 - **Reguły bez zmian** (`RULES_VERSION` jak w etapie 2): tryby różnią się transportem, szyfrowaniem
   operacji i pracą w tle, nie regułami. Ten sam log daje ten sam stan w każdym trybie.
 - **Tryb przy budowaniu:** wirtualny moduł `ddn:mode` rozwiązywany przez esbuild na plik jednego
@@ -365,7 +361,7 @@ Wariant B (decyzja właściciela 2026-10-12): tryby nowego rdzenia, nie stare `a
 - **Webhooki w e2ee/plain:** pula instancji z setupu + opcjonalne kanały konta z Settings
   (konto z własnymi kanałami używa tylko ich). URL-e zaszyfrowane kluczem instancji
   (`instance.key`, osobny plik 0600), API nigdy ich nie zwraca.
-- **Wysyłacz serwerowy** `packages/server-discord`: limiter per kanał (pomiar §7), wybór kanału
+- **Wysyłacz serwerowy** `packages/server-discord`: limiter per kanał, wybór kanału
   z najwcześniej wolnym kubełkiem, Cloudflare fail-fast (ddrive 0d098ca), budżet żądań na
   IP (discord-client c143f82), health-check webhooków. Bez Prismy/Redisa.
 - **Upload przez serwer** fragment po fragmencie (`PUT /v1/uploads/<U>/blobs/<i>`, hash
@@ -373,7 +369,7 @@ Wariant B (decyzja właściciela 2026-10-12): tryby nowego rdzenia, nie stare `a
   idempotentne wznawianie, anulowanie = skasowanie fragmentów + tombstone U.
 - **Pobieranie z CDN** po odświeżeniu linków przez serwer (bot albo webhook), nie proxy: preview
   stoi za a VPS przez a VPN, proxy podwajałoby ruch tunelu. Proxy z Range jako zapas i dla plain.
-- **Praca w tle bez otwartej karty:** łańcuch segmentów logu (§6.2, ≤ 5 min straty) pisany przez
+- **Praca w tle bez otwartej karty:** łańcuch segmentów logu (≤ 5 min straty) pisany przez
   serwer kluczem HKDF(klucz instancji, konto); w e2ee bez baz (serwer nie zna drzewa, łańcuch od
   seq 1 jest pełny). Sprzątanie: porzucone uploady (lease wygasł, bez finalizacji) od razu,
   zwolnione (zgłoszone przez klienta z indeksu) po 30 dniach.
@@ -397,10 +393,10 @@ Wariant B (decyzja właściciela 2026-10-12): tryby nowego rdzenia, nie stare `a
   (brak „secure context”), więc do testów w Chromium służy lokalny proxy (`DDN_E2E_TUNNEL=1`);
   właściciel potrzebuje domeny z HTTPS (prośba w raporcie).
 
-## Zlecenie 2026-10-13: kosz, sprzątanie, klucz konta chroniony hasłem
+## 2026-10-13: kosz, sprzątanie, klucz konta chroniony hasłem
 
-### Kontrakt §3.3 (co serwer widzi) przy włączonym logowaniu hasłem (koncept §3.8, model Bitwarden)
-Domyślnie wyłączone; bez włączenia kontrakt §3.3 bez zmian. Po świadomym włączeniu w Settings → Security
+### Kontrakt: co serwer widzi przy włączonym logowaniu hasłem (model Bitwarden)
+Domyślnie wyłączone; bez włączenia kontrakt serwera bez zmian. Po świadomym włączeniu w Settings → Security
 serwer trzyma dodatkowo, dla tego jednego konta:
 - **login** (jawny, unikalny na instancji, bez rozróżniania wielkości liter; decyzja właściciela #26
   2026-10-13: nazwa logowania wybierana przy włączaniu, bo losowego ID konta nikt nie zapamięta),
@@ -422,12 +418,12 @@ serwer trzyma dodatkowo, dla tego jednego konta:
   tylko z `deletableUploadsWithRetention` (30 dni od zwolnienia i żadna trzymana baza sprzed zwolnienia).
   Automatycznie w głównej karcie (po 1 min, potem co godzinę) z bramkami Q4; ręcznie „Clean up now”
   (bez bramek „główne urządzenie” i „łącze taryfowe”, nadal tylko w pełni zsynchronizowane). Serwer trzyma
-  księgowanie `/v1/gc` (ostatnie sprzątanie, ID skasowanych uploadów; ID uploadów są jawne już dziś, §3.3).
+  księgowanie `/v1/gc` (ostatnie sprzątanie, ID skasowanych uploadów; ID uploadów są jawne już dziś).
 - e2ee/plain: kosz czyści klient (serwer w e2ee nie może pisać operacji), zwolnione uploady klient zgłasza,
   fragmenty kasuje serwer w tle po 30 dniach. W e2ee/plain nie ma baz po stronie klienta do ochrony (serwer
-  pisze sam łańcuch segmentów, §6 stage3-modes.md), więc retencja = 30 dni od zwolnienia.
+  pisze sam łańcuch segmentów, etap 3), więc retencja = 30 dni od zwolnienia.
 
-## Zlecenie 2026-10-13 (2): usuwanie webhooków, pliki niedostępne, statystyki, podgląd
+## 2026-10-13 (2): usuwanie webhooków, pliki niedostępne, statystyki, podgląd
 
 ### Reguły v3: `relocate` i rozmieszczenie kawałków (rozstrzygnięte samodzielnie)
 - `RULES_VERSION = 3`, `MIN_REPLAY_RULES_VERSION = 2`. Wpisy reguł 2 odtwarzają się bajt w bajt (gałęzie
@@ -460,7 +456,7 @@ serwer trzyma dodatkowo, dla tego jednego konta:
 
 ### Przenieś i usuń: kiedy kasować stare wiadomości (rozstrzygnięte samodzielnie)
 - metadata only: po przeniesieniu webhook zostaje w sejfie jako `drain` (wycofany, tylko do odczytu, poza
-  licznikami), bo stare wpisy logu i bazy trzymane 30 dni (§6.2) wskazują na jego wiadomości. Po retencji
+  licznikami), bo stare wpisy logu i bazy trzymane 30 dni wskazują na jego wiadomości. Po retencji
   (30 dni + 1 dzień i żadna trzymana baza sprzed przeniesienia) `finishDrain` kasuje to, co relocate
   zastąpiły, i stary łańcuch, a webhook znika z sejfu („moved”).
 - e2ee/plain: serwer kasuje stare wiadomości od razu po potwierdzeniu kopii, bo w e2ee nie ma baz
@@ -492,7 +488,7 @@ serwer trzyma dodatkowo, dla tego jednego konta:
   z naszym originem i zawiera tylko to, co utworzyła aplikacja. `object-src 'none'` i `frame-ancestors
   'none'` bez zmian. SVG wyłącznie jako `<img>`, Markdown własnym rendererem do węzłów DOM (bez innerHTML).
 
-## Zlecenie 2026-10-14-ui: kosz obok pobierania, menu kontekstowe, widok kafelków, sortowanie
+## 2026-10-14-ui: kosz obok pobierania, menu kontekstowe, widok kafelków, sortowanie
 
 ### Kosz w wierszu
 - „Przenieś do kosza” jest ikoną bezpośrednio po „Pobierz” (pliki) i po „Otwórz” (foldery), z tooltipem i
@@ -524,7 +520,7 @@ serwer trzyma dodatkowo, dla tego jednego konta:
 
 ### Kafelki
 - Ten sam DOM wierszy (te same hooki, stronicowanie 50, zaznaczanie, menu), inny układ (siatka
-  auto-fill). Miniatury: plain z serwera, metadata only / e2ee ikona typu (zaszyfrowane podglądy §7.5.1
+  auto-fill). Miniatury: plain z serwera, metadata only / e2ee ikona typu (zaszyfrowane podglądy
   osobno). Kosz ma oba widoki.
 
 ### Panel kolejki zamyka się sam (dopisek właściciela 2026-10-14)
@@ -536,10 +532,10 @@ serwer trzyma dodatkowo, dla tego jednego konta:
   × czyści. Przerwane przez użytkownika nie trafiają do paska (to jego wybór), ale wydłużają czas panelu.
 - Panel pobierania dostanie to samo w zleceniu „transfer”.
 
-## Zlecenie 2026-10-15-transfery: drugie połączenie, słabe łącza, strażnik zatkanego połączenia
+## 2026-10-15-transfery: drugie połączenie, słabe łącza, strażnik zatkanego połączenia
 
-### Eksperyment: drugie połączenie w przeglądarce (§1)
-- Wynik (`docs/evidence/2026-10-15-connections/`, `scripts/browser-conn-exp.mts`, Chromium 151, net log):
+### Eksperyment: drugie połączenie w przeglądarce
+- Wynik (`scripts/browser-conn-exp.mts`, Chromium 151, net log):
   **ukryty iframe `sandbox="allow-scripts"` (nieprzezroczysty origin) dostaje własne połączenie** do
   `cdn.discordapp.com` i `discord.com` (HTTP/3 domyślnie, HTTP/2 przy wyłączonym QUIC). CORS Discorda
   przyjmuje `Origin: null` (CDN dla `.txt`, webhooki zawsze). Worker, service worker i strona dzielą jedno
@@ -549,10 +545,10 @@ serwer trzyma dodatkowo, dla tego jednego konta:
 - Przepustowość na tym serwerze (łącze ~11 MB/s) jest taka sama dla 1 i 2 połączeń (0 błędów) —
   zysk na łączu właściciela trzeba zmierzyć u niego (komenda w README dowodów).
 - Decyzja: drugie połączenie = **„tor” w ukrytym iframe sandbox** serwowanym przez instancję
-  (`/lane.html`), z którym worker rozmawia przez MessagePort. Używa go strażnik (§3). Domyślnie wysyłanie
+  (`/lane.html`), z którym worker rozmawia przez MessagePort. Używa go strażnik zatkanego połączenia. Domyślnie wysyłanie
   i pobieranie zostają na jednym torze.
 
-### Słabe i niestabilne łącza (§2), `packages/metadata-client/src/net.ts`
+### Słabe i niestabilne łącza, `packages/metadata-client/src/net.ts`
 - Trzy sytuacje, trzy reakcje: **słabe łącze** (błędy sieci, timeouty) → mniej fragmentów w locie;
   **brak sieci** → stop i jedno próbne żądanie co jakiś czas; **zatkane połączenie** (wolno BEZ błędów,
   pierwszy bajt szybki) → strażnik. 429 i błędy HTTP nie są „siecią” (429 obsługuje limiter kanału).
@@ -567,7 +563,7 @@ serwer trzyma dodatkowo, dla tego jednego konta:
   „Sieć wróciła: wznowiono.”), bez kodów.
 - „Oszczędzaj dane” (Settings → Diagnostyka; włączone samo, gdy przeglądarka zgłasza łącze taryfowe /
   `saveData` / `cellular` / telefon): najwyżej 2 fragmenty w locie, strażnik wyłączony, snapshoty bazowe
-  i automatyczne sprzątanie jak na łączu taryfowym (§6.2, Q4, już było).
+  i automatyczne sprzątanie jak na łączu taryfowym (Q4, już było).
 - Wznawianie po odświeżeniu: **wysyłanie** — dziennik w IndexedDB (nagłówek: upload ID, node ID, klucz
   pliku; osobny mały wpis na każdy zapisany fragment z SHA-256 jego jawnej treści). Te same pliki wybrane
   ponownie (nazwa+rozmiar+mtime+folder) idą pod tym samym upload ID, jeśli upload jest nadal `open`
@@ -581,7 +577,7 @@ serwer trzyma dodatkowo, dla tego jednego konta:
   Chromium na komputerze, brak w Firefox/Safari/Android) albo agenta desktopowego; na razie pobieranie
   po przeładowaniu zaczyna od nowa (opisane w docs/desktop-agent-transport.md jako wymaganie agenta).
 
-### Strażnik zatkanego połączenia (§3)
+### Strażnik zatkanego połączenia
 - Punkt odniesienia urządzenia: mediana szczytów (najlepsze 10 s) ostatnich ≤ 5 transferów trwających
   ≥ 20 s, osobno dla wysyłania i pobierania, z ostatnich 7 dni, z tego samego typu sieci, gdy
   przeglądarka go podaje (Chromium: `navigator.connection.type`); min. 2 pomiary (nowe urządzenie

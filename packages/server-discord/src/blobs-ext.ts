@@ -1,5 +1,5 @@
-// Blobs through the instance: the server part of the e2ee and plain modes
-// (docs/stage3-modes.md §3, §5, §6). A DdnServer extension.
+// Blobs through the instance: the server part of the e2ee and plain modes.
+// A DdnServer extension.
 //
 // Endpoints (all need a session; the account comes from it):
 //   PUT    /v1/uploads/<U>/blobs/<i>  one ciphertext blob (fragment i or "m" = manifest), body =
@@ -466,7 +466,7 @@ export class BlobsExtension implements ServerExtension {
     }
   }
 
-  /** BotRefresher for share links of this instance (works with or without a bot, §3.7). */
+  /** BotRefresher for share links of this instance (works with or without a bot). */
   shareRefresher(): BotRefresher {
     return {
       refresh: async (urls) => {

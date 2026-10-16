@@ -17,13 +17,13 @@
 //                           --transfer-log-names: with file names (off by default)
 //
 // State dir (default ~/.local/share/ddn, 0700; files 0600):
-//   account.json  account ID + account key (the secret; the rescue kit, §3.5),
+//   account.json  account ID + account key (the secret; the rescue kit),
 //                 server URL + instance (server mode)
 //   device.json   this device: ID + Ed25519 key (PKCS#8; decision #13)
 //   server/       local mode only: what a server would hold (encrypted log,
 //                 encrypted vault), served in-process. Server mode keeps nothing here.
 //   seen.json     highest vault revision seen (rollback guard)
-//   index.db      the device's own copy of the tree (SQLite, koncept §4.1); only
+//   index.db      the device's own copy of the tree (SQLite); only
 //                 the log tail after its headSeq is fetched on start
 // --webhook-file / DDN_WEBHOOK_FILES (':'-separated URL files) are added to the
 // vault on start (convenience for scripts and tests).

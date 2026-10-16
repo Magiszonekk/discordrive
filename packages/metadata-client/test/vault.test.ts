@@ -25,7 +25,7 @@ const hook = (id: string, channelId: string, t = 1): VaultWebhook => ({
   addedAt: t,
 });
 
-describe("webhook vault (koncept §3.2)", () => {
+describe("webhook vault", () => {
   it("server stores only ciphertext; another device with the key reads it", async () => {
     const key = newAccountKey();
     const store = new MemoryVaultStore();

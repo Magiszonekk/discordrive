@@ -12,7 +12,7 @@ import { SqliteIndexStore } from "../src/node/sqlite-store.js";
 const actionArb = simActionArb as unknown as fc.Arbitrary<Action>;
 const RUNS = Number(process.env.SQLITE_RUNS ?? 40);
 
-describe("SqliteIndexStore (koncept §4.1, tree on disk)", () => {
+describe("SqliteIndexStore (tree on disk)", () => {
   it(`gives the same state as MemoryIndexStore on ${RUNS} random stage-1 logs`, () => {
     const stats = newStats();
     let compared = 0;

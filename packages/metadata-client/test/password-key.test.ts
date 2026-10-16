@@ -1,4 +1,4 @@
-// Optional password-protected account key (koncept §3.8, zlecenie 2026-10-13 p. 3): off by default,
+// Optional password-protected account key: off by default,
 // wrong password, attempt limits (per account, per IP), change password, turn off, sign in on a
 // new device (rescue-key registration), server never holds the password or the account key.
 import { afterEach, describe, expect, it } from "vitest";

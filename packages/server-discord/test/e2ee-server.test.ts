@@ -1,6 +1,6 @@
 // e2ee mode end to end over HTTP: a real DdnServer with the BlobsExtension, the fake Discord,
-// and the client core (DriveClient + ServerBlobStore + EncryptedArbiter). Checks what the
-// zlecenie asks for: upload through the server (streamed per fragment, memory budget), resume,
+// Checks what is
+// needed: upload through the server (streamed per fragment, memory budget), resume,
 // cancel, download straight from the CDN with links refreshed by the server, background
 // cleanup without any client, the server never sees plaintext, webhook URLs never leave it.
 import { mkdtempSync, readFileSync } from "node:fs";
@@ -247,7 +247,7 @@ describe("e2ee: blobs through the instance", () => {
     expect(I.fake.messages.size).toBe(0);
   });
 
-  it("cleanup (zlecenie 2026-10-13 p. 2): trash purged by the client after 30 days, released uploads reported, the server deletes them 30 days later; GET /v1/gc shows what waits, POST /v1/gc/run runs now", async () => {
+  it("cleanup: trash purged by the client after 30 days, released uploads reported, the server deletes them 30 days later; GET /v1/gc shows what waits, POST /v1/gc/run runs now", async () => {
     let t = Date.UTC(2026, 9, 13);
     const I = await instance({ now: () => t });
     const A = await account(I.url, I.origin);

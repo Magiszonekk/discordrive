@@ -1,4 +1,4 @@
-// File preview (zlecenie 2026-10-13-webhooki p. 4): the pure parts of apps/web-mo/src/preview.ts and
+// File preview: the pure parts of apps/web-mo/src/preview.ts and
 // markdown.ts (type detection, the safe Markdown renderer, CSV/TSV, UTF-8 cut, JSON). The dialog
 // itself is driven in headless Chromium by apps/web-mo/check.ts (step "preview").
 import { describe, expect, it } from "vitest";

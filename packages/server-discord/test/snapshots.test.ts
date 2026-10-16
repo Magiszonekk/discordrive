@@ -15,7 +15,7 @@ afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c().catch(() => {});
 });
 
-describe("e2ee: server-written snapshots (§6.2) with no client open", () => {
+describe("e2ee: server-written snapshots with no client open", () => {
   it("segment after 1 min of silence / at the latest 5 min; the chain rebuilds the log after the database is gone", async () => {
     let t = Date.UTC(2026, 9, 12, 10);
     const fake = new FakeDiscord();

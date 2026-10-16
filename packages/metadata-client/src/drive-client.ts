@@ -1,4 +1,4 @@
-// Client core shared by every mode (koncept §2): index (sync-core replica),
+// Client core shared by every mode: index (sync-core replica),
 // operation log through the arbiter, per-file keys and fragment encryption in
 // the discordrive format, manifests on demand, download/Range reads.
 // WHERE the encrypted blobs go is a BlobStore chosen by the mode:
@@ -46,7 +46,7 @@ import { errText, ms, nowMs, type TransferLog } from "./transfer-log.js";
 import type { DiscordPlacement } from "./types.js";
 
 /**
- * Upper bound of fragments in flight (owner, 2026-10-14: up to 64 to saturate a ~600 Mb/s line). Each
+ * Upper bound of fragments in flight (up to 64 to saturate a ~600 Mb/s line). Each
  * upload fragment in flight holds ~2 × 10 MiB (ciphertext + request body), a download one ~2 × 10 MiB.
  */
 export const MAX_CONCURRENCY = 64;
@@ -67,7 +67,7 @@ export const DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024 - 28;
  * snapshots). Measured 2026-10-09: Discord's CDN sends CORS headers only for
  * some content types, chosen by extension (.txt/.json/.webm/.png yes;
  * .bin/.dat/none no), so a browser can read only those. The bytes are the
- * same ciphertext as before (format §6.2 unchanged); only the name differs.
+ * same ciphertext as before (format unchanged); only the name differs.
  */
 export const BLOB_EXT = ".txt";
 export const MANIFEST_SCHEMA_VERSION = 1;
@@ -97,7 +97,7 @@ export function memorySource(data: Uint8Array): ByteSource {
 /** What manifestRef decodes to. Lives only in the (encrypted, except plain) op payload and tree. */
 export interface ManifestLocator {
   v: 1;
-  /** File root key, base64 (koncept: key per file). */
+  /** File root key, base64 (key per file). */
   k: string;
   /** Where the encrypted manifest is. */
   at: DiscordPlacement;
@@ -170,7 +170,7 @@ export interface UploadStages {
 }
 
 /**
- * Where unfinished transfers are remembered on this device (zlecenie 2026-10-15-transfery §2: resume after
+ * Where unfinished transfers are remembered on this device (resume after
  * a reload). Browser: IndexedDB of this origin. Values are plain JSON; an upload's entry holds the file
  * key of the unfinished version (the device already holds the account key the same way).
  */
@@ -223,7 +223,7 @@ export interface DownloadOptions {
   /** Plaintext bytes written to the sink so far. */
   onProgress?: (doneBytes: number, totalBytes: number) => void;
   /**
-   * Resume (zlecenie 2026-10-15-transfery §2): the sink already holds fragments [0, from) of this version;
+   * Resume: the sink already holds fragments [0, from) of this version;
    * `hash` is the whole-file SHA-256 state after them (from `onWritten`). Only the rest is fetched.
    */
   resume?: { versionId: string; from: number; hash: Uint8Array };
@@ -258,7 +258,7 @@ export class DriveClient {
   /** Transfer log (Settings → Diagnostics); null = off. */
   tlog: TransferLog | null = null;
   /**
-   * Network state shared by uploads and downloads (zlecenie 2026-10-15-transfery §2–3): no-network
+   * Network state shared by uploads and downloads: no-network
    * gate, a window of pieces in flight per direction that shrinks on network errors and grows back,
    * the stuck-connection guard for downloads, "save data".
    */
@@ -400,7 +400,7 @@ export class DriveClient {
     const signal = opts.signal;
     throwIfAborted(signal);
     const deviceId = this.d.device.id;
-    // Resume (zlecenie 2026-10-15-transfery §2): the same upload ID, file key and node ID as the unfinished
+    // Resume: the same upload ID, file key and node ID as the unfinished
     // upload, if it is still open in the index and its lease can be taken again; otherwise a fresh start.
     const rs = this.d.resume;
     const rk = opts.resumeKey && rs ? resumeKeys(opts.resumeKey) : null;
@@ -466,7 +466,7 @@ export class DriveClient {
       // The whole-file plaintext hash must be fed in order. Reads run in parallel (each fragment's own),
       // the hash takes them in index order as soon as each is read (not after its post, as before), so a
       // fragment's plaintext is dropped right after it is encrypted and hashed: memory follows the
-      // fragments in flight, not the slowest post (owner's note 2026-10-14: 30–60 in flight).
+      // fragments in flight, not the slowest post (30–60 in flight).
       let hashChain: Promise<unknown> = Promise.resolve();
       const readInOrder = (i: number): Promise<{ data: Uint8Array; rd: number; ph: number }> => {
         const r0 = nowMs();
@@ -612,12 +612,12 @@ export class DriveClient {
     }
   }
 
-  /** Manifests are immutable per version: small LRU (koncept §4.1, manifest layer on demand). */
+  /** Manifests are immutable per version: small LRU (manifest layer on demand). */
   private readonly manifests = new Map<string, Promise<{ manifest: ChunkManifest; key: FileKey }>>();
   /** Manifest fetches from storage (diagnostics/tests). */
   manifestLoads = 0;
 
-  /** Load and decrypt the manifest of a version (koncept §4.1: manifests on demand, cached). */
+  /** Load and decrypt the manifest of a version (manifests on demand; cached). */
   async loadManifest(manifestRef: string): Promise<{ manifest: ChunkManifest; key: FileKey }> {
     const hit = this.manifests.get(manifestRef);
     if (hit) {
@@ -677,7 +677,7 @@ export class DriveClient {
       }
       const ordered = all.slice(from);
       opts.onProgress?.(total, v.sizeBytes);
-      // Parallel fetch (zlecenie 2026-10-13-transfer §3): up to `conc` fragments are fetched, checked and
+      // Parallel fetch: up to `conc` fragments are fetched, checked and
       // decrypted at once; they are written strictly in order, so memory holds at most `conc` fragments and
       // the whole-file SHA-256 is fed in order. The first failure stops the others (internal abort).
       const ac = new AbortController();
@@ -806,7 +806,7 @@ export class DriveClient {
 
   /**
    * Bytes [start, end] (inclusive, like HTTP Range) of a file's current
-   * version, fetching only the fragments that overlap (koncept §3.1: video
+   * version, fetching only the fragments that overlap (video
    * streaming via service worker + Range). Every fetched fragment is checked
    * against its ciphertext hash; the whole-file SHA-256 cannot be checked on
    * a partial read, AES-GCM still authenticates every fragment.

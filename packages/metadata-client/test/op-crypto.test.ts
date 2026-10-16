@@ -43,7 +43,7 @@ function device(server: InProcessLogServer, codec: OpCodec, transport: MemoryTra
   });
 }
 
-describe("encrypted operation log (koncept §3.3)", () => {
+describe("encrypted operation log", () => {
   it("the server sees only opId/rulesVersion/baseSeq/leaseGuard; two devices converge and download", async () => {
     const key = newAccountKey();
     const c = clock();

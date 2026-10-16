@@ -24,7 +24,7 @@ Steps (Enter = the default):
    saved as `language` in `config.json` and used by the next `start`/`doctor`/`invite` and as
    the default language of the browser app (users can switch there; their choice wins);
    in Polish mode `t`/`tak`/`nie` are accepted too, but `y/n` is what is shown,
-0b. **risk notice** (owner decision 2026-10-12), before anything else: storing files on Discord is
+0b. **risk notice**, before anything else: storing files on Discord is
    against Discord's Terms of Service (messages, attachments, webhooks or the account can be
    removed or blocked) and the software comes without any warranty (MIT, `LICENSE`). Choice
    `○ I understand and accept / ◉ Cancel` with **Cancel preselected: Enter alone does not

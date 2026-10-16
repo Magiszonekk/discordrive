@@ -1,4 +1,4 @@
-// Transfer logs (zlecenie 2026-10-13-transfer §2): every event of an upload and a download through the
+// Transfer logs: every event of an upload and a download through the
 // real fetch transport against the fake Discord (with a per-channel 429 so the limiter shows up), no
 // secret in any line (webhook token / URL, CDN signatures, file name unless asked), and the report
 // built from the log. Also the CLI flag --transfer-log.

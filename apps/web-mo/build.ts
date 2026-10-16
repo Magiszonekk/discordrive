@@ -1,7 +1,7 @@
 // Build dist/<mode>/: ui.js, w/worker.js, sw.js, w/sw.js (ESM / IIFE bundles), sqlite3.wasm, index.html, cobalt/ (style),
 // build-stamp.json (hash of the sources; `discordrive start` rebuilds when it no longer matches).
 //
-// The mode is fixed at build time (koncept §2, docs/stage3-modes.md §2): app-core imports the
+// The mode is fixed at build time: app-core imports the
 // virtual module `ddn:mode`, which this plugin resolves to src/modes/<mode>.ts. The files of the
 // other modes are never read, so their code cannot end up in the bundle (mode-bundles test).
 //
@@ -81,7 +81,7 @@ export async function buildMode(mode: Mode, outRoot = join(here, "dist")): Promi
   await build({ ...common, entryPoints: { worker: join(here, "src/worker.ts") }, outdir: join(out, "w") });
   await build({ ...common, format: "iife", entryPoints: { sw: join(here, "src/sw.ts") }, outdir: out });
   await build({ ...common, format: "iife", entryPoints: { sw: join(here, "src/w-sw.ts") }, outdir: join(out, "w") });
-  // Second connection to the CDN (src/lane.ts, zlecenie 2026-10-15-transfery §1): a page for a sandboxed iframe.
+  // Second connection to the CDN (src/lane.ts): a page for a sandboxed iframe.
   await build({ ...common, format: "iife", entryPoints: { lane: join(here, "src/lane.ts") }, outdir: out });
   writeFileSync(join(out, "lane.html"), '<!doctype html><meta charset="utf-8"><title>lane</title><script src="/lane.js"></script>\n');
   copyFileSync(createRequire(import.meta.url).resolve("@sqlite.org/sqlite-wasm/sqlite3.wasm"), join(out, "sqlite3.wasm"));

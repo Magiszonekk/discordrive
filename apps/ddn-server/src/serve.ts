@@ -1,7 +1,7 @@
 // `discordrive serve`: one process for the API (/v1/...), the notify
 // websocket (/v1/notify) and the built web app, from the same origin.
 //
-// Mode (koncept §2, docs/stage3-modes.md §2): the web app comes from apps/web-mo/dist/<mode>
+// Mode: the web app comes from apps/web-mo/dist/<mode>
 // and the mode-specific server part from apps/ddn-server/dist/<mode>/server-mode.mjs, both
 // built for exactly the configured mode (rebuilt when the sources changed). The server
 // refuses to start when the bundle, the config and the database disagree on the mode.

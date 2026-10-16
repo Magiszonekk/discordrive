@@ -14,7 +14,7 @@ export class MemoryTransport implements WebhookTransport {
   private readonly blobs = new Map<string, Uint8Array>();
   private nextId = 1_000_000n;
   private linkGen = 0;
-  /** Max attachment size (Discord without boosts: 20 MiB passes, 24 MiB is 413; koncept §7). */
+  /** Max attachment size (Discord without boosts: 20 MiB passes; 24 MiB is 413). */
   maxBytes = 20 * 1024 * 1024;
   posts = 0;
   /** Called before each post; throw to inject a failure. */

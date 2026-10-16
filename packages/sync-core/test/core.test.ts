@@ -29,7 +29,7 @@ import {
 } from "../src/index.js";
 import { A, B, Scenario } from "./helpers.js";
 
-describe("rules version in the log (§5.4)", () => {
+describe("rules version in the log", () => {
   it("every entry carries the rules version and the index records the highest one", () => {
     const s = new Scenario();
     s.folder(A, "fold0001", ROOT_ID, "x");
@@ -136,7 +136,7 @@ describe("determinism and snapshots", () => {
   });
 });
 
-describe("garbage collection (§6.2, rule 8)", () => {
+describe("garbage collection (rule 8)", () => {
   it("aborted uploads are deletable at once, released ones only after retention", () => {
     const s = new Scenario();
     s.file(A, "file0001", ROOT_ID, "a.txt");
@@ -228,7 +228,7 @@ describe("names", () => {
   });
 });
 
-describe("manifest layer (§4.1)", () => {
+describe("manifest layer", () => {
   it("loads on demand, dedupes concurrent loads, evicts by size", async () => {
     let loads = 0;
     const mk = (n: number): ChunkManifest => ({

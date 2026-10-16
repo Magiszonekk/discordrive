@@ -1,4 +1,4 @@
-// Trash and fragment cleanup in metadata only (koncept §6.2, DECISIONS Q4; zlecenie 2026-10-13 p. 2).
+// Trash and fragment cleanup in metadata only (DECISIONS Q4).
 //
 // Two steps, both run by a client (the server cannot read the tree and never holds a webhook):
 //  1. Trash: nodes more than 30 days in the trash are purged with one group op (Q4 policy:
@@ -9,7 +9,7 @@
 //     message). The manifest of a released version is gone from the tree, so its reference is
 //     found again in the log (the op that bound the upload). Fragment messages go first, the
 //     manifest message last: a run cut short can be repeated from the manifest.
-// The server records which uploads are done (upload IDs are already plaintext there, §3.3), so
+// The server records which uploads are done (upload IDs are already plaintext there), so
 // another device does not delete the same messages again; it also gives the server clock.
 
 import { DAY_MS, FRAGMENT_RETENTION_MS, type ContentRef, type IndexStore, type Operation } from "@ddv4/sync-core";
@@ -46,7 +46,7 @@ export interface CleanupDeps {
   api: CleanupApi;
   transport: WebhookTransport;
   webhook(id: string): WebhookRef;
-  /** Webhooks removed from the account (zlecenie 2026-10-13-webhooki): their messages can never be deleted by us; skipped. */
+  /** Webhooks removed from the account: their messages can never be deleted by us; skipped. */
   removedHook?(id: string): boolean;
   /** Current snapshot pointer (kept bases); null = no snapshots yet. */
   pointer(): Promise<Pointer | null>;

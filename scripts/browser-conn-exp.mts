@@ -1,4 +1,4 @@
-// Experiment (zlecenie-2026-10-15-transfery §1): can a web page get a SECOND, independent connection to
+// Experiment: can a web page get a SECOND, independent connection to
 // the same Discord host (cdn.discordapp.com for downloads, discord.com for webhook POSTs) without
 // proxying through our server?
 //

@@ -1,6 +1,6 @@
 # @ddv4/web-mo: browser client of the metadata-only mode (stage 2)
 
-Look and layout: **Cobalt, the theme of discordrive** (owner decision 2026-10-12, replaces Nordic):
+Look and layout: **Cobalt, the theme of discordrive** (replaces Nordic):
 tokens 1:1 from `discordrive/apps/frontend` (`cobalt/tokens.css`, light + dark), discordrive's
 app-shell (`cobalt/app.css`): sidebar Files / Devices / Settings with the account, EN/PL and
 light/dark/system in its footer; on a phone a hamburger and a drawer (MainLayout). Before sign-in the
@@ -20,7 +20,7 @@ the page):
   (forced once), then Files.
 - signed out: `/` (create account), `/join`, `/restore`; share links `/s/<id>#<key>`.
 
-Architecture (concept §4.1):
+Architecture:
 - `src/app-core.ts`: application state (account, device, account key, paged folder list,
   upload/download, pairing), no DOM; called by the UI.
 - `src/keystore.ts`: Ed25519 device key (non-extractable CryptoKey) and the account key in

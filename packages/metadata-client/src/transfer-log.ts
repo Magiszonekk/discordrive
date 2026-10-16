@@ -1,4 +1,4 @@
-// Transfer logs (zlecenie 2026-10-13-transfer §2): one JSON object per line (JSON Lines), per
+// Transfer logs: one JSON object per line (JSON Lines), per
 // fragment and per file, for finding where an upload or a download spends its time. Format:
 // docs/transfer-log.md (version 1; later versions only ADD fields).
 //

@@ -1,4 +1,4 @@
-// Browser ceiling of parallel 10 MiB POSTs over HTTP/2 vs HTTP/1.1 (owner's note 2026-10-14): a local
+// Browser ceiling of parallel 10 MiB POSTs over HTTP/2 vs HTTP/1.1: a local
 // HTTPS+h2 server (like discord.com: one multiplexed connection) answering every POST after DELAY ms
 // (the owner's log: ~3 s per 10 MiB post). Chromium allows 6 HTTP/1.1 connections per host.
 //   DELAY=3000 npx tsx scripts/h2-vs-h1-posts.mts      (h2; scripts/concurrency-matrix.mts --proto h1 for h1)

@@ -1,6 +1,6 @@
 // Real Discord webhook transport (fetch; Node 22 and browsers).
 //
-// Rate limits measured on a test Discord server 2026-10-06 (koncept §7):
+// Rate limits measured on a test Discord server 2026-10-06:
 //  - per-webhook bucket: x-ratelimit-limit 5, reset ~0.4 s per slot ("user" scope 429 when exceeded),
 //  - per-CHANNEL shared limit ~30 messages/min after an initial burst ("shared" scope 429,
 //    sent while x-ratelimit-remaining is still > 0, so headers alone cannot predict it).

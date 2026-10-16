@@ -1,4 +1,4 @@
-// Removing a channel in metadata only (zlecenie 2026-10-13-webhooki p. 1): impact from the local
+// Removing a channel in metadata only: impact from the local
 // index, critical detection (pointer + chain), move with relocate ops (resumable after an
 // interruption, no file posted twice), the snapshot chain re-homed: restore from the NEW rescue kit
 // works, the old pointer is not updated any more; remove anyway -> unavailable (computed), pasting

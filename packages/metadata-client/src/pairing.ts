@@ -1,4 +1,4 @@
-// Device pairing (koncept §3.8): an already signed-in device hands the
+// Device pairing: an already signed-in device hands the
 // account key to a new device. The server only relays one opaque, one-shot
 // message and can read nothing.
 //

@@ -1,4 +1,4 @@
-// Snapshots on Discord and the pointer message (koncept §6.2, §3.5).
+// Snapshots on Discord and the pointer message.
 //
 // Objects (all sealed with the account subkey "snapshot", gzip before
 // encryption, each its own attachment posted through the paced client):
@@ -9,14 +9,14 @@
 //              rebuilt (retention: plan, not done yet).
 //   base     - the decrypted tree (sync-core IndexSnapshot) at headSeq, split
 //              into parts no bigger than a fragment. Only devices on an
-//              unmetered link write bases (§6.2).
+//              unmetered link write bases.
 //   pointer  - ONE fixed message, edited (PATCH, attachment replaced) after
 //              every snapshot: the current base and the last segment. A
 //              client never replaces a pointer that covers more of the log.
-// Rescue kit (§3.5) = account ID + account key + one webhook URL + pointer
+// Rescue kit = account ID + account key + one webhook URL + pointer
 // message ID: enough to rebuild the tree with no server at all.
 //
-// Policy (§6.2): segment after 1 min of log silence, at the latest 5 min after
+// Policy: segment after 1 min of log silence, at the latest 5 min after
 // the first unsnapshotted entry, only when there are changes; base when the
 // segments since the last base exceed 20 % of its size or it is 7 days old.
 
@@ -65,7 +65,7 @@ export interface Pointer {
   /** Bytes of segments written after `base` (20 % rule). */
   segmentBytesSinceBase: number;
   writtenAt: number;
-  /** Older bases still kept (retention, §6.2), newest first. Optional: absent = none. */
+  /** Older bases still kept (retention), newest first. Optional: absent = none. */
   history?: BaseRef[];
   /** Segments with toSeq <= this were deleted from Discord (prune bookkeeping). */
   prunedUpTo?: number;
@@ -148,7 +148,7 @@ export async function readPointer(io: BlobIO, key: AccountKey, accountId: string
 }
 
 /**
- * Replace the pointer unless the current one already covers at least as much (§6.2).
+ * Replace the pointer unless the current one already covers at least as much.
  * mode "same_coverage": bookkeeping update (retention) allowed only while the
  * pointer still has exactly the coverage and base we computed it from.
  */
@@ -276,14 +276,14 @@ export async function writeSnapshot(d: SnapshotDeps, kind: "segment" | "base"): 
   return { kind: next.base && next.base !== cur.base ? "base" : "segment", pointer: next, written, posts };
 }
 
-// --- retention (§6.2): 7 daily + 4 weekly bases, segments from the oldest kept base
+// --- retention: 7 daily + 4 weekly bases, segments from the oldest kept base
 
 export const DAILY_BASES = 7;
 export const WEEKLY_BASES = 4;
 const DAY = 24 * 3600_000;
 
 /**
- * Which bases to keep (§6.2: 7 daily + 4 weekly, ~30 days back): the current
+ * Which bases to keep (7 daily + 4 weekly; ~30 days back): the current
  * base, the newest base of each of the 7 most recent days that have one, and
  * the oldest base of each of the 4 most recent weeks BEFORE that daily window
  * (UTC, weeks from Monday). Days and weeks count only those that HAVE bases,
@@ -305,7 +305,7 @@ export function selectRetained(bases: BaseRef[]): { keep: BaseRef[]; drop: BaseR
   const oldestDay = days.size ? Math.min(...days) : Infinity;
   // Weekly: the OLDEST base of each of the 4 most recent weeks before the daily
   // window. The oldest kept base sets how far back a restore can go (segments
-  // after it are all kept), so the oldest-of-week choice gives the ~30 days of §6.2.
+  // after it are all kept), so the oldest-of-week choice gives the ~30 days of retention.
   const weekly = new Map<number, BaseRef>();
   for (const b of sorted) {
     if (dayOf(b) >= oldestDay) continue;
@@ -318,7 +318,7 @@ export function selectRetained(bases: BaseRef[]): { keep: BaseRef[]; drop: BaseR
 }
 
 /**
- * §6.2: fragments may be deleted from Discord only after 30 days AND when no
+ * Fragments may be deleted from Discord only after 30 days AND when no
  * kept base still points at them. A base points at a released upload iff it
  * was taken before the release, so: released at seq <= oldest kept base.
  */
@@ -368,7 +368,7 @@ export async function pruneSnapshots(io: BlobIO, key: AccountKey, accountId: str
   return { written, basesDropped: drop.length, partsDeleted, segmentsDeleted: segDrop.length };
 }
 
-// --- moving the chain to another channel (zlecenie 2026-10-13-webhooki: critical webhook)
+// --- moving the chain to another channel (critical webhook)
 
 /** Every object the current pointer can reach: kept segments (walked back to prunedUpTo), base parts, segmentAtBase. */
 export async function chainObjects(io: BlobIO, key: AccountKey, accountId: string, p: Pointer): Promise<{ segments: { ref: SegmentRef; body: SegmentBody }[]; parts: ObjRef[] }> {
@@ -386,7 +386,7 @@ export async function chainObjects(io: BlobIO, key: AccountKey, accountId: strin
 
 /**
  * Copy the whole snapshot chain to one webhook (`post` posts there) and write a new pointer message
- * there: kept history preserved (§6.2: point-in-time restore keeps working). Segments are re-sealed
+ * there: kept history preserved (point-in-time restore keeps working). Segments are re-sealed
  * (their body names the previous segment's message), base parts are copied byte for byte (their AAD
  * does not name a location). Returns the new pointer location and the old objects, which the caller
  * deletes once the vault points at the new pointer (the old rescue kit then stops working).
@@ -443,7 +443,7 @@ export async function rehomeChain(
   return { loc, pointer: next, old };
 }
 
-// --- restore (§3.5): no server needed
+// --- restore: no server needed
 
 export interface RestoreResult {
   store: IndexStore;
@@ -468,7 +468,7 @@ export async function loadBase(io: BlobIO, key: AccountKey, accountId: string, b
 }
 
 /**
- * Rebuild the tree from Discord alone. `atSeq`: point-in-time restore (§6.2,
+ * Rebuild the tree from Discord alone. `atSeq`: point-in-time restore (within
  * „przywrócić stan z dowolnego momentu”): uses the newest kept base at or
  * before it and replays the log only up to atSeq.
  */
@@ -538,7 +538,7 @@ export async function readLogChain(io: BlobIO, key: AccountKey, accountId: strin
   return { pointer, entries };
 }
 
-// --- rescue kit (§3.5)
+// --- rescue kit
 
 export interface RescueKit {
   v: 1;
@@ -551,7 +551,7 @@ export interface RescueKit {
 }
 
 /**
- * Rescue kit of the e2ee and plain modes (docs/stage3-modes.md §3): the webhooks belong to the
+ * Rescue kit of the e2ee and plain modes: the webhooks belong to the
  * instance, so the kit carries the account key and the instance address only. Registers a new
  * device with the rescue key, like kit 1.
  */
@@ -638,12 +638,12 @@ export function rescueBlobIO(transport: WebhookTransport, hook: WebhookRef): Blo
   };
 }
 
-// --- scheduler (§6.2, §3.6: only while a client is open)
+// --- scheduler (only while a client is open)
 
 export interface SchedulerDeps extends SnapshotDeps {
   /** Device writes snapshots at all (main device / main tab). */
   isPrimary: () => boolean;
-  /** Unmetered link: may write bases (§6.2); phones only write segments. */
+  /** Unmetered link: may write bases; phones only write segments. */
   unmetered: () => boolean;
   /** Server time of a log entry by seq (from the local log tail / index). */
   serverTimeOf: (seq: number) => number | undefined;

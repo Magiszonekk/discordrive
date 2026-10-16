@@ -1,4 +1,4 @@
-// Plain mode, server side (docs/stage3-modes.md §7): the server reads the operation log
+// Plain mode, server side: the server reads the operation log
 // (PlainOpCodec) and keeps its own replica of every account's index, so it knows names, the
 // tree and the file keys. On top of the e2ee parts (blobs through the instance, background
 // work) it adds:

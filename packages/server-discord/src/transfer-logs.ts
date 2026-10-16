@@ -1,4 +1,4 @@
-// Server part of the transfer logs (zlecenie 2026-10-13-transfer §2), e2ee and plain: what the
+// Server part of the transfer logs, e2ee and plain: what the
 // instance does between the browser and Discord (body read, in-flight budget, limiter wait, the
 // Discord request, 429s, retries), one JSON line per event in
 //   <data dir>/logs/transfers-YYYY-MM-DD.jsonl   (UTC day; oldest files deleted past maxBytes)

@@ -1,4 +1,4 @@
-// Download of a big file straight to disk (zlecenie 2026-10-13-transfer §3): a synthetic ≥ 4 GB file on
+// Download of a big file straight to disk: a synthetic ≥ 4 GB file on
 // the fake Discord (fragments kept on disk), uploaded and downloaded through the real web app in
 // headless Chromium (metadata-only build, service worker stream), SHA-256 compared, memory of the
 // browser's processes sampled during the download (the tab used to collect the whole file in a Blob).

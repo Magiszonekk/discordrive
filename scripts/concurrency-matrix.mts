@@ -1,4 +1,4 @@
-// Ceiling of the browser at high concurrency (owner's note 2026-10-14, zlecenie 2026-10-13-transfer):
+// Ceiling of the browser at high concurrency:
 // headless Chromium uploads (and downloads) through MetadataClient to the local fake Discord without
 // limits, for a grid of channels × fragments in flight, over HTTPS with HTTP/2 (like discord.com and
 // its CDN: one multiplexed connection) and over HTTP/1.1 (6 connections per host in Chromium), with

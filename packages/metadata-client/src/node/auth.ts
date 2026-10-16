@@ -1,4 +1,4 @@
-// Server side of device sign-in (decision #13, koncept §3.3).
+// Server side of device sign-in (decision #13).
 //
 // Stores per account: the rescue public key, and per device: its Ed25519
 // public key. Challenges are random, one-shot (deleted when used) and expire
@@ -82,7 +82,7 @@ export class Ed25519Authenticator implements Authenticator {
         token_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, device_id TEXT NOT NULL, expires_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS sessions_device ON sessions(device_id);
     `);
-    // Device display name, sealed with the account key (zlecenie 2026-10-09 A): opaque here.
+    // Device display name, sealed with the account key (A): opaque here.
     const cols = (db.prepare("PRAGMA table_info(devices)").all() as { name: string }[]).map((c) => c.name);
     if (!cols.includes("name_sealed")) db.exec("ALTER TABLE devices ADD COLUMN name_sealed TEXT");
     const row = db.prepare("SELECT v FROM server_meta WHERE k = 'instance'").get() as { v: string } | undefined;

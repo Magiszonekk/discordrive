@@ -15,7 +15,7 @@ function subOps(e: LogEntry): SingleOp[] {
 }
 
 /**
- * „Żadna treść nie ginie bez operacji usunięcia” (task invariant, koncept §5.2.3):
+ * „Żadna treść nie ginie bez operacji usunięcia” (task invariant):
  * every content version that was ever bound is still bound to a node, or it
  * was released by
  *  - an explicit replacement: a new_content_version on that node whose
@@ -70,7 +70,7 @@ export function checkNoSilentLoss(log: LogEntry[], store: IndexStore): string[] 
 }
 
 /**
- * I4b, „niewidziana treść nie znika po cichu” (koncept §5.2.3 with the
+ * I4b, „niewidziana treść nie znika po cichu” (with the
  * folder exception, owner decisions Q1 + #11, DECISIONS.md). A file that sits
  * in the trash with its current content is fine if:
  *  - whoever trashed it (itself or through an ancestor) had seen that

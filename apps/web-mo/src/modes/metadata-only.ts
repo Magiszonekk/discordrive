@@ -1,4 +1,4 @@
-// Metadata-only mode of the browser app (koncept §3): webhooks in the encrypted vault, blobs
+// Metadata-only mode of the browser app: webhooks in the encrypted vault, blobs
 // straight to Discord, snapshots written by the main tab, rescue kit with the pointer webhook.
 import {
   ChainIndex,
@@ -57,7 +57,7 @@ async function ensurePointer(ctx: ModeCtx, c: DriveClient) {
 
 const schedulers = new WeakMap<DriveClient, SnapshotScheduler>();
 
-// ── channels (zlecenie 2026-10-13-webhooki p. 1–2) ─────────────────────
+// ── channels ─────────────────────
 const sqlOf = (ctx: ModeCtx) => (ctx.store instanceof SqlIndexStore ? ctx.store : null);
 const chains = new WeakMap<ModeCtx, ChainIndex>();
 const chainOf = (ctx: ModeCtx) => {
@@ -270,10 +270,10 @@ export const mode: ModeImpl = {
     if (!v.pointer) return null;
     let s = schedulers.get(c);
     if (!s) {
-      // §6.2: phones (metered) write only segments, bases come from desktops.
+      // Phones (metered) write only segments, bases come from desktops.
       const nav = (globalThis as unknown as { navigator?: { userAgent?: string; connection?: { type?: string; saveData?: boolean } } }).navigator;
       const metered = /Android|iPhone|iPad|Mobile/i.test(nav?.userAgent ?? "") || nav?.connection?.type === "cellular" || !!nav?.connection?.saveData;
-      // Snapshot objects only on the pointer's channel (zlecenie 2026-10-13-webhooki): one critical
+      // Snapshot objects only on the pointer's channel: one critical
       // channel instead of all of them; the others can be retired or removed freely.
       const ptrHook = v.pointer.webhookId;
       s = new SnapshotScheduler({
@@ -309,7 +309,7 @@ export const mode: ModeImpl = {
       isPrimary: () => cc.primary(),
       metered: () => cc.metered(),
     });
-    // Channels moved away (drain, zlecenie 2026-10-13-webhooki): after the retention their old messages go
+    // Channels moved away (drain): after the retention their old messages go
     // and the webhook leaves the vault. Same gates as the fragment step (main tab, unmetered, or manual).
     const drains = async (manual: boolean) => {
       if (!manual && (!cc.primary() || cc.metered())) return;

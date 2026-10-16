@@ -1,4 +1,4 @@
-// Service-worker side of streaming (koncept §3.1): answers GET /ddn/file/<nodeId>
+// Service-worker side of streaming: answers GET /ddn/file/<nodeId>
 // with Range support from MetadataClient.readRange, so <video src> plays and
 // seeks while only the needed fragments are fetched from the CDN and
 // decrypted in the browser. Pure Request -> Response, testable in Node.

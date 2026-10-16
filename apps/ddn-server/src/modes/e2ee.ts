@@ -1,4 +1,4 @@
-// e2ee instance (docs/stage3-modes.md): the server knows the webhooks (pool from setup +
+// e2ee instance: the server knows the webhooks (pool from setup +
 // account channels, sealed with instance.key) and moves the encrypted blobs; snapshots,
 // cleanup and link refreshing run here without a browser tab.
 import { existsSync } from "node:fs";

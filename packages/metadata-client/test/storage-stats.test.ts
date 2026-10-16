@@ -1,4 +1,4 @@
-// Local derived tables (zlecenie 2026-10-13-webhooki p. 1-2): current versions, piece locations,
+// Local derived tables: current versions, piece locations,
 // unavailable uploads; Settings → Storage totals, per-channel stats, the remove dialog list,
 // hidden unavailable files. Plus the measurement the order asks for: 50 000 files, 2 000 000
 // fragments over 4 channels.

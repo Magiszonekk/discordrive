@@ -1,6 +1,6 @@
 # Transfer logs (format v1)
 
-Diagnostics for uploads and downloads (zlecenie 2026-10-13-transfer §2): where the time goes
+Diagnostics for uploads and downloads: where the time goes
 (the limiter, the network, the device), how often Discord answers 429, how many pieces are in
 flight. Off by default everywhere.
 

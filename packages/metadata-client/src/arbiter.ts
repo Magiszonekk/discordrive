@@ -1,6 +1,6 @@
 // Arbiter (server) as seen by a client. Async so an HTTP implementation can
 // replace the in-process one without touching the client. Mirrors
-// @ddv4/sync-core Sequencer (koncept §3.4 role 3, rule 8 leases).
+// @ddv4/sync-core Sequencer (role 3; rule 8 leases).
 
 import { Sequencer, type LogEntry, type OpEnvelope, type SubmitResult, type UploadId } from "@ddv4/sync-core";
 

@@ -1,4 +1,4 @@
-// Operations in clear for the server: the plain mode (docs/stage3-modes.md §7).
+// Operations in clear for the server: the plain mode.
 //
 // Same envelope as the encrypted log (opId, rulesVersion, baseSeq, leaseGuard + payload), so
 // the server, the Sequencer, snapshots and every client path are unchanged; only the payload

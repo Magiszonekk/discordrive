@@ -1,9 +1,9 @@
-// Client replica (koncept §5.1, rule 10).
+// Client replica (rule 10).
 //
 // A replica only ever applies the server log in server order. Its own
 // operations wait in an outbox until the server assigns them a seq; the UI
 // may show them optimistically, but the index state is always "log up to
-// headSeq". That keeps every replica identical by construction (§5.2.2) and
+// headSeq". That keeps every replica identical by construction and
 // makes long offline periods trivial: fetch the tail, then send the outbox
 // (rule 10), with no time limit.
 

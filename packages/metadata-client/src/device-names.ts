@@ -1,7 +1,7 @@
-// Device display names (zlecenie 2026-10-09 A). Decision (DECISIONS.md, etap 2):
+// Device display names. Decision (DECISIONS.md, etap 2):
 // the name is sealed with the account key (subkey "device-name"), bound to the
-// account and device ID, so the server stores an opaque blob and the §3.3
-// contract (what the server sees in clear) stays unchanged.
+// account and device ID, so the server stores an opaque blob and the contract
+// for what the server sees in clear stays unchanged.
 
 import { fromBase64, toBase64 } from "@ddv4/processing";
 import { sealJson, unsealJson, type AccountKey } from "./account-key.js";

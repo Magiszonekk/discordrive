@@ -1,4 +1,4 @@
-// Webhook vault (koncept §3.2).
+// Webhook vault.
 //
 // The user's webhooks (URL = token that can delete messages) are kept in one
 // blob encrypted with the account key (subkey "vault"). The server stores the
@@ -14,9 +14,9 @@
 //   loser re-reads and re-applies its change (changes are add/remove by
 //   webhook ID, so re-applying is always meaningful).
 //
-// Account wizard (owner decision #12, 2026-10-06): one channel with a webhook
+// Account wizard (decision #12 in packages/sync-core/DECISIONS.md): one channel with a webhook
 // is required, the wizard encourages 3–4 channels, because Discord limits
-// posts per CHANNEL (~30/min, koncept §7); several webhooks in one channel do
+// posts per CHANNEL (~30/min); several webhooks in one channel do
 // not add throughput.
 
 import { sealJson, unsealJson, type AccountKey } from "./account-key.js";
@@ -38,15 +38,15 @@ export interface VaultWebhook {
   label: string;
   addedAt: number;
   /**
-   * Retired (zlecenie 2026-10-13-webhooki, option 1): gets no new pieces, still read. Optional
+   * Retired (option 1): gets no new pieces, still read. Optional
    * field next to the old ones (no format bump): a tab on the previous bundle keeps it when it
    * edits the vault (update() clones the whole content) and simply ignores it.
    */
   retired?: boolean;
   /**
    * Moved away (option 2): nothing current is on it any more, but older log entries and kept snapshot
-   * bases still name its messages, so it stays (retired, URL kept, read only) until the retention of
-   * §6.2 has passed; then the cleanup deletes what the move replaced (relocate entries fromSeq..toSeq)
+   * bases still name its messages, so it stays (retired, URL kept, read only) until the retention
+   * has passed; then the cleanup deletes what the move replaced (relocate entries fromSeq..toSeq)
    * and the webhook leaves the vault ("moved").
    */
   drain?: { at: number; fromSeq: number; toSeq: number; oldPointer?: { webhookId: string; messageId: string } };
@@ -66,7 +66,7 @@ export interface VaultContent {
   format: typeof VAULT_FORMAT;
   version: number;
   webhooks: VaultWebhook[];
-  /** The account's snapshot pointer message (§6.2), once created. Part of the rescue kit. */
+  /** The account's snapshot pointer message, once created. Part of the rescue kit. */
   pointer?: { webhookId: string; messageId: string };
   /** Webhooks removed from the account, newest first (optional, like `retired`). */
   removed?: RemovedWebhook[];

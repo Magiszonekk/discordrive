@@ -1,6 +1,6 @@
 # @ddv4/sync-core
 
-Wspólny rdzeń discordrive-next (etap 1, koncept §4, §5, §6.2): model indeksu, log
+Wspólny rdzeń discordrive-next (etap 1): model indeksu, log
 operacji, deterministyczne reguły konfliktów 1–10 (wersja reguł 2), snapshoty. Pakiet nie używa Discorda,
 bazy, Redisa ani UI i działa w Node oraz w przeglądarce (sprawdzone na headless Chromium).
 
@@ -9,7 +9,7 @@ bazy, Redisa ani UI i działa w Node oraz w przeglądarce (sprawdzone na headles
 - **Drzewo** (`NodeRecord`): stałe losowe ID od klienta, nazwa i rodzic jako atrybuty.
   Pliki trzymają tylko wskaźnik do bieżącej wersji: `manifestRef`, rozmiar i liczbę
   fragmentów. Dwa korzenie systemowe: `root` oraz `recovered` („Odzyskane”, nieusuwalny).
-- **Manifesty** (`manifest.ts`) to osobna warstwa pobierana na żądanie (§4.1), z cache LRU.
+- **Manifesty** (`manifest.ts`) to osobna warstwa pobierana na żądanie, z cache LRU.
   Format jest zgodny z `FileChunkManifestPlaintext` z discordrive.
 - **Uploady** (`UploadRecord`): `open → committed → bound → released`, albo `aborted`.
   Tylko `released` (po retencji) i `aborted` wolno fizycznie skasować (`gc.ts`).
@@ -22,8 +22,8 @@ bazy, Redisa ani UI i działa w Node oraz w przeglądarce (sprawdzone na headles
 
 ## Reguły
 
-Wszystkie w `src/apply.ts`, każda opisana w komentarzu z numerem z §5.3. Przypadki, których
-koncept nie rozstrzygał, rozstrzygnął właściciel 2026-10-05: [DECISIONS.md](DECISIONS.md)
+Wszystkie w `src/apply.ts`, każda opisana w komentarzu. Przypadki, których
+rdzeń nie rozstrzygał, rozstrzygnął właściciel 2026-10-05: [DECISIONS.md](DECISIONS.md)
 (wersja reguł 2). W skrócie:
 
 - usunięcie folderu zabiera do kosza także zmiany, których autor nie widział, a ich autor
@@ -65,7 +65,7 @@ identyczny stan wszystkich replik (także przy odwróconej kolejności iteracji 
 niezmienniki drzewa po **każdym** prefiksie logu, brak utraty treści bez operacji
 usunięcia (albo zamiany na identyczną treść, Q7), to, że niewidziana treść nie znika po
 cichu (zostaje albo trafia do kosza razem z folderem i jej autor dostaje powiadomienie,
-koncept §5.2.3, Q1 + #11), brak odwołań do
+Q1 + #11), brak odwołań do
 skasowanych fragmentów, to, że wpis pominięty lub odrzucony nie zmienia stanu, oraz to,
 że snapshot plus ogon logu daje ten sam stan co pełny log. Urządzenia w symulacji mają
 różne strefy czasowe (Q6), a część treści ma ten sam hash (Q7).

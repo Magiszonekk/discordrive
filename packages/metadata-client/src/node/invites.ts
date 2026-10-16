@@ -1,4 +1,4 @@
-// Invite codes for a public instance (zlecenie 2026-10-09 B): sign-up is
+// Invite codes for a public instance (B): sign-up is
 // closed by default; the operator hands out one-shot codes made by
 // `discordrive setup` / `discordrive invite`. The server keeps only the
 // SHA-256 of a code. A code is claimed atomically before the account is

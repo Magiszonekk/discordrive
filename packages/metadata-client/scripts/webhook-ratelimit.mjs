@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Stage 0 leftover (koncept §7): webhook rate limits when several independent
+// Stage 0 leftover: webhook rate limits when several independent
 // clients (browser tabs, CLI) upload through the same webhook.
 //
 // Each "client" is a separate OS process with its own state and no shared

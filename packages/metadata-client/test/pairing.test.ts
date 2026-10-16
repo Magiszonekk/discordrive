@@ -23,7 +23,7 @@ const bundle = (key = newAccountKey()) => ({ accountId: "acct-1", accountKey: ke
 const fakeRegister = async () => ({ deviceId: "dev-new" });
 const devPub = async () => (await generateDeviceKey()).publicKey;
 
-describe("device pairing (koncept §3.8)", () => {
+describe("device pairing", () => {
   it("new device gets the account key; both show the same 6-digit code; slot is one-shot", async () => {
     const mb = new MemoryPairingMailbox();
     const n = await startPairing(await devPub());

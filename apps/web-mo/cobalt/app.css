@@ -535,7 +535,7 @@ dialog.modal.confirm .modal-b { gap: 1.25rem; }
 .auth-foot .alt-ways { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; max-width: 20rem; }
 .auth-foot .alt-ways .btn { width: 100%; padding-top: .625rem; padding-bottom: .625rem; }
 
-/* ── file preview (zlecenie 2026-10-13-webhooki p. 4): the player dialog on paper; full screen on a phone ── */
+/* ── file preview: the player dialog on paper; full screen on a phone ── */
 dialog.preview { width: min(1100px, 96vw); height: min(90dvh, 900px); max-width: 100vw; max-height: 100dvh; background: var(--color-paper); color: var(--color-ink-2); flex-direction: column; }
 dialog.preview[open] { display: flex; }
 .preview .player-h { gap: .25rem; }
@@ -593,8 +593,8 @@ dialog.preview[open] { display: flex; }
   .pv-md { padding: 1.25rem 1rem 2.5rem; }
 }
 
-/* ── channels: collapsible section, remove dialog, storage stats, unavailable rows (zlecenie 2026-10-13-webhooki;
- * polish by the frontend profile on the existing Cobalt tokens: list, chip, note, modal, ack, bar) ── */
+/* ── channels: collapsible section, remove dialog, storage stats, unavailable rows
+ * (polish by the frontend profile on the existing Cobalt tokens: list, chip, note, modal, ack, bar) ── */
 /* Heading: chevron + title + count chip on the left, the one-line summary on the right (under the title on a phone).
  * The summary repeats the count, so the chip steps back while the summary is there; it stays when the summary is
  * empty (not set up yet: the warning-toned chip is then the only signal). */
@@ -703,7 +703,7 @@ tr.unavail .nm > [data-ddn="unavailable-chip"] { flex: none; }
 .note.warn svg.i, .advice.need { color: color-mix(in oklab, var(--color-warning) 62%, var(--color-ink)); }
 .bar > i.paused { background: var(--color-warning); }
 
-/* ── zlecenie 2026-10-14-ui: trash next to Download, context menu, List / Tiles, sortable column heads ──
+/* ── trash next to Download, context menu, List / Tiles, sortable column heads ──
  * Functional base on the Cobalt tokens (the look gets its polish from the frontend profile). */
 /* Move to trash in the row: quiet (muted, error on hover). Phone list cards: in the menu (no room). */
 @media (max-width: 767.98px) { .ftable-wrap:not([data-view="tiles"]) .row-trash { display: none; } }
@@ -770,7 +770,7 @@ th[aria-sort="ascending"] .th-sort svg.i, th[aria-sort="descending"] .th-sort sv
 /* Long press opens the menu: no text selection / iOS callout on the rows */
 @media (hover: none) { .ftable tbody tr { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
 
-/* Upload queue closes itself (owner's note 2026-10-14): a hairline counts down at the bottom of the panel
+/* Upload queue closes itself: a hairline counts down at the bottom of the panel
  * (paused on hover / focus); files that failed stay in a warning bar with Details and Retry. */
 .uploads { position: relative; }
 .uploads[data-closing]::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: color-mix(in oklch, var(--color-accent) 35%, transparent); transform-origin: left; animation: toast-time var(--close-ms, 5000ms) linear forwards; }
@@ -786,7 +786,7 @@ th[aria-sort="ascending"] .th-sort svg.i, th[aria-sort="descending"] .th-sort sv
 .upfail-list .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-ink); font-weight: 500; }
 .upfail-list .why { flex: none; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-muted); }
 
-/* ── zlecenie 2026-10-14-ui, polish (frontend profile, styles #58). CSS only, every data-ddn hook unchanged ── */
+/* ── UI polish (frontend profile). CSS only, every data-ddn hook unchanged ── */
 /* List / Tiles: the segmented control is as tall as the buttons beside it (38 px; 46 px on a phone) */
 .files-h .view-toggle button { height: 2rem; min-width: 2.25rem; padding: 0 .5rem; }
 .files-h .view-toggle svg.i { width: 16px; height: 16px; }

@@ -1,4 +1,4 @@
-// Tree layer in the browser (koncept §4.1): SQLite-WASM on OPFS (SAH pool) in a
+// Tree layer in the browser: SQLite-WASM on OPFS (SAH pool) in a
 // dedicated Worker in headless Chromium. Replays random stage-1 logs there and
 // compares the canonical state hashes with Node (MemoryIndexStore), then checks
 // that the database survives a page reload.

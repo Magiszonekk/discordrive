@@ -1,4 +1,4 @@
-// Transfers on weak, unstable and "stuck" links (zlecenie 2026-10-15-transfery §2–3).
+// Transfers on weak, unstable and "stuck" links.
 //
 // Three different situations need opposite reactions, so they are told apart:
 //

@@ -1,5 +1,5 @@
 // Per-file key and fragment encryption, byte-compatible with discordrive
-// (koncept §6.2: same fragment and encryption format, version number, key per file).
+// (same fragment and encryption format; version number; key per file).
 //
 // discordrive (apps/frontend/src/lib/crypto.ts): random per-file root key
 // (rootFEK), content key = HKDF-SHA256(rootFEK, info "ddv4-file-content-v1"),

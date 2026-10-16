@@ -207,7 +207,7 @@ async function nav(p: Page, name: "files" | "trash" | "devices" | "settings") {
   await p.click(`a[data-nav=${name}]`);
   await p.waitForSelector(`[data-page=${name}]:not([hidden])`);
 }
-/** Settings → Channels is folded when there are channels (zlecenie 2026-10-13-webhooki p. 3): unfold it. */
+/** Settings → Channels is folded when there are channels: unfold it. */
 async function openChannels(p: Page) {
   await p.waitForSelector("[data-ddn=channels-toggle]");
   if ((await p.getAttribute("[data-ddn=channels-toggle]", "aria-expanded")) !== "true") await p.click("[data-ddn=channels-toggle]");
@@ -309,7 +309,7 @@ try {
     r.typedWebhook = (await p.inputValue("[data-ddn=webhook-url]")) === hookUrls[1];
     await p.click("[data-ddn=add-webhook]");
     await p.waitForFunction(() => document.querySelector("[data-ddn-ui=hook-count]")?.textContent?.startsWith("2"), null, { timeout: 30_000 });
-    // Several addresses pasted at once (owner, 2026-10-15): one per line in the clipboard → all added
+    // Several addresses pasted at once: one per line in the clipboard → all added
     // with one click, a duplicate of an existing channel is not counted twice.
     if (fake) {
       const many = [fake.addWebhook("1550000000000000103").url, fake.addWebhook("1550000000000000104").url, fake.addWebhook("1550000000000000105").url];
@@ -330,7 +330,7 @@ try {
       await p.click("[data-ddn=add-webhook]");
       await p.waitForSelector("[data-ddn=remove-webhook]", { timeout: 30_000 });
       r.ownChannel = { poolHidden: await p.isHidden("[data-ddn=pool]"), count: await p.textContent("[data-ddn-ui=hook-count]") };
-      // The remove dialog (zlecenie 2026-10-13-webhooki): an empty own channel, "remove anyway" needs no acknowledgement.
+      // The remove dialog: an empty own channel, "remove anyway" needs no acknowledgement.
       await p.click("[data-ddn=remove-webhook]");
       await p.waitForSelector("[data-ddn=channel-dialog][open]");
       await p.waitForFunction(() => !document.querySelector<HTMLInputElement>("[data-ddn=chd-opt-remove]")!.disabled, null, { timeout: 30_000 });
@@ -344,7 +344,7 @@ try {
   await shot(p, "03b-settings");
   // Cobalt fonts are local files (CSP: 'self' only) and really load: Space Grotesk / Inter / JetBrains Mono.
   r.fontsLoaded = await p.evaluate(async () => (await document.fonts.ready, [...new Set([...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family.replace(/"/g, "")))].sort()));
-  // Settings → Diagnostics: transfer logs on (zlecenie 2026-10-13-transfer §2); the upload and download below are logged.
+  // Settings → Diagnostics: transfer logs on; the upload and download below are logged.
   r.diagOffByDefault = !(await p.isChecked("[data-ddn=diag-log]")) && (await p.isDisabled("[data-ddn=diag-names]"));
   await p.click("[data-ddn=diag-log]");
   await p.waitForFunction(() => !document.querySelector<HTMLInputElement>("[data-ddn=diag-names]")!.disabled, null, { timeout: 10_000 });
@@ -458,7 +458,7 @@ try {
       serverPosts: events.filter((e) => e.src === "server" && e.ev === "req" && e.k === "discord").length,
       report: { files: rep.summary.files, n429: rep.summary.rateLimits.n429, stages: Object.keys(rep.summary.stages) },
     };
-    // Clear (owner, 2026-10-15: "Clear removes only today's lines, the old ones stay"): an old part that
+    // Clear removes only today's lines, the old ones stay: an old part that
     // another tab keeps open cannot be removed, so Clear must still leave its older lines out of the download.
     {
       // A part from an "earlier session", held open by another worker (like a forgotten tab from
@@ -851,7 +851,7 @@ try {
   ops.pwOff = true;
   r.ops = ops;
 
-  // 10c. file preview (zlecenie 2026-10-13-webhooki p. 4) in a new root folder "Podglad" (the counts above
+  // 10c. file preview in a new root folder "Podglad" (the counts above
   // are done): text, rendered Markdown without raw HTML, JSON, CSV table, JPEG, PDF, a hostile SVG; ←/→, Esc,
   // the row menu entry, quick → presses (only the last file renders), blob URLs revoked; phone viewport.
   step("preview");
@@ -1006,7 +1006,7 @@ try {
   await m.keyboard.press("Escape");
   r.preview = pv;
 
-  // 10c'. zlecenie 2026-10-14-ui, in "Podglad": Move to trash next to Download (+ Undo), the context menu on
+  // 10c'. In "Podglad": Move to trash next to Download (+ Undo), the context menu on
   // the empty area (New folder) and on a file (Rename), Shift+F10 / arrows / Esc with focus back, the sort
   // (folders first, remembered), List / Tiles (remembered after a reload), tiles on the phone with a long
   // press, the trash's own menu (Restore).
@@ -1144,7 +1144,7 @@ try {
   await nav(p, "files");
   r.contextMenu = cm;
 
-  // 10c'''. zlecenie 2026-10-15-transfery: the network goes away mid-download (context.setOffline): the panel
+  // 10c'''. The network goes away mid-download (context.setOffline): the panel
   // says "waiting for the network" (no error); it comes back: "resumed", the file completes with the right
   // SHA-256. The second connection (sandboxed iframe lane) downloads a file with Origin: null. Save data and
   // the stuck-connection switch in Settings > Diagnostics. An upload broken by a reload continues: only the
@@ -1268,7 +1268,7 @@ try {
     r.network = nw;
   }
 
-  // 10c''. owner's note 2026-10-14: the upload panel closes itself (~5 s after success, later after a
+  // 10c''. The upload panel closes itself (~5 s after success, later after a
   // failure; hover pauses it) and a failed file stays listed (Details, Retry) after it closed.
   step("queue closes");
   const qc: Record<string, unknown> = {};
@@ -1331,7 +1331,7 @@ try {
   r.queueCloses = qc;
 
 
-  // 10d. channels (zlecenie 2026-10-13-webhooki p. 1-3): the section folds (folded with channels, the
+  // 10d. channels: the section folds (folded with channels, the
   // choice kept), per-channel stats, the remove dialog (impact list, options), retire + undo, a critical
   // channel offers only "move", remove anyway -> files unavailable: hidden by default, shown + explained
   // with the Settings switch, Storage totals count them; pasting the same webhook again brings them back;
@@ -1596,7 +1596,7 @@ try {
       const o = r.ops as Record<string, unknown> | undefined;
       return !!o && o.pwDefaultOff === true && /good|strong|dobre|mocne/.test(String(o.pwStrength)) && o.pwNeedsAck === true && /Wrong login or password|Zły login albo hasło/.test(String(o.pwWrong)) && o.pwSignedIn === true && o.pwOff === true;
     })(),
-    // zlecenie 2026-10-13 p. 4: the note under the queue is true in this mode; plain says nothing about encryption.
+    // The note under the queue is true in this mode; plain says nothing about encryption.
     modeTexts:
       MODE === "plain"
         ? /through the server|przez serwer/.test(String(r.queueNote)) && !/ncrypt|szyfr/i.test(String(r.queueNote)) && !/ncrypt|szyfr|end-to-end/i.test(String(r.createSub))

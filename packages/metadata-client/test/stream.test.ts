@@ -11,7 +11,7 @@ async function setup(size: number, chunkSize = 1000) {
   return { c, data, transport, up };
 }
 
-describe("range reads for streaming (koncept §3.1)", () => {
+describe("range reads for streaming", () => {
   it("returns exactly the requested bytes across fragment borders, fetching only overlapping fragments", async () => {
     const { c, data, transport, up } = await setup(10_500);
     let cdn = 0;

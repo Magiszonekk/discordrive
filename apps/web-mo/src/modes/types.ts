@@ -1,4 +1,4 @@
-// What a mode adds to the browser app core (docs/stage3-modes.md §2). app-core.ts imports
+// What a mode adds to the browser app core. app-core.ts imports
 // `ddn:mode`; the build (build.ts, esbuild plugin) resolves it to ONE of the files next to
 // this one, so the code of the other modes is not even parsed into the bundle:
 //   metadata-only.ts  webhook vault, posts straight to Discord, client snapshots
@@ -32,13 +32,13 @@ export interface ModeCtx {
   /** Test hook: Discord API origin of the fake (metadata only posts there). */
   discordApiOrigin?: string;
   serverTimeOf(seq: number): number | undefined;
-  /** Network state shared by every client this tab builds (gate, windows, guard; zlecenie 2026-10-15-transfery). */
+  /** Network state shared by every client this tab builds (gate; windows; guard). */
   net?: NetControl;
   /** Unfinished uploads of this account (resume after a reload). */
   resume?: ResumeStore;
 }
 
-/** One own channel (webhook) with what lies on it (zlecenie 2026-10-13-webhooki p. 1–2). */
+/** One own channel (webhook) with what lies on it. */
 export interface ChannelRow {
   id: string;
   channelId: string;
@@ -148,7 +148,7 @@ export interface StorageTotals {
   tookMs: number;
 }
 
-/** Settings → Storage: what the trash/fragment cleanup did and what waits (zlecenie 2026-10-13 p. 2). */
+/** Settings → Storage: what the trash/fragment cleanup did and what waits. */
 export interface StorageStatus {
   /** Who deletes fragments: this browser (metadata only) or the instance in the background. */
   by: "client" | "server";
@@ -231,7 +231,7 @@ export interface ModeImpl {
   readonly serverFeatures?: { thumbnails: boolean; search: boolean; streaming: boolean };
   /** One snapshot tick (metadata only); null when nothing to do. */
   snapshotTick?(ctx: ModeCtx, client: DriveClient, force: boolean): Promise<{ kind: string; written: string; toSeq: number } | null>;
-  /** Attachment addresses of one file version, manifest first (share links, §3.7). */
+  /** Attachment addresses of one file version, manifest first (share links). */
   shareAttachments(ctx: ModeCtx, client: DriveClient, manifestRef: string): Promise<ShareAttachment[]>;
   /** plain only: server thumbnail, server search, server Range stream URL. */
   thumbnail?(ctx: ModeCtx, nodeId: string): Promise<Blob | null>;

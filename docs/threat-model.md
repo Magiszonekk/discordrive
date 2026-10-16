@@ -387,8 +387,7 @@ only for an instance you run yourself, or where the operator is trusted with the
 - **e2ee / plain**: the operator can delete everything on Discord (§4.4); one server IP and one
   pool for all users (§4.7).
 - **plain**: the server and a database thief read everything (§5).
-- **Shared folders between accounts do not exist and are not planned** (owner decision
-  2026-10-15). Another person gets their own account. Pairing is never a way to share: it hands
+- **Shared folders between accounts do not exist and are not planned.** Another person gets their own account. Pairing is never a way to share: it hands
   over the whole account.
 - Out of scope here: the operator's host security, TLS termination and reverse proxy
   configuration (`apps/ddn-server/README.md`), physical security of devices.

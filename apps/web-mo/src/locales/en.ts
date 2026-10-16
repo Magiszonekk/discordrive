@@ -311,7 +311,7 @@ export const en: Record<string, string> = {
   "status.cache.t@e2ee": "The browser may clear the local copy of the file list. The files are on Discord and the list is restored from the server.",
   "queue.cancel": "Cancel",
   "queue.cancelled": "Cancelled",
-  // live speed (zlecenie 2026-10-13-transfer §1)
+  // live speed
   "speed.run": "{rate} · {eta} left",
   "speed.done": "avg {rate} · {time}",
   "queue.stages": "{enc} encrypting, {net} sending",
@@ -397,7 +397,7 @@ export const en: Record<string, string> = {
   "search.none": "No files match your search",
   "search.none.s": "Search looks at file names in every folder.",
 
-  // trash, rename, move, selection (zlecenie 2026-10-13)
+  // trash, rename, move, selection
   "nav.trash": "Trash",
   "nav.recovered": "Recovered",
   "page.trash": "Trash",
@@ -484,7 +484,7 @@ export const en: Record<string, string> = {
   "notice.invalid": "The change could not be applied.",
   "err.invalid_name": "This name is not allowed.",
 
-  // Settings → Storage (cleanup, zlecenie 2026-10-13 p. 2)
+  // Settings → Storage (cleanup)
   "st.h": "Storage",
   "st.lead": "Items more than 30 days in the trash are deleted for good, and their pieces are removed from Discord 30 days later, once no kept snapshot needs them. The main tab of this browser does it while it is open (not on a phone or metered connection); if no device cleaned for 7 days, any device may.",
   "st.lead@e2ee": "Items more than 30 days in the trash are deleted for good when a tab is open; the instance then removes their pieces from Discord in the background, 30 days later.",
@@ -514,7 +514,7 @@ export const en: Record<string, string> = {
   "st.res.left_other": "{n} left for the next run.",
   "st.metered": "This looks like a phone or a metered connection: automatic cleanup is left to another device. You can still clean up now.",
 
-  // optional password-protected account key (zlecenie 2026-10-13 p. 3)
+  // optional password-protected account key
   "join.password": "Sign in with password",
   "signin.h": "Sign in with password",
   "signin.sub": "Only for accounts that turned on password sign-in in Settings → Security. The account key is decrypted in this browser; the password never leaves it.",
@@ -554,7 +554,7 @@ export const en: Record<string, string> = {
   "err.bad_login": "This login is not valid.",
   "err.password_too_short": "The password is too short.",
 
-  // mode variants (zlecenie 2026-10-13 p. 4): what is true in e2ee / plain
+  // mode variants: what is true in e2ee / plain
   "queue.note@e2ee": "Files are encrypted in this tab and go through the server to Discord. Keep this tab open until every file is complete; closing it stops the queue (the server deletes the unfinished parts).",
   "lim.1.b@e2ee": "Uploads need the open tab",
   "create.sub@plain": "A drive on your Discord channels, with thumbnails, previews and search on this server.",
@@ -575,7 +575,7 @@ export const en: Record<string, string> = {
   "pw.off.q@plain": "The locked account key is deleted from the server. New devices will need pairing or the rescue kit.",
   "pw.disabled@plain": "Password sign-in is off. The locked key was deleted from the server.",
 
-  // file preview (zlecenie 2026-10-13-webhooki p. 4)
+  // file preview
   "pv.action": "Preview",
   "pv.open.aria": "Preview {name}",
   "pv.prev": "Previous file",
@@ -594,7 +594,7 @@ export const en: Record<string, string> = {
   "pv.pdfNo": "This browser cannot show PDF files inside the page (phones open them after the download). Download the file to open it.",
   "pv.media": "This browser cannot play this format. Download the file to play it in another app.",
   "pv.none": "No preview for this file type.",
-  // channels: remove / retire / move, stats, unavailable files (zlecenie 2026-10-13-webhooki p. 1–3)
+  // channels: remove / retire / move, stats, unavailable files
   "ch.sum.ok": "all working",
   "ch.sum.retired_one": "{n} retired",
   "ch.sum.retired_other": "{n} retired",

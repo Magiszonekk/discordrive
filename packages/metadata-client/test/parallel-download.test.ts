@@ -1,4 +1,4 @@
-// Parallel download (zlecenie 2026-10-13-transfer §3): fragments fetched out of order are written in
+// Parallel download: fragments fetched out of order are written in
 // order (whole-file SHA-256 checked), at most `downloadConcurrency` in flight, the first failure stops
 // the rest and is the error the caller sees, a cancel stops everything; upload concurrency follows the
 // channels; Range reads use the same limit.

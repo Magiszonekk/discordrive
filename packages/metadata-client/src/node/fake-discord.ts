@@ -1,9 +1,9 @@
 // Local fake of the Discord webhook + CDN surface over real HTTP (127.0.0.1),
 // for tests of DiscordWebhookTransport and of the browser client without
-// touching Discord. Mimics what koncept §7 measured: multipart POST ?wait=true,
+// touching Discord. Mimics what was measured: multipart POST ?wait=true,
 // GET/PATCH/DELETE /messages/<id>, GET webhook, signed CDN links with ex/is/hm,
 // permissive CORS (Discord reflects the origin; CDN sends *).
-// Optional per-channel limit like the real one (§7): `perChannelPerMin`.
+// Optional per-channel limit like the real one: `perChannelPerMin`.
 
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";

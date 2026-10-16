@@ -1,14 +1,14 @@
-// Account key and its subkeys (koncept §3.2, §3.5, §3.8).
+// Account key and its subkeys.
 //
 // Metadata-only mode has one secret per account: a random 256-bit account key
 // (on every paired device, in the rescue kit; optionally password-wrapped on
-// the server, §3.8). Everything the server stores for the account is
+// the server). Everything the server stores for the account is
 // encrypted with subkeys derived from it by HKDF-SHA256 with distinct labels,
 // so one ciphertext can never be replayed as another kind:
-//   vault      - webhook vault (§3.2)
-//   op         - operation payloads in the log (§3.3)
-//   snapshot   - snapshots and the pointer message (§6.2), later
-// File keys stay random per file (koncept §6.2) and travel inside encrypted
+//   vault      - webhook vault
+//   op         - operation payloads in the log
+//   snapshot   - snapshots and the pointer message, later
+// File keys stay random per file and travel inside encrypted
 // op payloads.
 
 import { fromBase64, toBase64 } from "@ddv4/processing";

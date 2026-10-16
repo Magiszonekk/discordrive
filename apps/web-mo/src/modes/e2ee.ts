@@ -1,4 +1,4 @@
-// e2ee mode of the browser app (docs/stage3-modes.md): contents and names encrypted here like
+// e2ee mode of the browser app: contents and names encrypted here like
 // in metadata only, but the blobs go through the instance, which knows the webhooks (pool +
 // the account's own channels) and does the background work (snapshots, cleanup). The browser
 // never sees a webhook URL after pasting one in Settings; the rescue kit has no webhook.
@@ -60,7 +60,7 @@ export const mode: ModeImpl = {
     await ctx.http.json("POST", "/v1/channels", { url: url.trim() });
   },
 
-  // Removing a channel (zlecenie 2026-10-13-webhooki p. 1): the instance holds the webhooks and does
+  // Removing a channel: the instance holds the webhooks and does
   // the work; a move runs there as a background job (no tab needed), names come from this index.
   async removeChannel(ctx, id) {
     await serverRemoveChannel(ctx, id);

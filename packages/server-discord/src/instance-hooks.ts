@@ -1,4 +1,4 @@
-// Instance webhooks for the e2ee and plain modes (docs/stage3-modes.md §3).
+// Instance webhooks for the e2ee and plain modes.
 //
 // One table for both kinds:
 //   scope "pool"      the instance pool from `discordrive setup` (like discordrive's WEBHOOK_1..N);
@@ -9,7 +9,7 @@
 // so a copy of the database alone gives no webhooks and a sealed URL cannot be moved to
 // another account. Nothing here ever returns a URL to an API caller.
 //
-// Removing a channel (zlecenie 2026-10-13-webhooki p. 1): a webhook can be `retired` (no new
+// Removing a channel: a webhook can be `retired` (no new
 // blobs go there, it is still read) and a removed one leaves a row in inst_hooks_removed
 // (scope, label, when, how: "moved" = its data was moved off first, "removed" = removed anyway).
 // Files with blobs on a webhook that is no longer here are unavailable; that is computed from

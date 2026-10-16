@@ -413,7 +413,7 @@ export const pl: Record<string, string> = {
   "search.none": "Żaden plik nie pasuje do wyszukiwania",
   "search.none.s": "Szukamy w nazwach plików we wszystkich folderach.",
 
-  // kosz, zmiana nazwy, przenoszenie, zaznaczanie (zlecenie 2026-10-13)
+  // kosz, zmiana nazwy, przenoszenie, zaznaczanie
   "nav.trash": "Kosz",
   "nav.recovered": "Odzyskane",
   "page.trash": "Kosz",
@@ -514,7 +514,7 @@ export const pl: Record<string, string> = {
   "notice.invalid": "Nie udało się zastosować zmiany.",
   "err.invalid_name": "Ta nazwa jest niedozwolona.",
 
-  // Ustawienia → Miejsce (sprzątanie, zlecenie 2026-10-13 p. 2)
+  // Ustawienia → Miejsce (sprzątanie)
   "st.h": "Miejsce",
   "st.lead": "Elementy dłużej niż 30 dni w koszu są usuwane na stałe, a ich fragmenty znikają z Discorda 30 dni później, gdy żaden trzymany snapshot ich nie potrzebuje. Robi to główna karta tej przeglądarki, gdy jest otwarta (nie na telefonie ani na łączu taryfowym); jeśli żadne urządzenie nie sprzątało od 7 dni, może dowolne.",
   "st.lead@e2ee": "Elementy dłużej niż 30 dni w koszu są usuwane na stałe, gdy otwarta jest karta; ich fragmenty instancja usuwa z Discorda w tle, 30 dni później.",
@@ -554,7 +554,7 @@ export const pl: Record<string, string> = {
   "st.res.left_other": "{n} zostaje na następny raz.",
   "st.metered": "To wygląda na telefon albo łącze taryfowe: automatyczne sprzątanie zostawiamy innemu urządzeniu. Możesz posprzątać ręcznie.",
 
-  // opcjonalny klucz konta chroniony hasłem (zlecenie 2026-10-13 p. 3)
+  // opcjonalny klucz konta chroniony hasłem
   "join.password": "Zaloguj hasłem",
   "signin.h": "Zaloguj hasłem",
   "signin.sub": "Tylko dla kont z włączonym logowaniem hasłem w Ustawienia → Bezpieczeństwo. Klucz konta jest odszyfrowywany w tej przeglądarce; hasło jej nie opuszcza.",
@@ -594,7 +594,7 @@ export const pl: Record<string, string> = {
   "err.bad_login": "Ten login jest niepoprawny.",
   "err.password_too_short": "Hasło jest za krótkie.",
 
-  // mode variants (zlecenie 2026-10-13 p. 4): what is true in e2ee / plain
+  // mode variants: what is true in e2ee / plain
   "queue.note@e2ee": "Pliki są szyfrowane w tej karcie i trafiają przez serwer na Discorda. Nie zamykaj karty, dopóki wszystkie pliki nie będą gotowe; zamknięcie przerywa kolejkę (serwer usuwa niedokończone części).",
   "lim.1.b@e2ee": "Wysyłanie wymaga otwartej karty",
   "create.sub@plain": "Dysk na Twoich kanałach Discorda, z miniaturami, podglądem i wyszukiwaniem na tym serwerze.",
@@ -615,7 +615,7 @@ export const pl: Record<string, string> = {
   "pw.off.q@plain": "Zablokowany klucz konta zostanie usunięty z serwera. Nowe urządzenia będą wymagały parowania albo zestawu ratunkowego.",
   "pw.disabled@plain": "Logowanie hasłem wyłączone. Zablokowany klucz usunięto z serwera.",
 
-  // file preview (zlecenie 2026-10-13-webhooki p. 4)
+  // file preview
   "pv.action": "Podgląd",
   "pv.open.aria": "Podgląd: {name}",
   "pv.prev": "Poprzedni plik",
@@ -634,7 +634,7 @@ export const pl: Record<string, string> = {
   "pv.pdfNo": "Ta przeglądarka nie wyświetla plików PDF na stronie (telefony otwierają je po pobraniu). Pobierz plik, aby go otworzyć.",
   "pv.media": "Ta przeglądarka nie odtworzy tego formatu. Pobierz plik, aby odtworzyć go w innej aplikacji.",
   "pv.none": "Brak podglądu dla tego typu pliku.",
-  // channels: remove / retire / move, stats, unavailable files (zlecenie 2026-10-13-webhooki p. 1–3)
+  // channels: remove / retire / move, stats, unavailable files
   "ch.sum.ok": "wszystkie działają",
   "ch.sum.retired_one": "{n} wycofany",
   "ch.sum.retired_few": "{n} wycofane",

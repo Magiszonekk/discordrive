@@ -1,4 +1,4 @@
-// plain mode of the browser app (docs/stage3-modes.md §7): like e2ee (blobs through the
+// plain mode of the browser app: like e2ee (blobs through the
 // instance, channels on the server, server-side background work), but the operations go to
 // the server in clear (PlainOpCodec), so the server knows names and file keys: thumbnails,
 // previews, Range streaming and search run on the server.
@@ -54,7 +54,7 @@ export const mode: ModeImpl = {
     await ctx.http.json("POST", "/v1/channels", { url: url.trim() });
   },
 
-  // Removing a channel (zlecenie 2026-10-13-webhooki p. 1): the instance holds the webhooks and does
+  // Removing a channel: the instance holds the webhooks and does
   // the work; a move runs there as a background job (no tab needed), names come from this index.
   async removeChannel(ctx, id) {
     await serverRemoveChannel(ctx, id);
