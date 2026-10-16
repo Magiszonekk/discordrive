@@ -48,6 +48,24 @@ export class FakeDiscord {
   /** Benchmarks: extra time before a webhook post / a CDN read is answered (ms), like Discord's latency. */
   postDelayMs = 0;
   cdnDelayMs = 0;
+  /** Extra time before a GET of a message (a fresh link) is answered (ms). */
+  getDelayMs = 0;
+  /**
+   * Per-webhook limit on GET of messages like Discord's bucket (measured: 5 at once, ~1–2 s reset):
+   * more than this many in any 1 s window answer 429 scope `user`. 0 = off.
+   */
+  getPerSecPerHook = 0;
+  /** GETs of messages per webhook: [start, end] times (tests: rate and concurrency). */
+  readonly getLog = new Map<string, { t0: number; t1: number; st: number }[]>();
+  /**
+   * CDN bandwidth (bytes/s) shared by every CDN body being sent, and the most one body gets on its own
+   * (a CDN connection's own speed). 0 = unlimited. Tests: a narrow line with a known plateau.
+   */
+  cdnBytesPerSec = 0;
+  cdnBytesPerSecPerRead = 0;
+  private cdnSending = 0;
+  /** Time (ms) up to which the shared CDN line is booked. */
+  private cdnLineAt = 0;
   /** Origin headers of CDN reads (tests: a sandboxed lane sends "null"). */
   readonly cdnOriginsSeen = new Set<string>();
   /**
@@ -176,7 +194,25 @@ export class FakeDiscord {
       const ext = /\.([A-Za-z0-9]+)$/.exec(url.pathname)?.[1]?.toLowerCase() ?? "";
       const cors = this.cdnCorsAll || CDN_CORS_EXT.has(ext) ? { "access-control-allow-origin": "*" } : {};
       res.writeHead(200, { "content-type": "application/octet-stream", ...cors, "content-length": b.byteLength });
-      return void res.end(b);
+      if (!this.cdnBytesPerSec && !this.cdnBytesPerSecPerRead) return void res.end(b);
+      // Paced body in 32 KiB steps on an absolute schedule (coarse timers, e.g. Windows' ~16 ms, do not add
+      // up): this read at most its own speed, and all reads together at most the line (one shared schedule).
+      this.cdnSending++;
+      try {
+        const t0 = Date.now();
+        for (let o = 0; o < b.byteLength; ) {
+          const n = Math.min(32 * 1024, b.byteLength - o);
+          const own = this.cdnBytesPerSecPerRead ? t0 + ((o + n) / this.cdnBytesPerSecPerRead) * 1000 : 0;
+          const line = this.cdnBytesPerSec ? (this.cdnLineAt = Math.max(this.cdnLineAt, Date.now()) + (n / this.cdnBytesPerSec) * 1000) : 0;
+          const wait = Math.max(own, line) - Date.now();
+          if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+          if (!res.write(b.subarray(o, o + n))) await new Promise((r) => res.once("drain", r));
+          o += n;
+        }
+      } finally {
+        this.cdnSending--;
+      }
+      return void res.end();
     }
     const m = /^\/api(?:\/v\d+)?\/webhooks\/(\d+)\/([A-Za-z0-9_.-]+)(?:\/messages\/(\d+))?$/.exec(url.pathname);
     if (m) this.webhookRequests++;
@@ -233,7 +269,20 @@ export class FakeDiscord {
     }
     const msg = mid ? this.messages.get(mid) : undefined;
     if (!msg || msg.webhookId !== webhookId) return this.send(res, 404, { message: "Unknown Message", code: 10008 }, cors);
-    if (req.method === "GET") return this.send(res, 200, this.msgJson(mid!, msg), cors);
+    if (req.method === "GET") {
+      const t0 = Date.now();
+      const log = this.getLog.get(webhookId) ?? [];
+      this.getLog.set(webhookId, log);
+      if (this.getPerSecPerHook && log.filter((g) => g.st === 200 && g.t0 > t0 - 1000).length >= this.getPerSecPerHook) {
+        log.push({ t0, t1: t0, st: 429 });
+        return this.send(res, 429, { message: "You are being rate limited.", retry_after: 0.3, global: false }, { ...cors, "x-ratelimit-scope": "user" });
+      }
+      const g = { t0, t1: t0, st: 200 };
+      log.push(g);
+      if (this.getDelayMs) await new Promise((r) => setTimeout(r, this.getDelayMs));
+      g.t1 = Date.now();
+      return this.send(res, 200, this.msgJson(mid!, msg), cors);
+    }
     if (req.method === "DELETE") {
       for (const a of msg.attachments) this.blobs.delete(a.id);
       this.messages.delete(mid!);

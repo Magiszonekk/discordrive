@@ -49,6 +49,8 @@ export interface LogEvent {
   body?: number;
   post?: number;
   egress?: number;
+  lk?: string;
+  lw?: number;
   [k: string]: unknown;
 }
 
@@ -92,7 +94,11 @@ export interface Report {
     peakMBps: Record<string, number>;
     concurrency: Record<string, { avg: number; max: number }>;
     stages: Record<string, Record<string, number>>;
-    /** zlecenie 2026-10-15-transfery: window changes, no-network periods, stuck-connection guard, resumes. */
+    /** Links fetched ahead of downloads: requests, how the reads got theirs, time a read waited for one. */
+    links?: { n: number; p50: number; p90: number; failed: number; n429: number; hit: number; wait: number; miss: number; waitP50: number; waitP90: number; waitSumS: number; slotShare: number };
+    /** Automatic pieces in flight: every change with its reason, and the last value per direction. */
+    tune?: { changes: { t: number; dir: string; from: number; to: number; why: string; an?: number; aMBps?: number; mn?: number; mMBps?: number }[]; last: Record<string, number> };
+    /** Window changes, no-network periods, stuck-connection guard, resumes. */
     network?: { windowCuts: number; windowMin: Record<string, number>; offline: number; offlineMs: number; probes: number; guard: Record<string, number>; resumes: number; byLane: Record<string, { n: number; MB: number }> };
   };
 }
@@ -287,6 +293,48 @@ export function buildReport(events: LogEvent[], o: { bucketS?: number; bad?: num
     if (resumes.length) say(`  resumed transfers: ${resumes.length} (${resumes.map((e) => `${e.dir} ${e.have}/${e.n}`).join(", ")})`);
   }
 
+  // ── links ahead (metadata only): the GET of the message happens before a download slot needs it
+  let links: Report["summary"]["links"];
+  const lev = events.filter((e) => e.ev === "link");
+  const cdnReads = reqs.filter((e) => e.k === "cdn" && typeof e.lk === "string");
+  if (lev.length || cdnReads.length) {
+    const d = lev.filter((e) => !e.err).map((e) => e.dur ?? 0).sort((a, b) => a - b);
+    const lw = cdnReads.map((e) => Number(e.lw ?? 0)).sort((a, b) => a - b);
+    const lwSum = lw.reduce((a, b) => a + b, 0);
+    const cdnSum = cdnReads.filter((e) => !e.err).reduce((a, e) => a + (e.dur ?? 0), 0);
+    const cnt = (h: string) => cdnReads.filter((e) => e.lk === h).length;
+    links = { n: lev.length, p50: r1(pct(d, 50)), p90: r1(pct(d, 90)), failed: lev.filter((e) => e.err && e.st !== 429).length, n429: lev.filter((e) => e.st === 429).length, hit: cnt("hit"), wait: cnt("wait"), miss: cnt("miss"), waitP50: r1(pct(lw, 50)), waitP90: r1(pct(lw, 90)), waitSumS: r1(lwSum / 1000), slotShare: r2(lwSum + cdnSum > 0 ? lwSum / (lwSum + cdnSum) : 0) };
+    say();
+    say("Links ahead (fresh CDN links fetched before a download slot needs them)");
+    say(`  link requests: ${links.n}, p50 ${links.p50} ms, p90 ${links.p90} ms${links.n429 ? `, 429: ${links.n429}` : ""}${links.failed ? `, failed ${links.failed}` : ""}`);
+    say(`  reads: ${cdnReads.length}; link ready ${links.hit}, on its way ${links.wait}, fetched by the read ${links.miss}`);
+    say(`  a slot waited for its link: p50 ${links.waitP50} ms, p90 ${links.waitP90} ms, ${links.waitSumS} s in total = ${r1(links.slotShare * 100)} % of slot time (the rest: CDN)`);
+  }
+
+  // ── automatic pieces in flight
+  let tune: Report["summary"]["tune"];
+  const tev = events.filter((e) => e.ev === "tune");
+  if (tev.length) {
+    const last: Record<string, number> = {};
+    const changes = tev.map((e) => {
+      last[String(e.dir)] = Number(e.to);
+      const x: NonNullable<Report["summary"]["tune"]>["changes"][number] = { t: r1((e.t - t0) / 1000), dir: String(e.dir), from: Number(e.from), to: Number(e.to), why: String(e.why) };
+      if (typeof e.an === "number") ((x.an = e.an), (x.aMBps = r2(mb(Number(e.ab)))));
+      if (typeof e.mn === "number") ((x.mn = e.mn), (x.mMBps = r2(mb(Number(e.mb)))));
+      return x;
+    });
+    tune = { changes, last };
+    say();
+    say("Automatic pieces in flight (measured: up while the total speed grows, back when it does not)");
+    const sp = (n?: number, v?: number) => (n !== undefined ? `${n}: ${v} MB/s` : "");
+    for (const c of changes.slice(0, 60)) {
+      const m = [sp(c.an, c.aMBps), c.mn !== undefined && c.mn !== c.an ? sp(c.mn, c.mMBps) : ""].filter(Boolean).join(", ");
+      say(`  +${c.t} s ${c.dir} ${c.from} → ${c.to} ${c.why}${m ? ` (${m})` : ""}`);
+    }
+    if (changes.length > 60) say(`  … ${changes.length - 60} more`);
+    say(`  last: ${Object.entries(last).map(([d, n]) => `${d} ${n}`).join(", ")}`);
+  }
+
   // ── throughput over time, total and per channel (bytes of successful requests spread over their duration)
   const series = new Map<string, Map<number, number>>();
   const add = (key: string, from: number, to: number, b: number) => {
@@ -334,7 +382,7 @@ export function buildReport(events: LogEvent[], o: { bucketS?: number; bad?: num
     }
   }
 
-  return { text: lines.join("\n") + "\n", timelineCsv: csv.join("\n") + "\n", filesCsv: fileRows.join("\n") + "\n", summary: { events: events.length, files, requests, rateLimits, retries, peakMBps, concurrency, stages, network } };
+  return { text: lines.join("\n") + "\n", timelineCsv: csv.join("\n") + "\n", filesCsv: fileRows.join("\n") + "\n", summary: { events: events.length, files, requests, rateLimits, retries, peakMBps, concurrency, stages, network, links, tune } };
 }
 
 const short = (id: string) => (id.length > 8 ? `…${id.slice(-6)}` : id);

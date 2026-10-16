@@ -112,6 +112,7 @@ export type CoreEvent =
   | { type: "net"; state: NetUiState }
   /** The reference speed changed (the UI keeps it in localStorage for the next session). */
   | { type: "net-baseline"; data: BaselineData }
+  | { type: "net-tune"; data: { up: number; down: number } }
   | { type: "share-progress"; done: number; total: number }
   | { type: "changed" }
   | { type: "cleanup"; running: boolean }
@@ -140,10 +141,20 @@ type NavConn = { userAgent?: string; onLine?: boolean; connection?: { type?: str
 const nav = () => (globalThis as unknown as { navigator?: NavConn }).navigator;
 /** Settings → "Save data" (this browser's choice, sent by the UI). */
 let saveDataOn = false;
-/** Phone or metered link (§6.2, Q4: no bases, no automatic cleanup), or "Save data" on. */
+/** Phone or metered link (no snapshot bases, no automatic cleanup), or "Save data" on. */
 function meteredLink(): boolean {
+  return leanWhy() !== null;
+}
+/**
+ * Why data is being saved right now (the panels say it): the switch in Settings, the browser reporting a
+ * metered link (Save-Data / cellular), or a phone; null = not saving.
+ */
+function leanWhy(): "setting" | "metered" | "phone" | null {
   const n = nav();
-  return saveDataOn || /Android|iPhone|iPad|Mobile/i.test(n?.userAgent ?? "") || n?.connection?.type === "cellular" || !!n?.connection?.saveData;
+  if (saveDataOn) return "setting";
+  if (n?.connection?.type === "cellular" || n?.connection?.saveData) return "metered";
+  if (/Android|iPhone|iPad|Mobile/i.test(n?.userAgent ?? "")) return "phone";
+  return null;
 }
 /** Network type when the browser tells it (Chromium: wifi / ethernet / cellular …); "" elsewhere. */
 const netType = () => nav()?.connection?.type ?? "";
@@ -203,6 +214,10 @@ export class AppCore {
   constructor(private readonly cfg: CoreConfig = {}) {
     this.net.onState = (state) => this.onEvent({ type: "net", state });
     this.net.baseline.onSave = (data) => this.onEvent({ type: "net-baseline", data });
+    // The automatic pieces in flight a check settled on: remembered by the UI, the next session starts there.
+    const tuned = () => this.onEvent({ type: "net-tune", data: { up: this.net.tune.up.accepted, down: this.net.tune.down.accepted } });
+    this.net.tune.up.onAccept = tuned;
+    this.net.tune.down.onAccept = tuned;
     // The worker sees the browser's online/offline events too (dedicated workers get them in Chromium/Firefox).
     const g = globalThis as unknown as { addEventListener?: (t: string, f: () => void) => void };
     g.addEventListener?.("online", () => this.net.gate.setOnline(true));
@@ -233,10 +248,14 @@ export class AppCore {
   // ── network (zlecenie 2026-10-15-transfery §2–3) ──
 
   /** Settings: "Save data" and the stuck-connection guard; the reference speed kept by the UI. */
-  setNetPrefs(p: { saveData?: boolean; guard?: boolean; baseline?: unknown }) {
+  setNetPrefs(p: { saveData?: boolean; guard?: boolean; baseline?: unknown; tune?: { up?: number; down?: number } | null }) {
     if (p.saveData !== undefined) saveDataOn = !!p.saveData;
     if (p.guard !== undefined) this.net.guardOn = !!p.guard;
     if (p.baseline !== undefined) this.net.baseline.load(p.baseline);
+    if (p.tune) {
+      if (typeof p.tune.up === "number") this.net.tune.up.seed(p.tune.up);
+      if (typeof p.tune.down === "number") this.net.tune.down.seed(p.tune.down);
+    }
     this.net.saveData = saveDataOn;
     this.client?.syncWindows();
     return this.netStatus();
@@ -260,6 +279,8 @@ export class AppCore {
       metered: meteredLink(),
       saveData: saveDataOn,
       browserMetered: meteredLink() && !saveDataOn,
+      /** Why data is saved (panels: "Saving data: at most 2 at once" + the reason); null = not saving. */
+      leanWhy: leanWhy(),
       guard: this.net.guardOn,
       lanes: this.net.laneCount,
       window: { up: this.net.win.up.limit, upMax: this.net.win.up.max, down: this.net.win.down.limit, downMax: this.net.win.down.max },
@@ -888,16 +909,29 @@ export class AppCore {
 
   // ── transfer logs (Settings → Diagnostics, zlecenie 2026-10-13-transfer §2) ──
 
-  /** Fragments in flight (advanced): upload null = automatic (max(3, 2 × channels)), download null = 4. */
+  /** Fragments in flight (Settings → Network): null = automatic (measured per direction). */
   setConcurrency(upload: number | null, download: number | null) {
     this.conc = { upload: upload || null, download: download || null };
     this.client?.setConcurrency(this.conc);
     return this.concurrency();
   }
 
-  concurrency(): { upload: number; download: number; auto: boolean; channels: number } {
+  /** Pieces in flight now; `auto`/`autoDown`: the automatic value; `lean`: save data caps both at 2. */
+  concurrency(): { upload: number; download: number; auto: boolean; autoDown: boolean; channels: number; lean: boolean; capUp: number; capDown: number } {
     const c = this.client;
-    return { upload: c?.uploadConcurrency ?? 3, download: c?.downloadConcurrency ?? 4, auto: this.conc.upload === null, channels: c?.blobs.lanes?.() ?? 1 };
+    const lean = this.net.metered();
+    const up = c?.uploadConcurrency ?? 4;
+    const down = c?.downloadConcurrency ?? 4;
+    return {
+      upload: lean ? Math.min(2, up) : up,
+      download: lean ? Math.min(2, down) : down,
+      auto: this.conc.upload === null,
+      autoDown: this.conc.download === null,
+      channels: c?.blobs.lanes?.() ?? 1,
+      lean,
+      capUp: c?.autoCap("up") ?? 32,
+      capDown: c?.autoCap("down") ?? 32,
+    };
   }
 
   /** Turn this browser's transfer log on/off (the UI keeps the choice); e2ee/plain: the instance's log for this account too. */

@@ -41,6 +41,13 @@ upload your first file.
 choice is saved for the next commands. Yes/no questions are always `[Y/n]` / `[y/N]`. The
 browser app has an EN/PL switch in the header (remembered in the browser).
 
+## Browser requirements
+
+The app signs every device in with an Ed25519 key made by the browser (WebCrypto). That needs
+**Chrome, Edge or Brave 137 or newer, Firefox 129 or newer, Safari 17 or newer** (also on phones).
+An older browser shows “This browser is too old” instead of the sign-up form; update it. There is
+no fallback in JavaScript on purpose: the key stays inside the browser's own crypto.
+
 ## Modes
 
 Chosen in `npm run setup`, fixed for the life of the instance (another mode = a new instance in

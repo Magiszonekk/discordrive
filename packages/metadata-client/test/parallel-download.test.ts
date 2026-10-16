@@ -9,7 +9,7 @@ import { ChannelPacer, LocalArbiter, MemoryTransport, MetadataClient, memorySour
 function setup(o: { channels?: number; downloadConcurrency?: number; concurrency?: number } = {}) {
   const t = new MemoryTransport();
   const hooks = Array.from({ length: o.channels ?? 2 }, (_, i) => ({ id: `15500000000000070${String(i).padStart(2, "0")}`, url: `mem://hook/${i}`, channelId: `chan-${i}` }));
-  const c = new MetadataClient({ device: { id: "dev-p", name: "p" }, arbiter: new LocalArbiter(new Sequencer()), transport: t, webhooks: hooks, chunkSize: 1000, pacer: new ChannelPacer({ perMin: 1e6, maxPerMin: 1e6, burst: 1e6 }), downloadConcurrency: o.downloadConcurrency, concurrency: o.concurrency, sleep: async () => {} });
+  const c = new MetadataClient({ device: { id: "dev-p", name: "p" }, arbiter: new LocalArbiter(new Sequencer()), transport: t, webhooks: hooks, chunkSize: 1000, pacer: new ChannelPacer({ perMin: 1e6, maxPerMin: 1e6, burst: 1e6 }), links: { perMin: 1e6, burst: 1e6 }, downloadConcurrency: o.downloadConcurrency, concurrency: o.concurrency, sleep: async () => {} });
   return { t, c };
 }
 
@@ -57,13 +57,8 @@ describe("parallel download", () => {
     // Fragment 5's attachment is gone for good (every retry fails); the others answer slowly.
     const bad = new Set<string>();
     let calls = 0;
-    const atts = t.getAttachments.bind(t);
-    let seen = 0;
-    t.getAttachments = async (h, m) => {
-      const a = await atts(h, m);
-      if (++seen === 7) bad.add(a[0]!.id); // 1st GET is the manifest, then fragments 0, 1, … in launch order
-      return a;
-    };
+    // Fragment 5 by its attachment ID (links are fetched ahead, not in strict launch order).
+    bad.add((await c.loadManifest(up.version.manifestRef)).manifest.chunks.find((x) => x.index === 5)!.placements![0]!.attachmentId as string);
     t.fetchCdn = async (u) => {
       calls++;
       if ([...bad].some((id) => u.includes(`/${id}?`))) throw new Error("boom 5");
@@ -88,18 +83,17 @@ describe("parallel download", () => {
     let started = 0;
     let startedWhileHeadSlow = 0;
     let headDone = false;
-    let firstFrag = true;
+    // Fragment 0 is made slow (found by its attachment ID: links arrive out of order, so CDN reads do too).
+    const head = (await c.loadManifest(up.version.manifestRef)).manifest.chunks.find((x) => x.index === 0)!.placements![0]!.attachmentId;
     const orig = t.fetchCdn.bind(t);
     t.fetchCdn = async (u) => {
-      // The manifest is fetched first (its own GET); the next call is fragment 0, which is made slow.
-      const isHead = firstFrag && started === 1;
+      const isHead = u.includes(`/${head}?`);
       started++;
       if (!headDone && !isHead && started > 1) startedWhileHeadSlow++;
       inFlight++;
       peak = Math.max(peak, inFlight);
       try {
         if (isHead) {
-          firstFrag = false;
           await new Promise((r) => setTimeout(r, 120));
           headDone = true;
         } else await new Promise((r) => setTimeout(r, 5));
@@ -139,17 +133,28 @@ describe("parallel download", () => {
     expect(calls).toBeLessThan(30);
   });
 
-  it("upload concurrency: max(3, 2 × channels), capped; a setting overrides it", async () => {
+  it("concurrency: automatic starts at 8 (upload) / 4 (download) within max(3, 2 × channels) and 32 (and memory); a setting overrides it", async () => {
     expect(setup({ channels: 1 }).c.uploadConcurrency).toBe(3);
+    expect(setup({ channels: 1 }).c.autoCap("up")).toBe(3);
     expect(setup({ channels: 4 }).c.uploadConcurrency).toBe(8);
-    expect(setup({ channels: 12 }).c.uploadConcurrency).toBe(24);
-    expect(setup({ channels: 30 }).c.uploadConcurrency).toBe(32); // automatic stays ≤ 32
+    expect(setup({ channels: 2 }).c.uploadConcurrency).toBe(4); // 2 × channels
+    expect(setup({ channels: 4 }).c.autoCap("up")).toBe(8);
+    expect(setup({ channels: 12 }).c.autoCap("up")).toBe(24);
+    expect(setup({ channels: 30 }).c.autoCap("up")).toBe(32); // automatic stays ≤ 32
+    expect(setup({ channels: 30 }).c.autoCap("down")).toBe(32);
     expect(setup({ channels: 4, concurrency: 200 }).c.uploadConcurrency).toBe(64); // a setting up to 64
     const { c } = setup({ channels: 4, concurrency: 2 });
     expect(c.uploadConcurrency).toBe(2);
+    expect(c.downloadConcurrency).toBe(4);
+    expect(c.autoConcurrency).toEqual({ upload: false, download: true });
     c.setConcurrency({ upload: null, download: 6 });
     expect(c.uploadConcurrency).toBe(8);
     expect(c.downloadConcurrency).toBe(6);
+    expect(c.autoConcurrency).toEqual({ upload: true, download: false });
+    // memory: 8 pieces of ~20 MB at most
+    const t = new MemoryTransport();
+    const small = new MetadataClient({ device: { id: "d", name: "d" }, arbiter: new LocalArbiter(new Sequencer()), transport: t, webhooks: [{ id: "1550000000000007100", url: "mem://h", channelId: "c" }], memoryBudget: 160 * 1024 * 1024 });
+    expect(small.autoCap("down")).toBe(8);
   });
 
   it("upload: reads + whole-file hash stay in order with 12 in flight and random post delays; 429-slowed channel is skipped", async () => {

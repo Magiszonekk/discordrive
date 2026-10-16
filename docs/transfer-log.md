@@ -93,18 +93,30 @@ response headers, `st` HTTP status, `b` bytes, `hook`, `ch`, `fl`.
   tokens, `blk` ms still blocked after a 429, `q` requests queued.
 * upload e2ee/plain, client `k: "server"`: the PUT to the instance (round trip incl. its Discord post).
 * upload server `k: "discord"`: `lim`, `lst`, `egress` (wait of the IP budget).
-* download `k: "link"` (fresh CDN link through the webhook), `k: "cdn"` (`host`), `k: "proxy"`
-  (through the instance).
+* download `k: "cdn"` (`host`; metadata only also `lk` = where its link came from: `hit` fetched ahead
+  and ready, `wait` its request was on the way, `miss` fetched by this read; `lw` = ms this read waited
+  for the link), `k: "proxy"` (through the instance). Logs written before 2026-10-16 have `k: "link"`
+  requests here instead (the link was fetched inside the download slot).
 * a failure: `err` (scrubbed), and for a 429: `st: 429`, `ra` retry_after ms, `scope`
   (`shared` = the channel limit, `user` = the webhook bucket), `glob`, `cf: true` for a Cloudflare
   block of the IP.
 
-### Network (added 2026-10-15, zlecenie-2026-10-15-transfery)
+### Network
 
 * `req` (download `k: "cdn"`): `ln` = which connection the request used when there are two (0 = the
-  app's own fetch, 1 = the sandboxed iframe lane, docs/evidence/2026-10-15-connections).
+  app's own fetch, 1 = a sandboxed iframe of the app, which gets its own connection).
 * `file_start`: `win` pieces in flight allowed right now by the adaptive window (≤ `conc`), `lanes`
-  (download: connections available), `lean: true` when "Save data" / a metered link limits it to 2.
+  (download: connections available), `lean: true` when "Save data" / a metered link limits it to 2,
+  `auto: true` when the number of pieces in flight is automatic (measured, see `tune`).
+* `link` (metadata only, download): a fresh CDN link fetched AHEAD of the read that needs it (GET of the
+  message through its webhook): `i`, `hook`, `ch`, `dur`, `ttfb`, `st`, `q` link requests still queued,
+  `act` in flight; a failure has `err` (429: `st`, `ra`, `scope`). At most 8 at once, ~2.5/s per webhook
+  to start (Discord: 5 per webhook, ~1–2 s reset), slower after a 429.
+* `tune`: the automatic number of pieces in flight changed: `dir`, `from`, `to`, `why` = `try` (a step
+  up from a measured value), `gain` (it was ≥ 10 % faster: next step), `flat` (it was not: back),
+  `try-fewer` / `fewer` / `worse` (uploads: one step down, kept when as fast), `errors` (network errors
+  cut it), `cap` (bound lowered: memory, 2 per channel for uploads); `an`/`ab` pieces and bytes/s of the
+  accepted value, `mn`/`mb` of the value just measured. Measured again every minute.
 * `win`: the window of one direction changed: `dir`, `lim` new limit, `max`, `why` = `net` / `timeout`
   (halved after a network error, once per loss event) or `ok` (+1 after steady answers).
 * `gate`: no-network gate: `st` = `down` (`why: "errors"`, 3 network errors in a row) / `offline`
@@ -118,7 +130,10 @@ response headers, `st` HTTP status, `b` bytes, `hook`, `ch`, `fl`.
 * `resume`: a transfer continued after a reload: `dir`, `have` fragments already done, `n` total.
 
 The report (`npm run transfer-report`) has a **Network** section: window cuts and the lowest window,
-time without network and probes, the guard's steps with speeds, requests and MB per connection, resumes.
+time without network and probes, the guard's steps with speeds, requests and MB per connection, resumes;
+a **Links ahead** section (link requests, how many reads found their link ready, the share of slot time
+spent waiting for a link) and an **Automatic pieces in flight** section (every change with its reason
+and the speeds it compared).
 
 ### Other
 
