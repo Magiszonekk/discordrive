@@ -8,7 +8,7 @@
 
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
-import { chmodSync, existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -58,16 +58,55 @@ function runSync([cmd, args]: [string, string[]]): void {
   }
 }
 
+/**
+ * One build of a mode at a time, across processes (two instances, or setup and start, or parallel
+ * test files): a build deletes its output directory first, so a second builder would delete what
+ * the first is writing (on Windows that fails outright). The lock is a directory (mkdir is atomic);
+ * whoever waited checks the state again and usually finds the build done. A lock older than
+ * BUILD_LOCK_STALE_MS is left over from a killed process and is taken over.
+ */
+const BUILD_LOCK_STALE_MS = 5 * 60_000;
+function lockDir(mode: string): string {
+  return join(REPO_DIR, "apps", "web-mo", `.build-${mode}.lock`);
+}
+function tryLock(mode: string): boolean {
+  const d = lockDir(mode);
+  try {
+    mkdirSync(d);
+    return true;
+  } catch {
+    try {
+      if (Date.now() - statSync(d).mtimeMs > BUILD_LOCK_STALE_MS) rmSync(d, { recursive: true, force: true });
+    } catch {
+      /* gone meanwhile */
+    }
+    return false;
+  }
+}
+const unlock = (mode: string) => rmSync(lockDir(mode), { recursive: true, force: true });
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+function needsBuild(c: InstanceConfig): { web: "ok" | "missing" | "stale"; server: boolean } {
+  return { web: webBuildState(c), server: serverModeState(c.mode) !== "ok" };
+}
+
 /** Build apps/web-mo/dist/<mode> and dist/<mode>/server-mode.mjs if missing or older than the sources. */
 export function ensureWebBuilt(c: InstanceConfig, log: (s: string) => void = () => {}): string {
   const dir = webDir(c);
-  const state = webBuildState(c);
-  if (state !== "ok") {
-    if (c.webDir) throw new Error(t("c.webDirMissing", { dir }));
-    log(t(state === "stale" ? "s.rebuilding" : "s.building"));
-    runSync(webBuildArgs(c));
+  let need = needsBuild(c);
+  if (need.web === "ok" && !need.server) return dir;
+  if (need.web !== "ok" && c.webDir) throw new Error(t("c.webDirMissing", { dir }));
+  while (!tryLock(c.mode)) sleepSync(200);
+  try {
+    need = needsBuild(c);
+    if (need.web !== "ok") {
+      log(t(need.web === "stale" ? "s.rebuilding" : "s.building"));
+      runSync(webBuildArgs(c));
+    }
+    if (need.server) runSync(serverBuildArgs(c));
+  } finally {
+    unlock(c.mode);
   }
-  if (serverModeState(c.mode) !== "ok") runSync(serverBuildArgs(c));
   return dir;
 }
 
@@ -81,11 +120,17 @@ export async function buildWeb(c: InstanceConfig): Promise<string> {
       throw new Error(String((e as { stderr?: string }).stderr || (e as Error).message).trim().split("\n").slice(-3).join(" "));
     }
   };
-  if (webBuildState(c) !== "ok") {
-    if (c.webDir) throw new Error(t("c.webDirMissing", { dir }));
-    await run(webBuildArgs(c));
+  let need = needsBuild(c);
+  if (need.web === "ok" && !need.server) return dir;
+  if (need.web !== "ok" && c.webDir) throw new Error(t("c.webDirMissing", { dir }));
+  while (!tryLock(c.mode)) await new Promise((r) => setTimeout(r, 200));
+  try {
+    need = needsBuild(c);
+    if (need.web !== "ok") await run(webBuildArgs(c));
+    if (need.server) await run(serverBuildArgs(c));
+  } finally {
+    unlock(c.mode);
   }
-  if (serverModeState(c.mode) !== "ok") await run(serverBuildArgs(c));
   return dir;
 }
 
