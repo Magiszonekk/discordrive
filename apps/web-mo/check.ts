@@ -1533,7 +1533,7 @@ try {
     await op.waitForSelector("body[data-ready='1']");
     await op.waitForSelector("[data-ddn=old-browser]");
     r.oldBrowser = await op.evaluate(() => {
-      const cards = [...document.querySelectorAll("[data-ddn=signed-out] .auth-card")];
+      const cards = [...document.querySelectorAll("[data-ddn=signed-out] .auth-card:not([data-auth=lost])")];
       const notes = cards.filter((c) => c.querySelector("[data-ddn=old-browser]"));
       const btns = cards.flatMap((c) => [...c.querySelectorAll<HTMLButtonElement>(".auth-body button")]);
       return { cards: notes.length, buttonsDisabled: btns.length > 0 && btns.every((b) => b.disabled), text: notes[0]?.textContent ?? "", noRawError: !/Unrecognized name/.test(document.body.innerText) };
@@ -1544,12 +1544,110 @@ try {
     (r.oldBrowser as Record<string, unknown>).modernNoNote = !(await p.$("[data-ddn=old-browser]"));
   }
 
+  step("admin");
+  // Instance administration: only an account with the admin flag (set from the server) sees "Admin".
+  // A second account (own browser) does not; the admin makes and revokes an invite code, blocks the
+  // second account, which is signed out at once (blocked screen), then unblocks it.
+  if (srv) {
+    const adm: Record<string, unknown> = {};
+    // A second account with its own code, in its own browser.
+    const oc = await browser.newContext({ colorScheme: SCHEME });
+    await oc.addInitScript({ content: `window.__name = (f) => f; try { localStorage.setItem("ddn.lang", ${JSON.stringify(LANG)}) } catch {}` });
+    const o = await newPage(oc);
+    await o.goto(base);
+    await o.waitForSelector("body[data-ready='1']");
+    await typeInto(o, "[data-ddn=device-name]", "Drugie konto");
+    await typeInto(o, "[data-ddn=invite]", srv.invites.create(undefined, "check second").code);
+    await o.click("[data-ddn=create]");
+    await o.waitForURL((u) => u.pathname === "/welcome", { timeout: 30_000 });
+    await o.goto(base + "/settings");
+    await o.waitForSelector("[data-page=settings]:not([hidden])", { timeout: 30_000 });
+    const otherId = (await o.textContent("[data-ddn-ui=acc-id]"))!.trim();
+    adm.otherNoNav = await o.isHidden("[data-ddn=nav-admin]");
+    // Typing /admin as a regular account: back to Files, and the server answers 403 anyway.
+    await o.goto(base + "/admin");
+    await o.waitForURL((u) => u.pathname !== "/admin", { timeout: 15_000 });
+    adm.otherAdminRedirect = new URL(o.url()).pathname !== "/admin";
+    adm.otherApi403 = await o.evaluate(async () => {
+      const core = (window as unknown as { ddnCore: { adminAccounts(): Promise<unknown> } }).ddnCore;
+      return core.adminAccounts().then(
+        () => "ok",
+        (e: unknown) => String(e),
+      );
+    });
+    // The laptop's account becomes admin from the server (operator), as `discordrive accounts admin <id> on`.
+    const laptopId = (await p.evaluate(async () => (await (window as unknown as { ddnCore: { status(): Promise<{ accountId: string }> } }).ddnCore.status()).accountId));
+    adm.laptopNoNavBefore = await p.isHidden("[data-ddn=nav-admin]");
+    srv.admin.setAdmin(laptopId, true, "operator");
+    await p.reload();
+    await p.waitForSelector("body[data-ready='1']");
+    await p.waitForSelector("[data-ddn=nav-admin]:not([hidden])", { timeout: 15_000 });
+    await p.click("[data-ddn=nav-admin]");
+    await p.waitForSelector("[data-page=admin]:not([hidden])");
+    await p.waitForFunction((id) => !!document.querySelector(`[data-ddn=adm-acc-row][data-account="${id}"]`), otherId, { timeout: 15_000 });
+    adm.rows = await p.$$eval("[data-ddn=adm-acc-row]", (e) => e.length);
+    adm.blindNote = await p.textContent("[data-ddn=adm-blind]");
+    adm.noNamesInPanel = !/Laptop testowy|Telefon testowy|Drugie konto|notatki|Wakacje|duzy\.bin/.test((await p.textContent("[data-page=admin]")) ?? "");
+    await shot(p, "40-admin");
+    // Invite: create with a note → shown once → listed → revoked.
+    await typeInto(p, "[data-ddn=adm-inv-note]", "dla Ani");
+    await typeInto(p, "[data-ddn=adm-inv-days]", "3");
+    await p.click("[data-ddn=adm-inv-create]");
+    await p.waitForSelector("[data-ddn=adm-inv-new]:not([hidden])");
+    const code = await p.inputValue("[data-ddn=adm-inv-code]");
+    adm.codeShown = /^ddn-inv-/.test(code);
+    const row = p.locator("[data-ddn=adm-inv-row][data-state=active]", { hasText: "dla Ani" });
+    await row.waitFor();
+    adm.codeNotInList = !((await p.textContent("[data-ddn=adm-invites]")) ?? "").includes(code.slice(8));
+    await row.locator("[data-ddn=adm-inv-revoke]").click();
+    await p.locator("[data-ddn=adm-inv-row][data-state=revoked]", { hasText: "dla Ani" }).waitFor({ timeout: 10_000 });
+    adm.revokedRefused = await fetch(base + "/v1/accounts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ invite: code }) }).then((x) => x.status);
+    await shot(p, "41-admin-invites");
+    // Block the second account: its open tab drops to the "blocked" screen.
+    // (no channel yet: the open page is Settings; "/" would be the first-run wizard)
+    await o.goto(base + "/settings");
+    await o.waitForSelector("[data-page=settings]:not([hidden])", { timeout: 30_000 });
+    await p.locator(`[data-ddn=adm-acc-row][data-account="${otherId}"] [data-ddn=adm-acc-open]`).click();
+    await p.waitForSelector("[data-ddn=adm-acc-dialog][open]");
+    await typeInto(p, "[data-ddn=adm-d-reason]", "test blokady");
+    await p.click("[data-ddn=adm-d-block]");
+    await p.waitForSelector("[data-ddn=confirm-dialog][open]");
+    await p.click("[data-ddn=confirm-yes]");
+    await p.waitForFunction(() => /blocked|zablokowane/.test(document.querySelector("[data-ddn=adm-d-state]")?.textContent ?? ""), null, { timeout: 10_000 });
+    await shot(p, "42-admin-account");
+    const t0b = Date.now();
+    await o.waitForSelector("[data-ddn=auth-lost]:not([hidden])", { timeout: 20_000 });
+    adm.blockedScreenMs = Date.now() - t0b;
+    adm.blockedText = await o.textContent("[data-ddn=auth-lost-text]");
+    await shot(o, "43-blocked");
+    // Unblock: "Try again" brings it back.
+    await p.click("[data-ddn=adm-d-block]");
+    await p.waitForFunction(() => /active|aktywne/.test(document.querySelector("[data-ddn=adm-d-state]")?.textContent ?? ""), null, { timeout: 10_000 });
+    await p.click("[data-ddn-ui=adm-d-close]");
+    await o.click("[data-ddn=auth-lost-retry]");
+    await o.waitForSelector("[data-ddn=auth-lost]", { state: "hidden", timeout: 30_000 });
+    await o.waitForFunction(() => !!document.querySelector("[data-ddn=signed-in]:not([hidden]), [data-ddn-ui=onboarding]:not([hidden])"), null, { timeout: 30_000 });
+    adm.backAfterUnblock = true;
+    // Log: the steps, with the admin and the operator as actors.
+    await p.click("[data-ddn=adm-log-filter] [data-filter='']");
+    await p.waitForFunction(() => document.querySelectorAll("[data-ddn=adm-log-row]").length >= 5, null, { timeout: 10_000 });
+    adm.log = await p.$$eval("[data-ddn=adm-log-row]", (e) => e.map((x) => x.getAttribute("data-action")));
+    // Phone width: no horizontal scroll on the admin page.
+    await p.setViewportSize({ width: 390, height: 844 });
+    await p.waitForTimeout(500); // the sidebar turns into the drawer (transition)
+    adm.phoneNoHScroll = await p.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+    await shot(p, "44-admin-phone");
+    await p.setViewportSize({ width: 1280, height: 860 });
+    await oc.close();
+    r.admin = adm;
+  }
+
   // 11. what the server stores: no names in clear
   if (srv) {
-    const tables = ["devices", "log", "shares", "vault", "s_blobs", "s_uploads", "inst_hooks", "s_snapshots", "password_keys"].filter((t) => srv!.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t));
+    const tables = ["devices", "log", "shares", "vault", "s_blobs", "s_uploads", "inst_hooks", "s_snapshots", "password_keys", "accounts", "admin_log", "invites"].filter((t) => srv!.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t));
     const rows = tables.map((t) => srv!.db.prepare(`SELECT * FROM ${t}`).all());
     r.serverTables = tables;
-    r.serverSeesNoNames = !/Telefon testowy|Laptop testowy|notatki|Wakacje|duzy\.bin|discord\.com\/api\/webhooks|check run passphrase/.test(JSON.stringify(rows));
+    r.serverSeesNoNames = !/Telefon testowy|Laptop testowy|Drugie konto|notatki|Wakacje|duzy\.bin|discord\.com\/api\/webhooks|check run passphrase/.test(JSON.stringify(rows));
   }
   await phone.close();
   r.pageErrors = errors;
@@ -1728,6 +1826,18 @@ try {
     oldBrowser: (() => {
       const o = r.oldBrowser as Record<string, unknown> | undefined;
       return !!o && o.cards === 4 && o.buttonsDisabled === true && /137/.test(String(o.text)) && /129/.test(String(o.text)) && /17/.test(String(o.text)) && /Ed25519/.test(String(o.text)) && o.noRawError === true && o.modernNoNote === true;
+    })(),
+    admin: (() => {
+      const a = r.admin as Record<string, any> | undefined;
+      if (!a) return !!remote;
+      const log = (a.log as string[]) ?? [];
+      return (
+        a.otherNoNav === true && a.otherAdminRedirect === true && /403 not_admin/.test(String(a.otherApi403)) && a.laptopNoNavBefore === true &&
+        a.rows >= 2 && /never reach the server|nigdy nie trafiają|encrypted pieces|zaszyfrowane fragmenty|never shows them|nie pokazuje/.test(String(a.blindNote)) && a.noNamesInPanel === true &&
+        a.codeShown === true && a.codeNotInList === true && a.revokedRefused === 403 &&
+        /blocked|zablokował/.test(String(a.blockedText)) && a.blockedScreenMs < 15_000 && a.backAfterUnblock === true &&
+        ["account.admin_on", "invite.create", "invite.revoke", "account.block", "account.unblock"].every((x) => log.includes(x)) && a.phoneNoHScroll === true
+      );
     })(),
     noPageErrors: errors.length === 0,
   };

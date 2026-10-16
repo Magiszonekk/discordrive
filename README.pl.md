@@ -101,7 +101,8 @@ rozwiązanie to nowe konto i ponowne wysłanie plików. W metadata only dodatkow
 nowa webhooki w Discordzie.
 
 **Inna osoba.** Zawsze własne konto, nigdy parowanie. Na instancji publicznej administrator daje
-jej kod zaproszenia (`npm run invite`). Konta są od siebie oddzielone: nikt nie widzi cudzych plików.
+jej kod zaproszenia (`npm run invite` albo ekran **Admin** w aplikacji dla konta z flagą admina).
+Konta są od siebie oddzielone: nikt nie widzi cudzych plików.
 - metadata only: podłącza własne kanały i webhooki. Najlepiej utworzone przez nią samą: kto
   tworzy webhook, ten zna jego adres, a adres to sekret pozwalający wysyłać i kasować wiadomości.
 - e2ee / plain: używane są wspólne kanały instancji, webhooki niepotrzebne (własne może dodać w
@@ -122,7 +123,9 @@ ale kto już ma link, zachowuje dostęp, dopóki fragmenty pliku istnieją na Di
 | zmień ustawienia | `npm run setup` |
 | coś nie działa | `npm run doctor` |
 | wyłącz uruchamianie w tle | `npm run uninstall-autostart` |
-| kod zaproszenia (instancja publiczna) | `npm run invite` |
+| kod zaproszenia (instancja publiczna) | `npm run invite` (`-- --note "dla Ani"`, `-- list`, `-- revoke <id>`) |
+| konta: lista, blokada, usunięcie, admin | `npm run accounts -- list` (`block <id>`, `unblock <id>`, `delete <id>`, `admin <id> on`) |
+| kto może zakładać konta | `npm run signup -- invite` (albo `open`, `closed`; działa od razu) |
 | aktualizacja do najnowszej wersji | `npm run update`, potem ponownie włącz dysk |
 
 ## Aktualizacja

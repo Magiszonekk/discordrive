@@ -6,19 +6,23 @@
 //           (--systemd / --no-systemd: older names of --autostart)
 //   start   [--data-dir DIR]   (alias: serve)
 //   doctor  [--data-dir DIR]
-//   invite  [--data-dir DIR] [--days N] [--note TEXT]
+//   invite  [--data-dir DIR] [--days N] [--note TEXT] | invite list [--json] | invite revoke <code|id>
+//   accounts list [--json] | block <id> [--reason T] | unblock <id> | delete <id> [--yes] | admin <id> on|off
+//   signup  invite|open|closed   (sign-up policy, live; src/accounts.ts)
 //   uninstall-autostart [--data-dir DIR]   remove the background start (any system)
 //   supervise [--data-dir DIR]   (used by the background start) serve + restart after a crash, log to a file
 //   channels [--data-dir DIR] list | impact <id> | retire <id> | unretire <id> | move <id> [--wait] | status | remove <id> --force
 //           (e2ee/plain: the instance pool's webhooks; src/channels.ts)
 // Every command: --lang en|pl (or DISCORDRIVE_LANG); default = the language
-// saved by setup in config.json, else English.
+// saved by setup in config.json, else English. --help / -h on any command prints its help and
+// does nothing else; an option the command does not know is an error (nothing is done).
 
 import { readFileSync } from "node:fs";
-import { cliLang, envLang, isCliLang, setCliLang, t, type CliLang } from "./i18n.js";
+import { envLang, isCliLang, setCliLang, t, type CliLang } from "./i18n.js";
 import { ConfigError, configPath, defaultDataDir, loadConfig, riskAccepted, type InstanceConfig } from "./config.js";
 import type { DdnServer } from "@ddv4/metadata-client/node";
-import { doctor, invite } from "./doctor.js";
+import { doctor } from "./doctor.js";
+import { accountsCli, inviteCli, signupCli } from "./accounts.js";
 import { serve } from "./serve.js";
 import * as autostart from "./autostart.js";
 import { Cancelled, ttyPrompter, wantTui } from "./prompt.js";
@@ -27,32 +31,77 @@ import { setup, type SetupFlags } from "./setup.js";
 
 const help = () => t("cli.help", { dir: defaultDataDir() });
 
-/** Flags that never take a value (so `channels remove <id> --force` does not eat the next word). */
-const SWITCHES = new Set(["force", "wait", "yes"]);
+/** What each command accepts: options with a value, switches (no value), positional words. */
+interface Spec {
+  values: string[];
+  switches: string[];
+  positional: boolean;
+  /** Help of this command (default: the general help). */
+  help?: () => string;
+}
+const COMMON = ["data-dir", "lang"];
+const SPECS: Record<string, Spec> = {
+  setup: {
+    values: ["answers", "public-url", "host", "port", "trust-proxy", "signup", "bot-token-file", "bot-token", "mode", "webhooks-file", "discord-api-origin"],
+    switches: ["yes", "accept-risk", "no-bot", "replace-bot", "autostart", "no-autostart", "systemd", "no-systemd", "start", "no-start", "invite", "no-invite", "self-test", "no-self-test", "first-admin", "no-first-admin"],
+    positional: false,
+  },
+  start: { values: [], switches: [], positional: false },
+  serve: { values: [], switches: [], positional: false },
+  supervise: { values: [], switches: [], positional: false },
+  doctor: { values: [], switches: [], positional: false },
+  "uninstall-autostart": { values: [], switches: [], positional: false },
+  channels: { values: [], switches: ["force", "wait", "yes"], positional: true, help: () => t("ch.usage") },
+  invite: { values: ["days", "note"], switches: ["json"], positional: true, help: () => t("inv.usage") },
+  accounts: { values: ["reason"], switches: ["yes", "json"], positional: true, help: () => t("ac.usage") },
+  signup: { values: [], switches: [], positional: true, help: () => t("su.usage") },
+};
 
-function parse(argv: string[]): { cmd: string; opts: Record<string, string | boolean>; args: string[] } {
+class UsageError extends Error {
+  constructor(
+    msg: string,
+    readonly cmd: string,
+  ) {
+    super(msg);
+  }
+}
+
+/**
+ * Parse `argv` against the command's spec. `--help`/`-h` anywhere = help (nothing else runs);
+ * an unknown option or a stray word is a UsageError (nothing runs either).
+ */
+export function parse(argv: string[]): { cmd: string; opts: Record<string, string | boolean>; args: string[]; help: boolean } {
   const [cmd = "help", ...rest] = argv;
   const opts: Record<string, string | boolean> = {};
   const args: string[] = [];
+  const spec = SPECS[cmd];
+  if (!spec) return { cmd, opts, args: rest, help: rest.includes("--help") || rest.includes("-h") };
+  if (rest.includes("--help") || rest.includes("-h")) return { cmd, opts, args, help: true };
+  const values = new Set([...COMMON, ...spec.values]);
+  const switches = new Set(spec.switches);
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]!;
-    // Positional words only for `channels` (sub-command + webhook ID).
-    if (!a.startsWith("--") && cmd === "channels") {
+    if (!a.startsWith("-")) {
+      if (!spec.positional) throw new UsageError(t("cli.noArgs", { cmd, a }), cmd);
       args.push(a);
       continue;
     }
-    if (!a.startsWith("--")) throw new Error(t("cli.badArg", { a }));
-    if (cmd === "channels" && SWITCHES.has(a.slice(2))) {
-      opts[a.slice(2)] = true;
+    if (!a.startsWith("--")) throw new UsageError(t("cli.unknownFlag", { flag: a, cmd }), cmd);
+    const [k, v] = a.slice(2).split("=", 2) as [string, string | undefined];
+    if (switches.has(k)) {
+      if (v !== undefined && v !== "true" && v !== "false") throw new UsageError(t("cli.unknownFlag", { flag: a, cmd }), cmd);
+      opts[k] = v === undefined ? true : v === "true";
       continue;
     }
-    const [k, v] = a.slice(2).split("=", 2) as [string, string | undefined];
+    if (!values.has(k)) throw new UsageError(t("cli.unknownFlag", { flag: `--${k}`, cmd }), cmd);
     if (v !== undefined) opts[k] = v;
     else if (rest[i + 1] !== undefined && !rest[i + 1]!.startsWith("--")) opts[k] = rest[++i]!;
-    else opts[k] = true;
+    else throw new UsageError(t("cli.needsValue", { flag: `--${k}` }), cmd);
   }
-  return { cmd, opts, args };
+  return { cmd, opts, args, help: false };
 }
+
+const helpOf = (cmd: string) => SPECS[cmd]?.help?.() ?? help();
 
 /** `language` saved by setup, read without validating the rest (so errors are in that language). */
 export function savedLanguage(dataDir: string): CliLang | null {
@@ -91,6 +140,7 @@ export function setupFlags(opts: Record<string, string | boolean>): SetupFlags {
     replaceBot: opts["replace-bot"] === true || answers.replaceBot === true,
     invite: bool("invite", "invite"),
     autostart: bool("autostart", "autostart") ?? bool("systemd", "systemd"),
+    firstAdmin: bool("first-admin", "firstAdmin"),
     start: bool("start", "start"),
     selfTest: bool("self-test", "selfTest"),
     discordApiOrigin: str(pick("discord-api-origin", "discordApiOrigin")),
@@ -139,9 +189,31 @@ export async function main(argv: string[]): Promise<number | "running"> {
     const di = argv.indexOf("--data-dir");
     const dd0 = di >= 0 ? argv[di + 1] : argv.find((a) => a.startsWith("--data-dir="))?.split("=")[1];
     setCliLang(envLang(flagLang) ?? savedLanguage(dd0 ?? defaultDataDir()) ?? "en");
-    const p = parse(argv);
+    let p: ReturnType<typeof parse>;
+    try {
+      p = parse(argv);
+    } catch (e) {
+      if (!(e instanceof UsageError)) throw e;
+      console.error(`discordrive ${e.cmd}: ${e.message}\n\n${helpOf(e.cmd)}`);
+      return 64;
+    }
     cmd = p.cmd;
+    if (p.help) {
+      console.log(helpOf(p.cmd));
+      return 0;
+    }
     const dataDir = str(p.opts["data-dir"]) ?? defaultDataDir();
+    const ask = async (q: string) => {
+      if (!process.stdin.isTTY) return false;
+      const pr = ttyPrompter();
+      try {
+        return await pr.confirm(q, false);
+      } catch {
+        return false;
+      } finally {
+        pr.close();
+      }
+    };
     switch (p.cmd) {
       case "setup": {
         const flags = setupFlags(p.opts);
@@ -197,16 +269,16 @@ export async function main(argv: string[]): Promise<number | "running"> {
         const { channelsCli } = await import("./channels.js");
         return await channelsCli(dataDir, p.args, p.opts);
       }
-      case "invite": {
-        const r = invite(dataDir, Number(str(p.opts.days) ?? 7), str(p.opts.note) ?? "");
-        console.log(r.code);
-        console.error(t("cli.invite", { date: new Date(r.expiresAt).toLocaleString(cliLang() === "pl" ? "pl-PL" : "en-US") }));
-        return 0;
-      }
+      case "invite":
+        return await inviteCli(dataDir, p.args, p.opts);
+      case "accounts":
+        return await accountsCli(dataDir, p.args, p.opts, { confirm: ask });
+      case "signup":
+        return await signupCli(dataDir, p.args);
       case "help":
       case "--help":
       case "-h":
-        console.log(help());
+        console.log(SPECS[p.args[0] ?? ""] ? helpOf(p.args[0]!) : help());
         return 0;
       default:
         console.error(`${t("cli.unknown", { cmd: p.cmd })}\n\n${help()}`);

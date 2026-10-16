@@ -119,7 +119,59 @@ export type CoreEvent =
   /** Moving a channel: progress of the job (this tab in metadata only, the instance in e2ee/plain). */
   | { type: "channel-move"; status: MoveStatus }
   /** Rule notices about changes of OTHER devices addressed to this one (Q1: your file went to the trash with a folder). */
-  | { type: "notices"; notices: UiNotice[] };
+  | { type: "notices"; notices: UiNotice[] }
+  /** The server no longer accepts this device: the account was blocked or deleted, or the device revoked. */
+  | { type: "auth-lost"; code: AuthLost };
+
+export interface AdminAccount {
+  accountId: string;
+  createdAt: number;
+  lastSeenAt: number | null;
+  devices: number;
+  serverBytes: number;
+  poolBytes: number | null;
+  state: "active" | "blocked";
+  blockedAt: number | null;
+  blockedReason: string | null;
+  inviteNote: string | null;
+  admin: boolean;
+}
+export interface AdminDeletion {
+  accountId: string;
+  state: "pending" | "running" | "done" | "failed";
+  total: number;
+  done: number;
+  error: string | null;
+}
+export interface AdminInvite {
+  id: string;
+  createdAt: number;
+  expiresAt: number;
+  usedAt: number | null;
+  usedBy: string | null;
+  revokedAt: number | null;
+  note: string;
+  createdBy: string;
+  state: "active" | "used" | "expired" | "revoked";
+}
+export interface AdminLogRow {
+  id: number;
+  at: number;
+  actor: string;
+  action: string;
+  target: string;
+  detail: Record<string, unknown>;
+}
+export interface AdminInstance {
+  health: { version: string; mode: string; signup: string; uptimeS: number; rulesVersion: number; shares: boolean };
+  accounts: number;
+  admins: number;
+  deletions: AdminDeletion[];
+  pool?: { id: string; channelId: string; label: string; alive: boolean; retired: boolean; files: number; bytes: number; accounts: { accountId: string; bytes: number }[] }[];
+}
+
+/** Why the server stopped accepting this device. */
+export type AuthLost = "blocked" | "gone";
 
 function blobSource(b: Blob): ByteSource {
   return { size: b.size, read: async (o, l) => new Uint8Array(await b.slice(o, o + l).arrayBuffer()) };
@@ -198,6 +250,8 @@ export class AppCore {
   private readonly serverTimes = new Map<number, number>();
   private pending: PendingPair | null = null;
   private shared: { opened: OpenedShare } | null = null;
+  /** Set when the server refused this device (blocked account, deleted account, revoked device). */
+  authLost: AuthLost | null = null;
   leader = false;
   persistent = false;
   /** Bumped on every applied batch; the UI polls it to refresh. */
@@ -344,6 +398,7 @@ export class AppCore {
       lastSnapshot: this.lastSnapshot,
       /** Who writes snapshots: this browser (metadata only) or the instance (e2ee/plain). */
       snapshotsBy: mode.clientSnapshots ? "client" : "server",
+      authLost: this.authLost,
     };
   }
 
@@ -400,7 +455,15 @@ export class AppCore {
       net: this.net,
       resume: (this.resume = new IdbResumeStore(a.accountId)),
     };
-    await this.rebuildClient();
+    this.authLost = null;
+    try {
+      await this.rebuildClient();
+    } catch (e) {
+      // Blocked or deleted account / revoked device: keep the keys, show why (the UI asks what to do).
+      this.noteAuthError(e);
+      if (this.authLost) return;
+      throw e;
+    }
     this.version++;
     this.sub = this.http.subscribe(
       () =>
@@ -410,11 +473,123 @@ export class AppCore {
           const mine = this.uiNotices(rs, false);
           if (mine.length) this.onEvent({ type: "notices", notices: mine });
         }),
+      { onAuthLost: (code) => this.lostAuth(code === "account_blocked" ? "blocked" : "gone") },
     );
     void this.ensureOwnName().catch(() => {});
     this.startSnapshots();
     this.scheduleCleanup(CLEANUP_FIRST_MS);
     this.startUpkeep();
+  }
+
+  /** The server refused this device: stop background work and tell the UI (the keys stay in this browser). */
+  private lostAuth(why: AuthLost) {
+    if (this.authLost) return;
+    this.authLost = why;
+    this.sub?.close();
+    if (this.snapTimer) clearInterval(this.snapTimer);
+    if (this.gcTimer) clearTimeout(this.gcTimer);
+    this.onEvent({ type: "auth-lost", code: why });
+  }
+
+  /** Try again after "blocked" (the admin may have unblocked the account): sign in afresh. */
+  async retryAuth(): Promise<boolean> {
+    try {
+      await this.http!.session(true);
+    } catch (e) {
+      const m = String((e as Error)?.message ?? e);
+      if (/account_blocked/.test(m)) return false;
+      if (/bad_signature/.test(m)) return (this.authLost = "gone"), false;
+      throw e;
+    }
+    this.close();
+    this.client = null;
+    await this.open();
+    return true;
+  }
+
+  /** Remove the account from this browser (after it was deleted on the server). */
+  async forgetThisBrowser(): Promise<void> {
+    this.close();
+    this.client = null;
+    this.http = null;
+    this.acct = null;
+    this.authLost = null;
+    await keystore.clear();
+  }
+
+  // ── instance administration (only for accounts with the admin flag; the server checks it on every call)
+
+  /** What this account may do on the instance. */
+  async accountInfo(): Promise<{ admin: boolean }> {
+    try {
+      return (await this.http!.json<{ admin: boolean }>("GET", "/v1/account")).body;
+    } catch (e) {
+      this.noteAuthError(e);
+      return { admin: false };
+    }
+  }
+
+  /** A call failed: was it because the server no longer accepts this device? (Then the UI shows why.) */
+  async authProblem(message: string): Promise<boolean> {
+    this.noteAuthError(message);
+    return !!this.authLost;
+  }
+
+  private noteAuthError(e: unknown) {
+    const m = String((e as Error)?.message ?? e);
+    if (/account_blocked/.test(m)) this.lostAuth("blocked");
+    else if (/HTTP 401 bad_signature/.test(m)) this.lostAuth("gone");
+  }
+
+  private async adm<T>(method: string, path: string, body?: unknown): Promise<T> {
+    return (await this.http!.json<T>(method, path, body)).body;
+  }
+
+  adminAccounts() {
+    return this.adm<{ accounts: AdminAccount[]; deletions: AdminDeletion[] }>("GET", "/v1/admin/accounts");
+  }
+  adminAccount(id: string) {
+    return this.adm<{ account: AdminAccount; devices: { deviceId: string; createdAt: number; lastSeenAt: number | null; addedBy: string }[]; deletion: AdminDeletion | null }>("GET", `/v1/admin/accounts/${id}`);
+  }
+  adminBlock(id: string, reason: string) {
+    return this.adm("POST", `/v1/admin/accounts/${id}/block`, { reason });
+  }
+  adminUnblock(id: string) {
+    return this.adm("POST", `/v1/admin/accounts/${id}/unblock`, {});
+  }
+  /** Signed again by this device (not only the session). */
+  adminSetAdmin(id: string, on: boolean) {
+    return this.http!.adminSigned("POST", `/v1/admin/accounts/${id}/admin`, on ? "admin-on" : "admin-off", id, { on });
+  }
+  adminDelete(id: string) {
+    return this.http!.adminSigned<{ deletion: AdminDeletion }>("DELETE", `/v1/admin/accounts/${id}`, "delete-account", id);
+  }
+  adminRevokeDevice(id: string, deviceId: string) {
+    return this.http!.adminSigned("POST", `/v1/admin/accounts/${id}/devices/${deviceId}/revoke`, "revoke-device", `${id}/${deviceId}`);
+  }
+  adminInvites() {
+    return this.adm<{ invites: AdminInvite[] }>("GET", "/v1/admin/invites");
+  }
+  adminCreateInvite(days: number, note: string) {
+    return this.adm<{ code: string; expiresAt: number; id: string }>("POST", "/v1/admin/invites", { days, note });
+  }
+  adminRevokeInvite(ref: string) {
+    return this.adm<{ invite: AdminInvite }>("POST", "/v1/admin/invites/revoke", { ref });
+  }
+  adminInstance() {
+    return this.adm<AdminInstance>("GET", "/v1/admin/instance");
+  }
+  adminDoctor() {
+    return this.adm<{ checks: { level: "ok" | "warn" | "fail"; what: string; detail: string }[] | null }>("GET", "/v1/admin/doctor");
+  }
+  adminSetSignup(policy: "invite" | "open" | "closed") {
+    return this.adm<{ signup: string }>("PUT", "/v1/admin/signup", { policy });
+  }
+  adminLog(action = "", before = 0) {
+    const q = new URLSearchParams({ limit: "100" });
+    if (action) q.set("action", action);
+    if (before) q.set("before", String(before));
+    return this.adm<{ entries: AdminLogRow[] }>("GET", `/v1/admin/log?${q}`);
   }
 
   // ── cleanup (Q4) ────────────────────

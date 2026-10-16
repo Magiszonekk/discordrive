@@ -210,7 +210,7 @@ describe("risk notice (Discord's Terms of Service, no warranty)", () => {
     expect(a.text).toContain("without warranty of any kind");
     expect(a.text).toContain("2) Cancel  (default)");
     expect(existsSync(configPath(dir))).toBe(false);
-    const b = await run(["", "1", "", String(port), "", "", dir, "y", "", ""]);
+    const b = await run(["", "1", "", String(port), "", "", dir, "y", "", "", ""]);
     expect(b.r).not.toBeInstanceOf(Error);
     const c = loadConfig(dir);
     expect(c.acceptedRisk).toMatchObject({ version: RISK_VERSION });
@@ -257,7 +257,8 @@ describe("discordrive setup (interactive, scripted stdin)", () => {
     // language (Enter = English), scenario (Enter = local), port, mode (Enter), bot (Enter = skip), data dir, save (y), [systemd: Enter = no], start now (n)
     const { detectBackend } = await import("../src/autostart.js");
     const systemdAvailable = () => detectBackend() !== "none";
-    input.write(["", "1", "", String(port), "", "", dir, "y", ...(systemdAvailable() ? [""] : []), "n", ""].join("\n"));
+    // …save (y), first account = admin (Enter = yes), …
+    input.write(["", "1", "", String(port), "", "", dir, "y", "", ...(systemdAvailable() ? [""] : []), "n", ""].join("\n"));
     const p = ttyPrompter(input, output);
     // The default data dir comes from DISCORDRIVE_DATA_DIR (never the real user's one in tests).
     process.env.DISCORDRIVE_DATA_DIR = join(tmp(), "default");
@@ -302,7 +303,7 @@ describe("discordrive setup (interactive, scripted stdin)", () => {
     const { detectBackend } = await import("../src/autostart.js");
     const systemdAvailable = () => detectBackend() !== "none";
     // language 2 = Polski, scenario, port, mode, bot, data dir, save: "x" (invalid) then "tak", [systemd: nie], start now: n
-    input.write(["2", "1", "", String(port), "", "", dir, "x", "tak", ...(systemdAvailable() ? ["nie"] : []), "n", ""].join("\n"));
+    input.write(["2", "1", "", String(port), "", "", dir, "x", "tak", "", ...(systemdAvailable() ? ["nie"] : []), "n", ""].join("\n"));
     const p = ttyPrompter(input, output);
     process.env.DISCORDRIVE_DATA_DIR = join(tmp(), "default");
     cleanups.push(() => void delete process.env.DISCORDRIVE_DATA_DIR);
@@ -338,7 +339,7 @@ describe("discordrive setup (interactive, scripted stdin)", () => {
     const { detectBackend } = await import("../src/autostart.js");
     const systemdAvailable = () => detectBackend() !== "none";
     // scenario, port, mode, bot, data dir, save: "t" (not accepted in English) then "yes", [systemd], start: no
-    input.write(["1", "", String(port), "", "", dir, "t", "yes", ...(systemdAvailable() ? ["no"] : []), "no", ""].join("\n"));
+    input.write(["1", "", String(port), "", "", dir, "t", "yes", "", ...(systemdAvailable() ? ["no"] : []), "no", ""].join("\n"));
     const p = ttyPrompter(input, output);
     process.env.DISCORDRIVE_DATA_DIR = join(tmp(), "default");
     cleanups.push(() => void delete process.env.DISCORDRIVE_DATA_DIR);
@@ -363,7 +364,7 @@ describe("discordrive setup (interactive, scripted stdin)", () => {
     const { detectBackend } = await import("../src/autostart.js");
     const systemdAvailable = () => detectBackend() !== "none";
     // language, scenario, port, mode, bot: 2 = now, wrong token, right token, data dir, save, [systemd], start now: n
-    input.write(["", "1", "", String(port), "", "2", "wrong", fake.botToken, dir, "", ...(systemdAvailable() ? [""] : []), "n", ""].join("\n"));
+    input.write(["", "1", "", String(port), "", "2", "wrong", fake.botToken, dir, "", "", ...(systemdAvailable() ? [""] : []), "n", ""].join("\n"));
     const p = ttyPrompter(input, output);
     process.env.DISCORDRIVE_DATA_DIR = join(tmp(), "default");
     cleanups.push(() => void delete process.env.DISCORDRIVE_DATA_DIR);

@@ -15,7 +15,7 @@ import { pathToFileURL } from "node:url";
 import { DdnServer, DiscordBotRefresher, DISCORD_ORIGINS, type BotRefresher } from "@ddv4/metadata-client/node";
 import { t } from "./i18n.js";
 import { builtHash, sourceHash } from "../../web-mo/source-hash.js";
-import { PACKAGE_DIR, POSIX_MODES, REPO_DIR, dbPath, originOf, webDir, type InstanceConfig } from "./config.js";
+import { PACKAGE_DIR, POSIX_MODES, REPO_DIR, dbPath, loadConfig, originOf, saveConfig, webDir, type InstanceConfig } from "./config.js";
 import { serverModeFile, serverModeState } from "../build-server.js";
 import type { ServerMode } from "./modes/types.js";
 
@@ -122,6 +122,16 @@ export async function createServer(c: InstanceConfig, log: (s: string) => void =
     },
     bot: parts.shareRefresher ?? bot ?? undefined,
     cdnOrigins: test ? [test] : [],
+    // Admin panel: a new sign-up policy is kept in config.json too (setup shows it as the current value).
+    onSignupChange: (policy) => {
+      try {
+        saveConfig({ ...loadConfig(c.dataDir), signup: policy });
+      } catch (e) {
+        console.error(`discordrive: saving the sign-up policy: ${(e as Error).message}`);
+      }
+    },
+    // Admin panel → Instance: the same checks as `discordrive doctor`.
+    doctor: async () => (await import("./doctor.js")).doctor(c.dataDir, () => {}).then((r) => r.checks),
   });
 }
 

@@ -3,7 +3,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { InviteStore } from "@ddv4/metadata-client/node";
+import { AdminStore, InviteStore, OPERATOR } from "@ddv4/metadata-client/node";
 import { health, hostUrl, isLocalAddress, portState, validateBotToken } from "./checks.js";
 import { POSIX_MODES, checkWritable, riskAccepted, configPath, dbPath, fileMode, isLocalUrl, loadConfig, webDir, type InstanceConfig } from "./config.js";
 import { COMMANDS } from "./setup.js";
@@ -105,7 +105,22 @@ export async function doctor(dataDir: string, out: (s: string) => void = console
     const b = await validateBotToken(c.botToken, c.testing?.discordApiOrigin);
     add(b.ok ? "ok" : "fail", t("d.bot"), b.ok ? t("d.botOk", { name: b.username, id: b.id }) : b.why);
   } else add(local ? "ok" : "warn", t("d.share"), t("d.shareOff", { cmd: COMMANDS.setup }));
-  add(c.signup === "open" && !local ? "warn" : "ok", t("d.signup"), c.signup === "open" ? (local ? t("d.signupOpenLocal") : t("d.signupOpenPub")) : t(`signup.${c.signup}`));
+  // The live policy is in the database (`discordrive signup`, admin panel); config.json is the fallback.
+  let signup = c.signup;
+  try {
+    if (existsSync(dbPath(c))) {
+      const db1 = new DatabaseSync(dbPath(c), { readOnly: true });
+      try {
+        const v = (db1.prepare("SELECT v FROM server_meta WHERE k = 'signup'").get() as { v: string } | undefined)?.v;
+        if (v === "open" || v === "invite" || v === "closed") signup = v;
+      } finally {
+        db1.close();
+      }
+    }
+  } catch {
+    /* older database: config.json */
+  }
+  add(signup === "open" && !local ? "warn" : "ok", t("d.signup"), signup === "open" ? (local ? t("d.signupOpenLocal") : t("d.signupOpenPub")) : t(`signup.${signup}`));
   add("ok", t("d.lang"), c.language);
   if (c.testing) add("warn", t("d.testing"), t("d.testingOn"));
   const ok = !checks.some((x) => x.level === "fail");
@@ -113,11 +128,15 @@ export async function doctor(dataDir: string, out: (s: string) => void = console
   return { checks, ok };
 }
 
+/** A new invite code made by the operator (also written to the administrative log). */
 export function invite(dataDir: string, ttlDays = 7, note = ""): { code: string; expiresAt: number } {
   const c = loadConfig(dataDir);
   const db = new DatabaseSync(dbPath(c));
+  db.exec("PRAGMA busy_timeout = 5000");
   try {
-    return new InviteStore(db).create(ttlDays * 24 * 3600_000, note);
+    const r = new InviteStore(db).create(ttlDays * 24 * 3600_000, note, OPERATOR);
+    new AdminStore(db).log(OPERATOR, "invite.create", r.id, { note, days: ttlDays });
+    return r;
   } finally {
     db.close();
   }
