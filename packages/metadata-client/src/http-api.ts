@@ -296,6 +296,22 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     await this.call("DELETE", `/v1/shares/${shareId}`);
   }
 
+  /**
+   * Instance administration with a fresh signature of this device over the action (delete an
+   * account, change the admin flag, revoke another account's device): a stolen session token
+   * alone cannot do these.
+   */
+  async adminSigned<T>(method: string, path: string, action: string, target: string, body: Record<string, unknown> = {}): Promise<T> {
+    const c = await this.challenge();
+    return (
+      await this.call<T>(method, path, {
+        ...body,
+        challengeId: c.challengeId,
+        signature: await this.s.key.sign(authMessage.adminAction(c, this.s.accountId, this.s.deviceId, action, target)),
+      })
+    ).body;
+  }
+
   /** Revoke = delete its public key and sessions (signed by this device). */
   async revokeDevice(deviceId: string): Promise<void> {
     const c = await this.challenge();
@@ -311,7 +327,7 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
    * backoff until `close()`. `onHead` is also called once after every
    * (re)connect with -1, so the caller pulls whatever it missed.
    */
-  subscribe(onHead: (seq: number) => void, opts: { maxBackoffMs?: number } = {}): { close(): void; readonly connected: boolean } {
+  subscribe(onHead: (seq: number) => void, opts: { maxBackoffMs?: number; onAuthLost?: (code: string) => void } = {}): { close(): void; readonly connected: boolean } {
     let closed = false;
     let ws: WebSocket | null = null;
     let backoff = 500;
@@ -342,7 +358,13 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
           connected = false;
           if (!closed) setTimeout(open, (backoff = Math.min(backoff * 2, opts.maxBackoffMs ?? 30_000)));
         };
-      } catch {
+      } catch (e) {
+        // The account was blocked or deleted, or this device revoked: stop, tell the app.
+        if (e instanceof ServerError && (e.code === "account_blocked" || e.code === "bad_signature")) {
+          closed = true;
+          opts.onAuthLost?.(e.code);
+          return;
+        }
         if (!closed) setTimeout(open, (backoff = Math.min(backoff * 2, opts.maxBackoffMs ?? 30_000)));
       }
     };

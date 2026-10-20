@@ -223,6 +223,12 @@ export class SnapshotsExtension implements ServerExtension {
     return this.db.prepare("SELECT webhook_id, message_id, to_seq FROM s_snapshots WHERE account_id = ?").get(accountId) as never;
   }
 
+  /** A deleted account: no more segments for it, and its row leaves snapshots.json. */
+  forget(accountId: string): void {
+    this.pending.delete(accountId);
+    this.exportLocations();
+  }
+
   location(accountId: string): PointerLocation | null {
     const r = this.row(accountId);
     return r ? { webhookId: r.webhook_id, messageId: r.message_id } : null;

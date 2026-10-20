@@ -25,6 +25,9 @@
 //   POST   /v1/channels/<id>/recover  bot only: read a removed channel's blobs, move them to active ones
 //   GET    /v1/channels/unavailable   uploads with a blob on a webhook no longer in the instance
 //   GET    /v1/usage                  bytes of the account on Discord (blobs + snapshot objects)
+// Deleted accounts (admin panel or `discordrive accounts delete`, table account_deletions): their
+// pieces (blobs and snapshot objects) are deleted from Discord in the background, with progress,
+// resumed after a restart or a Discord outage (deleteAccounts()).
 // (channels.ts has the rules and the job runner; a moved blob answers for its old attachment ID.)
 //
 // Memory (lesson of fix/upload-cancel-and-oom): a blob is read into one buffer of its
@@ -133,6 +136,7 @@ export class BlobsExtension implements ServerExtension {
   private store_: ChannelStore | null = null;
   private mover_: ChannelMover | null = null;
   private moving: Promise<number> | null = null;
+  private deleting: Promise<number> | null = null;
   readonly stats = { blobsStored: 0, blobsReused: 0, blobsDeleted: 0, reaped: 0, purged: 0, healthChecks: 0 };
 
   constructor(readonly o: BlobsExtensionOptions) {
@@ -155,6 +159,7 @@ export class BlobsExtension implements ServerExtension {
         void this.tick().catch((e) => this.o.log?.(`background: ${(e as Error).message}`));
         // Channel moves run beside the cleanup (they can take hours; the cleanup must not wait).
         this.kickMoves();
+        this.kickDeletions();
       }, this.o.tickMs ?? 30_000);
       this.timer.unref?.();
     }
@@ -208,6 +213,115 @@ export class BlobsExtension implements ServerExtension {
 
   private kickMoves(): void {
     void this.moves().catch((e) => this.o.log?.(`channel moves: ${(e as Error).message}`));
+  }
+
+  kickDeletions(): void {
+    void this.deleteAccounts().catch((e) => this.o.log?.(`account deletion: ${(e as Error).message}`));
+  }
+
+  /** Run the queued account deletions (one pass); resolves with the number finished. */
+  deleteAccounts(): Promise<number> {
+    if (!this.deleting) this.deleting = this.deletionPass().finally(() => (this.deleting = null));
+    return this.deleting;
+  }
+
+  private async deletionPass(): Promise<number> {
+    const due = this.db.prepare("SELECT account_id FROM account_deletions WHERE state IN ('pending', 'running') ORDER BY requested_at").all() as { account_id: string }[];
+    let finished = 0;
+    for (const { account_id: acct } of due) {
+      const set = (state: string, error: string | null = null) =>
+        this.db.prepare("UPDATE account_deletions SET state = ?, error = ?, updated_at = ?, finished_at = CASE WHEN ? = 'done' THEN ? ELSE finished_at END WHERE account_id = ?").run(state, error, this.now, state, this.now, acct);
+      const step = () => this.db.prepare("UPDATE account_deletions SET done = done + 1, updated_at = ? WHERE account_id = ?").run(this.now, acct);
+      set("running");
+      try {
+        // Tombstones first: a blob still being posted for it is deleted again when it lands (putBlob re-check).
+        this.db.prepare("UPDATE s_uploads SET state = 'reaped' WHERE account_id = ?").run(acct);
+        for (const b of this.db.prepare("SELECT * FROM s_blobs WHERE account_id = ? AND deleted_at IS NULL").all(acct) as unknown as BlobRow[]) {
+          const hook = this.o.hooks.hook(b.webhook_id);
+          if (hook) {
+            try {
+              await this.o.sender.delete(hook, b.message_id);
+            } catch (e) {
+              if (e instanceof DiscordUnavailableError) throw e;
+              // Any other failure (webhook dead, no permission): the piece cannot be reached; go on.
+            }
+          }
+          this.db.prepare("UPDATE s_blobs SET deleted_at = ? WHERE account_id = ? AND upload_id = ? AND idx = ?").run(this.now, acct, b.upload_id, b.idx);
+          this.links.delete(b.attachment_id);
+          this.stats.blobsDeleted++;
+          step();
+        }
+        // Snapshot chain: written by the server, on the instance's channels (pointer + segments).
+        const snaps = this.o.snapshots?.() ?? null;
+        const dropChain = async () => {
+          const objs = this.db.prepare("SELECT message_id, webhook_id FROM s_snap_objs WHERE account_id = ?").all(acct) as { message_id: string; webhook_id: string }[];
+          const ptr = this.db.prepare("SELECT webhook_id, message_id FROM s_snapshots WHERE account_id = ?").get(acct) as { webhook_id: string; message_id: string } | undefined;
+          if (ptr && !objs.some((o) => o.message_id === ptr.message_id)) objs.push(ptr);
+          for (const o of objs) {
+            const hook = this.o.hooks.hook(o.webhook_id);
+            if (hook) {
+              try {
+                await this.o.sender.delete(hook, o.message_id);
+              } catch (e) {
+                if (e instanceof DiscordUnavailableError) throw e;
+              }
+            }
+            this.db.prepare("DELETE FROM s_snap_objs WHERE account_id = ? AND message_id = ?").run(acct, o.message_id);
+            step();
+          }
+          this.db.prepare("DELETE FROM s_snapshots WHERE account_id = ?").run(acct);
+        };
+        if (snaps) await snaps.withLock(dropChain);
+        else if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 's_snapshots'").get()) await dropChain();
+        snaps?.forget(acct);
+        // The rest of what the instance kept for it: uploads, aliases, own channels and their jobs.
+        for (const sql of [
+          "DELETE FROM s_blobs WHERE account_id = ?",
+          "DELETE FROM s_uploads WHERE account_id = ?",
+          "DELETE FROM s_blob_alias WHERE account_id = ?",
+          "DELETE FROM s_move_trash WHERE job_id IN (SELECT id FROM s_moves WHERE scope = ?)",
+          "DELETE FROM s_moves WHERE scope = ?",
+          "DELETE FROM inst_hooks WHERE scope = ?",
+          "DELETE FROM inst_hooks_removed WHERE scope = ?",
+        ])
+          this.db.prepare(sql).run(acct);
+        if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 's_diag'").get()) this.db.prepare("DELETE FROM s_diag WHERE account_id = ?").run(acct);
+        this.o.hooks.reload();
+        for (const x of this.srv.extensions) x.accountGone?.(acct);
+        set("done");
+        finished++;
+        this.o.log?.(`account ${acct} deleted from the instance's channels`);
+      } catch (e) {
+        // Discord unavailable (or anything else): stays "running", retried on the next pass.
+        set(e instanceof DiscordUnavailableError ? "running" : "failed", String((e as Error)?.message ?? e).slice(0, 200));
+        if (e instanceof DiscordUnavailableError) break;
+      }
+    }
+    return finished;
+  }
+
+  /** e2ee/plain part of the admin panel's instance screen: the pool and how much each account uses. */
+  adminInfo(): Record<string, unknown> {
+    const rows = this.channelStore.rows(POOL);
+    const per = this.db
+      .prepare(
+        `SELECT b.webhook_id AS w, b.account_id AS a, coalesce(sum(b.size), 0) AS n FROM s_blobs b LEFT JOIN s_uploads u USING (account_id, upload_id)
+         WHERE b.deleted_at IS NULL AND coalesce(u.state, 'open') NOT IN ('aborted', 'reaped', 'purged') GROUP BY b.webhook_id, b.account_id ORDER BY n DESC`,
+      )
+      .all() as { w: string; a: string; n: number }[];
+    return {
+      pool: rows.map((h) => ({
+        id: h.id,
+        channelId: h.channelId,
+        label: h.label,
+        alive: h.alive,
+        retired: h.retired,
+        critical: h.critical,
+        files: h.files,
+        bytes: h.bytes,
+        accounts: per.filter((p) => p.w === h.id).map((p) => ({ accountId: p.a, bytes: Number(p.n) })),
+      })),
+    };
   }
 
   /** Resolves when no blob post in flight may land on `webhookId`. */

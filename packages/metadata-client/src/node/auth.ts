@@ -63,6 +63,43 @@ function sig(b: Record<string, unknown>, k: string): string {
   return b[k] as string;
 }
 
+/**
+ * Tables of accounts, devices and sessions, with the columns added later (in place, so older
+ * databases keep working). Also called by the operator CLI, which may open the database of a
+ * server that never ran this version.
+ */
+export function authTables(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS server_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, rescue_pub TEXT NOT NULL, created_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS devices (
+      id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id),
+      public_key TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, added_by TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS challenges (id TEXT PRIMARY KEY, nonce TEXT NOT NULL, expires_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, device_id TEXT NOT NULL, expires_at INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS sessions_device ON sessions(device_id);
+    CREATE INDEX IF NOT EXISTS sessions_account ON sessions(account_id);
+  `);
+  const add = (table: string, col: string, def: string) => {
+    const cols = (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+    if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+  };
+  // Device display name, sealed with the account key (A): opaque here.
+  add("devices", "name_sealed", "TEXT");
+  // Last sign-in / request of the device (server time; administration only).
+  add("devices", "last_seen_at", "INTEGER");
+  // Instance administration: the admin flag is set only from the server (CLI) or by another admin;
+  // a blocked account cannot sign in, sync, pair or get notifications (its data stays).
+  add("accounts", "admin", "INTEGER NOT NULL DEFAULT 0");
+  add("accounts", "blocked_at", "INTEGER");
+  add("accounts", "blocked_reason", "TEXT");
+  add("accounts", "last_seen_at", "INTEGER");
+}
+
+/** How often a request refreshes the "last seen" time of a device (writes are throttled). */
+const SEEN_EVERY_MS = 60_000;
+
 export class Ed25519Authenticator implements Authenticator {
   readonly instanceId: string;
 
@@ -71,20 +108,7 @@ export class Ed25519Authenticator implements Authenticator {
     private readonly now: () => number,
     private readonly sessionTtlMs = DEFAULT_SESSION_TTL_MS,
   ) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS server_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS accounts (id TEXT PRIMARY KEY, rescue_pub TEXT NOT NULL, created_at INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS devices (
-        id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id),
-        public_key TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, added_by TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS challenges (id TEXT PRIMARY KEY, nonce TEXT NOT NULL, expires_at INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS sessions (
-        token_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, device_id TEXT NOT NULL, expires_at INTEGER NOT NULL);
-      CREATE INDEX IF NOT EXISTS sessions_device ON sessions(device_id);
-    `);
-    // Device display name, sealed with the account key (A): opaque here.
-    const cols = (db.prepare("PRAGMA table_info(devices)").all() as { name: string }[]).map((c) => c.name);
-    if (!cols.includes("name_sealed")) db.exec("ALTER TABLE devices ADD COLUMN name_sealed TEXT");
+    authTables(db);
     const row = db.prepare("SELECT v FROM server_meta WHERE k = 'instance'").get() as { v: string } | undefined;
     this.instanceId = row?.v ?? rid("inst");
     if (!row) db.prepare("INSERT INTO server_meta (k, v) VALUES ('instance', ?)").run(this.instanceId);
@@ -146,6 +170,9 @@ export class Ed25519Authenticator implements Authenticator {
     const d = this.db.prepare("SELECT public_key FROM devices WHERE id = ? AND account_id = ?").get(deviceId, accountId) as { public_key: string } | undefined;
     // Same answer for unknown device and bad signature.
     if (!d || !(await verifySignature(d.public_key, authMessage.login(c, accountId, deviceId), sig(b, "signature")))) throw new AuthError(401, "bad_signature");
+    // Told only to a holder of a valid device signature.
+    if (this.isBlocked(accountId)) throw new AuthError(403, "account_blocked");
+    this.seen(accountId, deviceId, true);
     const token = `dds_${randomBytes(32).toString("base64url")}`;
     const expiresAt = this.now() + this.sessionTtlMs;
     this.db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(this.now());
@@ -177,6 +204,7 @@ export class Ed25519Authenticator implements Authenticator {
     const newPub = pub(b, "devicePublicKey");
     const a = this.db.prepare("SELECT rescue_pub FROM accounts WHERE id = ?").get(accountId) as { rescue_pub: string } | undefined;
     if (!a || !(await verifySignature(a.rescue_pub, authMessage.rescueAddDevice(c, accountId, newPub), sig(b, "signature")))) throw new AuthError(401, "bad_signature");
+    if (this.isBlocked(accountId)) throw new AuthError(403, "account_blocked");
     return { deviceId: this.insertDevice(accountId, newPub, "rescue") };
   }
 
@@ -209,10 +237,40 @@ export class Ed25519Authenticator implements Authenticator {
   verify(authorization: string | undefined): Session | null {
     const m = /^Bearer (dds_[A-Za-z0-9_-]{43})$/.exec(authorization ?? "");
     if (!m) return null;
+    // A blocked (or deleted) account has no valid session, whatever tokens it still holds.
     const r = this.db
-      .prepare("SELECT s.account_id, s.device_id, s.expires_at FROM sessions s JOIN devices d ON d.id = s.device_id WHERE s.token_hash = ?")
+      .prepare(
+        "SELECT s.account_id, s.device_id, s.expires_at FROM sessions s JOIN devices d ON d.id = s.device_id JOIN accounts a ON a.id = s.account_id WHERE s.token_hash = ? AND a.blocked_at IS NULL",
+      )
       .get(sha256(m[1]!)) as { account_id: string; device_id: string; expires_at: number } | undefined;
     if (!r || r.expires_at <= this.now()) return null;
+    this.seen(r.account_id, r.device_id);
     return { accountId: r.account_id, deviceId: r.device_id };
+  }
+
+  isBlocked(accountId: string): boolean {
+    const r = this.db.prepare("SELECT blocked_at FROM accounts WHERE id = ?").get(accountId) as { blocked_at: number | null } | undefined;
+    return !!r && r.blocked_at !== null;
+  }
+
+  private readonly seenAt = new Map<string, number>();
+  /** Remember when the device was last active (at most once a minute per device, unless forced). */
+  private seen(accountId: string, deviceId: string, force = false): void {
+    const t = this.now();
+    if (!force && t - (this.seenAt.get(deviceId) ?? 0) < SEEN_EVERY_MS) return;
+    if (this.seenAt.size > 50_000) this.seenAt.clear();
+    this.seenAt.set(deviceId, t);
+    this.db.prepare("UPDATE devices SET last_seen_at = ? WHERE id = ?").run(t, deviceId);
+    this.db.prepare("UPDATE accounts SET last_seen_at = ? WHERE id = ?").run(t, accountId);
+  }
+
+  /**
+   * A fresh signature of this device over an administrative action (re-authentication for
+   * destructive operations): an open tab with a stolen session token alone is not enough.
+   */
+  async verifyAdminAction(s: Session, action: string, target: string, body: unknown): Promise<void> {
+    const b = obj(body);
+    const c = this.take(str(b, "challengeId"));
+    await this.check(this.devicePub(s), authMessage.adminAction(c, s.accountId, s.deviceId, action, target), sig(b, "signature"));
   }
 }

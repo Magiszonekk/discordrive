@@ -303,15 +303,18 @@ export const en = {
   setup    configuration wizard (run again = change settings)   npm run setup
   start    run the drive in this window (Ctrl+C stops it)        npm start
   doctor   check what is wrong                                   npm run doctor
-  invite   new single-use invite code                            npm run invite
+  invite   new single-use invite code (list, revoke)             npm run invite [-- list | revoke <id>]
+  accounts accounts: list, block, unblock, delete, admin         npm run accounts -- list
+  signup   who can create accounts: invite | open | closed       npm run signup -- invite
   uninstall-autostart   remove the background start              npm run uninstall-autostart
   channels  pool webhooks of an e2ee/plain instance: list, impact, retire, move, remove
   transfer-report <log.jsonl…>  summary of transfer logs (speed, 429, limiter vs network) + CSV
 
-Common: --data-dir DIR (default {dir}), --lang en|pl (or DISCORDRIVE_LANG=pl)
+Common: --data-dir DIR (default {dir}), --lang en|pl (or DISCORDRIVE_LANG=pl); <command> --help = help of the command
 setup without questions: --yes [--answers file.json] [--public-url URL] [--host H] [--port N]
   [--trust-proxy A,B] [--signup invite|open|closed] [--bot-token-file FILE | --no-bot]
   [--replace-bot] [--autostart|--no-autostart] [--start] [--no-invite] [--no-self-test]
+  [--no-first-admin] (the first account created is the instance's admin unless this is given)
   --accept-risk is required with --yes (Discord's Terms of Service, no warranty: see README)
 The bot token is only accepted interactively or from a file (never on the command line).`,
   "cli.badArg": "unknown argument: {a}",
@@ -326,6 +329,80 @@ The bot token is only accepted interactively or from a file (never on the comman
   "cli.running": "The drive is running: open {url}\nStop: Ctrl+C. Problems: npm run doctor",
   "cli.invite": "(single use, valid until {date})",
   "cli.unknown": "Unknown command: {cmd}",
+
+  // accounts, invites, sign-up (operator)
+  "ac.usage": `discordrive accounts [--data-dir D] <command>: accounts of this instance
+  list [--json]                 ID, created, last activity, devices, size, state, invite note, admin
+  block <id> [--reason TEXT]    no sign-in, sync, pairing or notifications; open sessions end now (data stays)
+  unblock <id>
+  delete <id> [--yes]           delete the account's data on this server (asks first; --yes in scripts)
+  admin <id> on|off             admin flag: the Admin screen in the web app
+<id> = the account ID or a unique start of it (from: accounts list).`,
+  "ac.needId": "give the account ID (from: discordrive accounts list)",
+  "ac.needOnOff": "give on or off",
+  "ac.none": "No accounts yet.",
+  "ac.col.id": "ID",
+  "ac.col.created": "CREATED",
+  "ac.col.seen": "LAST ACTIVE",
+  "ac.col.devices": "DEVICES",
+  "ac.col.size": "SIZE",
+  "ac.col.state": "STATE",
+  "ac.col.invite": "INVITE NOTE",
+  "ac.col.admin": "ADMIN",
+  "ac.onDiscord": "on Discord",
+  "ac.active": "active",
+  "ac.blocked": "blocked",
+  "ac.noNote": "(no note)",
+  "ac.yes": "yes",
+  "ac.no": "no",
+  "ac.listNote": "Size = what the server keeps for the account (operation log, webhook vault, share links); in e2ee/plain also its pieces on the instance's Discord channels. Mode: {mode}.",
+  "ac.deleting": "deleting {id} from Discord: {done}/{total} ({state}){err}",
+  "ac.blockedOk": "Blocked: {id}. Its open sessions were ended.",
+  "ac.unblockedOk": "Unblocked: {id}.",
+  "ac.adminOn": "{id} is now an admin (web app → Admin).",
+  "ac.adminOff": "{id} is no longer an admin.",
+  "ac.noAdminsLeft": "No admin accounts left: grant it again with: discordrive accounts admin <id> on",
+  "ac.delWarnMo": "Delete account {id} from this server: operation log, devices ({devices}), webhook vault, sessions, share links ({size}).\nThe files are on the user's own Discord channels and are NOT deleted: the user can restore the account from their rescue kit on another instance.",
+  "ac.delWarnPool": "Delete account {id}: its data on this server ({size}, {devices} devices) AND its pieces on the instance's Discord channels ({pool}).\nThis cannot be undone: the files are gone for good, the rescue kit will not bring them back. The pieces are deleted in the background by the running server.",
+  "ac.delQ": "Delete account {id}?",
+  "ac.delNeedYes": "Not deleted: confirm with --yes (no terminal to ask on).",
+  "ac.delCancelled": "Not deleted.",
+  "ac.deletedOk": "Deleted: {id}.",
+  "ac.deletedQueued": "Deleted from the server: {id}. {total} pieces on Discord are being deleted in the background (progress: discordrive accounts list).",
+  "ac.e.noSuch": "no such account: {ref}",
+  "ac.e.ambiguous": "{ref} matches more than one account: give more of the ID",
+  "ac.e.ref": "not an account ID: {ref}",
+  "ac.e.lastAdmin": "this is the last admin",
+  "inv.usage": `discordrive invite [--data-dir D] [--days N] [--note TEXT]   new single-use invite code
+discordrive invite list [--json]                               codes: active / used / expired / revoked, note, who used it
+discordrive invite revoke <code|id>                            revoke an unused code (code or the start of its ID from the list)`,
+  "inv.badDays": "--days: a number of days from 1 to 365",
+  "inv.policyNote": "Note: sign-up is now {policy}, so the code is not needed (discordrive signup invite).",
+  "inv.none": "No invite codes.",
+  "inv.col.id": "ID",
+  "inv.col.state": "STATE",
+  "inv.col.created": "CREATED",
+  "inv.col.expires": "EXPIRES",
+  "inv.col.note": "NOTE",
+  "inv.col.usedBy": "USED BY",
+  "inv.st.active": "active",
+  "inv.st.used": "used",
+  "inv.st.expired": "expired",
+  "inv.st.revoked": "revoked",
+  "inv.needRef": "give the code or its ID (from: discordrive invite list)",
+  "inv.revokedOk": "Revoked: {id}.",
+  "inv.e.noSuch": "no such invite code: {ref}",
+  "inv.e.ambiguous": "{ref} matches more than one code: give more of the ID",
+  "inv.e.ref": "not a code or an ID: {ref}",
+  "inv.e.used": "this code was already used (it cannot be revoked; block the account instead)",
+  "su.usage": "discordrive signup invite|open|closed   who can create accounts (applies at once, no restart)",
+  "su.now": "Sign-up now: {policy}.",
+  "su.set": "Sign-up: {policy}. Applies at once.",
+  "cli.unknownFlag": "unknown option {flag} for `{cmd}`",
+  "cli.needsValue": "{flag} needs a value",
+  "cli.noArgs": "`{cmd}` takes no argument: {a}",
+  "s.firstAdminQ": "Make the first account created on this instance its admin (web app → Admin: accounts, invite codes)?",
+  "s.firstAdminOk": "The first account created will be the admin.",
 
   // channels (operator: pool webhooks)
   "ch.usage": `discordrive channels [--data-dir D] <command>: the instance pool's webhooks (e2ee/plain)
@@ -694,15 +771,18 @@ export const pl: Record<CliKey, string> = {
   setup    kreator konfiguracji (ponowne uruchomienie = zmiana ustawień)   npm run setup
   start    uruchom dysk w tym oknie (Ctrl+C zatrzymuje)                     npm start
   doctor   sprawdź, co nie działa                                           npm run doctor
-  invite   nowy jednorazowy kod zaproszenia                                 npm run invite
+  invite   nowy jednorazowy kod zaproszenia (list, revoke)                  npm run invite [-- list | revoke <id>]
+  accounts konta: list, block, unblock, delete, admin                       npm run accounts -- list
+  signup   kto może zakładać konta: invite | open | closed                  npm run signup -- invite
   uninstall-autostart   usuń start w tle                                    npm run uninstall-autostart
   channels  webhooki puli instancji e2ee/plain: list, impact, retire, move, remove
   transfer-report <log.jsonl…>  podsumowanie logów transferów (prędkość, 429, limiter vs sieć) + CSV
 
-Wspólne: --data-dir DIR (domyślnie {dir}), --lang en|pl (albo DISCORDRIVE_LANG=pl)
+Wspólne: --data-dir DIR (domyślnie {dir}), --lang en|pl (albo DISCORDRIVE_LANG=pl); <polecenie> --help = pomoc polecenia
 setup bez pytań: --yes [--answers plik.json] [--public-url URL] [--host H] [--port N]
   [--trust-proxy A,B] [--signup invite|open|closed] [--bot-token-file PLIK | --no-bot]
   [--replace-bot] [--autostart|--no-autostart] [--start] [--no-invite] [--no-self-test]
+  [--no-first-admin] (pierwsze założone konto zostaje adminem instancji, chyba że to podasz)
   z --yes wymagane --accept-risk (regulamin Discorda, brak gwarancji: zob. README)
 Token bota podaje się tylko interaktywnie albo plikiem (nigdy w linii poleceń).`,
   "cli.badArg": "nieznany argument: {a}",
@@ -717,6 +797,80 @@ Token bota podaje się tylko interaktywnie albo plikiem (nigdy w linii poleceń)
   "cli.running": "Dysk działa: otwórz {url}\nZatrzymanie: Ctrl+C. Problemy: npm run doctor",
   "cli.invite": "(jednorazowy, ważny do {date})",
   "cli.unknown": "Nieznane polecenie: {cmd}",
+
+  // konta, zaproszenia, rejestracja (operator)
+  "ac.usage": `discordrive accounts [--data-dir K] <polecenie>: konta tej instancji
+  list [--json]                 ID, utworzone, ostatnia aktywność, urządzenia, rozmiar, stan, notatka zaproszenia, admin
+  block <id> [--reason TEKST]   bez logowania, synchronizacji, parowania i powiadomień; otwarte sesje kończą się od razu (dane zostają)
+  unblock <id>
+  delete <id> [--yes]           usuń dane konta z tego serwera (najpierw pyta; --yes w skryptach)
+  admin <id> on|off             flaga admina: ekran Admin w aplikacji
+<id> = ID konta albo jego jednoznaczny początek (z: accounts list).`,
+  "ac.needId": "podaj ID konta (z: discordrive accounts list)",
+  "ac.needOnOff": "podaj on albo off",
+  "ac.none": "Nie ma jeszcze kont.",
+  "ac.col.id": "ID",
+  "ac.col.created": "UTWORZONE",
+  "ac.col.seen": "OSTATNIO",
+  "ac.col.devices": "URZĄDZENIA",
+  "ac.col.size": "ROZMIAR",
+  "ac.col.state": "STAN",
+  "ac.col.invite": "NOTATKA ZAPROSZENIA",
+  "ac.col.admin": "ADMIN",
+  "ac.onDiscord": "na Discordzie",
+  "ac.active": "aktywne",
+  "ac.blocked": "zablokowane",
+  "ac.noNote": "(bez notatki)",
+  "ac.yes": "tak",
+  "ac.no": "nie",
+  "ac.listNote": "Rozmiar = to, co serwer trzyma dla konta (log operacji, sejf webhooków, linki udostępniania); w e2ee/plain także jego fragmenty na kanałach Discorda instancji. Tryb: {mode}.",
+  "ac.deleting": "usuwanie {id} z Discorda: {done}/{total} ({state}){err}",
+  "ac.blockedOk": "Zablokowane: {id}. Jego otwarte sesje zostały zakończone.",
+  "ac.unblockedOk": "Odblokowane: {id}.",
+  "ac.adminOn": "{id} jest teraz adminem (aplikacja → Admin).",
+  "ac.adminOff": "{id} nie jest już adminem.",
+  "ac.noAdminsLeft": "Nie ma już kont z flagą admina: nadasz ją ponownie przez: discordrive accounts admin <id> on",
+  "ac.delWarnMo": "Usunąć konto {id} z tego serwera: log operacji, urządzenia ({devices}), sejf webhooków, sesje, linki udostępniania ({size}).\nPliki są na kanałach Discorda użytkownika i NIE zostaną usunięte: użytkownik może odtworzyć konto z zestawu ratunkowego na innej instancji.",
+  "ac.delWarnPool": "Usunąć konto {id}: jego dane na tym serwerze ({size}, urządzenia: {devices}) ORAZ jego fragmenty na kanałach Discorda instancji ({pool}).\nTego nie da się cofnąć: pliki znikną na zawsze, zestaw ratunkowy ich nie przywróci. Fragmenty usuwa w tle działający serwer.",
+  "ac.delQ": "Usunąć konto {id}?",
+  "ac.delNeedYes": "Nie usunięto: potwierdź flagą --yes (brak terminala, żeby zapytać).",
+  "ac.delCancelled": "Nie usunięto.",
+  "ac.deletedOk": "Usunięte: {id}.",
+  "ac.deletedQueued": "Usunięte z serwera: {id}. {total} fragmentów na Discordzie jest usuwanych w tle (postęp: discordrive accounts list).",
+  "ac.e.noSuch": "nie ma takiego konta: {ref}",
+  "ac.e.ambiguous": "{ref} pasuje do więcej niż jednego konta: podaj dłuższy początek ID",
+  "ac.e.ref": "to nie jest ID konta: {ref}",
+  "ac.e.lastAdmin": "to ostatni admin",
+  "inv.usage": `discordrive invite [--data-dir K] [--days N] [--note TEKST]   nowy jednorazowy kod zaproszenia
+discordrive invite list [--json]                                kody: aktywne / użyte / wygasłe / cofnięte, notatka, kto użył
+discordrive invite revoke <kod|id>                              cofnij nieużyty kod (kod albo początek jego ID z listy)`,
+  "inv.badDays": "--days: liczba dni od 1 do 365",
+  "inv.policyNote": "Uwaga: rejestracja jest teraz {policy}, więc kod nie jest potrzebny (discordrive signup invite).",
+  "inv.none": "Brak kodów zaproszeń.",
+  "inv.col.id": "ID",
+  "inv.col.state": "STAN",
+  "inv.col.created": "UTWORZONY",
+  "inv.col.expires": "WAŻNY DO",
+  "inv.col.note": "NOTATKA",
+  "inv.col.usedBy": "UŻYŁ",
+  "inv.st.active": "aktywny",
+  "inv.st.used": "użyty",
+  "inv.st.expired": "wygasły",
+  "inv.st.revoked": "cofnięty",
+  "inv.needRef": "podaj kod albo jego ID (z: discordrive invite list)",
+  "inv.revokedOk": "Cofnięty: {id}.",
+  "inv.e.noSuch": "nie ma takiego kodu: {ref}",
+  "inv.e.ambiguous": "{ref} pasuje do więcej niż jednego kodu: podaj dłuższy początek ID",
+  "inv.e.ref": "to nie jest kod ani ID: {ref}",
+  "inv.e.used": "ten kod został już użyty (nie da się go cofnąć; zablokuj konto)",
+  "su.usage": "discordrive signup invite|open|closed   kto może zakładać konta (działa od razu, bez restartu)",
+  "su.now": "Rejestracja teraz: {policy}.",
+  "su.set": "Rejestracja: {policy}. Działa od razu.",
+  "cli.unknownFlag": "nieznana opcja {flag} dla `{cmd}`",
+  "cli.needsValue": "{flag} wymaga wartości",
+  "cli.noArgs": "`{cmd}` nie przyjmuje argumentu: {a}",
+  "s.firstAdminQ": "Czy pierwsze konto założone na tej instancji ma zostać jej adminem (aplikacja → Admin: konta, kody zaproszeń)?",
+  "s.firstAdminOk": "Pierwsze założone konto zostanie adminem.",
 
   "ch.usage": `discordrive channels [--data-dir D] <polecenie>: webhooki puli instancji (e2ee/plain)
   list                     webhooki z liczbą plików, bajtami, wycofane/krytyczne; usunięte; ostatnie przeniesienie

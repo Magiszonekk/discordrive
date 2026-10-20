@@ -27,6 +27,7 @@ function frame(opcode: number, payload: Buffer): Buffer {
 interface Client {
   socket: Duplex;
   accountId: string;
+  deviceId: string;
   ping: ReturnType<typeof setInterval>;
 }
 
@@ -73,6 +74,7 @@ export class NotifyHub {
     const c: Client = {
       socket,
       accountId: t.accountId,
+      deviceId: t.deviceId,
       ping: setInterval(() => socket.writable && socket.write(frame(0x9, Buffer.alloc(0))), PING_MS),
     };
     let set = this.clients.get(t.accountId);
@@ -109,6 +111,31 @@ export class NotifyHub {
   publish(accountId: string, seq: number): void {
     const msg = frame(0x1, Buffer.from(JSON.stringify({ type: "head", seq })));
     for (const c of this.clients.get(accountId) ?? []) if (c.socket.writable) c.socket.write(msg);
+  }
+
+  /** Accounts with at least one open socket. */
+  openAccounts(): string[] {
+    return [...this.clients].filter(([, set]) => set.size > 0).map(([a]) => a);
+  }
+
+  /** Close the sockets of an account (blocked, deleted), or of one of its devices (revoked), and drop its tickets. */
+  closeAccount(accountId: string, deviceId?: string): number {
+    for (const [k, v] of this.tickets) if (v.accountId === accountId && (!deviceId || v.deviceId === deviceId)) this.tickets.delete(k);
+    let n = 0;
+    for (const c of [...(this.clients.get(accountId) ?? [])]) {
+      if (deviceId && c.deviceId !== deviceId) continue;
+      clearInterval(c.ping);
+      this.clients.get(accountId)!.delete(c);
+      if (c.socket.writable) c.socket.end(frame(0x8, Buffer.from([0x0f, 0xa0]))); // 4000: session ended
+      setTimeout(() => c.socket.destroy(), 1000).unref?.();
+      n++;
+    }
+    return n;
+  }
+
+  /** Devices with an open socket (to notice revoked ones). */
+  openDevices(accountId: string): string[] {
+    return [...(this.clients.get(accountId) ?? [])].map((c) => c.deviceId);
   }
 
   closeAll(): void {

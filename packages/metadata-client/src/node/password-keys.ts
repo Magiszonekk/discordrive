@@ -85,6 +85,8 @@ export class PasswordKeyStore {
       throw new AuthError(401, "bad_password");
     }
     this.db.prepare("DELETE FROM password_fails WHERE account_id = ?").run(r.account_id);
+    const bl = this.db.prepare("SELECT blocked_at FROM accounts WHERE id = ?").get(r.account_id) as { blocked_at: number | null } | undefined;
+    if (bl && bl.blocked_at !== null) throw new AuthError(403, "account_blocked");
     return { accountId: r.account_id, sealedKey: r.sealed_key };
   }
 

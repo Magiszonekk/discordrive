@@ -24,3 +24,6 @@ var/
 
 # web-mo: colour-mode script of the Cobalt look (plain JS, not a build output)
 !apps/web-mo/cobalt/theme.js
+
+# Build lock of `discordrive start` / setup (one build of a mode at a time)
+apps/web-mo/.build-*.lock/

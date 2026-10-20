@@ -79,7 +79,28 @@ discordrive setup  [--data-dir DIR] [--lang en|pl]   # wizard; again = edit     
 discordrive start  [--data-dir DIR]                  # server in this window (alias: serve) (npm start)
 discordrive doctor [--data-dir DIR]                  # (npm run doctor) Node, write access, config, permissions, port, bind, unit, local and public health, bot token
 discordrive invite [--days N] [--note TXT]           # new single-use invite code (npm run invite)
+discordrive invite list [--json] | revoke <code|id>  # codes: active / used / expired / revoked, note, who used it
+discordrive accounts list [--json]                   # ID, created, last active, devices, size, state, invite note, admin
+discordrive accounts block <id> [--reason T] | unblock <id>
+discordrive accounts delete <id> [--yes]             # asks first; e2ee/plain: the pieces on Discord go too (background)
+discordrive accounts admin <id> on|off               # the Admin screen in the web app
+discordrive signup invite|open|closed                # sign-up policy, applies at once (no restart)
 ```
+
+Every command: `--help` / `-h` prints its help and does nothing else; an option it does not know
+is an error (exit 64, nothing done). `<id>` = an account ID or a unique start of it.
+The account/invite/sign-up commands work on `ddn.db` directly, also while the server runs: it
+notices blocks and deletions within about two seconds and closes the account's connections. Every
+change goes to the administrative log as `operator` (also shown in the web app's Admin screen).
+
+**Admin screen.** An account with the admin flag sees **Admin** in the sidebar: accounts (search,
+details with devices, block / unblock, delete, admin flag, revoke a device), invite codes (create
+with a validity and a note; the code is shown once), the instance (sign-up policy, version,
+`doctor` checks, in e2ee/plain the pool with usage per account) and the administrative log.
+`setup` asks whether the first account created on the instance becomes its admin (default yes;
+`--no-first-admin` in `--yes` mode). Deleting an account or changing the admin flag in the panel
+needs a confirmation and a fresh signature of the admin's device. What admins can and cannot see:
+[threat model §2.11](../../docs/threat-model.md).
 
 `--lang en|pl` (or `DISCORDRIVE_LANG=pl`) works with every command and beats the saved language.
 Through npm: `npm run setup -- --lang pl`.

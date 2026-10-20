@@ -15,6 +15,7 @@ import { applyStatic, fmtDate, fmtDateTime, fmtNum, fmtSize, getLang, isLang, se
 import { connect } from "./rpc.js";
 import { createPreview, type PreviewRow } from "./preview.js";
 import { createChannelsUi, storedShowUnavailable } from "./channels-ui.js";
+import { createAdminUi } from "./admin-ui.js";
 import { SpeedMeter, fmtDuration } from "./speed.js";
 import type { UploadStages } from "@ddv4/metadata-client";
 
@@ -44,6 +45,7 @@ function onCoreEvent(e: CoreEvent) {
   else if (e.type === "net") paintNet(e.state);
   else if (e.type === "net-baseline") storeNet({ baseline: e.data });
   else if (e.type === "net-tune") storeNet({ tune: e.data });
+  else if (e.type === "auth-lost") void render();
 }
 export const core = connect(worker, onCoreEvent);
 (window as unknown as { ddnCore: typeof core }).ddnCore = core;
@@ -113,7 +115,7 @@ const typeOf = (name: string) => EXT.find(([re]) => re.test(name)) ?? [null, "fi
 const VIDEO = EXT[0]![0];
 
 // ── messages and actions ────────────────────────────────────────────
-const KNOWN_ERRORS = ["channel_critical", "need_other_channel", "file_unavailable", "main_tab_only", "move_running", "bad_password", "login_taken", "bad_login", "password_too_short", "invalid_name", "invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone", "instance_busy", "discord_blocked", "webhook_in_use", "too_many_channels"];
+const KNOWN_ERRORS = ["channel_critical", "need_other_channel", "file_unavailable", "main_tab_only", "move_running", "bad_password", "login_taken", "bad_login", "password_too_short", "invalid_name", "invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone", "instance_busy", "discord_blocked", "webhook_in_use", "too_many_channels", "account_blocked", "not_admin", "last_admin", "self_target"];
 /** Readable text for an error: no technical codes in the message (the raw one goes to the console). */
 const errText = (e: unknown) => {
   const m = String((e as Error)?.message ?? e);
@@ -143,7 +145,8 @@ async function ed25519Supported(): Promise<boolean> {
 function showOldBrowser() {
   document.body.dataset.oldBrowser = "1";
   const tpl = ui<HTMLTemplateElement>("old-browser-tpl");
-  for (const card of document.querySelectorAll<HTMLElement>("[data-ddn=signed-out] .auth-card")) {
+  // Not on the "signed out by the server" card: it makes no keys.
+  for (const card of document.querySelectorAll<HTMLElement>("[data-ddn=signed-out] .auth-card:not([data-auth=lost])")) {
     if (card.querySelector("[data-ddn=old-browser]")) continue;
     const note = tpl.content.firstElementChild!.cloneNode(true) as HTMLElement;
     applyStatic(note);
@@ -235,6 +238,7 @@ type Route =
   | { name: "trash" }
   | { name: "devices" }
   | { name: "settings" }
+  | { name: "admin" }
   | { name: "welcome" }
   | { name: "create" }
   | { name: "join" }
@@ -248,6 +252,7 @@ function parseRoute(path = location.pathname): Route {
   if (p === "/trash") return { name: "trash" };
   if (p === "/devices") return { name: "devices" };
   if (p === "/settings") return { name: "settings" };
+  if (p === "/admin") return { name: "admin" };
   if (p === "/welcome") return { name: "welcome" };
   if (p === "/join") return { name: "join" };
   if (p === "/restore") return { name: "restore" };
@@ -632,6 +637,21 @@ const channelsUi = createChannelsUi({
   render: () => render(),
   openKit: (forced) => openKit(forced),
 });
+const adminUi = createAdminUi({
+  core,
+  mode: __DDN_MODE__,
+  h,
+  icon,
+  chip,
+  act,
+  toast,
+  confirmDanger: (title, text, yes) => confirmDanger(title, text, yes),
+  copy: (text) => navigator.clipboard.writeText(text),
+  me: () => myAccount,
+});
+/** This account, and whether it has the admin flag (asked from the server; the server checks again on every admin call). */
+let myAccount: string | null = null;
+let isAdmin = false;
 const preview = createPreview({ core, features: () => features, download: (id, name) => download(id, name), error: (e) => toast(errText(e), "err") });
 function previewFile(r: PreviewRow) {
   preview.open(r, searchQ ? { rows: searchRows } : { folder: currentFolder(), sort });
@@ -746,7 +766,14 @@ function render(): Promise<void> {
     again = true;
     return rendering;
   }
-  rendering = renderNow().finally(() => {
+  rendering = renderNow()
+    .catch(async (e: unknown) => {
+      // Blocked or deleted account / revoked device, noticed by a call of this render before the
+      // notification socket said so: show the "signed out by the server" screen instead of an error.
+      if (await core.authProblem(String((e as Error)?.message ?? e))) again = true;
+      else throw e;
+    })
+    .finally(() => {
     rendering = null;
     if (again) {
       again = false;
@@ -756,12 +783,27 @@ function render(): Promise<void> {
   return rendering;
 }
 
+/** The admin page was painted since it was entered (renders after every sync must not refetch it). */
+let adminShown = false;
 /** False until main() has opened the account: an early render would see "signed out" and redirect. */
 let booted = false;
 
 async function renderNow() {
   if (shareMode || !booted) return;
   const st = await core.status();
+  if (st.authLost) {
+    // The server refused this device: blocked account, or deleted / this device revoked.
+    for (const d of all<HTMLDialogElement>("dialog[open]")) d.close();
+    showOnly("signed-out");
+    all<HTMLElement>("[data-auth]").forEach((el) => (el.hidden = el.dataset.auth !== "lost"));
+    const blocked = st.authLost === "blocked";
+    ui("lost-h").textContent = t(blocked ? "lost.blocked.h" : "lost.gone.h");
+    $("auth-lost-text").textContent = t(blocked ? "lost.blocked.t" : "lost.gone.t");
+    ui("lost-hint").textContent = t(blocked ? "lost.blocked.hint" : "lost.gone.hint");
+    $("auth-lost-retry").hidden = !blocked;
+    document.title = `${t(blocked ? "lost.blocked.h" : "lost.gone.h")} · ${t("app.title")}`;
+    return;
+  }
   if (!st.signedIn) {
     showOnly("signed-out");
     if (!SIGNED_OUT_ROUTES.has(route.name) && !(route.name === "files" && route.folder === "root")) return navigate("/", true);
@@ -811,6 +853,12 @@ async function renderNow() {
   placeHooks("settings");
   ui("hooks-block").hidden = false;
   renderShellStatus(st);
+  if (myAccount !== st.accountId) {
+    myAccount = st.accountId;
+    isAdmin = (await core.accountInfo()).admin;
+  }
+  $("nav-admin").hidden = !isAdmin;
+  if (route.name === "admin" && !isAdmin) return navigate("/", true);
   const page = route.name;
   const navKey = page === "files" && route.name === "files" && route.folder === "recovered" ? "recovered" : page;
   all<HTMLElement>("[data-page]").forEach((el) => (el.hidden = el.dataset.page !== page));
@@ -820,6 +868,14 @@ async function renderNow() {
   ui("nav-recovered").hidden = (await core.recoveredCount()) === 0;
   if (page === "trash") return renderTrash();
   trashShown = false;
+  if (page === "admin") {
+    if (!adminShown) {
+      adminShown = true;
+      await adminUi.render().catch((e) => toast(errText(e), "err"));
+    }
+    return;
+  }
+  adminShown = false;
   if (page === "devices") {
     if (!devicesLoaded) await renderDevices(st.deviceId);
     return;
@@ -2696,6 +2752,21 @@ async function main() {
   wireDiagnostics();
   wireNet();
   wireSecurity();
+  adminUi.wire();
+  $("auth-lost-retry").onclick = () =>
+    void act($("auth-lost-retry"), async () => {
+      if (!(await core.retryAuth())) toast(t("lost.still"), "err");
+      myAccount = null;
+      await render();
+    });
+  $("auth-lost-forget").onclick = () =>
+    void act($("auth-lost-forget"), async () => {
+      if (!(await confirmDanger(t("lost.forget"), t("lost.forget.t"), t("lost.forget.yes")))) return;
+      await core.forgetThisBrowser();
+      myAccount = null;
+      isAdmin = false;
+      navigate("/", true);
+    });
   $("dl-close").onclick = () => closeDownloads();
   $("share-copy").onclick = () => void copy($<HTMLTextAreaElement>("share-link").value, t("shareD.copied"));
   $("share-close").onclick = () => $<HTMLDialogElement>("share-dialog").close();
