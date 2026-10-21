@@ -42,7 +42,8 @@ release's `SHA256SUMS`. Then:
   removed with `--keep-shortcuts`, no desktop or Start menu shortcut is created again, so shortcuts the user
   moved, renamed or pinned to the taskbar stay where they are (the program's path and its AppUserModelID do
   not change). The data folder is not touched. The installer starts the app again (`--updated`). Running the
-  downloaded `.exe` by hand opens the full installer, which re-creates the default shortcuts.
+  downloaded `.exe` by hand opens the full installer, which re-creates the default shortcuts. A copy
+  installed for all users (Program Files) needs administrator rights: Windows asks for them.
   CI (`desktop-release.yml`, job "update in place") installs a build A, moves the desktop shortcut, adds a
   Start menu shortcut, lets A update itself to B and checks the shortcuts, the data and the restart.
   Taskbar pins cannot be made in CI; to check by hand: pin discordrive to the taskbar, then Settings →

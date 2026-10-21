@@ -4,16 +4,20 @@
 // installer and SHA256SUMS), downloads, checks and installs it the way the button does (silent NSIS in
 // update mode in the same folder) and is started again by the installer. Checked: B's files are in place,
 // the app restarted, every shortcut is where the user left it and points at the app, the default desktop
-// shortcut was not created again, the Start menu shortcut is the same file (not re-made), the data stayed.
-// A control run of B's installer without update mode shows the full installer's behaviour (it re-creates
-// the default shortcuts).
-// Taskbar pins cannot be made in CI (Windows offers no API for it); README tells how to check them by hand.
+// shortcut was not created again, the Start menu shortcut is the user's file (a description the user gave
+// it is still there: a re-made shortcut gets the installer's), the data stayed.
+// Control: B's installer run again without update mode (as when the user runs the file by hand) re-makes
+// the default shortcuts; the same marker check sees it, so the check can tell the two apart.
+// File times are reported, not checked: NTFS gives a file re-made under the same name within seconds its
+// old creation time back ("tunnelling"), and the shell updates a shortcut's stored target data when it opens it.
+// Taskbar pins cannot be made in CI (Windows offers no API for it): a pin-like shortcut file in the
+// "User Pinned\TaskBar" folder is reported (informational); README tells how to check real pins by hand.
 //   npx tsx apps/desktop/test/update-in-place.ts <release folder of A> <release folder of B>
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 if (process.platform !== "win32") throw new Error("Windows only");
 const [relA, relB] = process.argv.slice(2);
@@ -44,8 +48,16 @@ async function until<T>(f: () => T | null | undefined | false, ms: number, every
 function install(exe: string, args: string[]) {
   ps(`$p = Start-Process -FilePath ${q(exe)} -ArgumentList ${args.map(q).join(",")} -PassThru -Wait; exit $p.ExitCode`);
 }
-const lnk = (p: string) => (existsSync(p) ? (JSON.parse(ps(`$s=(New-Object -ComObject WScript.Shell).CreateShortcut(${q(p)}); $i=Get-Item -LiteralPath ${q(p)}; @{target=$s.TargetPath; created=[string]$i.CreationTimeUtc.Ticks; written=[string]$i.LastWriteTimeUtc.Ticks} | ConvertTo-Json -Compress`)) as { target: string; created: string; written: string }) : null);
-const makeLnk = (p: string, target: string) => ps(`$s=(New-Object -ComObject WScript.Shell).CreateShortcut(${q(p)}); $s.TargetPath=${q(target)}; $s.Save()`);
+const lnk = (p: string) =>
+  existsSync(p)
+    ? (JSON.parse(ps(`$s=(New-Object -ComObject WScript.Shell).CreateShortcut(${q(p)}); $i=Get-Item -LiteralPath ${q(p)}; @{target=$s.TargetPath; description=$s.Description; created=[string]$i.CreationTimeUtc.Ticks; written=[string]$i.LastWriteTimeUtc.Ticks} | ConvertTo-Json -Compress`)) as { target: string; description: string; created: string; written: string })
+    : null;
+const makeLnk = (p: string, target: string, description: string) => ps(`$s=(New-Object -ComObject WScript.Shell).CreateShortcut(${q(p)}); $s.TargetPath=${q(target)}; $s.Description=${q(description)}; $s.Save()`);
+/** What the user changed in a shortcut (its comment): a shortcut the installer makes has its own. */
+const mark = (p: string, description: string) => ps(`$s=(New-Object -ComObject WScript.Shell).CreateShortcut(${q(p)}); $s.Description=${q(description)}; $s.Save()`);
+/** Now as a .NET tick count (the unit of the file times above). */
+const ticks = () => String((BigInt(Date.now()) + 62135596800000n) * 10000n);
+const at: Record<string, string> = {};
 const appRunning = () => /discordrive\.exe/i.test(execFileSync("tasklist", ["/FI", "IMAGENAME eq discordrive.exe", "/NH"], { encoding: "utf8" }));
 /** Is this build's commit inside the installed app (its build-info.json)? False while the installer writes it. */
 const asarHas = (dir: string, s: string) => {
@@ -63,8 +75,9 @@ const appData = join(process.env.APPDATA!, "discordrive");
 mkdirSync(join(process.env.USERPROFILE!, "Downloads"), { recursive: true });
 const defaultDesktopLnk = join(desktop, "discordrive.lnk");
 const startLnk = join(programs, "discordrive.lnk");
-const movedLnk = join(desktop, "My apps", "discordrive.lnk");
+const movedLnk = join(desktop, "My apps", "Drive.lnk");
 const ownStartLnk = join(programs, "My tools", "discordrive (mine).lnk");
+const pinLnk = join(process.env.APPDATA!, "Microsoft", "Internet Explorer", "Quick Launch", "User Pinned", "TaskBar", "discordrive.lnk");
 
 // ── 1. version A, installed as a user does (the full installer, silently here) ───────────────────────
 step(`install A (${A.build})`);
@@ -80,12 +93,15 @@ r.defaultLinksAfterA = { desktop: !!lnk(defaultDesktopLnk), startMenu: !!lnk(sta
 // ── 2. the user's shortcuts and data ──────────────────────────────────────────────────────────────────
 mkdirSync(join(desktop, "My apps"), { recursive: true });
 renameSync(defaultDesktopLnk, movedLnk);
+mark(movedLnk, "user: moved and renamed");
+mark(startLnk, "user: my comment");
 mkdirSync(join(programs, "My tools"), { recursive: true });
-makeLnk(ownStartLnk, appExe);
+makeLnk(ownStartLnk, appExe, "user: own shortcut");
+mkdirSync(dirname(pinLnk), { recursive: true });
+makeLnk(pinLnk, appExe, "user: pin-like");
 mkdirSync(appData, { recursive: true });
 writeFileSync(join(appData, "keep-me.txt"), "user data");
 const startBefore = lnk(startLnk);
-await sleep(1500); // shortcut times have a coarse resolution: a re-made file must differ
 
 // ── 3. A finds B, downloads, checks and installs it (as "Install and restart") ────────────────────────
 const exeBytes = readFileSync(exeB);
@@ -117,15 +133,21 @@ const report = join(process.env.RUNNER_TEMP ?? process.env.TEMP!, "ddn-update-se
 rmSync(report, { force: true });
 rmSync(join(appData, "last-update.json"), { force: true });
 step("start A: check, download, install B");
+at.aStarted = ticks();
 const app = spawn(appExe, [], { detached: true, stdio: "ignore", env: { ...process.env, DDN_DESKTOP_UPDATES_API: base, DDN_DESKTOP_UPDATE_SELFTEST: report, DDN_DESKTOP_HIDDEN: "1" } });
 app.unref();
 const readReport = () => (existsSync(report) ? (JSON.parse(readFileSync(report, "utf8")) as { stage: string; own: { commit: string }; argv: string[]; error?: string }) : null);
 r.selftestA = await until(() => readReport(), 90_000);
+at.aInstalling = ticks();
+// The Start menu shortcut just before A closes and the installer runs.
+r.startMenuLinkBeforeInstaller = lnk(startLnk);
 step(`A: ${JSON.stringify(r.selftestA)}`);
 r.installedB = !!(await until(() => existsSync(appExe) && asarHas(instDir, B.commit) && !asarHas(instDir, A.commit), 180_000, 2000));
+at.bInstalled = ticks();
 // The installer starts the app again with --updated; it notes the build it is now.
 const last = await until(() => (existsSync(join(appData, "last-update.json")) ? (JSON.parse(readFileSync(join(appData, "last-update.json"), "utf8")) as { commit: string }) : null), 120_000);
 r.restartedAs = last?.commit ?? null;
+at.bStarted = ticks();
 r.restartedReport = readReport();
 await sleep(3000);
 try {
@@ -138,6 +160,7 @@ srv.close();
 const moved = lnk(movedLnk);
 const start = lnk(startLnk);
 const own = lnk(ownStartLnk);
+const pin = lnk(pinLnk);
 const same = (p: string | undefined) => (p ?? "").toLowerCase() === appExe.toLowerCase();
 r.after = {
   movedDesktopLink: moved,
@@ -145,16 +168,18 @@ r.after = {
   startMenuLink: start,
   startMenuLinkBefore: startBefore,
   ownStartMenuLink: own,
+  pinLikeLink: pin,
   dataKept: existsSync(join(appData, "keep-me.txt")) && existsSync(join(appData, "desktop-settings.json")),
 };
+r.at = at;
 const checks = {
   installedA: r.installedA === true,
   aFoundAndInstalledB: (r.selftestA as { stage?: string } | null)?.stage === "installing" && r.installedB === true,
   restartedAsB: r.restartedAs === B.commit,
-  movedDesktopLinkKept: !!moved && same(moved.target),
+  movedDesktopLinkKept: !!moved && same(moved.target) && moved.description === "user: moved and renamed",
   defaultDesktopLinkNotMadeAgain: !lnk(defaultDesktopLnk),
-  startMenuLinkSameFile: !!start && !!startBefore && start.created === startBefore.created && start.written === startBefore.written && same(start.target),
-  ownStartMenuLinkKept: !!own && same(own.target),
+  startMenuLinkIsTheUsers: !!start && same(start.target) && start.description === "user: my comment",
+  ownStartMenuLinkKept: !!own && same(own.target) && own.description === "user: own shortcut",
   dataKept: (r.after as { dataKept: boolean }).dataKept,
 };
 r.checks = checks;
@@ -163,7 +188,15 @@ r.checks = checks;
 step("control: full installer");
 install(exeB, ["/S"]);
 const startCtl = lnk(startLnk);
-r.control = { defaultDesktopLinkMadeAgain: !!lnk(defaultDesktopLnk), startMenuLinkMadeAgain: !!startCtl && !!start && startCtl.created !== start.created };
+r.control = {
+  defaultDesktopLinkMadeAgain: !!lnk(defaultDesktopLnk),
+  startMenuLinkMadeAgain: !!startCtl && startCtl.description !== "user: my comment",
+  startMenuLink: startCtl,
+  movedDesktopLinkStill: !!lnk(movedLnk),
+  pinLikeLinkStill: !!lnk(pinLnk),
+};
+// The control must see what the update avoided, or the checks above would prove nothing.
+(checks as Record<string, boolean>).controlSeesReinstall = (r.control as { defaultDesktopLinkMadeAgain: boolean }).defaultDesktopLinkMadeAgain && (r.control as { startMenuLinkMadeAgain: boolean }).startMenuLinkMadeAgain;
 try {
   execFileSync("taskkill", ["/IM", "discordrive.exe", "/F", "/T"], { stdio: "ignore" });
 } catch {}
