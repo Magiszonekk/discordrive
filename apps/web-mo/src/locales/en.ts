@@ -337,6 +337,8 @@ export const en: Record<string, string> = {
   "diag.auto": "auto ({n})",
   "diag.conc.warn": "{n} at once with {ch} channels: above about {max} (2 per channel) Discord's per-channel limit answers \"slow down\" (429) and uploads get no faster. Add channels instead.",
   "diag.download": "Download logs",
+  "diag.version": "Version: {app}",
+  "diag.version2": "Version: {app} (this page) · {server} (the instance: reload the page to update)",
   "diag.clear": "Clear",
   "diag.on": "Recording",
   "diag.off": "Off",

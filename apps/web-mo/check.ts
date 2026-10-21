@@ -95,6 +95,7 @@ if (remote) {
     signup: "invite",
     rateLimits: false,
     mode: MODE,
+    build: (JSON.parse(readFileSync(join(dist, "build-stamp.json"), "utf8")) as { build: string }).build,
     extensions,
     web: { dir: dist, connectSrc: [...DISCORD_ORIGINS, discordOrigin], config: { discordApiOrigin: discordOrigin, mode: MODE, streamMinBytes: 1024 * 1024 } },
     bot: shareBot,
@@ -497,6 +498,11 @@ try {
       serverLines: events.filter((e) => e.src === "server").length,
       serverPosts: events.filter((e) => e.src === "server" && e.ev === "req" && e.k === "discord").length,
       report: { files: rep.summary.files, n429: rep.summary.rateLimits.n429, stages: Object.keys(rep.summary.stages) },
+      // Version: the first line of the file names the builds, every file_start carries the app's, Settings shows it.
+      header: events.find((e) => e.ev === "log_header") ?? null,
+      startBuilds: [...new Set(events.filter((e) => e.ev === "file_start" && e.src === "web").map((e) => e.build))],
+      reportVersion: rep.text.split("\n")[0],
+      settingsVersion: await p.textContent("[data-ddn=diag-version]"),
     };
     // Clear removes only today's lines, the old ones stay: an old part that
     // another tab keeps open cannot be removed, so Clear must still leave its older lines out of the download.
@@ -1696,6 +1702,7 @@ try {
     transferLog: (() => {
       const l = r.transferLog as Record<string, any>;
       return (
+        (remote || (!!l.header && l.header.build === l.startBuilds[0] && l.startBuilds.length === 1 && /^\d+\.\d+\.\d+\+[0-9a-f]{8}/.test(String(l.header.build)) && l.header.serverBuild === l.header.build && String(l.reportVersion).startsWith(`Version: ${l.header.build}`) && String(l.settingsVersion).includes(String(l.header.build)))) &&
         r.diagOffByDefault === true && /\(\d+\)/.test(String(r.concAuto)) && (r.concSet as { download: number }).download === 6 && !!l && l.bad === 0 && l.noSecrets === true && l.upEnd && l.downEnd && l.ext === "bin" && l.fragsUp === 2 && l.reqsDown >= 2 &&
         (SERVER_SIDE ? l.serverLines > 0 && l.serverPosts >= 3 : l.serverLines === 0) && l.report.files.length >= 2 && /\.jsonl(\.gz)?$/.test(l.file)
       );

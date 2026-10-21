@@ -96,6 +96,8 @@ export interface Report {
     stages: Record<string, Record<string, number>>;
     /** Links fetched ahead of downloads: requests, how the reads got theirs, time a read waited for one. */
     links?: { n: number; p50: number; p90: number; failed: number; n429: number; hit: number; wait: number; miss: number; waitP50: number; waitP90: number; waitSumS: number; slotShare: number };
+    /** Builds that wrote the log (app and instance) and whether app transfers of several builds are mixed. */
+    builds?: { all: string[]; mixed: boolean };
     /** Automatic pieces in flight: every change with its reason, and the last value per direction. */
     tune?: { changes: { t: number; dir: string; from: number; to: number; why: string; an?: number; aMBps?: number; mn?: number; mMBps?: number }[]; last: Record<string, number> };
     /** Window changes, no-network periods, stuck-connection guard, resumes. */
@@ -118,8 +120,12 @@ function spread(into: Map<number, number>, t0: number, size: number, from: numbe
   }
 }
 
-export function buildReport(events: LogEvent[], o: { bucketS?: number; bad?: number } = {}): Report {
+export function buildReport(all: LogEvent[], o: { bucketS?: number; bad?: number } = {}): Report {
   const bucket = (o.bucketS ?? 10) * 1000;
+  // The download header (log_header: which builds wrote the file) is not a transfer event: its time is
+  // when the file was saved. It counts only for the version line.
+  const headers = all.filter((e) => e.ev === "log_header");
+  const events = headers.length ? all.filter((e) => e.ev !== "log_header") : all;
   const lines: string[] = [];
   const say = (s = "") => lines.push(s);
   if (!events.length) {
@@ -128,6 +134,12 @@ export function buildReport(events: LogEvent[], o: { bucketS?: number; bad?: num
   const t0 = events[0]!.t;
   const tEnd = events.at(-1)!.t;
   const srcs = [...new Set(events.map((e) => e.src))].sort();
+  // Which builds wrote the log (file_start / log_header `build`, header `serverBuild`): first line.
+  const builds = [...new Set([...headers, ...events].flatMap((e) => [e.build, e.serverBuild]).filter((b): b is string => typeof b === "string" && !!b))].sort();
+  // Transfers recorded by different app builds (a log kept across an update): speeds are not comparable.
+  const headerBuilds = [...new Set(events.filter((e) => typeof e.build === "string").map((e) => e.build as string))];
+  say(builds.length ? `Version: ${builds.join(", ")}` : "Version: unknown (log from before builds were recorded)");
+  if (headerBuilds.length > 1) say(`WARNING: this file mixes logs of ${headerBuilds.length} app versions (${headerBuilds.join(", ")}): compare speeds per version, not across the file.`);
   say(`Transfer report: ${events.length} events${o.bad ? ` (${o.bad} unreadable lines skipped)` : ""}, ${new Date(t0).toISOString()} .. ${new Date(tEnd).toISOString()} (${r1((tEnd - t0) / 1000)} s), sources: ${srcs.join(", ")}`);
   const modes = [...new Set(events.filter((e) => e.ev === "file_start" && e.mode).map((e) => e.mode))];
   if (modes.length) say(`Mode: ${modes.join(", ")}`);
@@ -382,7 +394,7 @@ export function buildReport(events: LogEvent[], o: { bucketS?: number; bad?: num
     }
   }
 
-  return { text: lines.join("\n") + "\n", timelineCsv: csv.join("\n") + "\n", filesCsv: fileRows.join("\n") + "\n", summary: { events: events.length, files, requests, rateLimits, retries, peakMBps, concurrency, stages, network, links, tune } };
+  return { text: lines.join("\n") + "\n", timelineCsv: csv.join("\n") + "\n", filesCsv: fileRows.join("\n") + "\n", summary: { events: events.length, files, requests, rateLimits, retries, peakMBps, concurrency, stages, network, links, tune, builds: { all: builds, mixed: headerBuilds.length > 1 } } };
 }
 
 const short = (id: string) => (id.length > 8 ? `…${id.slice(-6)}` : id);

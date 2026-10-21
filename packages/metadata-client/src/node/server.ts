@@ -119,6 +119,8 @@ export interface ServerOptions {
   mode?: string;
   /** Default language of the web app for this instance (users can switch). */
   language?: string;
+  /** Build of the code this instance runs (version + source hash + commit; `/v1/health`, Settings, logs). */
+  build?: string;
   /** Browser origins allowed via CORS (exact match). Default: none. */
   corsOrigins?: string[];
   /** Session token lifetime (default 1 h). */
@@ -285,6 +287,7 @@ export class DdnServer {
       ok: true,
       service: "discordrive-next",
       version: SERVER_VERSION,
+      ...(this.opts.build ? { build: this.opts.build } : {}),
       mode: this.opts.mode ?? "metadata-only",
       rulesVersion: RULES_VERSION,
       uptimeS: Math.round((this.now() - this.startedAt) / 1000),

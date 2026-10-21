@@ -63,7 +63,14 @@ Every line:
 ### `file_start` / `file_end` (per file)
 
 `file_start`: `size`, `n` fragments, `chunk` (plaintext fragment size), `conc` fragments in flight
-allowed, `lanes` (upload: channels the store spreads over; added 2026-10-14), `mode` (`metadata-only` / `e2ee` / `plain`), `ext`, `name` (only with names on).
+allowed, `lanes` (upload: channels the store spreads over; added 2026-10-14), `mode` (`metadata-only` / `e2ee` / `plain`), `build` (the app's build, e.g. `0.2.0+a76246c6.gb045e69` = version + hash of the sources + git commit when known; added 2026-10-21), `ext`, `name` (only with names on).
+
+### `log_header` (first line of a downloaded file)
+
+Written once when the browser saves the log (Settings → Diagnostics → Download logs), not while
+transferring: `build` (this page), `mode`, `serverBuild` (the instance, from `/v1/health`, when it
+reports one). `transfer-report` prints every build in its first line and warns when the transfers of
+one file come from more than one app build (a log kept across an update).
 
 `file_end`: `ok`, `size`, `b` bytes done, `dur` (from start), `mbps` (MB/s, 10^6 B/s), `posts`
 (upload: requests incl. retries), `err` (`aborted` for a cancel).

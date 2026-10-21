@@ -396,6 +396,7 @@ describe("instance server: invites, limits, health, web app", () => {
 
     const h = (await (await fetch(`${url}/v1/health`)).json()) as Record<string, unknown>;
     expect(h).toMatchObject({ ok: true, service: "discordrive-next", mode: "metadata-only", signup: "invite", shares: false, language: "en" });
+    expect(h.build).toMatch(/^\d+\.\d+\.\d+\+[0-9a-f]{8}/); // the build of the app it serves (Settings, logs)
     expect(typeof h.uptimeS).toBe("number");
     const page = await fetch(`${url}/s/AAAAAAAAAAAAAAAAAAAAAA`);
     expect(page.status).toBe(200);

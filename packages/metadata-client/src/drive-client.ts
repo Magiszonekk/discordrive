@@ -462,7 +462,7 @@ export class DriveClient {
     const auto = this.tuning("up");
     // Workers: as many as the value may grow to; the window gates how many run (the automatic value moves it).
     const workers = Math.min(nFrags, auto ? Math.max(win.max, this.autoCap("up")) : win.max);
-    log?.emit("file_start", { dir: "up", x: uploadId, size: src.size, n: nFrags, chunk: this.chunkSize, conc, ...(auto ? { auto: true } : {}), lanes: this.blobs.lanes?.() ?? null, win: win.limit, ...(this.net.metered() ? { lean: true } : {}), mode: log.o.mode, ...log.nameFields(nfc) });
+    log?.emit("file_start", { dir: "up", x: uploadId, size: src.size, n: nFrags, chunk: this.chunkSize, conc, ...(auto ? { auto: true } : {}), lanes: this.blobs.lanes?.() ?? null, win: win.limit, ...(this.net.metered() ? { lean: true } : {}), mode: log.o.mode, ...(log.o.build ? { build: log.o.build } : {}), ...log.nameFields(nfc) });
     let sentBytes = 0;
     const endLog = (ok: boolean, e?: unknown) =>
       log?.emit("file_end", { dir: "up", x: uploadId, ok, size: src.size, b: sentBytes, dur: ms(t0), mbps: mbps(sentBytes, ms(t0)), posts: stats.posts, ...(ok ? {} : { err: e instanceof Error && e.name === "AbortError" ? "aborted" : errText(e) }) });
@@ -685,7 +685,7 @@ export class DriveClient {
     const win = this.net.win.down;
     const conc = Math.min(win.max, Math.max(1, v.chunkCount));
     const auto = this.tuning("down");
-    log?.emit("file_start", { dir: "down", x, size: v.sizeBytes, n: v.chunkCount, conc, ...(auto ? { auto: true } : {}), win: win.limit, lanes: this.net.laneCount, ...(this.net.metered() ? { lean: true } : {}), mode: log.o.mode, ...log.nameFields(node.name) });
+    log?.emit("file_start", { dir: "down", x, size: v.sizeBytes, n: v.chunkCount, conc, ...(auto ? { auto: true } : {}), win: win.limit, lanes: this.net.laneCount, ...(this.net.metered() ? { lean: true } : {}), mode: log.o.mode, ...(log.o.build ? { build: log.o.build } : {}), ...log.nameFields(node.name) });
     try {
       const tm = log ? nowMs() : 0;
       const { manifest, key } = await this.loadManifest(v.manifestRef);

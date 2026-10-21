@@ -131,6 +131,27 @@ describe("transfer logs", () => {
     expect(readFileSync(join(dir, "t.files.csv"), "utf8")).toMatch(/,up,/);
   });
 
+  it("version: file_start carries the build; the report names it in its first lines and warns about mixed builds", () => {
+    const sink = new MemoryLogSink();
+    const l = new TransferLog(sink.write, { src: "web", mode: "metadata-only", build: "0.2.0+aaaaaaaa.g1111111" });
+    l.emit("file_start", { dir: "up", x: "u1", size: 1, n: 1, mode: l.o.mode, build: l.o.build });
+    l.emit("file_end", { dir: "up", x: "u1", ok: true, size: 1, b: 1, dur: 1 });
+    const one = buildReport(parseLines(sink.text()).events);
+    expect(one.text.split("\n").slice(0, 2).join("\n")).toMatch(/^Version: 0\.2\.0\+aaaaaaaa\.g1111111$/m);
+    expect(one.text).not.toMatch(/WARNING/);
+    expect(one.summary.builds).toEqual({ all: ["0.2.0+aaaaaaaa.g1111111"], mixed: false });
+    // A header line from the download (app + instance builds) counts for the version only, not as a transfer.
+    const head = JSON.stringify({ v: 1, t: Date.now() + 60_000, src: "web", ev: "log_header", build: "0.2.0+aaaaaaaa.g1111111", serverBuild: "0.2.0+bbbbbbbb.g2222222" }) + "\n";
+    const l2 = new TransferLog(sink.write, { src: "web", build: "0.2.0+cccccccc.g3333333" });
+    l2.emit("file_start", { dir: "down", x: "u1", size: 1, n: 1, build: l2.o.build });
+    const mixed = buildReport(parseLines(head + sink.text()).events);
+    expect(mixed.text.split("\n")[0]).toBe("Version: 0.2.0+aaaaaaaa.g1111111, 0.2.0+bbbbbbbb.g2222222, 0.2.0+cccccccc.g3333333");
+    expect(mixed.text).toMatch(/WARNING: this file mixes logs of 2 app versions/);
+    expect(mixed.summary.events).toBe(3); // the header is not an event of the transfers
+    // Old logs (no build field): said so.
+    expect(buildReport(parseLines('{"v":1,"t":1,"src":"web","ev":"file_start","dir":"up","x":"a"}\n').events).text.split("\n")[0]).toMatch(/^Version: unknown/);
+  });
+
   it("errors are scrubbed: URLs reduced to the host, long tokens cut", () => {
     const s = scrubText("webhook post: fetch failed https://discord.com/api/webhooks/123456789012345678/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcdefghijklmnop?wait=true and https://cdn.discordapp.com/attachments/1/2/x.txt?ex=1&hm=abc");
     expect(s).not.toMatch(/AbCdEf|hm=|ex=|attachments/);

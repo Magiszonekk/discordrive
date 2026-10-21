@@ -2147,6 +2147,8 @@ async function renderDiagnostics() {
   const parts = [t("diag.size", { size: fmt(st.bytes) }), st.where === "memory" ? t("diag.memory") : ""];
   if (st.server) parts.push(st.server.all ? t("diag.serverAll") : st.server.on ? t("diag.serverOn") : t("diag.serverOff"));
   $("diag-info").textContent = parts.filter(Boolean).join(" ");
+  const b = await core.buildInfo().catch(() => null);
+  if (b) $("diag-version").textContent = b.server && b.server !== b.app ? t("diag.version2", { app: b.app, server: b.server }) : t("diag.version", { app: b.app });
 }
 function wireDiagnostics() {
   const box = $<HTMLInputElement>("diag-log");
