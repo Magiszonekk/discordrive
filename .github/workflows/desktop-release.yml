@@ -1,0 +1,132 @@
+name: Desktop app builds (main-build)
+
+# Installers of the desktop app from every change on `main` that touches the app: Windows .exe (NSIS), Linux
+# AppImage + .deb, SHA256SUMS and build-info.json (the commit; the app compares it with its own to offer an
+# update). They replace the assets of ONE pre-release, tag `main-build`. Builds are not code-signed; the app
+# never installs an update by itself (see README). On pull requests the installers are built and kept as
+# workflow artifacts only, nothing is published.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/desktop/**"
+      - "apps/web-mo/**"
+      - "apps/ddn-server/**"
+      - "packages/**"
+      - "package-lock.json"
+      - ".github/workflows/desktop-release.yml"
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - ".github/workflows/desktop-release.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+            target: --win
+          - os: ubuntu-latest
+            target: --linux
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci --no-audit --no-fund
+
+      - name: Build the app
+        run: npm run build -w @ddv4/desktop
+
+      - name: Installers
+        env:
+          DDN_BUILD_ID: "${{ github.ref_name }}+${{ github.sha }}"
+        run: npx tsx apps/desktop/package.ts ${{ matrix.target }}
+
+      - name: Keep the installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ runner.os }}
+          path: |
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.deb
+            apps/desktop/release/SHA256SUMS
+            apps/desktop/release/build-info.json
+          if-no-files-found: error
+
+  publish:
+    name: publish main-build
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Installers of both systems
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: One SHA256SUMS for all files, notes with the changes since the previous build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          rm -f SHA256SUMS
+          sha256sum *.exe *.AppImage *.deb > SHA256SUMS
+          echo "{\"version\":\"$(node -p "require('../apps/desktop/package.json').version")\",\"build\":\"main+${GITHUB_SHA::7}\",\"commit\":\"$GITHUB_SHA\",\"builtAt\":\"$(date -u +%FT%TZ)\"}" > build-info.json
+          prev=$(gh release view main-build --json targetCommitish -q .targetCommitish 2>/dev/null || true)
+          {
+            echo "Automatic build of \`main\` (not signed; see the README on Windows SmartScreen). The app checks this release and offers the new version; it never installs anything by itself."
+            echo
+            echo "commit: $GITHUB_SHA"
+            echo "built: $(date -u +'%Y-%m-%d %H:%M UTC')"
+            echo
+            echo "Changes since the previous build:"
+            if [ -n "$prev" ] && git cat-file -e "$prev" 2>/dev/null; then git log --format='- %s' "$prev..$GITHUB_SHA" | head -50; else git log --format='- %s' -10 "$GITHUB_SHA"; fi
+            echo
+            echo "SHA-256:"
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } > ../notes.md
+
+      - name: Replace the main-build pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Until the repository variable DESKTOP_PUBLISH is "1", the build is left as a DRAFT release
+          # (visible to the maintainers only; apps do not see it) for a check before the first publication.
+          PUBLISH: ${{ vars.DESKTOP_PUBLISH }}
+        run: |
+          gh release delete main-build --yes --cleanup-tag 2>/dev/null || true
+          if [ "$PUBLISH" = "1" ]; then state=--prerelease; else state=--draft; fi
+          gh release create main-build dist/* $state --target "$GITHUB_SHA" --title "discordrive desktop — build of main (${GITHUB_SHA::7})" --notes-file notes.md
