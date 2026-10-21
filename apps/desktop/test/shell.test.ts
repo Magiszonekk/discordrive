@@ -60,7 +60,7 @@ describe("server address", () => {
   it("normalises and refuses unsafe addresses", () => {
     expect(normaliseServerUrl("drive.example.com")).toBe("https://drive.example.com");
     expect(normaliseServerUrl(" https://drive.example.com/some/path?x#y ")).toBe("https://drive.example.com");
-    expect(normaliseServerUrl("http://192.168.1.10:3020")).toBe("http://192.168.1.10:3020");
+    expect(normaliseServerUrl("http://192.168.77.20:3020")).toBe("http://192.168.77.20:3020");
     expect(normaliseServerUrl("http://localhost:3020")).toBe("http://localhost:3020");
     expect(() => normaliseServerUrl("http://drive.example.com")).toThrow(/https/);
     expect(() => normaliseServerUrl("https://user:pw@drive.example.com")).toThrow();
@@ -69,7 +69,7 @@ describe("server address", () => {
     expect(() => normaliseServerUrl("")).toThrow();
   });
   it("private hosts", () => {
-    for (const h of ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.0.5", "localhost", "nas.local", "[::1]"]) expect(isPrivateHost(h), h).toBe(true);
+    for (const h of ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.77.21", "localhost", "nas.local", "[::1]"]) expect(isPrivateHost(h), h).toBe(true);
     for (const h of ["8.8.8.8", "172.32.0.1", "drive.example.com", "192.0.2.1"]) expect(isPrivateHost(h), h).toBe(false);
   });
   it("settings survive a round trip, broken files fall back to defaults", () => {
