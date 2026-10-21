@@ -244,6 +244,46 @@ change is written to `admin_log` (actor = admin account ID or `operator`, action
 What this does not protect against: an admin can block or delete any other account (that is the
 point), and a malicious operator is still the server itself (§2.10, the takeover sections).
 
+### 2.12 The desktop app
+
+The desktop app (`apps/desktop`, Electron) is another client of the same accounts: the same web app in a
+window, with the application core in a background **agent** (a separate Node process). It changes who
+delivers the code and where the keys live; the modes and what the server sees stay as in §3–5.
+
+- **Code**: the window loads only the app's own files from `app://ddn` (packaged with the app, CSP
+  `script-src 'self'`), never from the server. A compromised instance can no longer hand this device
+  modified code (§2.10 does not apply to it); it still sees what the mode lets it see.
+- **Window isolation**: the page runs with Chromium's sandbox, `contextIsolation` and no Node. It cannot
+  navigate away from `app://ddn` (http(s) links open in the system browser), open windows or
+  `<webview>`s, and gets no permissions (camera, notifications from the page, …). Its only ways out:
+  a `MessagePort` to the agent, whose every call is checked against a fixed list of core methods and
+  argument types (`agent/methods.ts`), and a few narrow IPC calls (paths of dropped files, show a
+  downloaded file in its folder, pick a folder, the first-start choice), each checking the sender frame.
+  The AppImage refuses to start without the sandbox (Ubuntu 24.04+ blocks it for AppImages; the .deb
+  installs an AppArmor profile).
+- **Keys**: the account key and the device's Ed25519 key are kept by the agent in `keys.bin` in the app's
+  data folder (owner-only permissions), sealed with the system key store through Electron `safeStorage`:
+  DPAPI on Windows (bound to the user's Windows login), Keychain on macOS, the Secret Service (GNOME
+  Keyring / KWallet) on Linux. When Linux has no key store (Electron reports `basic_text`), the file is
+  **not** encrypted: anyone who can read the user's files or a copy of the disk has the account. Settings
+  → Desktop app says so. In the browser the device key is non-extractable; in the desktop app it is a
+  file the user's own processes can read either way: any program running as the same user can take
+  the keys (a stolen session of the user's OS account = the account). The rescue kit stays the way back.
+- **Data on the computer**: the tree (`index/<account>.db`), upload journals (`resume/`) with the file
+  key of an unfinished upload, transfer logs (no names unless switched on) — all in the app's data
+  folder, owner-only. Downloads are written as `<name>.<tag>.ddnpart` in the downloads folder and renamed
+  only after the whole-file SHA-256 matched.
+- **Built-in instance ("This computer only")**: the same server in metadata-only mode, listening on
+  127.0.0.1 with a random port. Other programs on the computer can reach it. Before the first account
+  the only way to sign up is a one-shot code the app creates at each start and fills in itself; after
+  the first account sign-up is closed. Its database holds what any metadata-only server holds (§3.1).
+- **Updates**: the app checks the `main-build` pre-release on GitHub and, if its commit differs, offers
+  to download the installer; the download is checked against `SHA256SUMS` from the same release. The
+  builds are **not code-signed**, and nothing is installed without the user starting the installer.
+  The checksum protects against a broken download, not against someone who can publish releases in
+  the repository: that person can publish a malicious build with a matching checksum. Whoever controls
+  the GitHub repository is therefore trusted with the code of every desktop app that updates.
+
 ## 3. metadata only
 
 The server is a cache of encrypted data plus the order arbiter (`node/server.ts`,
@@ -416,7 +456,11 @@ only for an instance you run yourself, or where the operator is trusted with the
 - **No account key rotation.** Revoking a device or losing a rescue kit does not invalidate the
   account key; whoever has it can read the account and register a new device with the rescue key
   (§2.4, test in `auth.test.ts`). Recovery = new account + upload again.
-- **The web app is delivered by the server** (§2.10). No code signing or pinning.
+- **The web app is delivered by the server** (§2.10). No code signing or pinning. The desktop app
+  carries its own code (§2.12), but its builds are not code-signed either; updates are offered, never
+  installed silently, and trust the GitHub repository.
+- **Desktop app keys** are protected by the system key store only where one exists (§2.12); without it
+  (some Linux setups) they are an owner-only file.
 - **Usage patterns are not hidden** (§2.6): counts, sizes, times, devices. There is no padding of
   sizes.
 - **Discord**: Terms of Service, deletions, bans, API changes; it is the only copy of the files

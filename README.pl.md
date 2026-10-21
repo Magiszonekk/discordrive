@@ -54,6 +54,34 @@ samej przeglądarki.
 `QuicAllowed: false`; Firefox: `network.http.http3.enable` = false w `about:config`. Dotyczy wszystkich
 stron; aplikacja działa w obu przypadkach.
 
+## Aplikacja desktopowa (Windows, Linux)
+
+Ten sam dysk jako aplikacja: web UI w oknie plus agent w tle, który sam przesyła dane (kilka połączeń do
+Discorda przy wysyłaniu, pliki czytane i zapisywane prosto na dysk). Wysyła, pobiera i synchronizuje także
+przy zamkniętym oknie (ikona w zasobniku; „Zakończ” jest w menu zasobnika), uruchamia się z systemem
+(można wyłączyć) i po restarcie kontynuuje przerwane pobieranie. Przy pierwszym uruchomieniu wybierz
+**Połącz z serwerem** (adres instancji; dalej logowanie, parowanie albo nowe konto jak w przeglądarce)
+albo **Tylko ten komputer** (aplikacja uruchamia własną instancję na tym komputerze, bez Node.js
+i terminala; dostęp ma tylko ten komputer).
+
+**Pobieranie:** [Releases → `main-build`](https://github.com/Magiszonekk/discordrive/releases/tag/main-build):
+`…win-x64.exe` (Windows), `…amd64.deb` (Ubuntu, Debian), `…x86_64.AppImage` (inne Linuksy). Sprawdź
+pobrany plik z `SHA256SUMS` z tej samej strony (`sha256sum -c SHA256SUMS --ignore-missing`).
+
+- **Wydania nie są podpisane cyfrowo.** Windows SmartScreen pokaże „System Windows ochronił ten
+  komputer”: kliknij **Więcej informacji → Uruchom mimo to**. Rób to tylko z plikiem ze strony powyżej,
+  którego suma się zgadza.
+- **Ubuntu 24.04 i nowsze:** zainstaluj `.deb` (`sudo apt install ./discordrive-…-amd64.deb`); dodaje
+  profil AppArmor potrzebny piaskownicy Chromium. AppImage nie może go sobie dodać na tych systemach
+  i mówi o tym, zamiast uruchomić się bez piaskownicy.
+- **Aktualizacje nigdy nie instalują się same.** Aplikacja co kilka godzin sprawdza, czy jest nowsza
+  wersja (Ustawienia → Aplikacja desktopowa; można wyłączyć), i pokazuje ją w zasobniku i w Ustawieniach.
+  **Pobierz** ściąga instalator dla Twojego systemu do Pobranych i sprawdza jego SHA-256; uruchamiasz go
+  sam.
+- **Klucze:** trzyma je aplikacja, zabezpieczone systemowym magazynem kluczy (Windows DPAPI, Linux
+  GNOME Keyring / KWallet). Bez magazynu (część instalacji Linuksa) to plik, który może odczytać tylko
+  Twój użytkownik; Ustawienia o tym mówią. Szczegóły: [docs/threat-model.md §2.12](docs/threat-model.md).
+
 ## Tryby
 
 Wybierany w `npm run setup`, na zawsze dla danej instancji (inny tryb = nowa instancja w innym

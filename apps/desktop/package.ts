@@ -52,6 +52,17 @@ const config = {
   directories: { output: out, buildResources: join(here, "build-res") },
   files: ["dist/**/*", "package.json"],
   asar: true,
+  // Electron fuses (security checklist #18): no ELECTRON_RUN_AS_NODE, NODE_OPTIONS or --inspect for the
+  // packaged app, app code only from the (integrity-checked where supported) asar, no extra file:// rights.
+  electronFuses: {
+    runAsNode: false,
+    enableNodeOptionsEnvironmentVariable: false,
+    enableNodeCliInspectArguments: false,
+    enableEmbeddedAsarIntegrityValidation: true,
+    onlyLoadAppFromAsar: true,
+    grantFileProtocolExtraPrivileges: false,
+    enableCookieEncryption: true,
+  },
   // No auto-update feed: updates are checked and offered by the app itself (never installed silently).
   publish: null,
   artifactName: "discordrive-${version}-${os}-${arch}.${ext}",
