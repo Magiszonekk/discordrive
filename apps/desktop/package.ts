@@ -66,6 +66,8 @@ const config = {
   publish: null,
   artifactName: "discordrive-${version}-${os}-${arch}.${ext}",
   win: { target: [{ target: "nsis", arch: ["x64"] }], icon: join(here, "build-res", "icon.ico") },
+  // createDesktopShortcut: true = only on a fresh install ("always" would re-create it at every update). The
+  // in-app update runs this installer with --updated, which keeps the user's shortcuts (README: Updates).
   nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, createDesktopShortcut: true, runAfterFinish: true },
   linux: {
     target: [

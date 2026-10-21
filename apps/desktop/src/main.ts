@@ -9,8 +9,9 @@
 // windows or <webview>s, and gets no permissions. IPC: one channel for the agent's port (sent only to the
 // app's own main frame), and a few invoke handlers that check the sender frame and every argument.
 import { app, BrowserWindow, Menu, clipboard, MessageChannelMain, Notification, Tray, dialog, ipcMain, nativeImage, net, protocol, safeStorage, session, shell, utilityProcess, type IpcMainInvokeEvent, type UtilityProcess } from "electron";
-import { existsSync, readFileSync } from "node:fs";
-import { join, normalize, sep } from "node:path";
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, normalize, sep } from "node:path";
 import { ORIGIN, SCHEME, isAppUrl, staticPath as staticPathIn } from "./shell/paths.js";
 import { pathToFileURL } from "node:url";
 import { DISCORD_ORIGINS } from "@ddv4/metadata-client/node";
@@ -18,7 +19,7 @@ import { autostartOn, setAutostart, HIDDEN_ARG, type AutostartEnv } from "./shel
 import { loadSettings, normaliseServerUrl, saveSettings, type DesktopSettings } from "./shell/settings.js";
 import type { AgentInit } from "./agent.js";
 import { appArmorCommand, appImageWithoutSandbox } from "./shell/sandbox.js";
-import { CHECK_EVERY_MS, assetFor, downloadVerified, installHint, installKind, isNewer, latestBuild, type AvailableBuild } from "./shell/updates.js";
+import { CHECK_EVERY_MS, assetFor, canInstallInPlace, downloadVerified, installHint, installKind, isNewer, latestBuild, nsisUpdateCommand, replaceAppImage, sha256File, type AvailableBuild } from "./shell/updates.js";
 
 const APP_ID = "discordrive";
 const APP_NAME = "discordrive";
@@ -211,7 +212,7 @@ export function trayText(b: typeof busy): string {
   return `${APP_NAME}: ${parts.join(", ")}`;
 }
 
-// ── updates (never installed by the app; see shell/updates.ts) ─────────────────────────────────────
+// ── updates (installed only on the user's click; see shell/updates.ts) ─────────────────────────────
 /** This copy: from build-info.json written by package.ts (absent in a dev run). */
 function ownBuild(): { version: string; build: string; commit: string | null } {
   try {
@@ -235,20 +236,97 @@ async function checkUpdates(manual = false): Promise<{ current: ReturnType<typeo
   paintTray();
   return { current: own, available: update, kind: kind() };
 }
+/** The installer downloaded and checked in this run (only this file may be installed). */
+let downloaded: { path: string; sha256: string } | null = null;
+/** Started once the agent and the instance have stopped (before-quit), so the installer meets no running copy. */
+let runOnQuit: (() => void) | null = null;
+async function downloadUpdate(): Promise<{ path: string; hint: string; busy: boolean; inPlace: boolean }> {
+  if (!update) throw new Error("no new version");
+  const a = assetFor(kind(), update.assets);
+  if (!a) throw new Error("no installer for this system in the release");
+  const path = await downloadVerified((u, i) => net.fetch(u, i), update, a, app.getPath("downloads"));
+  downloaded = { path, sha256: await sha256File(path) };
+  const inPlace = canInstallInPlace(kind(), process.env.APPIMAGE);
+  // Transfers running: say so, do not stop them (the user installs when it suits).
+  return { path, hint: installHint(kind(), path, inPlace), busy: busy.busy, inPlace };
+}
+/**
+ * "Install and restart": Windows runs the downloaded installer silently in update mode in this copy's
+ * folder once the app has closed (shortcuts and pins stay, the data folder is not touched) and the
+ * installer starts the app again; an AppImage is replaced by the new file and restarted. Running
+ * transfers: the user is asked first, as on Quit. Returns false when the user kept the app running.
+ */
+async function installUpdate(ask = true): Promise<boolean> {
+  const k = kind();
+  if (!downloaded) throw new Error("download the new version first");
+  if (!canInstallInPlace(k, process.env.APPIMAGE)) throw new Error("this copy cannot update itself: install the downloaded file");
+  // The same file that was checked against SHA256SUMS (the Downloads folder is writable by other programs).
+  if ((await sha256File(downloaded.path).catch(() => "")) !== downloaded.sha256) {
+    downloaded = null;
+    throw new Error("the downloaded file changed after it was checked: download it again");
+  }
+  if (ask && busy.busy) {
+    const pl = app.getLocale().startsWith("pl");
+    const r = await dialog.showMessageBox({
+      type: "warning",
+      buttons: pl ? ["Zainstaluj mimo to", "Później"] : ["Install anyway", "Later"],
+      defaultId: 1,
+      cancelId: 1,
+      message: pl ? "Trwają transfery" : "Transfers are still running",
+      detail: `${trayText(busy)}. ${pl ? "Niedokończone pobierania wznowią się po ponownym uruchomieniu; niedokończone wysyłki — gdy wyślesz ten sam plik jeszcze raz." : "Unfinished downloads continue after the restart; unfinished uploads continue when you upload the same file again."}`,
+    });
+    if (r.response !== 0) return false;
+  }
+  const file = downloaded.path;
+  if (k === "appimage") {
+    const target = process.env.APPIMAGE!;
+    replaceAppImage(file, target);
+    app.relaunch({ execPath: target, args: [] });
+  } else {
+    const c = nsisUpdateCommand(file, dirname(process.execPath));
+    runOnQuit = () => {
+      // windowsVerbatimArguments: NSIS reads /D= raw (a path with spaces, no quotes); argv0 is quoted here.
+      const p = spawn(c.file, c.args, { argv0: c.argv0, detached: true, stdio: "ignore", windowsVerbatimArguments: true, windowsHide: false });
+      p.on("error", () => null);
+      p.unref();
+    };
+  }
+  quitting = true;
+  app.quit();
+  return true;
+}
+/**
+ * Tests (CI, Windows): with DDN_DESKTOP_UPDATE_SELFTEST=<report file> the app checks for an update at
+ * start; when there is one it downloads and installs it the same way as the buttons do, otherwise it
+ * writes which build it is and quits.
+ */
+async function updateSelftest(report: string) {
+  const own = ownBuild();
+  const write = (o: object) => writeFileSync(report, JSON.stringify({ own, argv: process.argv.slice(1), ...o }, null, 1));
+  try {
+    const r = await checkUpdates(true);
+    if (!r.available) {
+      write({ stage: "current" });
+      quitting = true;
+      app.quit();
+      return;
+    }
+    const d = await downloadUpdate();
+    write({ stage: "installing", to: r.available.commit, file: d.path });
+    await installUpdate(false);
+  } catch (e) {
+    write({ stage: "error", error: String(e) });
+    quitting = true;
+    app.quit();
+  }
+}
 function wireUpdates() {
   const fromApp = (e: IpcMainInvokeEvent) => {
     if (!e.senderFrame || !isAppUrl(e.senderFrame.url)) throw new Error("not allowed");
   };
   ipcMain.handle("ddn:update-check", (e) => (fromApp(e), checkUpdates(true)));
-  ipcMain.handle("ddn:update-download", async (e) => {
-    fromApp(e);
-    if (!update) throw new Error("no new version");
-    const a = assetFor(kind(), update.assets);
-    if (!a) throw new Error("no installer for this system in the release");
-    const path = await downloadVerified((u, i) => net.fetch(u, i), update, a, app.getPath("downloads"));
-    // Transfers running: say so, do not stop them (the user installs when it suits).
-    return { path, hint: installHint(kind(), path), busy: busy.busy };
-  });
+  ipcMain.handle("ddn:update-download", async (e) => (fromApp(e), downloadUpdate()));
+  ipcMain.handle("ddn:update-install", async (e) => (fromApp(e), installUpdate()));
   // Settings → Desktop app: update checks, autostart, downloads folder (a folder picked in the system dialog).
   ipcMain.handle("ddn:app-settings", (e, patch: unknown) => {
     fromApp(e);
@@ -271,6 +349,7 @@ function wireUpdates() {
     if (!e.senderFrame || !isAppUrl(e.senderFrame.url) || typeof p !== "string" || !update) return;
     if (normalize(p).startsWith(normalize(app.getPath("downloads")) + sep) && update.assets.some((a) => p.endsWith(a.name))) void shell.openPath(p);
   });
+  if (process.env.DDN_DESKTOP_UPDATE_SELFTEST) return;
   setTimeout(() => void checkUpdates(), 30_000);
   setInterval(() => void checkUpdates(), CHECK_EVERY_MS);
 }
@@ -518,6 +597,8 @@ else {
     const dbg = (m: string) => process.env.DDN_DESKTOP_DEBUG && console.error(`[ddn] ${m}`);
     settings = loadSettings(DATA());
     dbg("settings loaded");
+    // Started by the installer after an in-place update: note which build this is now (About, tests).
+    if (process.argv.includes("--updated")) writeFileSync(join(DATA(), "last-update.json"), JSON.stringify({ ...ownBuild(), at: new Date().toISOString() }) + "\n");
     const ses = session.defaultSession;
     ses.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
     ses.setPermissionCheckHandler(() => false);
@@ -565,6 +646,7 @@ else {
     paintTray();
     win = createWindow(server ? "/" : "/start/start.html");
     if (process.env.DDN_DESKTOP_SMOKE) win.webContents.once("did-finish-load", () => void smoke());
+    if (process.env.DDN_DESKTOP_UPDATE_SELFTEST) void updateSelftest(process.env.DDN_DESKTOP_UPDATE_SELFTEST);
   });
   // Closing the window does not end the app: the agent keeps transferring and syncing (tray: Quit).
   app.on("window-all-closed", () => {
@@ -589,6 +671,7 @@ else {
       qdbg(`children stopped: ${why}`);
       stopped = true;
       for (const p of [agent, instance]) p?.kill();
+      runOnQuit?.();
       app.quit();
     });
   });

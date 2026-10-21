@@ -1,12 +1,14 @@
-// Update check of the desktop app. There is no silent update: CI publishes the build of every change on
-// `main` as one pre-release ("main-build", replaced each time) with the installers and SHA256SUMS; the app
-// asks GitHub (no token, at most every few hours), and when that build is from another commit than its own
-// it says so (tray, About). "Download" fetches the installer for this system to the Downloads folder,
-// checks its SHA-256 against SHA256SUMS (a mismatch is refused and the file deleted), then the user opens
-// or runs it. Nothing is installed by the app.
+// Update check of the desktop app. Nothing is installed without the user's click: CI publishes the build of
+// every change on `main` as one pre-release ("main-build", replaced each time) with the installers and
+// SHA256SUMS; the app asks GitHub (no token, at most every few hours), and when that build is from another
+// commit than its own it says so (tray, About). "Download" fetches the installer for this system to the
+// Downloads folder and checks its SHA-256 against SHA256SUMS (a mismatch is refused and the file deleted).
+// Then "Install and restart" (Windows, AppImage) updates this copy in place: the app closes, the NSIS
+// installer runs silently in update mode in the same folder (shortcuts are kept, not created again) and
+// starts the app again; an AppImage file is replaced by the new one. A .deb is installed by the user (apt).
 import { createHash } from "node:crypto";
-import { createWriteStream, renameSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { accessSync, chmodSync, constants, copyFileSync, createReadStream, createWriteStream, renameSync, rmSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -136,16 +138,69 @@ export async function downloadVerified(f: Fetch, b: AvailableBuild, asset: Relea
   return final;
 }
 
-/** What to tell the user after the download (the app never installs by itself). */
-export function installHint(kind: InstallKind, path: string): string {
+/** What to tell the user after the download (nothing is installed until they click). */
+export function installHint(kind: InstallKind, path: string, inPlace: boolean): string {
   switch (kind) {
     case "deb":
       return `sudo apt install ${JSON.stringify(path)}`;
     case "appimage":
-      return `chmod +x ${JSON.stringify(path)} — then start the new file (and remove the old one)`;
+      return inPlace
+        ? "Install and restart: the app closes, this AppImage file is replaced by the new one and starts again."
+        : `chmod +x ${JSON.stringify(path)} — then start the new file (and remove the old one)`;
     case "nsis":
-      return "Run the installer (Windows SmartScreen may warn: More info → Run anyway).";
+      return inPlace
+        ? "Install and restart: the app closes, the new version is installed in the same folder (your shortcuts and pins stay where they are) and the app starts again. Running the downloaded file yourself opens the full installer."
+        : "Run the installer (Windows SmartScreen may warn: More info → Run anyway).";
     default:
       return "Open the downloaded file.";
+  }
+}
+
+/**
+ * Can "Install and restart" update this copy in place? Windows (NSIS) always; an AppImage when its folder
+ * is writable (the file is replaced next to itself); a .deb never (apt needs root).
+ */
+export function canInstallInPlace(kind: InstallKind, appImage?: string): boolean {
+  if (kind === "nsis") return true;
+  if (kind !== "appimage" || !appImage) return false;
+  try {
+    accessSync(dirname(appImage), constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * How to start the NSIS installer in update mode (electron-builder's assisted installer): `/S` silent,
+ * `--updated` (an update: the old version's uninstaller keeps the shortcuts, no new ones are created, the
+ * app data stays), `--force-run` (start the app when done), `/D=` the folder this copy runs from. NSIS
+ * wants `/D=` last and unquoted (a path with spaces included), so the command line is passed verbatim and
+ * only the installer's own path is quoted.
+ */
+export function nsisUpdateCommand(installer: string, installDir: string): { file: string; argv0: string; args: string[] } {
+  if (/["\r\n]/.test(installer) || /["\r\n]/.test(installDir)) throw new Error("unexpected characters in a path");
+  return { file: installer, argv0: `"${installer}"`, args: ["/S", "--updated", "--force-run", `/D=${installDir.replace(/[\\/]+$/, "")}`] };
+}
+
+export async function sha256File(path: string): Promise<string> {
+  const h = createHash("sha256");
+  await pipeline(createReadStream(path), h);
+  return h.digest("hex");
+}
+
+/**
+ * Put the downloaded AppImage in place of the running one: copied next to it, made executable, renamed over
+ * it (a rename: the running copy keeps its mounted old file, the next start gets the new one).
+ */
+export function replaceAppImage(downloaded: string, target: string): void {
+  const tmp = join(dirname(target), `.${basename(target)}.update`);
+  try {
+    copyFileSync(downloaded, tmp);
+    chmodSync(tmp, 0o755);
+    renameSync(tmp, target);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
   }
 }
