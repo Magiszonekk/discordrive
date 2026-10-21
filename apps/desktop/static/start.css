@@ -1,0 +1,7 @@
+/* Bare layout of the first-start page until the design work replaces it. */
+body { font: 15px/1.5 system-ui, sans-serif; margin: 0; display: grid; place-items: center; min-height: 100vh; }
+.start { max-width: 560px; padding: 24px; }
+.choice { display: block; width: 100%; text-align: left; padding: 16px; margin: 12px 0; cursor: pointer; }
+.choice span { display: block; opacity: .75; margin-top: 4px; }
+label { display: block; margin: 12px 0; } input { display: block; width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
+.row { display: flex; gap: 8px; justify-content: flex-end; } .err { color: #b00020; }

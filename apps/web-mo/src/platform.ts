@@ -84,6 +84,8 @@ export interface CorePlatform {
    * sessions of the agent's pool). The browser adds its own later (sandboxed iframes, attachLane).
    */
   cdnLanes?: LaneFetch[];
+  /** How the device key is kept on disk (desktop): "os" = sealed by the system key store, "file" = owner-only file. */
+  keyProtection?: "os" | "file";
   /** Desktop: files on this computer (uploads from disk, downloads written straight to disk). */
   files?: DiskFiles;
 }

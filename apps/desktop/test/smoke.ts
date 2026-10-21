@@ -14,8 +14,8 @@ const out = join(dir, "report.json");
 const args = [join(here, "..")];
 // CI containers without user namespaces cannot start Chromium's sandbox for the GPU/utility helpers.
 if (process.env.DDN_DESKTOP_NO_SANDBOX) args.push("--no-sandbox");
-const r = spawnSync(electron, [...args, `--user-data-dir=${join(dir, "profile")}`], {
-  env: { ...process.env, DDN_DESKTOP_SMOKE: out, DDN_DESKTOP_HIDDEN: "1" },
+const r = spawnSync(electron, args, {
+  env: { ...process.env, DDN_DESKTOP_SMOKE: out, DDN_DESKTOP_HIDDEN: "1", DDN_DESKTOP_DATA: join(dir, "data") },
   stdio: "inherit",
   timeout: 90_000,
 });

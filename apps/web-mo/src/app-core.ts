@@ -970,8 +970,8 @@ export class AppCore {
   }
 
   /** What this core can do beyond the browser (the UI shows the desktop actions only when set). */
-  capabilities(): { disk: boolean; platform: "web" | "desktop"; downloadsDir: string | null } {
-    return { disk: !!this.platform.files, platform: this.platform.kind, downloadsDir: this.platform.files?.downloadsDir() ?? null };
+  capabilities(): { disk: boolean; platform: "web" | "desktop"; downloadsDir: string | null; keyProtection: "os" | "file" | null } {
+    return { disk: !!this.platform.files, platform: this.platform.kind, downloadsDir: this.platform.files?.downloadsDir() ?? null, keyProtection: this.platform.keyProtection ?? null };
   }
 
   /**

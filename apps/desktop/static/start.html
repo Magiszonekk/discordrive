@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>discordrive</title>
+<link rel="stylesheet" href="./start.css">
+</head>
+<!-- First start of the desktop app: where are the files kept? Logic in start.js; the look comes later
+     from the design work (this page only has stable data-ddn hooks and plain markup). -->
+<body>
+<main class="start">
+  <h1 data-t="start.title">Where should your files live?</h1>
+
+  <section data-ddn="start-choice">
+    <button type="button" class="choice" data-ddn="start-remote">
+      <b data-t="start.remote">Connect to a server</b>
+      <span data-t="start.remote.hint">An instance someone runs for you or that you run yourself (address like https://drive.example.com). Your account works in the browser too.</span>
+    </button>
+    <button type="button" class="choice" data-ddn="start-local">
+      <b data-t="start.local">This computer only</b>
+      <span data-t="start.local.hint">The app runs its own small server on this computer. Nothing to install; only this computer can reach it.</span>
+    </button>
+  </section>
+
+  <section data-ddn="start-remote-form" hidden>
+    <label><span data-t="start.address">Server address</span>
+      <input data-ddn="start-url" type="url" placeholder="https://drive.example.com" autocomplete="url" spellcheck="false"></label>
+    <p class="err" data-ddn="start-remote-err" hidden></p>
+    <div class="row">
+      <button type="button" data-ddn="start-back" data-t="start.back">Back</button>
+      <button type="button" class="primary" data-ddn="start-connect" data-t="start.connect">Connect</button>
+    </div>
+  </section>
+
+  <section data-ddn="start-terms" hidden>
+    <h2 data-t="r.title">Before you start: read and accept</h2>
+    <p data-t="r.tos">1. Storing files on Discord is against Discord's Terms of Service. Discord may delete the messages and attachments, or block the webhooks or the account, at any time and without warning.</p>
+    <p data-t="r.warranty">2. This software is provided "as is", without warranty of any kind (MIT licence). Data can be lost. Keep a copy of important files somewhere else.</p>
+    <p class="err" data-ddn="start-local-err" hidden></p>
+    <div class="row">
+      <button type="button" data-ddn="start-back2" data-t="start.back">Back</button>
+      <button type="button" class="primary" data-ddn="start-accept" data-t="r.accept">I understand and accept</button>
+    </div>
+  </section>
+</main>
+<script src="./start.js"></script>
+</body>
+</html>

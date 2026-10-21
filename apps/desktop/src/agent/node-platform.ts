@@ -40,25 +40,42 @@ export const plainSealer: Sealer = { kind: "file", seal: async (b) => b, open: a
 /** What keys.json holds: the account record with the device key as PKCS#8 (sealed as a whole). */
 type StoredJson = Omit<StoredAccount, "devicePrivateKey"> & { devicePkcs8: string };
 
-export function fileKeyStore(dir: string, sealer: Sealer): KeyStore {
+/** keys.bin: "DDNK" + 1 byte how it is protected ("S": sealed by the OS key store, "P": plain) + body. */
+const KEY_MAGIC = "DDNK";
+
+export function fileKeyStore(dir: string, sealer: Sealer, o: { serverUrl?: () => string | undefined } = {}): KeyStore {
   const file = join(dir, "keys.bin");
+  const write = async (j: StoredJson) => {
+    const body = new TextEncoder().encode(JSON.stringify(j));
+    const sealed = sealer.kind === "os";
+    const out = sealed ? await sealer.seal(body) : body;
+    writePrivate(file, Buffer.concat([Buffer.from(KEY_MAGIC + (sealed ? "S" : "P")), Buffer.from(out)]));
+  };
   return {
     async load() {
       if (!existsSync(file)) return undefined;
-      const j = JSON.parse(new TextDecoder().decode(await sealer.open(new Uint8Array(readFileSync(file))))) as StoredJson;
+      const raw = readFileSync(file);
+      if (raw.subarray(0, 4).toString() !== KEY_MAGIC) throw new Error("keys.bin: unknown format");
+      const how = String.fromCharCode(raw[4]!);
+      const body = new Uint8Array(raw.subarray(5));
+      if (how === "S" && sealer.kind !== "os") throw new Error("the keys are protected by the system key store, which is not available now (unlock it and start the app again)");
+      const j = JSON.parse(new TextDecoder().decode(how === "S" ? await sealer.open(body) : body)) as StoredJson;
+      // The system key store became available: protect the keys with it from now on.
+      if (how === "P" && sealer.kind === "os") await write(j);
       const { devicePkcs8, ...rest } = j;
       // Refuses a stored pair whose halves do not match.
       await importDeviceKey({ pkcs8: devicePkcs8, publicKey: j.devicePublicKey });
+      // The instance built into the app listens on a new port at every start: the account follows it.
+      const url = o.serverUrl?.();
       // Extractable: saving the account again (rename, kit confirmed) exports it once more.
-      return { ...rest, devicePrivateKey: await privateOf(devicePkcs8) };
+      return { ...rest, ...(url ? { serverUrl: url } : {}), devicePrivateKey: await privateOf(devicePkcs8) };
     },
     async save(a) {
       const { devicePrivateKey, ...rest } = a;
       const { pkcs8 } = await exportDeviceKey({ privateKey: devicePrivateKey, publicKey: a.devicePublicKey }).catch(() => {
         throw new Error("device key is not extractable (created outside the desktop agent)");
       });
-      const j: StoredJson = { ...rest, devicePkcs8: pkcs8 };
-      writePrivate(file, await sealer.seal(new TextEncoder().encode(JSON.stringify(j))));
+      await write({ ...rest, devicePkcs8: pkcs8 });
     },
     async clear() {
       rmSync(file, { force: true });
@@ -206,6 +223,8 @@ export interface NodePlatformOptions {
   cdnLanes?: LaneFetch[];
   /** Default folder for downloads. */
   downloadsDir?: string;
+  /** The instance built into the app: its address at this start (the stored account follows it). */
+  serverUrl?: () => string | undefined;
 }
 
 /** Files on this computer for the core: sources read on demand, downloads written at offsets. */
@@ -318,7 +337,8 @@ export function nodePlatform(o: NodePlatformOptions): CorePlatform & { dataDir: 
     discordFetch: o.discordFetch,
     cdnLanes: o.cdnLanes,
     files: nodeDiskFiles(o.downloadsDir ?? join(homedir(), "Downloads")),
-    keys: fileKeyStore(root, sealer),
+    keys: fileKeyStore(root, sealer, { serverUrl: o.serverUrl }),
+    keyProtection: sealer.kind,
     extractableDeviceKey: true,
     // The agent is the only process that opens this account (the app holds a single-instance lock).
     leadership: (_id, onChange) => {

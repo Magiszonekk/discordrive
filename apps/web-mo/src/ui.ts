@@ -26,13 +26,50 @@ let features = { thumbnails: false, search: false, streaming: false };
 /** plain: current server search ("" = none). */
 let searchQ = "";
 
-const cfg = (window as unknown as { DDN_CONFIG?: { discordApiOrigin?: string; serverUrl?: string; language?: string; streamMinBytes?: number } }).DDN_CONFIG ?? {};
+const cfg =
+  (window as unknown as { DDN_CONFIG?: { discordApiOrigin?: string; serverUrl?: string; language?: string; streamMinBytes?: number; desktop?: { local: boolean; invite: string | null } } }).DDN_CONFIG ?? {};
 // Language before the first paint: this browser's choice, else the instance default, else English.
 setLang(storedLang() ?? (isLang(cfg.language) ? cfg.language : "en"));
 applyStatic();
 /** Same-origin instance (served by `discordrive serve`): the API is this origin. */
 const serverUrl = cfg.serverUrl ?? location.origin;
-const worker = new Worker("./w/worker.js", { type: "module" });
+/**
+ * Desktop app (apps/desktop): its preload exposes `ddnDesktop`, and the core runs in the background agent,
+ * reached through a MessagePort; in a browser the core runs in a dedicated worker. Same core, same calls.
+ */
+interface DesktopBridge {
+  platform: string;
+  version: number;
+  /** Paths of files dropped on the window (a renderer cannot read File.path any more). */
+  pathsOf(files: File[]): string[];
+  /** Open the system file manager at a file. */
+  showInFolder(path: string): void;
+  /** Ask for a folder (downloads). */
+  pickFolder(): Promise<string | null>;
+  /** The built-in instance got its first account (it closes sign-up). */
+  firstAccountMade(): Promise<boolean>;
+}
+const desktop = (window as unknown as { ddnDesktop?: DesktopBridge }).ddnDesktop ?? null;
+/** The agent's port arrives from the preload by a window message; calls made before it are queued. */
+function agentEndpoint() {
+  let port: MessagePort | null = null;
+  const queue: unknown[] = [];
+  const ep = {
+    onmessage: null as ((ev: MessageEvent) => void) | null,
+    postMessage(m: unknown) {
+      if (port) port.postMessage(m);
+      else queue.push(m);
+    },
+  };
+  addEventListener("message", (e) => {
+    if (e.source !== window || !(e.data as { ddnAgentPort?: boolean })?.ddnAgentPort || !e.ports[0]) return;
+    port = e.ports[0];
+    port.onmessage = (ev) => ep.onmessage?.(ev);
+    for (const m of queue.splice(0)) port.postMessage(m);
+  });
+  return ep;
+}
+const worker = desktop ? agentEndpoint() : new Worker("./w/worker.js", { type: "module" });
 const progressHandlers = new Map<string, (done: number, total: number, stages?: UploadStages) => void>();
 let onShareProgress: (done: number, total: number) => void = () => {};
 function onCoreEvent(e: CoreEvent) {
@@ -1246,7 +1283,10 @@ function wireFilesPage() {
     e.preventDefault();
     depth = 0;
     zone.classList.remove("over");
-    void uploadAll([...(e.dataTransfer?.files ?? [])]);
+    const files = [...(e.dataTransfer?.files ?? [])];
+    // Desktop: files and whole folders straight from disk (the agent reads them; nothing is copied here).
+    if (desktop) void uploadPathsFromDrop(desktop.pathsOf(files));
+    else void uploadAll(files);
   });
   zone.onclick = () => {
     if (channelsOk) $<HTMLInputElement>("file").click();
@@ -1363,7 +1403,8 @@ function wireNet() {
       storeNet({ guard: guard.checked });
       paintNetSettings(await core.setNetPrefs({ guard: guard.checked }));
     });
-  startLane();
+  // Desktop: the agent has its own connections (a second one for the guard included); no iframe lane.
+  if (!desktop) startLane();
   $("unfinished-pick").onclick = () => $<HTMLInputElement>("file").click();
   $("unfinished-forget").onclick = () =>
     void act(null, async () => {
@@ -1432,6 +1473,23 @@ function closeDownloads() {
   $("downloads").hidden = true;
   $("dl-list").replaceChildren();
 }
+/** Desktop: dropped files and folders are uploaded by the agent from disk (also with the window closed). */
+async function uploadPathsFromDrop(paths: string[]) {
+  if (!paths.length) return;
+  if (!channelsOk) {
+    toast(t("err.need_channel"), "err");
+    return;
+  }
+  const token = crypto.randomUUID();
+  try {
+    const r = await core.uploadPaths(paths, currentFolder(), token);
+    void render();
+    if (r.failed.length) toast(r.failed.map((f) => `${f.path}: ${f.error}`).join("\n"), "err");
+  } catch (e) {
+    toast(errText(e), "err");
+  }
+}
+
 function download(id: string, name: string) {
   const box = $("downloads");
   const list = $("dl-list");
@@ -1488,6 +1546,18 @@ function download(id: string, name: string) {
     // Closes itself a few seconds after the last download went fine; a failure stays until ×.
     if (!dlRunning && !all<HTMLElement>("[data-ddn=dl-item]").some((x) => x.dataset.state === "err")) dlCloseTimer = window.setTimeout(closeDownloads, 6000);
   };
+  // Desktop: the agent writes the file straight to the downloads folder (at offsets, resumable).
+  const toDisk = async () => {
+    const r = await core.downloadToDisk(id, undefined, token);
+    state.title = r.path;
+    li.dataset.path = r.path;
+    // "Show in folder": the name of a finished download opens the system file manager at the file.
+    const nameEl = li.querySelector<HTMLElement>(".qname");
+    if (nameEl && desktop) {
+      nameEl.dataset.ddn = "dl-show";
+      nameEl.onclick = () => desktop.showInFolder(r.path);
+    }
+  };
   const viaBlob = () =>
     core.download(id, token).then((b) => {
       const a = document.createElement("a");
@@ -1497,6 +1567,7 @@ function download(id: string, name: string) {
       setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
     });
   return (async () => {
+    if (desktop) return toDisk();
     const info = await core.fileInfo(id);
     // Big files stream to disk through the service worker (the tab never holds the whole file);
     // small ones, or without a service worker, through a Blob.
@@ -2504,6 +2575,8 @@ function wireSignedOut(server: () => string) {
   $("create").onclick = (e) =>
     void act(e.currentTarget as HTMLElement, async () => {
       await core.createAccount(server(), $<HTMLInputElement>("device-name").value.trim() || defaultDeviceName(), $<HTMLInputElement>("invite").value);
+      // Desktop, "This computer only": the first account is the only one; the built-in instance closes sign-up.
+      if (cfg.desktop?.local) await desktop?.firstAccountMade();
       await core.open();
       await applyTransferLog();
       sessionStorage.removeItem(SKIP_KEY);
@@ -2713,7 +2786,8 @@ async function main() {
   wireTheme();
   wireLinks();
   wireDrawer();
-  if ("serviceWorker" in navigator) {
+  // Desktop: downloads go straight to disk through the agent; no service worker is needed (or allowed: app://).
+  if ("serviceWorker" in navigator && !desktop) {
     await navigator.serviceWorker.register("./sw.js").catch(() => {});
     // /w/ (the app worker) under its own fetch-less service worker: see src/w-sw.ts. The app worker starts
     // above before this registration exists on a first visit; it is only slower then, never wrong.
@@ -2733,8 +2807,10 @@ async function main() {
     $<HTMLButtonElement>("create").disabled = true;
     $("create").title = t("create.closed");
   }
-  const pre = new URLSearchParams(location.search).get("invite");
+  const pre = new URLSearchParams(location.search).get("invite") ?? cfg.desktop?.invite;
   if (pre) $<HTMLInputElement>("invite").value = pre;
+  // Desktop, "This computer only": the one-shot code of the first account is filled in by the app.
+  if (cfg.desktop?.local) ui("invite-field").hidden = true;
   if (!(await ed25519Supported())) showOldBrowser();
   features = await core.features();
   await core.setShowUnavailable(storedShowUnavailable());
