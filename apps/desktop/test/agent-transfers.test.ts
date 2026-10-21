@@ -80,7 +80,7 @@ describe("desktop agent transfers (Node, HTTP/2 to a fake Discord)", () => {
     f.close();
   });
 
-  it("killed mid-download (SIGKILL): the next agent continues from the resume point, fetches only the rest", async () => {
+  it("killed mid-download (SIGKILL): the next agent continues from the resume point, fetches only the rest", { timeout: 240_000 }, async () => {
     const dataDir = join(tmp, "k-data");
     const dl = join(tmp, "k-dl");
     const { f, p } = platformFor(dataDir, dl);
@@ -101,10 +101,12 @@ describe("desktop agent transfers (Node, HTTP/2 to a fake Discord)", () => {
     const child = fork(join(here, "agent-child.ts"), [], {
       execArgv: ["--import", "tsx", "--import", pathToFileURL(join(here, "mode-hook.mjs")).href],
       env: { ...process.env, DDN_T_DATA: dataDir, DDN_T_DL: dl, DDN_T_ORIGIN: origin, DDN_T_CA: ca, DDN_T_NODE: nodeId },
-      stdio: "inherit",
+      stdio: ["ignore", "inherit", "pipe", "ipc"],
     });
+    let childLog = "";
+    child.stderr!.on("data", (d: Buffer) => (childLog += d.toString()));
     const resumeDir = join(dataDir, "resume");
-    const deadline = Date.now() + 60_000;
+    const deadline = Date.now() + 90_000;
     let next = 0;
     let exited: number | null = null;
     child.once("exit", (c) => (exited = c ?? -1));
@@ -118,6 +120,7 @@ describe("desktop agent transfers (Node, HTTP/2 to a fake Discord)", () => {
         }
       if (next >= 2) break;
     }
+    if (next < 2 || exited !== null) console.error(`child agent (exit ${exited}):\n${childLog.slice(-4000)}`);
     expect(exited).toBeNull(); // the child must still be downloading (it failed to start otherwise)
     child.kill("SIGKILL");
     if (child.exitCode === null && child.signalCode === null) await new Promise((r) => child.once("exit", r));

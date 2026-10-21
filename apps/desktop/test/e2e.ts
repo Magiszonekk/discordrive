@@ -46,6 +46,24 @@ async function launch(dataDir = data): Promise<{ app: ElectronApplication; page:
 }
 
 const step = (s: string) => console.error(`[e2e] ${s}`);
+/**
+ * Wait until the app's process (and its single-instance lock) is gone. Windows reports the closed
+ * DevTools connection before the process has exited; a second start at that moment collides with it.
+ */
+async function gone(pid: number | undefined, ms = 30_000) {
+  if (!pid) return;
+  const end = Date.now() + ms;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      break;
+    }
+    if (Date.now() > end) break;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  await new Promise((r) => setTimeout(r, 1500));
+}
 let ok = true;
 const check = (name: string, v: boolean) => {
   r[name] = v;
@@ -118,10 +136,12 @@ try {
   check("appStillRunning", (await app.evaluate(({ app: a }) => a.isReady())) === true);
 
   step("quit and start again");
+  const pid = app.process().pid;
   await app.evaluate(({ app: a }) => {
     a.quit();
   });
   await app.waitForEvent("close").catch(() => null);
+  await gone(pid);
   w = await launch();
   app = w.app;
   p = w.page;
@@ -134,8 +154,10 @@ try {
   check("noPartialFiles", readdirSync(downloads).every((f) => !f.endsWith(".ddnpart")));
   r.downloads = readdirSync(downloads);
 
+  const pid1 = app.process().pid;
   await app.evaluate(({ app: a }) => a.exit(0)).catch(() => {});
   await app.close().catch(() => {});
+  await gone(pid1);
   app = null;
 
   step("second app, 'Connect to a server': a remote instance (invite only)");
