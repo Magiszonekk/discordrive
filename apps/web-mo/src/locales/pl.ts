@@ -388,6 +388,8 @@ export const pl: Record<string, string> = {
   "diag.down": "Pobieranie",
   "diag.auto": "auto ({n})",
   "diag.conc.warn": "{n} naraz przy {ch} kanałach: powyżej ok. {max} (2 na kanał) limit Discorda na kanał odpowiada „zwolnij” (429) i wysyłanie nie przyspiesza. Dodaj raczej kanały.",
+  "diag.version": "Wersja: {app}",
+  "diag.version2": "Wersja: {app} (ta strona) · {server} (instancja: odśwież stronę, żeby zaktualizować)",
   "diag.download": "Pobierz logi",
   "diag.clear": "Wyczyść",
   "diag.on": "Zapisuje",

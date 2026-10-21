@@ -66,6 +66,8 @@ export interface TransferLogOptions {
   names?: boolean;
   /** Build mode (metadata-only / e2ee / plain), written into every file_start. */
   mode?: string;
+  /** Build of the app (version + source hash + commit), written into every file_start. */
+  build?: string;
   /** Fields added to every line (server: the account). */
   base?: Record<string, unknown>;
 }

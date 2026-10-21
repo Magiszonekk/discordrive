@@ -67,6 +67,10 @@ import { fromBase64, toBase64 } from "@ddv4/processing";
 import { claimLeadership, openOpfsIndexStore, requestPersistentStorage } from "@ddv4/metadata-client/browser";
 // Resolved at build time to ONE mode (build.ts): the other modes are not in the bundle.
 import { mode } from "ddn:mode";
+
+/** Build of this app (build.ts define: version + source hash + commit); "dev" when run unbuilt. */
+declare const __DDN_BUILD__: string | undefined;
+export const BUILD = typeof __DDN_BUILD__ === "string" ? __DDN_BUILD__ : "dev";
 import type { ChannelsView, ModeCleanup, ModeCtx, MoveStatus, RemovalImpact, StorageRun, StorageStatus, StorageTotals } from "./modes/types.js";
 import { keystore, type StoredAccount } from "./keystore.js";
 import { IdbResumeStore } from "./resume-idb.js";
@@ -1113,7 +1117,7 @@ export class AppCore {
   async setTransferLog(on: boolean, names = false): Promise<{ on: boolean; names: boolean; server: { on: boolean; all: boolean } | null }> {
     if (on) {
       this.tlogStore ??= new OpfsTransferLog();
-      this.tlog ??= new TransferLog(this.tlogStore.write, { src: "web", mode: mode.mode });
+      this.tlog ??= new TransferLog(this.tlogStore.write, { src: "web", mode: mode.mode, build: BUILD });
       this.tlog.names = names;
     } else {
       await this.tlogStore?.flush();
@@ -1128,6 +1132,12 @@ export class AppCore {
         .catch(() => null);
     }
     return { on: !!this.tlog, names: !!this.tlog?.names, server };
+  }
+
+  /** Build of this app and of the instance (Settings → Diagnostics). */
+  async buildInfo(): Promise<{ app: string; server: string | null }> {
+    const h = await getHealth(this.http?.baseUrl ?? location.origin).catch(() => null);
+    return { app: BUILD, server: (h as { build?: string } | null)?.build ?? null };
   }
 
   async transferLogStatus(): Promise<{ on: boolean; names: boolean; bytes: number; where: string; server: { on: boolean; all: boolean } | null }> {
@@ -1149,8 +1159,15 @@ export class AppCore {
       const r = await this.http.request("GET", "/v1/diagnostics/transfer-log?download=1").catch(() => null);
       if (r?.ok) srv = await r.text();
     }
-    const all = mine + srv;
+    // First line: which builds wrote this file (the app here; the instance from its health), so a log
+    // shared later says what version it came from even when it holds no file_start.
+    const serverBuild = await getHealth(this.http?.baseUrl ?? location.origin)
+      .then((h) => (h as { build?: string }).build ?? null)
+      .catch(() => null);
+    const head = JSON.stringify({ v: 1, t: Date.now(), src: "web", ev: "log_header", build: BUILD, mode: mode.mode, ...(serverBuild ? { serverBuild } : {}) }) + "\n";
     const count = (s: string) => (s.match(/\n/g) ?? []).length;
+    if (!count(mine + srv)) return { ...(await gzipText("")), lines: 0, serverLines: 0 };
+    const all = head + mine + srv;
     return { ...(await gzipText(all)), lines: count(all), serverLines: count(srv) };
   }
 

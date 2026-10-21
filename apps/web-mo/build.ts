@@ -16,7 +16,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, rmSync, writeFileSync } fr
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { sourceHash, STAMP_FILE } from "./source-hash.js";
+import { buildId, sourceHash, STAMP_FILE } from "./source-hash.js";
 
 export const MODES = ["metadata-only", "e2ee", "plain"] as const;
 export type Mode = (typeof MODES)[number];
@@ -63,6 +63,7 @@ export async function buildMode(mode: Mode, outRoot = join(here, "dist")): Promi
   const out = join(outRoot, mode);
   // Hash first: a file edited during the build makes the next start rebuild again (never the other way round).
   const hash = sourceHash();
+  const ident = buildId(hash);
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
   const common = {
@@ -72,7 +73,7 @@ export async function buildMode(mode: Mode, outRoot = join(here, "dist")): Promi
     target: "es2022",
     logLevel: "error" as const,
     sourcemap: false,
-    define: { __DDN_MODE__: JSON.stringify(mode) },
+    define: { __DDN_MODE__: JSON.stringify(mode), __DDN_BUILD__: JSON.stringify(ident) },
     plugins: [modePlugin(mode)],
   };
   await build({ ...common, entryPoints: { ui: join(here, "src/ui.ts") }, outdir: out });
@@ -88,7 +89,7 @@ export async function buildMode(mode: Mode, outRoot = join(here, "dist")): Promi
   copyFileSync(join(here, "index.html"), join(out, "index.html"));
   // Look: Cobalt (discordrive) tokens, app CSS, theme.js and local fonts (see cobalt/README.md).
   cpSync(join(here, "cobalt"), join(out, "cobalt"), { recursive: true });
-  writeFileSync(join(out, STAMP_FILE), JSON.stringify({ hash, mode, builtAt: new Date().toISOString() }) + "\n");
+  writeFileSync(join(out, STAMP_FILE), JSON.stringify({ hash, mode, build: ident, builtAt: new Date().toISOString() }) + "\n");
   return out;
 }
 

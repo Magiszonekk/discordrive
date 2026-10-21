@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DdnServer, DiscordBotRefresher, DISCORD_ORIGINS, type BotRefresher } from "@ddv4/metadata-client/node";
 import { t } from "./i18n.js";
-import { builtHash, sourceHash } from "../../web-mo/source-hash.js";
+import { builtHash, builtId, sourceHash } from "../../web-mo/source-hash.js";
 import { PACKAGE_DIR, POSIX_MODES, REPO_DIR, dbPath, loadConfig, originOf, saveConfig, webDir, type InstanceConfig } from "./config.js";
 import { serverModeFile, serverModeState } from "../build-server.js";
 import type { ServerMode } from "./modes/types.js";
@@ -159,6 +159,8 @@ export async function createServer(c: InstanceConfig, log: (s: string) => void =
     limits: c.limits,
     mode: c.mode,
     language: c.language,
+    // The build of the web app it serves (the server code comes from the same checkout).
+    build: builtId(dir) ?? undefined,
     extensions: parts.extensions,
     web: {
       dir,
