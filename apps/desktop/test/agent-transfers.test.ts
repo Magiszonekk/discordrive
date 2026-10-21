@@ -7,7 +7,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DdnServer, FakeDiscord, h2Fetch } from "@ddv4/metadata-client/node";
 import { sha256Hex } from "@ddv4/metadata-client";
@@ -99,14 +99,16 @@ describe("desktop agent transfers (Node, HTTP/2 to a fake Discord)", () => {
     fake.cdnBytesPerSec = 12 * 1024 * 1024;
     const gets0 = fake.cdnGets;
     const child = fork(join(here, "agent-child.ts"), [], {
-      execArgv: ["--import", "tsx", "--import", join(here, "mode-hook.mjs")],
+      execArgv: ["--import", "tsx", "--import", pathToFileURL(join(here, "mode-hook.mjs")).href],
       env: { ...process.env, DDN_T_DATA: dataDir, DDN_T_DL: dl, DDN_T_ORIGIN: origin, DDN_T_CA: ca, DDN_T_NODE: nodeId },
       stdio: "inherit",
     });
     const resumeDir = join(dataDir, "resume");
     const deadline = Date.now() + 60_000;
     let next = 0;
-    while (Date.now() < deadline) {
+    let exited: number | null = null;
+    child.once("exit", (c) => (exited = c ?? -1));
+    while (Date.now() < deadline && exited === null) {
       await new Promise((r) => setTimeout(r, 200));
       next = 0;
       for (const acct of existsSync(resumeDir) ? readdirSync(resumeDir) : [])
@@ -116,8 +118,9 @@ describe("desktop agent transfers (Node, HTTP/2 to a fake Discord)", () => {
         }
       if (next >= 2) break;
     }
+    expect(exited).toBeNull(); // the child must still be downloading (it failed to start otherwise)
     child.kill("SIGKILL");
-    await new Promise((r) => child.once("exit", r));
+    if (child.exitCode === null && child.signalCode === null) await new Promise((r) => child.once("exit", r));
     expect(next).toBeGreaterThanOrEqual(2);
     const part = readdirSync(dl).find((x) => x.endsWith(".ddnpart"));
     expect(part).toBeDefined();
