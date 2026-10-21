@@ -74,6 +74,8 @@ export const pl: Record<string, string> = {
   "files.next": "Następna strona",
   "files.folder": "folder",
   "files.open": "Otwórz {name}",
+  "files.up": "Folder nadrzędny",
+  "panel.closesIn": "Zamknie się za {s} s",
   "files.play": "Odtwórz",
   "files.play.aria": "Odtwórz {name}",
   "files.download": "Pobierz",

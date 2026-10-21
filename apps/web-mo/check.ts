@@ -601,6 +601,50 @@ try {
   await p.goBack();
   await p.waitForFunction(() => location.pathname === "/");
   await count(p, L.four);
+  // Folder navigation: a click anywhere on a folder row (here its empty size cell) opens it; Up and
+  // Backspace go one level up (Backspace in a text field does not); Enter on the row's checkbox opens it.
+  {
+    const fn: Record<string, unknown> = {};
+    const atRoot = () => p.waitForFunction(() => location.pathname === "/" && [...document.querySelectorAll("[data-ddn=row]")].some((x) => /Wakacje/.test(x.textContent ?? "")));
+    const inWak = () => p.waitForFunction(() => location.pathname.startsWith("/folder/") && document.querySelector("[data-ddn-ui=folder-title]")?.textContent === "Wakacje");
+    fn.upHiddenAtRoot = await p.isHidden("[data-ddn=up]");
+    fn.rowCursor = await p.locator("[data-ddn=row]", { hasText: "Wakacje" }).evaluate((tr) => getComputedStyle(tr).cursor);
+    await p.locator("[data-ddn=row]", { hasText: "Wakacje" }).locator("td.size").click();
+    await inWak();
+    fn.rowClick = true;
+    fn.upLabel = await p.getAttribute("[data-ddn=up]", "aria-label");
+    await p.click("[data-ddn=up]");
+    await atRoot();
+    fn.upButton = true;
+    await p.locator("[data-ddn=row]", { hasText: "Wakacje" }).locator("[data-ddn=select]").focus();
+    await p.keyboard.press("Enter");
+    await inWak();
+    fn.enter = true;
+    // A text field on the page: Backspace edits it and stays in the folder.
+    await p.evaluate(() => {
+      const i = Object.assign(document.createElement("input"), { type: "text", value: "abc" });
+      i.dataset.test = "bs";
+      document.querySelector("[data-page=files] .files-h")!.append(i);
+      i.focus();
+    });
+    await p.keyboard.press("Backspace");
+    await p.waitForTimeout(300);
+    fn.backspaceInField = (await p.inputValue("[data-test=bs]")) === "ab" && /^\/folder\//.test(new URL(p.url()).pathname);
+    await p.evaluate(() => document.querySelector("[data-test=bs]")!.remove());
+    await p.keyboard.press("Backspace");
+    await atRoot();
+    fn.backspace = true;
+    // Back returns into the folder (Up and Backspace are navigations), Backspace at the top does nothing.
+    await p.goBack();
+    await inWak();
+    await p.goForward();
+    await atRoot();
+    await p.keyboard.press("Backspace");
+    await p.waitForTimeout(300);
+    fn.backspaceAtRootStays = new URL(p.url()).pathname === "/";
+    r.folderNav = fn;
+  }
+  await count(p, L.four);
 
   // 6. paging: 60 more folders, pages of 50 in the main tab
   step("paging");
@@ -1354,16 +1398,39 @@ try {
     await p.waitForFunction(() => !!document.querySelector("[data-ddn-ui=queue][data-closing]"), null, { timeout: 60_000 });
     return Date.now();
   };
+  // The countdown bar at the bottom of a panel: height, colour (= the accent), width now.
+  const barOf = (sel: string) =>
+    p.evaluate((s) => {
+      const box = document.querySelector<HTMLElement>(s)!;
+      const bar = box.querySelector<HTMLElement>("[data-ddn=close-bar]")!;
+      const probe = document.createElement("i");
+      probe.style.background = "var(--color-accent)";
+      box.append(probe);
+      const accent = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      const b = bar.getBoundingClientRect();
+      const cs = getComputedStyle(bar);
+      return { h: b.height, w: b.width, panelW: box.getBoundingClientRect().width, color: cs.backgroundColor, accent, visible: cs.visibility === "visible", atBottom: Math.abs(box.getBoundingClientRect().bottom - b.bottom) < 2, result: box.dataset.result ?? null };
+    }, sel);
+  const barShrinks = async (sel: string) => {
+    const a = await barOf(sel);
+    await p.waitForTimeout(1000);
+    const b = await barOf(sel);
+    return { ...a, w2: b.w, shrinks: b.w < a.w - 20 };
+  };
   // Success: gone after ~5 s by itself.
   let t0 = await uploadDone("q1.txt");
   await p.mouse.move(5, 5);
+  qc.bar = await barShrinks("[data-ddn-ui=queue]");
   await p.waitForSelector("[data-ddn-ui=queue]", { state: "hidden", timeout: 15_000 });
   qc.okClosedMs = Date.now() - t0;
   // Hover pauses: still there after 7 s with the pointer on it, gone after it leaves.
   t0 = await uploadDone("q2.txt");
   await p.hover("[data-ddn-ui=queue-title]");
+  const wPaused = (await barOf("[data-ddn-ui=queue]")).w;
   await p.waitForTimeout(7000);
   qc.hoverKeeps = (await queueShown()) && (await p.getAttribute("[data-ddn-ui=queue]", "data-paused")) === "1";
+  qc.hoverBarStill = Math.abs((await barOf("[data-ddn-ui=queue]")).w - wPaused) < 2;
   await p.mouse.move(5, 5);
   await p.waitForSelector("[data-ddn-ui=queue]", { state: "hidden", timeout: 15_000 });
   qc.closedAfterLeave = true;
@@ -1378,6 +1445,7 @@ try {
   await p.waitForFunction(() => !!document.querySelector("[data-ddn-ui=queue][data-closing]"), null, { timeout: 60_000 });
   t0 = Date.now();
   await p.mouse.move(5, 5);
+  qc.errBar = await barOf("[data-ddn-ui=queue]");
   await p.waitForTimeout(7000);
   qc.errStillShownAt7s = await queueShown();
   qc.failedBar = { shown: await p.isVisible("[data-ddn=upload-failed]"), count: await p.textContent("[data-ddn=upload-failed-count]") };
@@ -1398,6 +1466,36 @@ try {
   await p.click("[data-ddn=upload-failed-close]");
   qc.dismissed = await p.isHidden("[data-ddn=upload-failed]");
   await count(p, /^10 /);
+  // The downloads panel: the same countdown (5 s after success, bar in the accent, hover pauses it).
+  {
+    const dlDone = async () => {
+      const [d] = await Promise.all([p.waitForEvent("download", { timeout: 60_000 }), rowOf(p, "q1.txt").locator("[data-ddn=download]").click()]);
+      await d.path();
+      await p.waitForFunction(() => !!document.querySelector("[data-ddn=downloads][data-closing]"), null, { timeout: 60_000 });
+      return Date.now();
+    };
+    await p.mouse.move(5, 5);
+    let d0 = await dlDone();
+    qc.dlBar = await barShrinks("[data-ddn=downloads]");
+    await p.waitForSelector("[data-ddn=downloads]", { state: "hidden", timeout: 15_000 });
+    qc.dlClosedMs = Date.now() - d0;
+    d0 = await dlDone();
+    await p.hover("[data-ddn-ui=dl-title]");
+    await p.waitForTimeout(7000);
+    qc.dlHoverKeeps = (await p.isVisible("[data-ddn=downloads]")) && (await p.getAttribute("[data-ddn=downloads]", "data-paused")) === "1";
+    await p.mouse.move(5, 5);
+    await p.waitForSelector("[data-ddn=downloads]", { state: "hidden", timeout: 15_000 });
+    // Reduced motion: the bar does not move; the header says in how many seconds it closes.
+    await p.emulateMedia({ reducedMotion: "reduce" });
+    await dlDone();
+    qc.reducedText = await p.textContent("[data-ddn=downloads] [data-ddn=close-in]");
+    qc.reducedBarHidden = !(await barOf("[data-ddn=downloads]")).visible;
+    await p.waitForTimeout(2100);
+    qc.reducedText2 = await p.textContent("[data-ddn=downloads] [data-ddn=close-in]");
+    await p.click("[data-ddn=dl-close]");
+    qc.dlXCloses = await p.isHidden("[data-ddn=downloads]");
+    await p.emulateMedia({ reducedMotion: null });
+  }
   r.queueCloses = qc;
 
 
@@ -1705,6 +1803,10 @@ try {
     ...(SERVER_SIDE
       ? { modeChannels: r.noChannelStepWithPool === true && /\d+ (shared|wspóln)/.test(String(r.poolShown)) && (!hookUrls[0] || ((r.ownChannel as { poolHidden: boolean; backToPool: boolean }).poolHidden && (r.ownChannel as { backToPool: boolean }).backToPool)) }
       : {}),
+    folderNav: (() => {
+      const f = r.folderNav as Record<string, unknown> | undefined;
+      return !!f && f.upHiddenAtRoot === true && f.rowCursor === "pointer" && f.rowClick === true && /^(Parent folder|Folder nadrzędny)$/.test(String(f.upLabel)) && f.upButton === true && f.enter === true && f.backspaceInField === true && f.backspace === true && f.backspaceAtRootStays === true;
+    })(),
     layout: r.filesPageClean === true && r.settingsSurvivesReload === true && r.devicesSurvivesReload === true && (r.folderRoute as { path: boolean; crumb: string }).path && (r.folderRoute as { crumb: string }).crumb === "Wakacje",
     fonts: JSON.stringify(r.fontsLoaded) === JSON.stringify(["Inter", "JetBrains Mono", "Space Grotesk"]),
     theme: (r.theme as { resolved: string }).resolved === SCHEME && (r.themeToggled as { resolved: string; bg: string }).resolved !== SCHEME && (r.themeToggled as { bg: string }).bg !== (r.theme as { bg: string }).bg,
@@ -1831,7 +1933,12 @@ try {
       return (
         !!o && o.okClosedMs >= 4000 && o.okClosedMs < 9000 && o.hoverKeeps === true && o.closedAfterLeave === true &&
         o.errStillShownAt7s === true && o.failedBar.shown === true && /^1 /.test(String(o.failedBar.count)) && o.errClosedMs >= 10_000 && o.errClosedMs < 17_000 &&
-        o.failedBarAfter === true && /^bad/.test(String(o.failedItem)) && o.retried === true && o.xCloses === true && o.dismissed === true
+        o.failedBarAfter === true && /^bad/.test(String(o.failedItem)) && o.retried === true && o.xCloses === true && o.dismissed === true &&
+        // countdown bar: >= 3 px, full accent, at the bottom, shrinking; still while hovered; error colour after a failure
+        [o.bar, o.dlBar].every((b) => b.h >= 3 && b.visible && b.atBottom && b.color === b.accent && b.shrinks && b.w <= b.panelW) && o.hoverBarStill === true &&
+        o.errBar.result === "err" && o.errBar.color !== o.errBar.accent && o.errBar.h >= 3 &&
+        o.dlClosedMs >= 4000 && o.dlClosedMs < 9000 && o.dlHoverKeeps === true && o.dlXCloses === true &&
+        /^(Closes in|Zamknie się za) \d+ s$/.test(String(o.reducedText)) && o.reducedBarHidden === true && Number(/\d+/.exec(String(o.reducedText2))?.[0]) < Number(/\d+/.exec(String(o.reducedText))?.[0])
       );
     })(),
     network: (() => {

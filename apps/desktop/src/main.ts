@@ -176,6 +176,10 @@ function createWindow(page: string) {
   w.webContents.on("will-redirect", (e, url) => {
     if (!isAppUrl(url)) e.preventDefault();
   });
+  // The mouse's side buttons (and the keyboard's Back / Forward keys) on Windows: the page walks its history.
+  w.on("app-command", (_e, cmd) => {
+    if (cmd === "browser-backward" || cmd === "browser-forward") w.webContents.send("ddn:navigate", cmd === "browser-backward" ? "back" : "forward");
+  });
   w.once("ready-to-show", () => {
     if (!process.env.DDN_DESKTOP_HIDDEN && !process.argv.includes(HIDDEN_ARG)) w.show();
   });

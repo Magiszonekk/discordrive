@@ -186,6 +186,32 @@ try {
   check("listed", rows.some((x) => x.name === "movie.bin") && rows.some((x) => x.name === "photos" && x.kind === "folder"));
   const movie = rows.find((x) => x.name === "movie.bin")!;
 
+  step("back / forward: the mouse's side buttons (mouseup 3/4; Windows: the window's app-command)");
+  {
+    const path = () => p.evaluate(() => location.pathname);
+    const photos = rows.find((x) => x.name === "photos")!;
+    await p.waitForSelector(`[data-ddn=row][data-id="${photos.id}"]`, { timeout: 30_000 });
+    await p.locator(`[data-ddn=row][data-id="${photos.id}"] td.size`).click();
+    await p.waitForFunction((id) => location.pathname === `/folder/${id}`, photos.id);
+    const inFolder = await path();
+    const mouse = (button: number) => p.evaluate((b) => window.dispatchEvent(new MouseEvent("mouseup", { button: b, bubbles: true })), button);
+    await mouse(3);
+    const afterBack = await p.waitForFunction(() => location.pathname === "/", null, { timeout: 5000 }).then(() => path()).catch(() => path());
+    await p.waitForTimeout(450); // one step per 400 ms (both paths can fire for one press on Windows)
+    await mouse(4);
+    const afterForward = await p.waitForFunction((f) => location.pathname === f, inFolder, { timeout: 5000 }).then(() => path()).catch(() => path());
+    await p.waitForTimeout(450);
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.emit("app-command", {}, "browser-backward"));
+    const afterCmdBack = await p.waitForFunction(() => location.pathname === "/", null, { timeout: 5000 }).then(() => path()).catch(() => path());
+    await p.waitForTimeout(450);
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.emit("app-command", {}, "browser-forward"));
+    const afterCmdForward = await p.waitForFunction((f) => location.pathname === f, inFolder, { timeout: 5000 }).then(() => path()).catch(() => path());
+    r.mouseNav = { inFolder, afterBack, afterForward, afterCmdBack, afterCmdForward };
+    check("mouseBackForward", inFolder.startsWith("/folder/") && afterBack === "/" && afterForward === inFolder && afterCmdBack === "/" && afterCmdForward === inFolder);
+    await p.click("[data-ddn=up]");
+    await p.waitForFunction(() => location.pathname === "/");
+  }
+
   step("transfer log of the agent: file events and the build");
   await p.evaluate(() => (window as unknown as { ddnCore: { setTransferLog(on: boolean): Promise<unknown> } }).ddnCore.setTransferLog(true));
   writeFileSync(join(src, "log.bin"), randomBytes(3 * 1024 * 1024));

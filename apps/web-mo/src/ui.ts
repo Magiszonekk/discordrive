@@ -48,6 +48,8 @@ interface DesktopBridge {
   pickFolder(): Promise<string | null>;
   /** The built-in instance got its first account (it closes sign-up). */
   firstAccountMade(): Promise<boolean>;
+  /** The window's back / forward commands (the mouse's side buttons on Windows). */
+  onNavigate?(cb: (dir: "back" | "forward") => void): void;
   updates: {
     check(): Promise<{ current: { version: string; build: string; commit: string | null }; available: { build: string; commit: string; publishedAt: string; htmlUrl: string } | null; kind: string }>;
     download(): Promise<{ path: string; hint: string; busy: boolean }>;
@@ -339,6 +341,54 @@ function wireLinks() {
   window.addEventListener("popstate", () => {
     void onRoute();
   });
+  // Backspace: one folder up (not while typing, not in a dialog or a menu).
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Backspace" || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.isComposing) return;
+    if (typingIn(e.target) || document.querySelector("dialog[open]") || !$("row-menu").hidden) return;
+    if (route.name !== "files" || searchQ || !upHref) return;
+    e.preventDefault();
+    goUp();
+  });
+  // Enter with nothing focused and exactly one folder selected: open it (Enter on a row's checkbox too, in fileRow).
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || route.name !== "files") return;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    if (document.querySelector("dialog[open]") || !$("row-menu").hidden || selected.size !== 1) return;
+    const [[id, s]] = [...selected];
+    if (s.kind !== "folder") return;
+    e.preventDefault();
+    openFolder(id);
+  });
+  if (!desktop) return; // a browser goes back / forward by itself (Alt+arrows, the mouse's side buttons)
+  // Desktop app: Electron has no built-in history keys or mouse buttons. Alt+←/→ and the mouse's side
+  // buttons (Linux, macOS: mouseup button 3/4 here; Windows: the window's app-command, sent by the main
+  // process) walk the history. The two paths can both fire for one press on Windows: one step per 400 ms.
+  let lastNav = 0;
+  const walk = (dir: "back" | "forward") => {
+    if (Date.now() - lastNav < 400) return;
+    lastNav = Date.now();
+    if (dir === "back") history.back();
+    else history.forward();
+  };
+  document.addEventListener("keydown", (e) => {
+    if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight") || typingIn(e.target)) return;
+    e.preventDefault();
+    walk(e.key === "ArrowLeft" ? "back" : "forward");
+  });
+  window.addEventListener("mouseup", (e) => {
+    if (e.button !== 3 && e.button !== 4) return;
+    e.preventDefault();
+    walk(e.button === 3 ? "back" : "forward");
+  });
+  desktop.onNavigate?.((dir) => walk(dir));
+}
+/** A text field, editable area or select has the focus (keys belong to it). */
+function typingIn(t: EventTarget | null) {
+  const el = t instanceof Element ? t : null;
+  if (!el) return false;
+  if (el.closest("textarea, select, [contenteditable]:not([contenteditable=false])")) return true;
+  const i = el.closest("input");
+  return !!i && !["checkbox", "radio", "button", "submit", "reset", "range", "color", "file"].includes(i.type);
 }
 
 // ── mobile drawer (MainLayout) ──────────────────────────────────────
@@ -435,6 +485,12 @@ const inRecovered = () => underRecovered;
 const DRAG_TYPE = "application/x-ddn-nodes";
 const openFolder = (id: string) => navigate(id === "root" ? "/" : `/folder/${id}`);
 
+/** Where "Up" (button, Backspace) goes from the open folder: its parent's address, or null at the top. */
+let upHref: string | null = null;
+/** One level up (the Up button and Backspace): a normal navigation, so Back returns here. */
+function goUp() {
+  if (route.name === "files" && upHref) navigate(upHref);
+}
 /** Breadcrumb links are drop targets too (drag rows onto a parent folder). */
 function crumbLink(id: string, label: string) {
   const a = h("a", { href: id === "root" ? "/" : `/folder/${id}`, "data-link": "", title: label, "data-drop": id }, label);
@@ -457,6 +513,17 @@ function renderCrumbs(fullPath: { id: string; name: string }[]) {
     back.append(a);
   } else back.append(h("span", { "aria-current": "page" }, rootLabel));
   kids.push(back);
+  // Up: the parent folder (also a drop target: move the dragged rows there). Not shown at the top.
+  const parentId = path.length ? (path.at(-2)?.id ?? rootId) : null;
+  const parentLabel = path.length ? (path.at(-2)?.name ?? rootLabel) : "";
+  upHref = parentId ? (parentId === "root" ? "/" : `/folder/${parentId}`) : null;
+  const up = h("button", { class: "iconbtn up", type: "button", "data-ddn": "up", "aria-label": t("files.up"), title: t("files.up") }, icon("up"));
+  up.onclick = () => goUp();
+  if (parentId) {
+    up.dataset.drop = parentId;
+    up.dataset.dropName = parentLabel;
+  } else up.hidden = true;
+  kids.push(up);
   const desk = h("span", { class: "desk crumbs" });
   desk.append(path.length ? crumbLink(rootId, rootLabel) : h("span", { "aria-current": "page" }, rootLabel));
   path.forEach((p, i) => {
@@ -553,6 +620,18 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
     const go = iconBtn("right", t("files.open", { name: r.name }), t("files.open", { name: r.name }));
     go.onclick = () => openFolder(r.id);
     acts.append(go, trashBtn());
+    // A click anywhere on a folder row (not on its buttons / checkbox / name link) opens it, like the
+    // preview of a file row; Enter on the row or on its checkbox too (the name link handles its own Enter).
+    tr.classList.add("open-row");
+    tr.onclick = (e) => {
+      if (!(e.target as Element | null)?.closest("button, input, a, label, .c-sel")) openFolder(r.id);
+    };
+    tr.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      if (e.target !== tr && e.target !== box) return;
+      e.preventDefault();
+      openFolder(r.id);
+    });
   } else {
     const [, label, tone] = typeOf(r.name);
     const badge = h("span", { class: `badge ${tone}` }, label);
@@ -1037,69 +1116,98 @@ function wireSearch() {
 }
 
 // ── upload queue (UploadProgress) ───────────────────────────────────
-// The panel closes itself when the queue is done: ~5 s when everything went
-// in, longer after a failure or a cancel (time to read it); hover / focus pause the countdown, × closes
-// at once, a new upload cancels it. Files that failed stay in the warning bar (Details, Retry).
-const QUEUE_CLOSE_OK_MS = 5000;
-const QUEUE_CLOSE_PROBLEM_MS = 12000;
+// The transfer panels (uploads, downloads) close themselves when they are done: 5 s when everything went
+// fine, 12 s after a failure or a cancel (time to read it). A bar at the bottom of the panel shrinks to zero
+// meanwhile (accent; error / warning colour after a failure / cancel); hover or focus pauses it where it
+// is, leaving continues from there, × closes at once, a new transfer cancels it. With reduced motion the
+// bar does not move: a text says in how many seconds the panel closes. Files that failed to upload stay
+// in the warning bar (Details, Retry).
+const CLOSE_OK_MS = 5000;
+const CLOSE_PROBLEM_MS = 12000;
+type Closer = { start(result: "ok" | "err" | "cancel"): void; stop(): void };
+function panelCloser(box: HTMLElement, close: () => void): Closer {
+  const bar = h("span", { class: "closebar", "data-ddn": "close-bar", "aria-hidden": "true" });
+  const text = h("span", { class: "closein", "data-ddn": "close-in", hidden: "" });
+  box.append(bar);
+  box.querySelector(".uploads-h .t")?.append(text);
+  let anim: Animation | null = null;
+  let tick = 0;
+  let held = false;
+  const paintText = () => {
+    if (!anim) return;
+    const total = Number(anim.effect?.getTiming().duration ?? 0);
+    const left = Math.max(0, total - Number(anim.currentTime ?? 0));
+    text.textContent = t("panel.closesIn", { s: Math.max(1, Math.ceil(left / 1000)) });
+  };
+  const stop = () => {
+    anim?.cancel();
+    anim = null;
+    clearInterval(tick);
+    text.hidden = true;
+    delete box.dataset.closing;
+    delete box.dataset.paused;
+    delete box.dataset.result;
+  };
+  const hold = (on: boolean) => {
+    held = on;
+    if (!anim) return;
+    if (on) {
+      anim.pause();
+      box.dataset.paused = "1";
+    } else {
+      anim.play();
+      delete box.dataset.paused;
+    }
+  };
+  box.addEventListener("pointerenter", (e) => {
+    if (e.pointerType !== "touch") hold(true);
+  });
+  box.addEventListener("pointerleave", () => hold(box.contains(document.activeElement)));
+  box.addEventListener("focusin", () => hold(true));
+  box.addEventListener("focusout", (e) => hold(box.contains(e.relatedTarget as Node | null) || box.matches(":hover")));
+  return {
+    stop,
+    start(result) {
+      stop();
+      const ms = result === "ok" ? CLOSE_OK_MS : CLOSE_PROBLEM_MS;
+      box.dataset.result = result;
+      box.dataset.closing = "1";
+      // The animation is the clock: pausing it pauses the closing, its end closes the panel.
+      const a = bar.animate([{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }], { duration: ms, easing: "linear", fill: "forwards" });
+      anim = a;
+      void a.finished.then(
+        () => {
+          if (anim === a) {
+            stop();
+            close();
+          }
+        },
+        () => {},
+      );
+      if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        text.hidden = false;
+        paintText();
+        tick = window.setInterval(paintText, 250);
+      }
+      // Already under the pointer (not a stale touch :hover) or holding the focus: starts paused.
+      hold((held && box.matches(":hover")) || box.contains(document.activeElement));
+    },
+  };
+}
+
 let queueBatches = 0;
-let queueProblem = false;
-const queueClose: { timer: number; left: number; since: number; held: boolean } = { timer: 0, left: 0, since: 0, held: false };
+let queueProblem: "" | "err" | "cancel" = "";
+let queueCloser: Closer | null = null;
 const failedUploads: { file: File; folder: string; why: string }[] = [];
 function closeQueue() {
-  stopQueueCountdown();
-  queueProblem = false;
+  queueCloser?.stop();
+  queueProblem = "";
   ui("queue").hidden = true;
   ui("queue-list").replaceChildren();
 }
-function stopQueueCountdown() {
-  clearTimeout(queueClose.timer);
-  queueClose.timer = 0;
-  const box = ui("queue");
-  delete box.dataset.closing;
-  delete box.dataset.paused;
-}
-function runQueueCountdown() {
-  const box = ui("queue");
-  clearTimeout(queueClose.timer);
-  if (queueClose.held) {
-    box.dataset.paused = "1";
-    return;
-  }
-  delete box.dataset.paused;
-  queueClose.since = Date.now();
-  queueClose.timer = window.setTimeout(closeQueue, queueClose.left);
-}
-function startQueueCountdown() {
-  const box = ui("queue");
-  const ms = queueProblem ? QUEUE_CLOSE_PROBLEM_MS : QUEUE_CLOSE_OK_MS;
-  queueClose.left = ms;
-  box.dataset.result = queueProblem ? "err" : "ok";
-  box.style.setProperty("--close-ms", `${ms}ms`);
-  box.removeAttribute("data-closing");
-  void box.offsetWidth; // restart the hairline animation
-  box.dataset.closing = "1";
-  runQueueCountdown();
-}
-function holdQueue(on: boolean) {
-  if (queueClose.held === on) return;
-  queueClose.held = on;
-  if (!ui("queue").dataset.closing) return;
-  if (on) {
-    clearTimeout(queueClose.timer);
-    queueClose.left = Math.max(1000, queueClose.left - (Date.now() - queueClose.since));
-    ui("queue").dataset.paused = "1";
-  } else runQueueCountdown();
-}
 function wireQueue() {
-  const box = ui("queue");
-  const hovered = () => box.matches(":hover");
-  box.addEventListener("pointerenter", (e) => {
-    if (e.pointerType !== "touch") holdQueue(true);
-  });
-  box.addEventListener("pointerleave", () => holdQueue(box.contains(document.activeElement)));
-  box.addEventListener("focusin", () => holdQueue(true));
-  box.addEventListener("focusout", (e) => holdQueue(box.contains(e.relatedTarget as Node | null) || hovered()));
+  queueCloser = panelCloser(ui("queue"), closeQueue);
+  dlCloser = panelCloser($("downloads"), closeDownloads);
   ui("queue-close").onclick = () => closeQueue();
   const bar = $("upload-failed");
   const list = $("upload-failed-list");
@@ -1147,7 +1255,7 @@ async function uploadItems(files: UploadItem[], into?: string) {
     return;
   }
   const folder = into ?? currentFolder();
-  stopQueueCountdown(); // a new upload cancels the closing
+  queueCloser?.stop(); // a new upload cancels the closing
   queueBatches++;
   const box = ui("queue");
   const list = ui("queue-list");
@@ -1192,7 +1300,7 @@ async function uploadItems(files: UploadItem[], into?: string) {
   for (const item of items) {
     const { f, state, bar, token } = item;
     if (item.cancelled) {
-      queueProblem = true;
+      queueProblem ||= "cancel";
       state.className = "qstate cancel";
       bar.className = "cancel";
       state.textContent = t("queue.cancelled");
@@ -1233,7 +1341,7 @@ async function uploadItems(files: UploadItem[], into?: string) {
       // Cancelled is the user's choice, not a failure: muted text and bar like discordrive's CANCELLED.
       state.className = item.cancelled ? "qstate cancel" : "qstate err";
       bar.className = item.cancelled ? "cancel" : "err";
-      queueProblem = true;
+      queueProblem = item.cancelled ? queueProblem || "cancel" : "err";
       if (item.cancelled) state.textContent = t("queue.cancelled");
       else {
         failed++;
@@ -1266,7 +1374,7 @@ async function uploadItems(files: UploadItem[], into?: string) {
   if (failed) toast(t("queue.failed", { failed, total: files.length }), "err");
   paintFailed();
   void paintUnfinished();
-  startQueueCountdown();
+  queueCloser?.start(queueProblem || "ok");
   await render();
 }
 
@@ -1482,7 +1590,7 @@ async function paintUnfinished() {
 
 // ── downloads panel: progress, speed, time left, cancel ──
 let dlRunning = 0;
-let dlCloseTimer = 0;
+let dlCloser: Closer | null = null;
 function dlMeta() {
   const items = all<HTMLElement>("[data-ddn=dl-item]");
   const failed = items.filter((li) => li.dataset.state === "err").length;
@@ -1490,7 +1598,7 @@ function dlMeta() {
   $("dl-close").hidden = dlRunning > 0;
 }
 function closeDownloads() {
-  clearTimeout(dlCloseTimer);
+  dlCloser?.stop();
   $("downloads").hidden = true;
   $("dl-list").replaceChildren();
 }
@@ -1511,7 +1619,7 @@ async function uploadPathsFromDrop(paths: string[]) {
 function download(id: string, name: string) {
   const box = $("downloads");
   const list = $("dl-list");
-  clearTimeout(dlCloseTimer);
+  dlCloser?.stop(); // a new download cancels the closing
   const token = crypto.randomUUID();
   const state = h("span", { class: "qstate run" }, "0%");
   const bar = h("i");
@@ -1561,8 +1669,11 @@ function download(id: string, name: string) {
     if (ok) paint();
     else speed.textContent = "";
     dlMeta();
-    // Closes itself a few seconds after the last download went fine; a failure stays until ×.
-    if (!dlRunning && !all<HTMLElement>("[data-ddn=dl-item]").some((x) => x.dataset.state === "err")) dlCloseTimer = window.setTimeout(closeDownloads, 6000);
+    // When the last one ended: closes itself like the upload queue (longer after a failure or a cancel).
+    if (!dlRunning) {
+      const states = all<HTMLElement>("[data-ddn=dl-item]").map((x) => x.dataset.state);
+      dlCloser?.start(states.includes("err") ? "err" : states.includes("cancel") ? "cancel" : "ok");
+    }
   };
   // Desktop: the agent writes the file straight to the downloads folder (at offsets, resumable).
   const toDisk = async () => {
@@ -2124,7 +2235,7 @@ function wireSelection() {
     const ids = (JSON.parse(e.dataTransfer!.getData(DRAG_TYPE) || "[]") as string[]).filter((id) => id !== t0.dataset.drop);
     const dest = t0.dataset.drop!;
     if (!ids.length || dest === currentFolder()) return;
-    const name = dest === "root" ? t("files.root") : dest === "recovered" ? t("nav.recovered") : (t0.querySelector("a")?.textContent ?? t0.textContent ?? "").trim();
+    const name = dest === "root" ? t("files.root") : dest === "recovered" ? t("nav.recovered") : (t0.dataset.dropName ?? t0.querySelector("a")?.textContent ?? t0.textContent ?? "").trim();
     const first = document.querySelector<HTMLElement>(`[data-ddn=row][data-id="${CSS.escape(ids[0]!)}"] .nm > :last-child`)?.textContent ?? "";
     void act(null, () => moveItems(ids, dest, name, first));
   });

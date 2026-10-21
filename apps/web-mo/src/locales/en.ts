@@ -74,6 +74,8 @@ export const en: Record<string, string> = {
   "files.next": "Next page",
   "files.folder": "folder",
   "files.open": "Open {name}",
+  "files.up": "Parent folder",
+  "panel.closesIn": "Closes in {s} s",
   "files.play": "Play",
   "files.play.aria": "Play {name}",
   "files.download": "Download",
