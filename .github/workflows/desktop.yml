@@ -55,6 +55,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck -w @ddv4/desktop
 
+      - name: Agent tests (core on Node, HTTP/2 pool, disk transfers, resume after SIGKILL)
+        run: npm test -w @ddv4/desktop
+
       - name: Smoke test
         run: |
           npm run build -w @ddv4/desktop

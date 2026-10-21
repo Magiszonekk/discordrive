@@ -9,10 +9,17 @@
     "build": "tsx build.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "tsx build.ts && electron .",
-    "smoke": "tsx build.ts && tsx test/smoke.ts"
+    "smoke": "tsx build.ts && tsx test/smoke.ts",
+    "test": "vitest run"
   },
   "devDependencies": {
     "electron": "45.0.0",
-    "esbuild": "~0.27.0"
+    "esbuild": "~0.27.0",
+    "vitest": "^4.1.5"
+  },
+  "dependencies": {
+    "@ddv4/metadata-client": "*",
+    "@ddv4/sync-core": "*",
+    "@ddv4/web-mo": "*"
   }
 }

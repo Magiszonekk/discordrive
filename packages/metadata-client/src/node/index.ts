@@ -8,3 +8,4 @@ export { ShareStore, DiscordBotRefresher, checkBotToken, type BotRefresher } fro
 export { StaticSite, DISCORD_ORIGINS, securityHeaders, type StaticOptions } from "./static.js";
 export { Ed25519Authenticator, AuthError, authTables, CHALLENGE_TTL_MS, DEFAULT_SESSION_TTL_MS } from "./auth.js";
 export { FakeDiscord } from "./fake-discord.js";
+export { h2Fetch, LANE_HEADER, type H2Fetch, type H2FetchOptions, type H2Event } from "./h2-fetch.js";

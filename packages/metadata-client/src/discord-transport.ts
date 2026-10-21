@@ -104,7 +104,13 @@ export class DiscordWebhookTransport implements WebhookTransport {
     const t0 = timing ? nowMs() : 0;
     try {
       res = await this.f(url, { ...init, signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
-      if (timing) ((timing.ttfb = ms(t0)), (timing.st = res.status));
+      if (timing) {
+        timing.ttfb = ms(t0);
+        timing.st = res.status;
+        // A Node transport with its own connections says which one answered (transfer log `ln`).
+        const ln = res.headers.get("x-ddn-lane");
+        if (ln !== null && timing.lane === undefined) timing.lane = Number(ln);
+      }
     } catch (e) {
       if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
       // No HTTP answer at all (offline, reset, DNS, timeout): the link, not Discord (net.ts tells them apart).
