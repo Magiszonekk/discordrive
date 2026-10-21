@@ -626,15 +626,15 @@ try {
 
   // 8. share link, opened in a fresh context (no account)
   step("share");
-  await p.click("[data-ddn=prev]");
-  await p.waitForSelector("[data-ddn=row]:has-text('notatki.txt')", { state: "attached" }).catch(() => {});
-  // Share buttons follow the instance's health (shares on/off); wait for the row's actions, not just the row
-  // (under load the first page could still be drawn without them and the step was skipped as "no bot").
-  const sharesOn = !!(await (await fetch(`${base}/v1/health`)).json() as { shares?: boolean }).shares;
-  if (sharesOn) await p.waitForSelector("[data-ddn=row]:has-text('notatki.txt') [data-ddn=share]", { timeout: 15_000 }).catch(() => {});
-  if ((await p.locator("[data-ddn=share]").count()) > 0) {
-    await p.click("[data-ddn=next]");
-    await p.locator("[data-ddn=row]", { hasText: "notatki.txt" }).locator("[data-ddn=share]").click();
+  // Whether the instance shares at all comes from its health (a bot, or e2ee/plain's own refresh), not from
+  // counting share buttons on whatever page is open: the first page holds only folders (65 of them by now),
+  // and the old count skipped the step as "no bot" whenever the file row was not on it.
+  const sharesOn = !!((await (await fetch(`${base}/v1/health`)).json()) as { shares?: boolean }).shares;
+  if (sharesOn) {
+    const fileRow = p.locator("[data-ddn=row]", { hasText: "notatki.txt" });
+    if (!(await fileRow.count())) await p.click("[data-ddn=next]");
+    await fileRow.locator("[data-ddn=share]").waitFor({ timeout: 30_000 });
+    await fileRow.locator("[data-ddn=share]").click();
     await p.waitForSelector("[data-ddn=share-dialog][open]", { timeout: 30_000 });
     const link = await p.inputValue("[data-ddn=share-link]");
     await shot(p, "06-share-link");
@@ -664,7 +664,7 @@ try {
     share.revokedStopsNew = true;
     r.share = share;
     await sctx.close();
-  } else r.share = sharesOn ? false : "unavailable (no bot)";
+  } else r.share = "unavailable (no bot)";
 
   // 9. pairing a second device (another browser context), on a phone viewport
   step("pairing");
