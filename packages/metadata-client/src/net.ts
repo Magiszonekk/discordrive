@@ -111,7 +111,7 @@ export class AdaptiveWindow {
   /** Network errors that did not cut (isolated among successes). */
   ignored = 0;
   recoveries = 0;
-  /** Last network error / timeout seen (weak-link state for the UI). */
+  /** Last network error / timeout of a burst (weak-link state for the UI). */
   lastErrAt = -Infinity;
   inUse = 0;
   private waiters: (() => void)[] = [];
@@ -205,15 +205,16 @@ export class AdaptiveWindow {
   /** A network error or timeout of a request that started at `startedAt`. */
   fail(startedAt: number, why: "net" | "timeout" = "net"): void {
     const now = this.clock.now();
-    this.lastErrAt = now;
-    this.okRun = 0;
-    if (startedAt < this.lastCutAt) return; // the same loss event (it was in flight when we cut)
+    if (startedAt < this.lastCutAt) return void (this.lastErrAt = now); // the same loss event (in flight when we cut)
     this.note(true, now);
     if (!this.burstNow(now)) {
-      // One error among requests that succeed: the caller retries it, the window stays.
+      // One error among requests that succeed: the caller retries it; the window stays, and it does not
+      // count as a weak link (no "weak" in the UI, the window still follows a new maximum at once).
       this.ignored++;
       return;
     }
+    this.lastErrAt = now;
+    this.okRun = 0;
     if (this.limit <= this.min) return;
     // Cut again soon after a recovery: the value before was too high; no jump back this time (slow growth only).
     this.good = now - this.recoveredAt < 2 * this.o.recoverMs ? 0 : Math.max(this.good, this.limit);

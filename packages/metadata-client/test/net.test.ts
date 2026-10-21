@@ -492,3 +492,23 @@ describe("upload reference speed", () => {
     expect(events.filter((e) => e === "guard")).toEqual([]);
   });
 });
+
+describe("adaptive window: an ignored error", () => {
+  it("is not a weak link and does not stop the window from following a new maximum", () => {
+    const c = new (class implements NetClock {
+      t = 1_000_000;
+      now = () => this.t;
+      random = () => 0.5;
+      setTimeout = () => 0;
+      clearTimeout = () => {};
+    })();
+    const w = new AdaptiveWindow("up", 8, c);
+    for (let k = 0; k < 20; k++) (c.t += 200, w.ok());
+    c.t += 100;
+    w.fail(c.t - 50);
+    expect(w.ignored).toBe(1);
+    expect(w.weak()).toBe(false);
+    w.setMax(16); // the automatic value stepped up
+    expect(w.limit).toBe(16);
+  });
+});
