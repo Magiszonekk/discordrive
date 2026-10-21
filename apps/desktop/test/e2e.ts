@@ -62,6 +62,14 @@ async function gone(pid: number | undefined, ms = 30_000) {
     if (Date.now() > end) break;
     await new Promise((r) => setTimeout(r, 200));
   }
+  // Its helper processes (agent, instance, GPU …) too: they keep the profile and the single-instance lock.
+  if (process.platform === "win32") {
+    for (let i = 0; i < 50; i++) {
+      const out = execFileSync("tasklist", ["/FI", "IMAGENAME eq electron.exe", "/NH"], { encoding: "utf8" });
+      if (!/electron\.exe/i.test(out)) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
   await new Promise((r) => setTimeout(r, 1500));
 }
 let ok = true;

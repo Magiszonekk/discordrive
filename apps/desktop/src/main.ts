@@ -560,6 +560,7 @@ else {
   app.on("window-all-closed", () => {
     if (process.env.DDN_DESKTOP_QUIT_ON_CLOSE) app.quit();
   });
+  let stopped = false;
   app.on("before-quit", (e) => {
     if (!quitting && busy.busy) {
       e.preventDefault();
@@ -567,7 +568,15 @@ else {
       return;
     }
     quitting = true;
-    agent?.postMessage({ type: "quit" });
-    instance?.postMessage({ type: "quit" });
+    if (stopped) return;
+    // The agent and the built-in instance stop first (database closed, journals flushed); the app ends
+    // after them, so a new start never meets a half-closed one (at most 5 s).
+    e.preventDefault();
+    const ends = [agent, instance].filter((p): p is UtilityProcess => !!p && p.pid !== undefined).map((p) => new Promise<void>((r) => (p.once("exit", () => r()), p.postMessage({ type: "quit" }))));
+    void Promise.race([Promise.all(ends), new Promise((r) => setTimeout(r, 5000))]).then(() => {
+      stopped = true;
+      for (const p of [agent, instance]) p?.kill();
+      app.quit();
+    });
   });
 }
