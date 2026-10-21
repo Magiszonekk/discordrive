@@ -671,7 +671,10 @@ else {
       qdbg(`children stopped: ${why}`);
       stopped = true;
       for (const p of [agent, instance]) p?.kill();
-      runOnQuit?.();
+      // Once, even when Quit was asked twice (a second click while the first quit waits for the children).
+      const run = runOnQuit;
+      runOnQuit = null;
+      run?.();
       app.quit();
     });
   });
