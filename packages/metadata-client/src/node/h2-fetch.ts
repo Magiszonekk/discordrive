@@ -4,7 +4,10 @@
 // Measured (docs/conn-bench.md, docs/desktop-agent-transport.md):
 //  - uploads need SEVERAL separate connections: on one HTTP/2 connection Discord resets streams past some
 //    concurrency (ENHANCE_YOUR_CALM / INTERNAL_ERROR at 32 × 10 MiB); the same posts over separate
-//    connections all pass and reach ~91% of the line;
+//    connections all pass and reach ~91% of the line. conn-bench's h2-N is ONE connection per post in
+//    flight; the agent measured on a test server (2 GB, 12 channels): 6 sessions × up to 6 streams got
+//    resets down to 1–2 streams per session and 17 MB/s, one stream per session matches conn-bench. So an
+//    upload session carries one large post at a time, and sessions are opened as the window grows;
 //  - downloads are best on ONE connection (112 MB/s on a 110 MB/s line; N connections measured worse).
 // So: requests with a body go to a small pool of sessions ("up" lanes) with a per-session stream cap;
 // requests without one go to one session per origin ("down"), plus extra lanes for the stuck-connection
@@ -25,9 +28,9 @@ import { NetworkError } from "../net.js";
 const { NGHTTP2_REFUSED_STREAM, NGHTTP2_ENHANCE_YOUR_CALM, NGHTTP2_CANCEL, NGHTTP2_NO_ERROR } = http2.constants;
 
 export interface H2FetchOptions {
-  /** Separate sessions for uploads (requests with a body). Default 6. */
+  /** Most separate sessions for uploads (requests with a body); opened as needed. Default 32. */
   upSessions?: number;
-  /** Streams at once on one upload session at first (lowered when the server refuses). Default 6. */
+  /** Streams at once on one upload session (lowered when the server refuses). Default 1. */
   upStreams?: number;
   /** Streams at once on the download session. Default 64 (one connection carries everything). */
   downStreams?: number;
@@ -77,10 +80,16 @@ class Group {
   async acquire(only?: number): Promise<Lane> {
     for (;;) {
       const cands = only === undefined ? this.lanes : [this.lanes[only]!];
+      // A live session with a free slot first; a new session only when every live one is full (sessions
+      // are opened as the number of requests in flight grows, never all up front).
       let best: Lane | null = null;
-      for (const l of cands) {
-        if (!l.usable()) this.open(this, l);
-        if (l.active < l.cap && (!best || l.active < best.active)) best = l;
+      for (const l of cands) if (l.usable() && l.active < l.cap && (!best || l.active < best.active)) best = l;
+      if (!best) {
+        const fresh = cands.find((l) => !l.usable());
+        if (fresh) {
+          this.open(this, fresh);
+          best = fresh;
+        }
       }
       if (best) {
         best.active++;
@@ -103,6 +112,11 @@ class NotProcessed extends Error {}
 
 export interface H2Fetch {
   (input: string | URL | Request, init?: RequestInit): Promise<Response>;
+  /**
+   * A request whose body is given as parts, written to the connection as they are (no copy; the webhook
+   * post: multipart head + the 10 MiB fragment + tail). Same sessions and rules as a fetch with a body.
+   */
+  sendParts(url: string, init: { method: string; headers: Record<string, string>; parts: Uint8Array[]; signal?: AbortSignal }): Promise<Response>;
   /** Download on a given lane of the origin's download group (lane ≥ 1: the guard's extra connections). */
   onLane(lane: number): (url: string, init?: { signal?: AbortSignal }) => Promise<Response>;
   /** Close every session. */
@@ -112,8 +126,8 @@ export interface H2Fetch {
 }
 
 export function h2Fetch(o: H2FetchOptions = {}): H2Fetch {
-  const upN = Math.max(1, o.upSessions ?? 6);
-  const upCap = Math.max(1, o.upStreams ?? 6);
+  const upN = Math.max(1, o.upSessions ?? 32);
+  const upCap = Math.max(1, o.upStreams ?? 1);
   const downCap = Math.max(1, o.downStreams ?? 64);
   const fallback = o.fallback ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const groups = new Map<string, Group>();
@@ -162,7 +176,7 @@ export function h2Fetch(o: H2FetchOptions = {}): H2Fetch {
   };
 
   /** One request on one stream; resolves at the response headers, the body streams after. */
-  const onStream = (g: Group, l: Lane, url: URL, method: string, headers: Record<string, string>, body: Uint8Array | null, signal?: AbortSignal | null): Promise<Response> =>
+  const onStream = (g: Group, l: Lane, url: URL, method: string, headers: Record<string, string>, body: ReadableStream<Uint8Array> | null, signal?: AbortSignal | null): Promise<Response> =>
     new Promise<Response>((resolve, reject) => {
       if (signal?.aborted) return reject(abortErr(signal));
       let req: ClientHttp2Stream;
@@ -232,15 +246,16 @@ export function h2Fetch(o: H2FetchOptions = {}): H2Fetch {
         resolve(new Response(nullBody ? null : stream, { status, headers: out }));
       });
       req.setTimeout(0);
-      if (body) req.end(body);
+      if (body) void pump(body, req).catch((e) => req.destroy(e as Error));
     });
 
-  const run = async (url: URL, method: string, headers: Record<string, string>, body: Uint8Array | null, signal: AbortSignal | null | undefined, role: "up" | "down", lane?: number): Promise<Response> => {
+  /** `body()` makes the request body afresh for every attempt (a stream can be read once). */
+  const run = async (url: URL, method: string, headers: Record<string, string>, body: (() => ReadableStream<Uint8Array> | null) | null, signal: AbortSignal | null | undefined, role: "up" | "down", lane?: number): Promise<Response> => {
     const g = group(url.origin, role, lane === undefined ? 1 : lane + 1);
     for (let tries = 0; ; tries++) {
       const l = await g.acquire(lane);
       try {
-        const r = await onStream(g, l, url, method, headers, body, signal);
+        const r = await onStream(g, l, url, method, headers, body ? body() : null, signal);
         // The stream slot is held until the body is read (or cancelled).
         return holdUntilRead(r, () => g.release(l));
       } catch (e) {
@@ -259,14 +274,35 @@ export function h2Fetch(o: H2FetchOptions = {}): H2Fetch {
     const req = new Request(input, init);
     const url = new URL(req.url);
     if (url.protocol !== "https:" || noH2.has(url.origin)) return fallback(req);
-    const body = req.body ? new Uint8Array(await req.arrayBuffer()) : null;
     const headers: Record<string, string> = {};
     req.headers.forEach((v, k) => (headers[k] = v));
     const signal = init.signal ?? null;
-    const r = await run(url, req.method, headers, body, signal, body ? "up" : "down");
-    return r;
+    // The body (a webhook post: multipart with a ~10 MiB fragment) is streamed onto the connection, never
+    // copied whole; an attempt the server did not process gets it serialized again from `init`.
+    let first: Request | null = req;
+    const body = req.body
+      ? () => {
+          const r = first ?? new Request(input, init);
+          first = null;
+          return r.body;
+        }
+      : null;
+    return run(url, req.method, headers, body, signal, body ? "up" : "down");
   }) as H2Fetch;
 
+  f.sendParts = async (u, init) => {
+    const url = new URL(u);
+    if (url.protocol !== "https:" || noH2.has(url.origin)) return fallback(u, { method: init.method, headers: init.headers, body: new Blob(init.parts as BlobPart[]), signal: init.signal });
+    const len = init.parts.reduce((s, p) => s + p.byteLength, 0);
+    const parts = () =>
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          for (const p of init.parts) c.enqueue(p);
+          c.close();
+        },
+      });
+    return run(url, init.method, { ...lower(init.headers), "content-length": String(len) }, parts, init.signal, "up");
+  };
   f.onLane = (lane) => async (u, init) => {
     const url = new URL(u);
     if (url.protocol !== "https:" || noH2.has(url.origin)) return fallback(u, init);
@@ -279,6 +315,24 @@ export function h2Fetch(o: H2FetchOptions = {}): H2Fetch {
   f.stats = () => [...groups.values()].flatMap((g) => g.lanes.map((l) => ({ origin: g.origin, role: g.role, lane: l.index, alive: l.usable(), active: l.active, cap: l.cap })));
   return f;
 }
+
+/** Copy a body stream onto an HTTP/2 stream, waiting for the connection to drain (back-pressure). */
+async function pump(body: ReadableStream<Uint8Array>, req: ClientHttp2Stream): Promise<void> {
+  const reader = body.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (req.destroyed) return void reader.cancel().catch(() => {});
+      if (!req.write(value)) await new Promise<void>((r) => req.once("drain", r).once("close", r));
+    }
+    if (!req.destroyed) req.end();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+const lower = (h: Record<string, string>) => Object.fromEntries(Object.entries(h).map(([k, v]) => [k.toLowerCase(), v]));
 
 function abortErr(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : Object.assign(new Error("aborted"), { name: "AbortError" });

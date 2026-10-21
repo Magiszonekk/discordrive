@@ -65,23 +65,28 @@ function reset() {
 }
 
 describe("h2Fetch", () => {
-  it("uploads spread over separate sessions, downloads share one", async () => {
+  it("uploads spread over separate sessions (one post each), downloads share one", async () => {
     reset();
     mode.delayMs = 50;
-    const f = h2Fetch({ upSessions: 4, upStreams: 2, tls: { ca } });
+    // Default: one large post per session, sessions opened as posts are in flight.
+    const f = h2Fetch({ tls: { ca } });
     const ups = await Promise.all(Array.from({ length: 8 }, (_, i) => f(`${origin}/up/${i}`, { method: "POST", body: new Uint8Array(1000 + i) })));
     const upLanes = new Set(ups.map((r) => r.headers.get(LANE_HEADER)));
     const bodies = await Promise.all(ups.map((r) => r.json() as Promise<{ len: number }>));
     expect(bodies.map((b) => b.len).sort()).toEqual(Array.from({ length: 8 }, (_, i) => 1000 + i));
-    expect(upLanes.size).toBe(4);
-    expect(new Set(sessionOfReq).size).toBe(4);
+    expect(upLanes.size).toBe(8);
+    expect(new Set(sessionOfReq).size).toBe(8);
+    // Two posts at a time afterwards: the sessions already open are reused, no new ones.
+    sessionOfReq.length = 0;
+    for (let k = 0; k < 3; k++) await Promise.all([0, 1].map((i) => f(`${origin}/up/again${k}${i}`, { method: "POST", body: new Uint8Array(10) }).then((r) => r.json())));
+    expect(f.stats().filter((s) => s.role === "up" && s.alive)).toHaveLength(8);
 
     sessionOfReq.length = 0;
     const downs = await Promise.all(Array.from({ length: 10 }, (_, i) => f(`${origin}/down/${i}`).then((r) => r.json())));
     expect(downs).toHaveLength(10);
     expect(new Set(sessionOfReq).size).toBe(1);
     const st = f.stats();
-    expect(st.filter((s) => s.role === "up" && s.alive)).toHaveLength(4);
+    expect(st.filter((s) => s.role === "up" && s.alive)).toHaveLength(8);
     expect(st.filter((s) => s.role === "down" && s.alive)).toHaveLength(1);
     f.close();
   });
