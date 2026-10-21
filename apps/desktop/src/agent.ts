@@ -14,6 +14,8 @@
 //   { type: "seal" | "unseal", id, data }    the OS key store lives in the main process (safeStorage)
 //   { type: "status", busy, up, down }       for the tray (what is running)
 //   { type: "notify", kind, name, bytes }    a large transfer finished
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { h2Fetch } from "@ddv4/metadata-client/node";
 import { AppCore, type CoreEvent } from "../../web-mo/src/app-core.js";
@@ -93,8 +95,29 @@ async function start(init: AgentInit): Promise<AppCore> {
   });
   setDownloadsDir = (d) => platform.files?.setDownloadsDir?.(d);
   const c = new AppCore({ discordApiOrigin: init.discordApiOrigin }, platform);
+  // What the network checks learned (the reference speed, the automatic pieces in flight) is kept by the
+  // agent itself: in the browser the page keeps it, but the agent also runs with no window open.
+  const netFile = join(init.dataDir, "net.json");
+  const net = ((): { baseline?: unknown; tune?: { up?: number; down?: number } } => {
+    try {
+      return JSON.parse(readFileSync(netFile, "utf8"));
+    } catch {
+      return {};
+    }
+  })();
+  c.setNetPrefs({ ...(net.baseline ? { baseline: net.baseline } : {}), ...(net.tune ? { tune: net.tune } : {}) });
+  const keepNet = (patch: typeof net) => {
+    Object.assign(net, patch);
+    try {
+      writeFileSync(netFile, JSON.stringify(net), { mode: 0o600 });
+    } catch {
+      /* next time */
+    }
+  };
   c.onEvent = (e) => {
     track(e);
+    if (e.type === "net-baseline") keepNet({ baseline: e.data });
+    else if (e.type === "net-tune") keepNet({ tune: e.data });
     broadcast(e);
   };
   core = c;

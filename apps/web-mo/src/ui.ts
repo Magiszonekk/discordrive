@@ -1395,7 +1395,8 @@ function wireNet() {
   addEventListener("offline", () => void core.setOnline(false));
   if (!navigator.onLine) void core.setOnline(false);
   const p = storedNet();
-  void core.setNetPrefs({ saveData: !!p.saveData, guard: p.guard !== false, baseline: p.baseline ?? null, tune: p.tune ?? null }).then(paintNetSettings);
+  // Desktop: the agent keeps the reference speed and the automatic values itself (it runs without a window).
+  void core.setNetPrefs({ saveData: !!p.saveData, guard: p.guard !== false, ...(desktop ? {} : { baseline: p.baseline ?? null, tune: p.tune ?? null }) }).then(paintNetSettings);
   const save = $<HTMLInputElement>("net-savedata");
   const guard = $<HTMLInputElement>("net-guard");
   save.onchange = () =>
