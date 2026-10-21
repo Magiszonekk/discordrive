@@ -1,0 +1,18 @@
+{
+  "name": "@ddv4/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "discordrive desktop app (Electron): the web app in a window plus a background agent that moves the data over Node.",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "tsx build.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "tsx build.ts && electron .",
+    "smoke": "tsx build.ts && tsx test/smoke.ts"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "esbuild": "~0.27.0"
+  }
+}

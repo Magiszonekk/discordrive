@@ -1,0 +1,65 @@
+name: Desktop app (Electron)
+
+# Builds the desktop app and runs its smoke test on Linux and Windows: the window reaches the background
+# agent over its port, the page has no Node, navigation outside the app is blocked, and the agent keeps
+# running after the window is closed. The Chromium sandbox stays on (no --no-sandbox).
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - "apps/web-mo/**"
+      - "packages/metadata-client/**"
+      - "packages/sync-core/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci --no-audit --no-fund
+
+      - name: "Linux: display, and user namespaces for the Chromium sandbox"
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb
+          # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; the sandbox needs them
+          # (an installed .deb ships its own AppArmor profile instead).
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Typecheck
+        run: npm run typecheck -w @ddv4/desktop
+
+      - name: Smoke test
+        run: |
+          npm run build -w @ddv4/desktop
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a npx tsx apps/desktop/test/smoke.ts
+          else
+            npx tsx apps/desktop/test/smoke.ts
+          fi
