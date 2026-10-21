@@ -5,12 +5,15 @@
 // this checkout, so the same command measures the code before and after a change.
 //
 //   npx tsx scripts/live-transfer-bench.mts webhooks.txt [--mb 1000] [--down auto,16] [--up auto]
-//        [--files 1] [--out dir] [--label before] [--speedtest] [--seed 1]
+//        [--files 1] [--out dir] [--label before] [--speedtest] [--seed 1] [--drop-posts 20,40]
 //
 // The file is generated on the fly from a seed (no Blob of the whole size: a 1 GB Blob is written to the
 // temporary browser profile's disk and a system Chromium/Brave failed to read it back). --speedtest
 // first measures the line itself (speed.cloudflare.com, 8 streams, ~8 s each way, from this process),
 // so the result can be compared with what the line does. CHROMIUM_PATH = the browser to run.
+// --drop-posts 20,40: those webhook posts (numbers in the order they are sent) fail with "Failed to fetch"
+// before leaving the page, as a connection reset would; the client retries them. Shows what isolated
+// network errors do to the speed (the same posts fail in a run of any version).
 //
 // webhooks.txt: webhook URLs of a TEST server, one per line. Every posted message is deleted at the
 // end. The output (summary JSON, transfer logs, report text) has no webhook tokens or CDN links.
@@ -43,14 +46,26 @@ const OUT = arg("out", "");
 const LABEL = arg("label", "run");
 const SEED = Number(arg("seed", "1")) >>> 0;
 const SPEEDTEST = argv.includes("--speedtest");
+const DROP = arg("drop-posts", "").split(",").map(Number).filter((n) => n > 0);
 const HOOK_RE = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/(\d+)\/[A-Za-z0-9_.-]+$/;
 const hooks = readFileSync(file, "utf8").split(/\s+/).filter((l) => HOOK_RE.test(l)).map((url) => ({ id: HOOK_RE.exec(url)![1]!, url }));
 if (!hooks.length) throw new Error("no webhook URLs in file");
 const log = (s: string) => console.error(`[${new Date().toISOString().slice(11, 19)}] ${s}`);
 
 /** Runs in the page: upload `mb` MB, then each download setting; returns the transfer log and the placements to delete. */
-const runSrc = async (D: never, hooks: { id: string; url: string }[], mb: number, up: string, down: string[], files: number, seed: number) => {
+const runSrc = async (D: never, hooks: { id: string; url: string }[], mb: number, up: string, down: string[], files: number, seed: number, drop: number[]) => {
   const DD = D as unknown as typeof import("@ddv4/metadata-client") & { Sequencer: new () => never };
+  if (drop.length) {
+    const real = globalThis.fetch.bind(globalThis);
+    let posts = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "POST" && /\/webhooks\//.test(String(input)) && drop.includes(++posts)) {
+        await new Promise((r) => setTimeout(r, 300));
+        throw new TypeError("Failed to fetch");
+      }
+      return real(input, init);
+    }) as typeof fetch;
+  }
   const size = Math.round(mb * 1e6);
   // Bytes computed from the seed and the offset (xorshift per 4-byte word): any range at any time, the same
   // bytes every run, nothing kept in memory or on disk. Not compressible enough to matter (encrypted anyway).
@@ -181,11 +196,11 @@ try {
   await p.addScriptTag({ content: bundle.outputFiles[0]!.text });
   log(`${LABEL}: ${MB} MB over ${hooks.length} channel(s), upload ${UP}, downloads ${DOWN.join(",")}`);
   res = (await p.evaluate(
-    async ({ src, hooks, mb, up, down, files, seed }) => {
+    async ({ src, hooks, mb, up, down, files, seed, drop }) => {
       const D = (globalThis as unknown as { DDN: never }).DDN;
-      return (new Function(`return (${src})`)() as (...a: unknown[]) => Promise<unknown>)(D, hooks, mb, up, down, files, seed);
+      return (new Function(`return (${src})`)() as (...a: unknown[]) => Promise<unknown>)(D, hooks, mb, up, down, files, seed, drop);
     },
-    { src: runSrc.toString(), hooks, mb: MB, up: UP, down: DOWN, files: FILES, seed: SEED },
+    { src: runSrc.toString(), hooks, mb: MB, up: UP, down: DOWN, files: FILES, seed: SEED, drop: DROP },
   )) as Res;
 } finally {
   await browser.close();
