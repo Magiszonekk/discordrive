@@ -73,10 +73,27 @@ export type NetEmit = (ev: string, f: Record<string, unknown>) => void;
 
 // ── adaptive window (pieces in flight) ──────────────────────────────
 
+export interface WindowOptions {
+  /** Network errors within `spanMs` (since the last cut) before the window is cut… */
+  burst?: number;
+  /** …and at least this share of the requests that ended in that time failed. */
+  share?: number;
+  spanMs?: number;
+  /** After a cut: back to the value before it once this long passed without a burst of errors. */
+  recoverMs?: number;
+}
+
 /**
- * Pieces in flight for one direction, like a TCP congestion window: a network error or timeout halves it
- * (once per "loss event": failures of requests that started before the last cut do not cut again), down
- * to `min` (2); successes raise it by one every ceil(limit / 4) answers, up to the configured maximum.
+ * Pieces in flight for one direction, like a TCP congestion window, but cut only by a BURST of network
+ * errors: at least `burst` (3) errors within `spanMs` (15 s) that are also at least `share` (25 %) of the
+ * requests ending then. A single error among requests that keep succeeding (a connection reset, one
+ * "Failed to fetch" on a fast line) is retried by the caller and leaves the window alone: two such errors
+ * in a 300 MB upload used to halve 8 → 4 → 2 and the upload stayed at 2 (11.7 MB/s on a 68 MB/s line).
+ * A cut halves the window (once per "loss event": failures of requests that started before the cut do
+ * not cut again), down to `min` (2). Recovery: once `recoverMs` (20 s) passed after the cut without
+ * another burst, the window goes straight back to the value before the cut (`good`); between that it
+ * grows by one every ceil(limit / 4) answers. A cut soon after such a recovery means the old value was
+ * too high: then there is no jump back, only the slow growth (and the tuner's next check).
  * 429s and HTTP errors do not touch it (the per-channel pacer handles 429s). Starts at the maximum, so a
  * good link sees no change at all.
  */
@@ -85,6 +102,15 @@ export class AdaptiveWindow {
   private max_: number;
   private okRun = 0;
   private lastCutAt = -Infinity;
+  /** Value before the last cut (recovery target); 0 = nothing to recover. */
+  private good = 0;
+  private recoveredAt = -Infinity;
+  /** Outcomes of recent requests (time, network error or not), for the burst rule. */
+  private recent: { t: number; err: boolean }[] = [];
+  readonly o: Required<WindowOptions>;
+  /** Network errors that did not cut (isolated among successes). */
+  ignored = 0;
+  recoveries = 0;
   /** Last network error / timeout seen (weak-link state for the UI). */
   lastErrAt = -Infinity;
   inUse = 0;
@@ -94,15 +120,41 @@ export class AdaptiveWindow {
   onChange: (() => void) | null = null;
   /** Called after a cut by network errors with the new limit (the automatic value follows it). */
   onCut: ((limit: number) => void) | null = null;
+  /** Called when the window goes back to the value before a cut (the automatic value follows it first). */
+  onRecover: ((limit: number) => void) | null = null;
 
   constructor(
     readonly dir: "up" | "down",
     max: number,
     private readonly clock: NetClock = realClock,
     private readonly emit: NetEmit = () => {},
+    o: WindowOptions = {},
   ) {
     this.max_ = Math.max(1, max);
     this.limit = this.max_;
+    this.o = { burst: o.burst ?? 3, share: o.share ?? 0.25, spanMs: o.spanMs ?? 15_000, recoverMs: o.recoverMs ?? 20_000 };
+  }
+
+  private note(err: boolean, now: number): void {
+    this.recent.push({ t: now, err });
+    const from = now - this.o.spanMs;
+    let i = 0;
+    while (i < this.recent.length && this.recent[i]!.t < from) i++;
+    if (i) this.recent.splice(0, i);
+    if (this.recent.length > 2000) this.recent.splice(0, this.recent.length - 2000);
+  }
+
+  /** A burst of errors right now: enough of them since the last cut, and a real share of what ended. */
+  private burstNow(now: number): boolean {
+    // Only what happened after the last cut counts (the errors that caused it are spent).
+    let errs = 0;
+    let all = 0;
+    for (const r of this.recent) {
+      if (r.t < now - this.o.spanMs || r.t <= this.lastCutAt) continue;
+      all++;
+      if (r.err) errs++;
+    }
+    return errs >= this.o.burst && errs >= this.o.share * all;
   }
 
   get max(): number {
@@ -125,6 +177,22 @@ export class AdaptiveWindow {
 
   /** An HTTP answer (any status except 429 counts as the link working). */
   ok(): void {
+    const now = this.clock.now();
+    this.note(false, now);
+    // Recovery: long enough since the cut and no burst now → back to the value before the cut. Checked
+    // before "at the maximum": with the automatic value the maximum itself was lowered to the cut value.
+    if (this.good > this.limit && now - this.lastCutAt >= this.o.recoverMs && !this.burstNow(now)) {
+      const to = this.good;
+      this.good = 0;
+      this.okRun = 0;
+      this.recoveredAt = now;
+      this.recoveries++;
+      this.onRecover?.(to); // the automatic value goes back first (it is the window's maximum)
+      this.limit = Math.max(this.limit, Math.min(this.max_, to));
+      this.emit("win", { dir: this.dir, lim: this.limit, max: this.max_, why: "recover" });
+      this.wake();
+      return;
+    }
     if (this.limit >= this.max_) return void (this.okRun = 0);
     if (++this.okRun >= Math.ceil(this.limit / 4)) {
       this.okRun = 0;
@@ -140,7 +208,15 @@ export class AdaptiveWindow {
     this.lastErrAt = now;
     this.okRun = 0;
     if (startedAt < this.lastCutAt) return; // the same loss event (it was in flight when we cut)
+    this.note(true, now);
+    if (!this.burstNow(now)) {
+      // One error among requests that succeed: the caller retries it, the window stays.
+      this.ignored++;
+      return;
+    }
     if (this.limit <= this.min) return;
+    // Cut again soon after a recovery: the value before was too high; no jump back this time (slow growth only).
+    this.good = now - this.recoveredAt < 2 * this.o.recoverMs ? 0 : Math.max(this.good, this.limit);
     this.limit = Math.max(this.min, Math.floor(this.limit / 2));
     this.lastCutAt = now;
     this.cuts++;
@@ -216,7 +292,7 @@ export interface TunerOptions {
  * it did not (back), `try-fewer` one step below, `fewer` that was as fast (kept), `worse` it was not
  * (back), `errors` network errors cut it, `cap` the upper bound went down.
  */
-export type TuneWhy = "try" | "gain" | "flat" | "try-fewer" | "fewer" | "worse" | "errors" | "cap";
+export type TuneWhy = "try" | "gain" | "flat" | "try-fewer" | "fewer" | "worse" | "errors" | "recover" | "cap";
 
 /** A piece in flight as the tuner sees it (from begin() to end()/drop()). */
 export type TuneToken = { t0: number };
@@ -285,12 +361,28 @@ export class AutoTuner {
     if (this.target > cap) this.change(cap, "cap", null, null, "hold");
   }
 
+  /** Value before the last cut by errors (what a recovery goes back to). */
+  private beforeLoss = 0;
+
   /** Network errors left `limit` pieces in flight (AdaptiveWindow cut): that is the value now; measure again later. */
   loss(limit: number): void {
     const n = Math.max(1, Math.min(this.target, Math.round(limit)));
     this.base = null;
-    if (n < this.target) this.change(n, "errors", null, null, "hold");
-    else this.settle(this.clock.now());
+    if (n < this.target) {
+      this.beforeLoss = Math.max(this.beforeLoss, this.accepted);
+      this.change(n, "errors", null, null, "hold");
+    } else this.settle(this.clock.now());
+  }
+
+  /**
+   * The errors are over (AdaptiveWindow recovered to `limit`): back to that value, the one measured
+   * before the cut at most. Without this the value stayed at the cut one until the next check (a minute,
+   * longer than most files), and a short burst of errors cost the rest of the upload.
+   */
+  recover(limit: number): void {
+    const n = Math.min(this.cap, Math.max(1, Math.round(Math.min(limit, this.beforeLoss || limit))));
+    this.beforeLoss = 0;
+    if (n > this.target) this.change(n, "recover", null, null, "hold");
   }
 
   /** A piece starts (a slot is taken). */
@@ -900,6 +992,8 @@ export interface NetControlOptions {
   guard?: GuardOptions;
   /** Automatic pieces in flight (tests: shorter measurements). */
   tune?: TunerOptions;
+  /** When network errors cut the window and when it recovers (tests). */
+  window?: WindowOptions;
 }
 
 export type NetUiState = "ok" | "weak" | "offline" | "resumed";
@@ -943,15 +1037,19 @@ export class NetControl {
       this.ui();
     };
     this.gate = new NetGate(this.clock, emit, o.gate);
-    this.win = { up: new AdaptiveWindow("up", 8, this.clock, emit), down: new AdaptiveWindow("down", 4, this.clock, emit) };
+    this.win = { up: new AdaptiveWindow("up", 8, this.clock, emit, o.window), down: new AdaptiveWindow("down", 4, this.clock, emit, o.window) };
     // Uploads start at 8 (a measurement step there takes a piece's whole post time, so a ramp from 4 eats
     // much of a 1 GB file on a fast line; on a narrow one the tuner goes down again), downloads at 4.
     // Uploads: a window of one piece time (≥ 4 s) per step instead of 1.5 (a post of 10 MiB takes several
     // seconds, so 1.5 piece times per step left a 1 GB upload on a fast line still ramping when it ended).
-    this.tune = { up: new AutoTuner("up", { start: 8, shrink: true, minPieces: 1, minSpanMs: 4000, ...o.tune }, this.clock, emit), down: new AutoTuner("down", { start: 4, ...o.tune }, this.clock, emit) };
+    // Downloads: the same window (a CDN read of 10 MiB takes ~5 s on a fast line; 1.5 piece times plus the
+    // wait for older pieces made the first step to 8 come only after ~40 s, longer than a 300 MB file).
+    this.tune = { up: new AutoTuner("up", { start: 8, shrink: true, minPieces: 1, minSpanMs: 4000, ...o.tune }, this.clock, emit), down: new AutoTuner("down", { start: 4, minPieces: 1, minSpanMs: 4000, ...o.tune }, this.clock, emit) };
     // Network errors cut the window; the automatic value follows the cut and is measured again later.
     this.win.up.onCut = (l) => this.tune.up.loss(l);
     this.win.down.onCut = (l) => this.tune.down.loss(l);
+    this.win.up.onRecover = (l) => this.tune.up.recover(l);
+    this.win.down.onRecover = (l) => this.tune.down.recover(l);
     this.guard = new StuckGuard(
       "down",
       {

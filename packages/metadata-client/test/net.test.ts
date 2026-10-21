@@ -55,10 +55,29 @@ describe("network errors", () => {
 });
 
 describe("adaptive window", () => {
-  it("halves on a network error (once per loss event), min 2, grows back slowly to the maximum", () => {
+  /** A burst: `n` network errors of requests started now (one loss event each when after a cut). */
+  const burst = (w: AdaptiveWindow, c: VClock, n = 3) => {
+    for (let i = 0; i < n; i++) (c.advance(10), w.fail(c.t));
+  };
+
+  it("one or two errors among successes do not cut (owner's 300 MB upload: 2 × 'Failed to fetch' left 2 in flight for good)", () => {
+    const c = new VClock();
+    const w = new AdaptiveWindow("up", 8, c);
+    for (let k = 0; k < 20; k++) (c.advance(200), w.ok());
+    c.advance(100);
+    w.fail(c.t - 50);
+    c.advance(300);
+    w.fail(c.t - 50);
+    for (let k = 0; k < 20; k++) (c.advance(200), w.ok());
+    expect(w.limit).toBe(8);
+    expect(w.cuts).toBe(0);
+    expect(w.ignored).toBe(2);
+  });
+
+  it("a burst halves (once per loss event), min 2; the next burst halves again; slow growth to the maximum", () => {
     const c = new VClock();
     const ev: unknown[] = [];
-    const w = new AdaptiveWindow("down", 32, c, (e, f) => ev.push(f));
+    const w = new AdaptiveWindow("down", 32, c, (e, f) => ev.push(f), { recoverMs: 1e12 });
     expect(w.limit).toBe(32);
     const t0 = c.t;
     c.advance(10);
@@ -66,15 +85,14 @@ describe("adaptive window", () => {
     for (let i = 0; i < 30; i++) w.fail(t0);
     expect(w.limit).toBe(16);
     expect(w.cuts).toBe(1);
-    // a request started after the cut fails: a new loss event
-    c.advance(10);
-    w.fail(c.t);
+    // a new burst of requests started after the cut: a new loss event
+    burst(w, c);
     expect(w.limit).toBe(8);
-    for (let k = 0; k < 10; k++) (c.advance(10), w.fail(c.t));
+    for (let k = 0; k < 10; k++) burst(w, c);
     expect(w.limit).toBe(2);
     // growth: +1 per ceil(limit/4) answers → from 2 to 32 takes a few hundred answers, not one
     let answers = 0;
-    while (w.limit < 32) (w.ok(), answers++);
+    while (w.limit < 32) (c.advance(10), w.ok(), answers++);
     expect(answers).toBeGreaterThan(100);
     expect(w.limit).toBe(32);
     w.ok();
@@ -82,11 +100,46 @@ describe("adaptive window", () => {
     expect(ev.length).toBeGreaterThan(5);
   });
 
+  it("weak link: errors among a few successes (a quarter or more) keep cutting", () => {
+    const c = new VClock();
+    const w = new AdaptiveWindow("up", 16, c, () => {}, { recoverMs: 1e12 });
+    // every 3rd request fails, for a minute
+    for (let k = 0; k < 120; k++) {
+      c.advance(500);
+      if (k % 3 === 2) w.fail(c.t - 100);
+      else w.ok();
+    }
+    expect(w.limit).toBeLessThan(8); // cut and kept low (it grows by one now and then, the next burst cuts again)
+    expect(w.cuts).toBeGreaterThanOrEqual(2);
+  });
+
+  it("recovery: after a quiet spell the window goes back to the value before the cut (not +1 at a time)", () => {
+    const c = new VClock();
+    const ev: { why?: string; lim?: number }[] = [];
+    const w = new AdaptiveWindow("up", 16, c, (_e, f) => ev.push(f as never), { recoverMs: 20_000 });
+    burst(w, c, 4);
+    expect(w.limit).toBe(8);
+    c.advance(5000);
+    w.ok();
+    expect(w.limit).toBe(8); // too early
+    c.advance(16_000);
+    w.ok();
+    expect(w.limit).toBe(16);
+    expect(ev.at(-1)).toMatchObject({ why: "recover", lim: 16 });
+    // cut again right after the recovery: the old value was too high, no jump back this time
+    burst(w, c, 4);
+    expect(w.limit).toBe(8);
+    c.advance(30_000);
+    w.ok();
+    expect(w.limit).toBeLessThan(16);
+  });
+
   it("a never-cut window follows the configured maximum; a cut one is clamped", () => {
-    const w = new AdaptiveWindow("up", 8, new VClock());
+    const c = new VClock();
+    const w = new AdaptiveWindow("up", 8, c, () => {}, { recoverMs: 1e12 });
     w.setMax(20);
     expect(w.limit).toBe(20);
-    w.fail(0);
+    burst(w, c);
     expect(w.limit).toBe(10);
     w.setMax(4);
     expect(w.limit).toBe(4);
@@ -97,7 +150,7 @@ describe("adaptive window", () => {
   it("acquire blocks above the limit and wakes when a slot frees or the limit grows", async () => {
     const c = new VClock();
     const w = new AdaptiveWindow("up", 4, c);
-    w.fail(0); // → 2
+    for (let i = 0; i < 3; i++) (c.advance(10), w.fail(c.t)); // a burst → 2
     const r1 = await w.acquire();
     const r2 = await w.acquire();
     let third = false;

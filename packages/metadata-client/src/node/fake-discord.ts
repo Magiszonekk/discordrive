@@ -79,6 +79,15 @@ export class FakeDiscord {
   readonly rejectedByChannel = new Map<string, number>();
   /** Every request that reached a webhook route (tests: egress budget). */
   webhookRequests = 0;
+  /**
+   * Tests: drop the connection of these webhook posts (1-based numbers of the posts, counted from the
+   * moment this is set) after the body arrived: the client sees a network error ("Failed to fetch"),
+   * nothing is stored. `dropPostEvery` = drop each post with this probability (0 = off).
+   */
+  dropPosts = new Set<number>();
+  dropPostEvery = 0;
+  private postNo = 0;
+  postsDropped = 0;
 
   /** Delete a webhook (its URL answers 401/404 from now on, like a webhook removed in Discord). */
   deleteWebhook(id: string): void {
@@ -254,6 +263,11 @@ export class FakeDiscord {
       if (wait > 0) return this.send(res, 429, { message: "The resource is being rate limited.", retry_after: wait, global: false }, { ...cors, "x-ratelimit-scope": "shared" });
       const f = await readFile();
       if (this.postDelayMs) await new Promise((r) => setTimeout(r, this.postDelayMs));
+      const no = ++this.postNo;
+      if (this.dropPosts.has(no) || (this.dropPostEvery > 0 && Math.random() < this.dropPostEvery)) {
+        this.postsDropped++;
+        return void req.socket.destroy();
+      }
       if (!f) return this.send(res, 400, { message: "no file" }, cors);
       if (f.data.byteLength > 20 * 1024 * 1024) return this.send(res, 413, { message: "Request entity too large" }, cors);
       const id = this.id();
