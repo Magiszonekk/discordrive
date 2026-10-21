@@ -48,6 +48,13 @@ The app signs every device in with an Ed25519 key made by the browser (WebCrypto
 An older browser shows “This browser is too old” instead of the sign-up form; update it. There is
 no fallback in JavaScript on purpose: the key stays inside the browser's own crypto.
 
+**Transfers stuck at ~20 MB/s on a fast line (Chrome, Brave, Edge on Linux).** These browsers talk to
+Discord over HTTP/3 (QUIC), which on some systems is much slower than HTTP/2 (measured on a
+111/69 MB/s line: ~20 MB/s with QUIC, 63–67 MB/s without). You can turn it off for the browser:
+`chrome://flags/#enable-quic` (Brave: `brave://flags/#enable-quic`) → Disabled, or the policy
+`QuicAllowed: false`; Firefox: `network.http.http3.enable` = false in `about:config`. It affects every
+site; the app works either way.
+
 ## Modes
 
 Chosen in `npm run setup`, fixed for the life of the instance (another mode = a new instance in

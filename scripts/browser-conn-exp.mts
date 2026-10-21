@@ -12,7 +12,10 @@
 //
 //   npx tsx scripts/browser-conn-exp.mts webhooks.txt [--out dir] [--frag-mib 10] [--n 32]
 //        [--no-throughput] [--quic|--no-quic] [--chrome /path/to/chrome | --channel chrome] [--alt sandbox|anon1]
-//        [--protos default,h2] [--n-up 16] [--no-upload]
+//        [--protos default,h2] [--n-up 16] [--no-upload] [--ways 1,2,3]
+//
+// --ways: how many contexts share the N requests in the throughput pass (1 = the page alone, 2 = the
+// page + --alt, 3 = the page + sandbox + anon1). Each one has its own connection to Discord.
 //
 // webhooks.txt: webhook URLs of a TEST server (one per channel). Test messages are deleted at the end.
 // The net log contains webhook tokens in request paths: it stays in a temp dir and is deleted; only
@@ -48,6 +51,7 @@ const ALT = opt("alt", "sandbox")!; // second context for the throughput pass
 // Throughput with the browser's default (HTTP/3 = QUIC to Discord when it can) and with QUIC off (HTTP/2 over TCP).
 const PROTOS: (boolean | null)[] = String(opt("protos", "default,h2")).split(",").map((x) => (x.trim() === "h2" ? false : null));
 const NO_UP = flag("no-upload");
+const WAYS = String(opt("ways", "1,2")).split(",").map(Number).filter((n) => n >= 1 && n <= 3);
 const QUIC = flag("quic") ? true : flag("no-quic") ? false : null; // null = browser default
 const CHROME = opt("chrome", process.env.CHROMIUM_PATH ?? "");
 // --channel chrome / msedge: the installed browser instead of Playwright's Chromium (the owner's real Chrome).
@@ -308,21 +312,21 @@ try {
       tp.push(row);
       log(`  ${label}: ${row.MBps} MB/s (${row.ok}/${row.of}, ${row.wall} s, fragment median ${row.medDur} s, first byte ${row.medTtfb} s) ${row.sessions.join(" | ")}`);
     };
-    const half = N >> 1;
     const NU = Math.min(N, Number(opt("n-up", "16")));
     const hookFor = (i: number) => `${hooks[i % hooks.length]}?wait=true`;
+    const ctxsFor = (w: number) => (w === 1 ? ["main"] : w === 2 ? ["main", alt] : ["main", "sandbox", "anon1"]);
+    /** Split `items` round-robin over the contexts of `w` ways. */
+    const split = <T,>(items: T[], w: number) => ctxsFor(w).map((ctx, k) => ({ ctx, items: items.filter((_, i) => i % w === k) }));
     for (const quic of PROTOS) {
       const q = quic === false ? "h2" : "dflt";
       for (const rep of [0, 1]) {
-        for (const o of rep === 0 ? ["one", "two"] : ["two", "one"]) {
-          if (o === "one") await pass(`${q}-down-1x${N}-r${rep}`, quic, [{ ctx: "main", kind: "get", items: big.map((u) => tag(u, "main")) }]);
-          else await pass(`${q}-down-2x${half}-r${rep}`, quic, [{ ctx: "main", kind: "get", items: big.slice(0, half).map((u) => tag(u, "main")) }, { ctx: alt, kind: "get", items: big.slice(half).map((u) => tag(u, alt)) }]);
+        for (const w of rep === 0 ? WAYS : [...WAYS].reverse()) {
+          await pass(`${q}-down-${w}x${Math.round(N / w)}-r${rep}`, quic, split(big, w).map((x) => ({ ctx: x.ctx, kind: "get" as const, items: x.items.map((u) => tag(u, x.ctx)) })));
         }
       }
       if (NO_UP) continue;
-      for (const o of ["one", "two"]) {
-        if (o === "one") await pass(`${q}-up-1x${NU}`, quic, [{ ctx: "main", kind: "post", items: Array.from({ length: NU }, (_, i) => tag(hookFor(i), "main")) }]);
-        else await pass(`${q}-up-2x${NU >> 1}`, quic, [{ ctx: "main", kind: "post", items: Array.from({ length: NU >> 1 }, (_, i) => tag(hookFor(i), "main")) }, { ctx: alt, kind: "post", items: Array.from({ length: NU >> 1 }, (_, i) => tag(hookFor(i + (NU >> 1)), alt)) }]);
+      for (const w of WAYS) {
+        await pass(`${q}-up-${w}x${Math.round(NU / w)}`, quic, split(Array.from({ length: NU }, (_, i) => hookFor(i)), w).map((x) => ({ ctx: x.ctx, kind: "post" as const, items: x.items.map((u) => tag(u, x.ctx)) })));
         await sleep(Math.max(5000, (NU / hooks.length) * 2500)); // let the channel limits refill
       }
     }

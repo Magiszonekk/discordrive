@@ -52,3 +52,33 @@ stack does not hit this (the web app posts 32 at once on one connection without 
 (`--proxy-share`). Compare "split: both IPs" with `h2-N`: clearly more → Discord's ceiling is per IP; about the
 same → it is not (route, line, or a limit per Discord server — all channels are in one guild).
 Downloads are not split: they already reach the line from one IP.
+
+## Browser: HTTP/3 (QUIC) vs HTTP/2, and several connections at once
+
+Chromium-based browsers (Chrome, Brave, Edge) reach Discord over HTTP/3 (QUIC) once Discord's `alt-svc`
+tells them to. On Linux that was the main limit of the web app:
+
+- on a 111/69 MB/s line, the real app in Brave: ~20 MB/s both ways with QUIC (the default), 67 MB/s up and
+  63 MB/s down with QUIC turned off (`--disable-quic`), 32 pieces in flight;
+- on a 47/43 MB/s test machine, `scripts/live-transfer-bench.mts` (1 GB): download 25.6–26.8 MB/s over h3 vs
+  31.7–32.0 over h2 (automatic pieces in flight), 21 vs 31–33 with 16 in flight.
+
+More connections do not lift the QUIC limit. `scripts/browser-conn-exp.mts --ways 1,2,3` splits 32 downloads of
+10 MiB over the page, a sandboxed iframe and a credentialless iframe; each of them got its own QUIC session
+(the net log shows it), yet the total stayed the same (47/43 MB/s test machine, headless Chromium 151):
+
+| download, 32 × 10 MiB | 1 connection | 2 connections | 3 connections |
+|---|---|---|---|
+| HTTP/3 (default) | 10.4–11.4 MB/s | 10.9–14.1 | 10.0–10.8 |
+| HTTP/2 (`--disable-quic`) | 43.4–44.3 | 30.1–45.6 | 41.3–43.6 |
+
+So the QUIC limit is shared by the whole browser (its network process), not per connection; extra connections
+would only add work. The app therefore does not spread transfers over more connections; README and Settings →
+Diagnostics say how to turn QUIC off (it affects every site). The second connection (`lane.html`) stays what it
+was: a way around ONE stuck connection.
+
+Commands (a test server's webhooks; every message is deleted at the end):
+
+    CHROMIUM_PATH=/path/to/browser npx tsx scripts/live-transfer-bench.mts webhooks.txt --mb 1000 --down auto,16 --speedtest
+    CHROMIUM_PATH=/path/to/browser npx tsx scripts/live-transfer-bench.mts webhooks.txt --mb 1000 --down auto,16 --browser-args "--disable-quic"
+    npx tsx scripts/browser-conn-exp.mts webhooks.txt --chrome /path/to/browser --ways 1,2,3 --protos default,h2

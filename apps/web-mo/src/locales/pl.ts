@@ -388,6 +388,7 @@ export const pl: Record<string, string> = {
   "diag.down": "Pobieranie",
   "diag.auto": "auto ({n})",
   "diag.conc.warn": "{n} naraz przy {ch} kanałach: powyżej ok. {max} (2 na kanał) limit Discorda na kanał odpowiada „zwolnij” (429) i wysyłanie nie przyspiesza. Dodaj raczej kanały.",
+  "diag.quic": "Transfery stoją na około 20 MB/s mimo szybkiego łącza w Chrome, Brave lub Edge? Te przeglądarki łączą się z Discordem przez HTTP/3 (QUIC), które na niektórych systemach jest wolne. Często pomaga jego wyłączenie: chrome://flags/#enable-quic (Brave: brave://flags/#enable-quic) → Disabled; Firefox: network.http.http3.enable = false w about:config.",
   "diag.version": "Wersja: {app}",
   "diag.version2": "Wersja: {app} (ta strona) · {server} (instancja: odśwież stronę, żeby zaktualizować)",
   "diag.download": "Pobierz logi",
