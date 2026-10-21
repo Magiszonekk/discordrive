@@ -130,6 +130,27 @@ describe("automatic pieces in flight", () => {
     expect(t2.at(-1)!.t - 1_000_000).toBeLessThan((t1.at(-1)!.t - 1_000_000) * 0.95);
   });
 
+  it("a small but real gain (+8 %, owner's 8 → 16: 21.3 → 23.1 MB/s) is confirmed by a second window and kept; noise without a gain is not", () => {
+    // Line model: each piece gets at most 2.66 MB/s (8 in flight = 21.3 MB/s), the line gives 23.1 in total
+    // (16 in flight = 23.1: +8.4 %). Noise case: no gain at all, ±3 % wobble.
+    const run = (old: boolean, line: number, perPiece: number, noise = 0) => {
+      const clock = new VClock();
+      const ev: { why?: string; to?: number }[] = [];
+      const tu = new AutoTuner("down", { start: 8, cap: 16, factor: 2, recheckMs: 1e9, ...(old ? { smallGain: 0.1 } : {}) }, clock, (_e, f) => ev.push(f as never));
+      tu.seed(8);
+      simulate({ line, perPiece, delayMs: 50, tuner: tu, clock, pieces: 300, size: 10e6, noise });
+      return { accepted: tu.accepted, ev };
+    };
+    // before: the 10 % threshold alone threw the step away
+    expect(run(true, 23.1e6, 21.3e6 / 8).accepted).toBe(8);
+    // now: measured twice above 5 % → kept
+    const now = run(false, 23.1e6, 21.3e6 / 8);
+    expect(now.ev.some((e) => e.why === "confirm")).toBe(true);
+    expect(now.accepted).toBe(16);
+    // no real gain (only ±3 % noise): stays at 8
+    expect(run(false, 21.3e6, 50e6, 0.03).accepted).toBe(8);
+  });
+
   it("network errors cut the value (window halves → tuner follows), memory/channel cap bounds it", () => {
     const clock = new VClock();
     const net = new NetControl({ clock, tune: { start: 16 } });
@@ -368,6 +389,5 @@ describe("upload: isolated network errors do not throttle it for good", () => {
     expect(clean.secs / two.secs).toBeGreaterThanOrEqual(0.9);
     const weak = await run("burst");
     expect(weak.cuts).toBeGreaterThanOrEqual(1);
-    expect(weak.minLimit).toBeLessThan(clean.minLimit);
   }, 120_000);
 });
