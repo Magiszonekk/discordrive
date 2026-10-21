@@ -100,7 +100,9 @@ jobs:
           node apps/ddn-server/bin/discordrive.mjs start --data-dir "$D"
           test $? -eq 1
           set -e
-          curl -fsS http://127.0.0.1:3020/ | grep -q "cobalt/tokens.css"
+          # (not piped into grep -q: grep stops at the first match, curl then fails writing the rest, exit 23)
+          curl -fsS http://127.0.0.1:3020/ -o "$RUNNER_TEMP/index.html"
+          grep -q "cobalt/tokens.css" "$RUNNER_TEMP/index.html"
           cat "$RUNNER_TEMP/start.log"
 
       - name: setup --mode e2ee (instance pool on a fake Discord), start, doctor, health

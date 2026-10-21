@@ -30,6 +30,19 @@ const origin = await fake.listen({ tls: { key: readFileSync(join(work, "k")), ce
 
 let data2 = "";
 async function launch(dataDir = data): Promise<{ app: ElectronApplication; page: Page }> {
+  // A start right after a quit can meet the single-instance lock of the previous run still being released
+  // (Windows): that start ends at once by design. Try again a few times.
+  for (let i = 1; ; i++) {
+    try {
+      return await launchOnce(dataDir);
+    } catch (e) {
+      if (i >= 4) throw e;
+      console.error(`[e2e] start ${i} failed (${String((e as Error).message).split("\n")[0]}), again`);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+}
+async function launchOnce(dataDir: string): Promise<{ app: ElectronApplication; page: Page }> {
   const app = await electron.launch({
     args: [appDir, ...(process.env.DDN_DESKTOP_NO_SANDBOX ? ["--no-sandbox"] : [])],
     env: {
@@ -64,7 +77,7 @@ async function gone(pid: number | undefined, ms = 30_000) {
   }
   // Its helper processes (agent, instance, GPU …) too: they keep the profile and the single-instance lock.
   if (process.platform === "win32") {
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 150; i++) {
       const out = execFileSync("tasklist", ["/FI", "IMAGENAME eq electron.exe", "/NH"], { encoding: "utf8" });
       if (!/electron\.exe/i.test(out)) break;
       await new Promise((r) => setTimeout(r, 200));
