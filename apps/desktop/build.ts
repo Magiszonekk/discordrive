@@ -27,7 +27,7 @@ const modePlugin: Plugin = {
 // The same build ID the web app and an instance show (`<version>+<source hash>.g<commit>`): the agent writes it
 // in its transfer logs and About / the update check read it from build-info.json.
 const VERSION = (JSON.parse(readFileSync(join(here, "package.json"), "utf8")) as { version: string }).version;
-const COMMIT = process.env.GITHUB_SHA ?? gitCommit();
+const COMMIT = process.env.DDN_COMMIT || gitCommit();
 const BUILD = buildId(sourceHash(), COMMIT ? COMMIT.slice(0, 7) : null, VERSION);
 const common = { bundle: true, platform: "node" as const, format: "cjs" as const, target: "node22", external: ["electron"], logLevel: "error" as const, sourcemap: false, plugins: [modePlugin], define: { __DDN_BUILD__: JSON.stringify(BUILD) } };
 await build({ ...common, entryPoints: { main: join(here, "src/main.ts"), agent: join(here, "src/agent.ts"), "local-instance": join(here, "src/local-instance.ts") }, outdir: out, outExtension: { ".js": ".cjs" } });

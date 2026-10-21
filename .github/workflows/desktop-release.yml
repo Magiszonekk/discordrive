@@ -58,6 +58,9 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Build the app
+        env:
+          # The commit the app says it is (a pull request runs on a merge commit GitHub made; use its head).
+          DDN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: npm run build -w @ddv4/desktop
 
       - name: Installers
