@@ -5,7 +5,8 @@
 // same line (what Node can do at all) and with live-transfer-bench (the browser).
 //
 //   node --import tsx --import ./apps/desktop/test/mode-hook.mjs scripts/desktop-bench.mts webhooks.txt [--mb 2000] [--out dir] [--label x] [--speedtest]
-//        [--up-sessions 6] [--up-streams 6] [--conc up,down] [--keep]
+//        [--up-sessions N] [--up-streams N] [--conc up,down] [--keep]
+// --up-sessions / --up-streams: override the agent's upload pool (default: what the app uses, h2Fetch's own).
 // --conc 32,32: fixed fragments in flight (Settings → Diagnostics) instead of the automatic value, which
 // starts low on a new device and climbs while it measures (a short file ends before it gets there).
 //
@@ -85,8 +86,8 @@ const srv = new DdnServer({ rateLimits: false, signup: "open" });
 const { url } = await srv.listen(0);
 const events: string[] = [];
 const f = h2Fetch({
-  upSessions: Number(arg("up-sessions", "6")),
-  upStreams: Number(arg("up-streams", "6")),
+  ...(arg("up-sessions", "") ? { upSessions: Number(arg("up-sessions", "")) } : {}),
+  ...(arg("up-streams", "") ? { upStreams: Number(arg("up-streams", "")) } : {}),
   onEvent: (e) => events.push(`${e.ev} ${e.role} ${e.lane}${"why" in e ? ` ${e.why}` : ""}${"cap" in e ? ` cap ${e.cap}` : ""}`),
 });
 const dl = join(work, "dl");
