@@ -8,6 +8,7 @@
 //   npx tsx apps/desktop/test/e2e.ts
 import { execFileSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -30,17 +31,7 @@ const origin = await fake.listen({ tls: { key: readFileSync(join(work, "k")), ce
 
 let data2 = "";
 async function launch(dataDir = data): Promise<{ app: ElectronApplication; page: Page }> {
-  // A start right after a quit can meet the single-instance lock of the previous run still being released
-  // (Windows): that start ends at once by design. Try again a few times.
-  for (let i = 1; ; i++) {
-    try {
-      return await launchOnce(dataDir);
-    } catch (e) {
-      if (i >= 4) throw e;
-      console.error(`[e2e] start ${i} failed (${String((e as Error).message).split("\n")[0]}), again`);
-      await new Promise((r) => setTimeout(r, 3000));
-    }
-  }
+  return launchOnce(dataDir);
 }
 async function launchOnce(dataDir: string): Promise<{ app: ElectronApplication; page: Page }> {
   const app = await electron.launch({
@@ -53,6 +44,9 @@ async function launchOnce(dataDir: string): Promise<{ app: ElectronApplication; 
       DDN_DESKTOP_TEST_CA: join(work, "c"),
     } as Record<string, string>,
     timeout: 60_000,
+  });
+  app.process().stderr?.on("data", (d: Buffer) => {
+    for (const l of d.toString().split("\n")) if (l.includes("[ddn]")) console.error(`[app] ${l.trim()}`);
   });
   const page = await app.firstWindow();
   return { app, page };
@@ -77,11 +71,14 @@ async function gone(pid: number | undefined, ms = 30_000) {
   }
   // Its helper processes (agent, instance, GPU …) too: they keep the profile and the single-instance lock.
   if (process.platform === "win32") {
+    let left = "";
     for (let i = 0; i < 150; i++) {
       const out = execFileSync("tasklist", ["/FI", "IMAGENAME eq electron.exe", "/NH"], { encoding: "utf8" });
-      if (!/electron\.exe/i.test(out)) break;
+      left = out.split("\n").filter((l) => /electron\.exe/i.test(l)).join(" | ");
+      if (!left) break;
       await new Promise((r) => setTimeout(r, 200));
     }
+    step(`after quit: main ${(() => { try { process.kill(pid, 0); return "alive"; } catch { return "gone"; } })()}, electron.exe left: ${left || "none"}`);
   }
   await new Promise((r) => setTimeout(r, 1500));
 }
@@ -122,23 +119,89 @@ try {
   r.capabilities = caps;
   check("coreInAgent", (caps as { platform?: string }).platform === "desktop");
 
-  step("upload from disk (the agent reads the file)");
+  step("upload from disk through the window: the queue shows progress while it runs");
   const big = randomBytes(64 * 1024 * 1024 + 11);
   const src = join(work, "src");
   mkdirSync(join(src, "photos"), { recursive: true });
   writeFileSync(join(src, "movie.bin"), big);
   writeFileSync(join(src, "photos", "a.txt"), "a");
+  writeFileSync(join(src, "photos", "b.txt"), "bb");
+  // Slow posts so the queue is seen mid-way (the fake answers every post after 1.5 s).
+  fake.postDelayMs = 1500;
   const t0 = Date.now();
-  const up = (await p.evaluate(
-    (paths) => (window as unknown as { ddnCore: { uploadPaths(p: string[]): Promise<unknown> } }).ddnCore.uploadPaths(paths),
-    [join(src, "movie.bin"), join(src, "photos")],
-  )) as { files: number; bytes: number; failed: unknown[] };
-  r.upload = { ...up, ms: Date.now() - t0 };
-  check("uploadedFromDisk", up.files === 2 && up.failed.length === 0);
-  await p.waitForSelector("[data-ddn=row] >> text=movie.bin", { timeout: 30_000 }).catch(() => null);
+  // The file picker of the Files page: in the app the agent reads the picked file from disk by its path.
+  await p.setInputFiles("[data-ddn=file]", join(src, "movie.bin"));
+  await p.waitForSelector("[data-ddn-ui=queue]:not([hidden]) [data-ddn=queue-item]", { timeout: 30_000 });
+  // While it runs: a row per file with a percentage between 1 and 99, a bar that moved, a speed.
+  const mid = await p
+    .waitForFunction(
+      () => {
+        const li = document.querySelector<HTMLElement>("[data-ddn=queue-item]");
+        const st = li?.querySelector(".qstate")?.textContent ?? "";
+        const pct = Number(/^(\d+)%$/.exec(st)?.[1] ?? "-1");
+        const bar = parseFloat(li?.querySelector<HTMLElement>(".bar i")?.style.width ?? "0");
+        const speed = li?.querySelector("[data-ddn=queue-speed]")?.textContent ?? "";
+        const meta = document.querySelector("[data-ddn=queue-meta]")?.textContent ?? "";
+        return pct > 0 && pct < 100 && bar > 0 && /MB\/s/.test(speed) ? { pct, bar, speed, meta, name: li!.querySelector(".qname")?.textContent } : null;
+      },
+      null,
+      { timeout: 60_000, polling: 100 },
+    )
+    .then((h) => h.jsonValue())
+    .catch(() => null);
+  r.queueMidUpload = mid;
+  check("pickerUploadShowsProgress", !!mid && mid.name === "movie.bin");
+  await p.waitForFunction(() => document.querySelector("[data-ddn=queue-item] .qstate")?.classList.contains("done"), null, { timeout: 120_000 });
+  r.upload = { ms: Date.now() - t0 };
+  check("pickerUploadDone", true);
+
+  // Drag and drop of files from disk: the File objects of a real file chooser (they carry their paths for
+  // the preload), dropped on the Files page. One queue row per file, all done.
+  fake.postDelayMs = 0;
+  await p.evaluate(() => {
+    const i = document.createElement("input");
+    i.type = "file";
+    i.multiple = true;
+    i.id = "e2e-drop-src";
+    i.hidden = true;
+    document.body.append(i);
+  });
+  await p.setInputFiles("#e2e-drop-src", [join(src, "photos", "a.txt"), join(src, "photos", "b.txt")]);
+  await p.evaluate(() => {
+    const i = document.getElementById("e2e-drop-src") as HTMLInputElement;
+    const dt = new DataTransfer();
+    for (const f of i.files!) dt.items.add(f);
+    document.querySelector("[data-page=files]")!.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    i.remove();
+  });
+  await p.waitForFunction(() => [...document.querySelectorAll("[data-ddn=queue-item] .qname")].some((x) => x.textContent === "b.txt"), null, { timeout: 30_000 }).catch(() => null);
+  const dropRows = await p.$$eval("[data-ddn=queue-item] .qname", (e) => e.map((x) => x.textContent));
+  r.dropRows = dropRows;
+  check("dropQueued", dropRows.includes("a.txt") && dropRows.includes("b.txt"));
+  await p.waitForFunction(() => [...document.querySelectorAll("[data-ddn=queue-item] .qstate")].every((x) => x.classList.contains("done")), null, { timeout: 60_000 }).catch(() => null);
+  check("dropDone", await p.evaluate(() => [...document.querySelectorAll("[data-ddn=queue-item] .qstate")].every((x) => x.classList.contains("done"))));
+  // A dropped folder (through the agent: the window cannot build a folder drop) keeps its structure.
+  await p.evaluate((paths) => (window as unknown as { ddnCore: { uploadPaths(p: string[]): Promise<unknown> } }).ddnCore.uploadPaths(paths), [join(src, "photos")]);
   const rows = (await p.evaluate(() => (window as unknown as { ddnCore: { list(): Promise<{ rows: { id: string; name: string; kind: string }[] }> } }).ddnCore.list())).rows;
   check("listed", rows.some((x) => x.name === "movie.bin") && rows.some((x) => x.name === "photos" && x.kind === "folder"));
   const movie = rows.find((x) => x.name === "movie.bin")!;
+
+  step("transfer log of the agent: file events and the build");
+  await p.evaluate(() => (window as unknown as { ddnCore: { setTransferLog(on: boolean): Promise<unknown> } }).ddnCore.setTransferLog(true));
+  writeFileSync(join(src, "log.bin"), randomBytes(3 * 1024 * 1024));
+  await p.evaluate((paths) => (window as unknown as { ddnCore: { uploadPaths(p: string[]): Promise<unknown> } }).ddnCore.uploadPaths(paths), [join(src, "log.bin")]);
+  const logFile = (await p.evaluate(async () => {
+    const f = await (window as unknown as { ddnCore: { transferLogFile(): Promise<{ data: Blob; gz: boolean }> } }).ddnCore.transferLogFile();
+    const buf = await f.data.arrayBuffer();
+    return { gz: f.gz, b64: btoa(String.fromCharCode(...new Uint8Array(buf))) };
+  })) as { gz: boolean; b64: string };
+  const raw = Buffer.from(logFile.b64, "base64");
+  const lines = (logFile.gz ? gunzipSync(raw) : raw).toString("utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { ev: string; build?: string; src?: string });
+  const evs = new Set(lines.map((l) => l.ev));
+  const head = lines.find((l) => l.ev === "log_header");
+  r.logBuild = head?.build;
+  check("logHasFileEvents", ["file_start", "frag", "req", "file_end"].every((e) => evs.has(e)) && lines.every((l) => l.src === "agent"));
+  check("buildNotDev", !!head?.build && head.build !== "dev" && /^\d+\.\d+\.\d+\+[0-9a-f]{8}(\.g[0-9a-f]{7})?$/.test(head.build));
 
   step("download to disk");
   const d1 = (await p.evaluate((id) => (window as unknown as { ddnCore: { downloadToDisk(id: string): Promise<unknown> } }).ddnCore.downloadToDisk(id), movie.id)) as { path: string };
@@ -157,6 +220,13 @@ try {
   check("appStillRunning", (await app.evaluate(({ app: a }) => a.isReady())) === true);
 
   step("quit and start again");
+  // Nothing runs any more (the tray says idle): Quit does not ask.
+  const idle = await app.evaluate(async ({ BrowserWindow: _ }) => {
+    const g = globalThis as unknown as { __ddnBusy?: () => boolean };
+    for (let i = 0; i < 50 && g.__ddnBusy?.(); i++) await new Promise((r) => setTimeout(r, 100));
+    return !g.__ddnBusy?.();
+  });
+  check("idleAfterTransfers", idle);
   const pid = app.process().pid;
   await app.evaluate(({ app: a }) => {
     a.quit();

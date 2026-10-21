@@ -41,6 +41,8 @@ let settings: DesktopSettings;
 let server: { url: string; mode: string; kind: "remote" | "local" } | null = null;
 let quitting = false;
 let busy = { busy: false, up: { n: 0, done: 0, total: 0 }, down: { n: 0, done: 0, total: 0 } };
+// Tests (e2e): whether a transfer still runs, as the tray and Quit see it.
+(globalThis as unknown as { __ddnBusy?: () => boolean }).__ddnBusy = () => busy.busy;
 
 const staticPath = (url: string) => staticPathIn(url, ROOT, server?.mode ?? "metadata-only");
 
@@ -493,7 +495,11 @@ async function refuseWithoutSandbox() {
 
 // ── start ──────────────────────────────────────────────────────────────────────────────────────────
 const single = app.requestSingleInstanceLock();
-if (!single) app.quit();
+if (!single) {
+  // Another copy runs: it shows its window (second-instance) and this one ends.
+  if (process.env.DDN_DESKTOP_DEBUG || process.env.DDN_DESKTOP_DATA) console.error("[ddn] another instance holds the lock; exiting");
+  app.quit();
+}
 else {
   app.on("second-instance", () => showWindow());
   app.on("web-contents-created", (_e, wc) => {
@@ -561,7 +567,9 @@ else {
     if (process.env.DDN_DESKTOP_QUIT_ON_CLOSE) app.quit();
   });
   let stopped = false;
+  const qdbg = (m: string) => (process.env.DDN_DESKTOP_DEBUG || process.env.DDN_DESKTOP_DATA) && console.error(`[ddn] ${m}`);
   app.on("before-quit", (e) => {
+    qdbg(`before-quit: quitting=${quitting} busy=${busy.busy} stopped=${stopped}`);
     if (!quitting && busy.busy) {
       e.preventDefault();
       void quitAsk();
@@ -573,7 +581,8 @@ else {
     // after them, so a new start never meets a half-closed one (at most 5 s).
     e.preventDefault();
     const ends = [agent, instance].filter((p): p is UtilityProcess => !!p && p.pid !== undefined).map((p) => new Promise<void>((r) => (p.once("exit", () => r()), p.postMessage({ type: "quit" }))));
-    void Promise.race([Promise.all(ends), new Promise((r) => setTimeout(r, 5000))]).then(() => {
+    void Promise.race([Promise.all(ends).then(() => "children exited"), new Promise((r) => setTimeout(() => r("5 s timeout"), 5000))]).then((why) => {
+      qdbg(`children stopped: ${why}`);
       stopped = true;
       for (const p of [agent, instance]) p?.kill();
       app.quit();

@@ -78,6 +78,24 @@ function track(e: CoreEvent) {
   pushStatus();
 }
 
+/** Calls that carry a progress token (its position in the arguments) and run a transfer. */
+const TRANSFER_CALLS: Map<string, { dir: "up" | "down"; tokenAt: number }> = new Map<string, { dir: "up" | "down"; tokenAt: number }>([
+  ["uploadPath", { dir: "up", tokenAt: 3 }],
+  ["uploadPaths", { dir: "up", tokenAt: 2 }],
+  ["upload", { dir: "up", tokenAt: 3 }],
+  ["downloadToDisk", { dir: "down", tokenAt: 2 }],
+  ["download", { dir: "down", tokenAt: 1 }],
+]);
+function settle(method: string, args: unknown[]) {
+  const t = TRANSFER_CALLS.get(method)!;
+  const token = args[t.tokenAt];
+  const m = t.dir === "up" ? running.up : running.down;
+  if (typeof token !== "string" || !token) return;
+  // uploadPaths tags each file `<token>:<n>`.
+  for (const k of [...m.keys()]) if (k === token || k.startsWith(`${token}:`)) m.delete(k);
+  pushStatus();
+}
+
 function broadcast(event: CoreEvent) {
   for (const p of ports) p.postMessage({ event });
 }
@@ -148,7 +166,14 @@ function serve(port: Port) {
       // open(): the agent opens the account at start; a window asking again gets the same session.
       if (m.method === "open" && (await c.status()).signedIn) return port.postMessage({ id, ok: true, result: null });
       const fn = (c as unknown as Record<string, (...a: unknown[]) => unknown>)[m.method as string]!;
-      const result = await encodeBlobs(await fn.apply(c, m.args as unknown[]));
+      let result: unknown;
+      try {
+        result = await encodeBlobs(await fn.apply(c, m.args as unknown[]));
+      } finally {
+        // A transfer is over when its call returns (or fails), whatever its last progress event said: the
+        // tray and "Quit" must not see it running after that.
+        if (TRANSFER_CALLS.has(m.method as string)) settle(m.method as string, m.args as unknown[]);
+      }
       port.postMessage({ id, ok: true, result });
     } catch (err) {
       port.postMessage({ id, ok: false, error: String((err as Error)?.message ?? err) });
