@@ -975,76 +975,84 @@ export class AppCore {
   }
 
   /**
-   * Upload files and folders from disk (desktop: dropped on the window or picked). Folders are recreated
-   * under `parentId` (an existing folder of the same name is reused) and their files uploaded one by one.
-   * The file is read piece by piece as it is sent, never whole into memory, and an interrupted upload of
-   * the same file into the same folder continues where it stopped (also after the app restarted).
+   * Desktop: what dropping (or picking) these paths would upload: every regular file, with the folders it
+   * goes into (a dropped folder is recreated under the target, its subfolders too). Nothing is read yet.
    */
-  async uploadPaths(paths: string[], parentId = ROOT_ID, token = ""): Promise<{ files: number; bytes: number; failed: { path: string; error: string }[] }> {
+  async listPaths(paths: string[]): Promise<{ path: string; name: string; size: number; folder: string[] }[]> {
     if (!Array.isArray(paths) || paths.some((p) => typeof p !== "string" || !p)) throw new Error("bad paths");
     const disk = this.disk();
-    const jobs: { path: string; folder: string[] }[] = [];
+    const out: { path: string; name: string; size: number; folder: string[] }[] = [];
     for (const p of paths) {
       if (await disk.isDir(p)) {
         const base = p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "folder";
-        for (const f of await disk.walk(p)) jobs.push({ path: f.path, folder: [base, ...f.rel.slice(0, -1)] });
-      } else jobs.push({ path: p, folder: [] });
-    }
-    const folderIds = new Map<string, string>();
-    const folderOf = async (names: string[]): Promise<string> => {
-      let id = parentId;
-      for (let i = 0; i < names.length; i++) {
-        const k = names.slice(0, i + 1).join("/");
-        const known = folderIds.get(k);
-        if (known) {
-          id = known;
-          continue;
-        }
-        const nfc = names[i]!.normalize("NFC");
-        const existing = this.c().store.childByKey(id, nameKey(nfc));
-        const n = existing ? this.c().store.getNode(existing) : undefined;
-        id = n && n.kind === "folder" && !n.trashed ? n.id : await this.mkdir(nfc, id);
-        folderIds.set(k, id);
+        for (const f of await disk.walk(p)) out.push({ path: f.path, name: f.rel.at(-1)!, size: f.size, folder: [base, ...f.rel.slice(0, -1)] });
+      } else {
+        const st = await disk.stat(p);
+        out.push({ path: p, name: p.split(/[\\/]/).pop() ?? p, size: st.size, folder: [] });
       }
-      return id;
-    };
-    let files = 0;
-    let bytes = 0;
-    const failed: { path: string; error: string }[] = [];
+    }
+    return out;
+  }
+
+  /** The folder `names` under `parentId`, made where missing (an existing one of the same name is reused). */
+  private async folderPathOf(parentId: string, names: string[]): Promise<string> {
+    let id = parentId;
+    for (const name of names) {
+      const nfc = name.normalize("NFC");
+      const existing = this.c().store.childByKey(id, nameKey(nfc));
+      const n = existing ? this.c().store.getNode(existing) : undefined;
+      id = n && n.kind === "folder" && !n.trashed ? n.id : await this.mkdir(nfc, id);
+    }
+    return id;
+  }
+
+  /**
+   * Desktop: upload one file from disk into `folder` (names under `parentId`, made where missing), with
+   * "upload-progress" events tagged with `token` (cancel: cancelUpload(token)). The file is read piece by
+   * piece as it is sent, never whole into memory; an interrupted upload of the same file into the same
+   * folder continues where it stopped (also after the app restarted).
+   */
+  async uploadPath(path: string, folder: string[] = [], parentId = ROOT_ID, token = ""): Promise<{ nodeId: string; resumed: number; size: number }> {
+    if (typeof path !== "string" || !path || !Array.isArray(folder) || folder.some((x) => typeof x !== "string")) throw new Error("bad arguments");
+    const src = await this.disk().openSource(path);
     const ac = new AbortController();
     if (token) this.uploads.set(token, ac);
     try {
-      for (const j of jobs) {
-        if (ac.signal.aborted) break;
-        const src = await disk.openSource(j.path).catch((e: unknown) => (failed.push({ path: j.path, error: String((e as Error)?.message ?? e) }), null));
-        if (!src) continue;
-        try {
-          const folder = await folderOf(j.folder);
-          let last = 0;
-          await this.c().upload(src, src.name, folder, {
-            signal: ac.signal,
-            resumeKey: diskResumeKey(folder, j.path, src.size, src.mtimeMs),
-            onProgress: (done, total, stages) => {
-              const t = Date.now();
-              if (done > 0 && done < total && t - last < 100) return;
-              last = t;
-              this.onEvent({ type: "upload-progress", token, done, total, stages, name: src.name });
-            },
-          });
-          files++;
-          bytes += src.size;
-          this.version++;
-        } catch (e) {
-          if (ac.signal.aborted) throw e;
-          failed.push({ path: j.path, error: String((e as Error)?.message ?? e) });
-        } finally {
-          await src.close();
-        }
-      }
+      const into = await this.folderPathOf(parentId, folder);
+      let last = 0;
+      const r = await this.c().upload(src, src.name, into, {
+        signal: ac.signal,
+        resumeKey: diskResumeKey(into, path, src.size, src.mtimeMs),
+        onProgress: (done, total, stages) => {
+          const t = Date.now();
+          if (done > 0 && done < total && t - last < 100) return;
+          last = t;
+          this.onEvent({ type: "upload-progress", token, done, total, stages, name: src.name });
+        },
+      });
+      this.version++;
+      void this.snapshotSoon();
+      return { nodeId: r.nodeId, resumed: r.resumed, size: src.size };
     } finally {
       this.uploads.delete(token);
+      await src.close();
     }
-    void this.snapshotSoon();
+  }
+
+  /** Upload files and folders from disk one after another (tests, scripts); the window uses listPaths + uploadPath. */
+  async uploadPaths(paths: string[], parentId = ROOT_ID, token = ""): Promise<{ files: number; bytes: number; failed: { path: string; error: string }[] }> {
+    let files = 0;
+    let bytes = 0;
+    const failed: { path: string; error: string }[] = [];
+    for (const [i, f] of (await this.listPaths(paths)).entries()) {
+      try {
+        await this.uploadPath(f.path, f.folder, parentId, token ? `${token}:${i}` : "");
+        files++;
+        bytes += f.size;
+      } catch (e) {
+        failed.push({ path: f.path, error: String((e as Error)?.message ?? e) });
+      }
+    }
     return { files, bytes, failed };
   }
 

@@ -1130,7 +1130,17 @@ function paintFailed() {
   $("upload-failed-list").replaceChildren(...failedUploads.map((x) => h("li", { "data-ddn": "upload-failed-item" }, h("span", { class: "n", title: x.file.name }, x.file.name), h("span", { class: "why", title: x.why }, x.why))));
 }
 
+/**
+ * One file of an upload batch: picked in the browser (a File), or a path on this computer (desktop app:
+ * the agent reads it from disk; `folder` = the subfolders it goes into, for a dropped folder).
+ */
+type UploadItem = { kind: "file"; f: File; name: string; size: number } | { kind: "path"; path: string; folder: string[]; name: string; size: number };
+
 async function uploadAll(files: File[], into?: string) {
+  return uploadItems(files.map((f) => ({ kind: "file" as const, f, name: f.name, size: f.size })), into);
+}
+
+async function uploadItems(files: UploadItem[], into?: string) {
   if (!files.length) return;
   if (!channelsOk) {
     toast(t("err.need_channel"), "err");
@@ -1150,7 +1160,8 @@ async function uploadAll(files: File[], into?: string) {
     const token = crypto.randomUUID();
     const cancel = h("button", { class: "iconbtn qcancel", type: "button", "data-ddn": "queue-cancel", "aria-label": t("queue.cancel"), title: t("queue.cancel") }, icon("x"));
     const speed = h("span", { "data-ddn": "queue-speed" });
-    const li = h("li", {}, h("span", { class: "qname", title: f.name }, f.name), h("span", { class: "qside" }, cancel, state), h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, fmt(f.size), speed));
+    const label = f.kind === "path" && f.folder.length ? `${f.folder.join("/")}/${f.name}` : f.name;
+    const li = h("li", {}, h("span", { class: "qname", title: label }, label), h("span", { class: "qside" }, cancel, state), h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, fmt(f.size), speed));
     li.dataset.ddn = "queue-item";
     list.append(li);
     const item = { f, state, bar, token, cancel, cancelled: false, speed };
@@ -1213,7 +1224,7 @@ async function uploadAll(files: File[], into?: string) {
       meta();
     });
     try {
-      const r = await core.upload(f, f.name, folder, token, uploadResumeKey(folder, f));
+      const r = f.kind === "file" ? await core.upload(f.f, f.name, folder, token, uploadResumeKey(folder, f.f)) : await core.uploadPath(f.path, f.folder, folder, token);
       state.className = "qstate done";
       state.textContent = t("queue.ok");
       if (r.resumed) state.title = t("queue.resumed", { n: r.resumed });
@@ -1230,7 +1241,7 @@ async function uploadAll(files: File[], into?: string) {
         // A file changed on disk after it was picked cannot be read again from this selection.
         const why = /NotReadable|could not be read/i.test(String((e as Error)?.message ?? e)) ? t("upf.gone", { name: f.name }) : errText(e);
         state.title = why;
-        failedUploads.push({ file: f, folder, why });
+        if (f.kind === "file") failedUploads.push({ file: f.f, folder, why });
       }
     } finally {
       progressHandlers.delete(token);
@@ -1264,7 +1275,10 @@ function wireFilesPage() {
     const input = e.target as HTMLInputElement;
     const files = [...(input.files ?? [])];
     input.value = "";
-    await uploadAll(files);
+    // Desktop: the agent reads the picked files from disk (resumable after a restart, nothing copied here).
+    const paths = desktop ? desktop.pathsOf(files) : [];
+    if (desktop && paths.length === files.length) await uploadPathsFromDrop(paths);
+    else await uploadAll(files);
   };
   wireQueue();
   // Drop zone + drag over the whole Files page (Dashboard).
@@ -1480,18 +1494,15 @@ function closeDownloads() {
   $("downloads").hidden = true;
   $("dl-list").replaceChildren();
 }
-/** Desktop: dropped files and folders are uploaded by the agent from disk (also with the window closed). */
+/**
+ * Desktop: dropped files and folders are uploaded by the agent straight from disk, in the same queue panel
+ * as files picked in the browser (one row per file, its progress, speed and cancel).
+ */
 async function uploadPathsFromDrop(paths: string[]) {
   if (!paths.length) return;
-  if (!channelsOk) {
-    toast(t("err.need_channel"), "err");
-    return;
-  }
-  const token = crypto.randomUUID();
   try {
-    const r = await core.uploadPaths(paths, currentFolder(), token);
-    void render();
-    if (r.failed.length) toast(r.failed.map((f) => `${f.path}: ${f.error}`).join("\n"), "err");
+    const list = await core.listPaths(paths);
+    await uploadItems(list.map((x) => ({ kind: "path" as const, ...x })));
   } catch (e) {
     toast(errText(e), "err");
   }

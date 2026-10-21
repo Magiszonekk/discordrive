@@ -61,8 +61,6 @@ jobs:
         run: npm run build -w @ddv4/desktop
 
       - name: Installers
-        env:
-          DDN_BUILD_ID: "${{ github.ref_name }}+${{ github.sha }}"
         run: npx tsx apps/desktop/package.ts ${{ matrix.target }}
 
       - name: Keep the installers
@@ -103,7 +101,7 @@ jobs:
           cd dist
           rm -f SHA256SUMS
           sha256sum *.exe *.AppImage *.deb > SHA256SUMS
-          echo "{\"version\":\"$(node -p "require('../apps/desktop/package.json').version")\",\"build\":\"main+${GITHUB_SHA::7}\",\"commit\":\"$GITHUB_SHA\",\"builtAt\":\"$(date -u +%FT%TZ)\"}" > build-info.json
+          # build-info.json comes from the build (the same ID the app shows: version + source hash + commit).
           prev=$(gh release view main-build --json targetCommitish -q .targetCommitish 2>/dev/null || true)
           {
             echo "Automatic build of \`main\` (not signed; see the README on Windows SmartScreen). The app checks this release and offers the new version; it never installs anything by itself."

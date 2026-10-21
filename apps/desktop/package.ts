@@ -24,9 +24,8 @@ rmSync(stage, { recursive: true, force: true });
 rmSync(out, { recursive: true, force: true });
 mkdirSync(stage, { recursive: true });
 cpSync(join(here, "dist"), join(stage, "dist"), { recursive: true });
-const build = process.env.DDN_BUILD_ID ?? `dev-${new Date().toISOString().slice(0, 10)}`;
-// What the app knows about itself (About, update check): the commit it was built from.
-writeFileSync(join(stage, "dist", "build-info.json"), JSON.stringify({ version: pkg.version, build, commit: process.env.GITHUB_SHA ?? null, builtAt: new Date().toISOString() }) + "\n");
+// What the app knows about itself (About, transfer logs, update check): written by build.ts.
+if (!existsSync(join(stage, "dist", "build-info.json"))) throw new Error("dist/build-info.json missing: run the build first");
 writeFileSync(
   join(stage, "package.json"),
   JSON.stringify(
@@ -102,4 +101,5 @@ const files = readdirSync(out).filter((f) => /\.(exe|AppImage|deb|zip)$/.test(f)
 const sums = files.map((f) => `${createHash("sha256").update(readFileSync(join(out, f))).digest("hex")}  ${f}`).join("\n") + "\n";
 writeFileSync(join(out, "SHA256SUMS"), sums);
 writeFileSync(join(out, "build-info.json"), readFileSync(join(stage, "dist", "build-info.json")));
+console.log("build", JSON.parse(readFileSync(join(stage, "dist", "build-info.json"), "utf8")).build);
 console.log(sums);

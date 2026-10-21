@@ -46,9 +46,11 @@ export interface DiskFiles {
   /** Random-access source of a file to upload (read on demand, never whole into memory). */
   openSource(path: string): Promise<ByteSource & { name: string; mtimeMs: number; close(): Promise<void> }>;
   /** Every regular file under a folder (dropping a folder uploads its contents), with their path relative to it. */
-  walk(dir: string): Promise<{ path: string; rel: string[] }[]>;
+  walk(dir: string): Promise<{ path: string; rel: string[]; size: number }[]>;
   /** Is this path a folder? */
   isDir(path: string): Promise<boolean>;
+  /** Size of a file. */
+  stat(path: string): Promise<{ size: number }>;
   /**
    * Open the target of a download in `dir`: a partial file `<name>.ddnpart` (kept across restarts
    * for resuming) renamed to a free name (`name`, `name (1)`, …) when done.

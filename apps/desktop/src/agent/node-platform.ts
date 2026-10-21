@@ -236,14 +236,19 @@ export function nodeDiskFiles(dir: string): DiskFiles & { setDownloadsDir(d: str
     async isDir(p) {
       return (await stat(p)).isDirectory();
     },
+    async stat(p) {
+      const st = await stat(p);
+      if (!st.isFile()) throw new Error("not a file");
+      return { size: st.size };
+    },
     async walk(dir) {
-      const out: { path: string; rel: string[] }[] = [];
+      const out: { path: string; rel: string[]; size: number }[] = [];
       const go = async (d: string, rel: string[]) => {
         for (const e of await readdir(d, { withFileTypes: true })) {
           const p = join(d, e.name);
           // Symbolic links are not followed (a link to "/" must not upload the whole disk).
           if (e.isDirectory()) await go(p, [...rel, e.name]);
-          else if (e.isFile()) out.push({ path: p, rel: [...rel, e.name] });
+          else if (e.isFile()) out.push({ path: p, rel: [...rel, e.name], size: (await stat(p)).size });
         }
       };
       await go(dir, []);

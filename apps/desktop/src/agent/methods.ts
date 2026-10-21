@@ -54,6 +54,8 @@ export const CORE_METHODS: Record<string, string[]> = {
   mkdir: ["s", "s?"],
   capabilities: [],
   uploadPaths: ["s[]", "s?", "s?"],
+  listPaths: ["s[]"],
+  uploadPath: ["s", "s[]?", "s?", "s?"],
   downloadToDisk: ["s", "s?", "s?"],
   unfinishedDownloads: [],
   resumeDownloads: [],

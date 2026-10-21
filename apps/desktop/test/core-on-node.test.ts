@@ -30,10 +30,14 @@ describe("AppCore on the desktop (Node) platform", () => {
     await core.createAccount(url, "desktop test");
     await core.open();
     await core.addWebhook(fake.addWebhook("1550000000000000301").url);
+    await core.setTransferLog(true, false);
     const data = new Uint8Array(randomBytes(3 * 1024 * 1024 + 17));
     const up = await core.upload(new Blob([data]), "a.bin");
     const blob = await core.download(up.nodeId);
     expect(await sha256Hex(new Uint8Array(await blob.arrayBuffer()))).toBe(await sha256Hex(data));
+    // The agent's transfer log has the file events, not only the requests (transfer-report counts files from them).
+    const evs = new Set((await (core as unknown as { platform: { transferLog(): { text(): Promise<string> } } }).platform.transferLog().text()).split("\n").filter(Boolean).map((l) => (JSON.parse(l) as { ev: string; src: string }).ev));
+    for (const ev of ["file_start", "frag", "req", "file_end"]) expect(evs.has(ev), ev).toBe(true);
     const listed = core.list().rows.map((r) => r.name);
     expect(listed).toContain("a.bin");
     if (process.platform !== "win32") expect(statSync(join(dataDir, "keys.bin")).mode & 0o777).toBe(0o600);
