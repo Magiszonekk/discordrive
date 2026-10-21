@@ -176,6 +176,10 @@ svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none;
 .crumbs [aria-current="page"] { max-width: 20ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: var(--color-ink); }
 .crumbs svg.i { width: 14px; height: 14px; color: var(--color-muted); }
 .crumbs .back { display: none; align-items: center; gap: .25rem; }
+/* Up: the parent folder (also a drop target); hidden at the top */
+.crumbs .up { padding: .25rem; margin-right: .125rem; }
+.crumbs .up svg.i { width: 16px; height: 16px; color: inherit; }
+.crumbs .up.drop-over { outline: 2px dashed var(--color-accent); outline-offset: -2px; background: color-mix(in oklch, var(--color-accent) 10%, transparent); }
 .files-h h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 var(--text-display)/1.1 var(--font-display); letter-spacing: -.02em; color: var(--color-ink); }
 .files-h .meta { margin-top: .25rem; font: 400 .75rem/1rem var(--font-mono); color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .files-h .acts { display: flex; width: 100%; gap: .5rem; }
@@ -199,6 +203,7 @@ svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none;
   .files-h .acts .btn .lbl-md { display: none; }
   .crumbs .desk { display: none; }
   .crumbs .back { display: inline-flex; }
+  .crumbs .up { display: none; } /* the phone's back link already goes to the parent */
 }
 
 /* UploadProgress */
@@ -585,7 +590,7 @@ dialog.preview[open] { display: flex; }
 .pv-md a { color: var(--color-accent); }
 .pv-md hr { margin: 1.5em 0; border: 0; border-top: 1px solid var(--color-rule); }
 .pv-md .md-img { color: var(--color-muted); font-style: italic; }
-.ftable tbody tr.pv-row { cursor: pointer; }
+.ftable tbody tr:is(.pv-row, .open-row) { cursor: pointer; }
 @media (max-width: 767.98px) {
   dialog.preview { width: 100vw; height: 100dvh; margin: 0; border: 0; border-radius: 0; }
   .preview .player-h { padding-top: max(.5rem, env(safe-area-inset-top)); }
@@ -770,13 +775,16 @@ th[aria-sort="ascending"] .th-sort svg.i, th[aria-sort="descending"] .th-sort sv
 /* Long press opens the menu: no text selection / iOS callout on the rows */
 @media (hover: none) { .ftable tbody tr { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
 
-/* Upload queue closes itself: a hairline counts down at the bottom of the panel
- * (paused on hover / focus); files that failed stay in a warning bar with Details and Retry. */
+/* Transfer panels (uploads, downloads) close themselves: a bar at the bottom of the panel shrinks to zero
+ * (ui.ts panelCloser animates it; paused on hover / focus). Full accent; error after a failure, warning
+ * after a cancel. Reduced motion: the bar stays still and the header says "Closes in N s". */
 .uploads { position: relative; }
-.uploads[data-closing]::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: color-mix(in oklch, var(--color-accent) 35%, transparent); transform-origin: left; animation: toast-time var(--close-ms, 5000ms) linear forwards; }
-.uploads[data-closing][data-result="err"]::after { background: color-mix(in oklch, var(--color-error) 45%, transparent); }
-.uploads[data-closing][data-paused]::after { animation-play-state: paused; }
-@media (prefers-reduced-motion: reduce) { .uploads[data-closing]::after { display: none; } }
+.closebar { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: var(--color-accent); transform-origin: left; visibility: hidden; pointer-events: none; }
+.uploads[data-closing] > .closebar { visibility: visible; }
+.uploads[data-result="err"] > .closebar { background: var(--color-error); }
+.uploads[data-result="cancel"] > .closebar { background: var(--color-warning); }
+.uploads-h .t .closein { margin-top: .125rem; }
+@media (prefers-reduced-motion: reduce) { .uploads[data-closing] > .closebar { visibility: hidden; } }
 .upfail { margin-bottom: 1rem; }
 .upfail-b { display: grid; gap: .5rem; min-width: 0; }
 .upfail-h { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem; }
@@ -920,13 +928,56 @@ input.switch:focus-visible { outline: 2px solid var(--color-focus); outline-offs
   input.switch, input.switch::before, label.dapp-row { transition: none; }
 }
 
-/* Accent colour swatches (Settings -> Appearance). Logic: theme.js (ddnAccent), ui.ts paintAccent. */
-.swatches { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: .5rem; }
-.swatch { display: inline-flex; flex-direction: column; align-items: center; gap: .35rem; background: none; border: 0; padding: 0; cursor: pointer; color: var(--color-ink-2); font-size: .75rem; }
-.swatch .dot { width: 2rem; height: 2rem; border-radius: 999px; background: var(--sw); box-shadow: inset 0 0 0 1px color-mix(in oklch, black 12%, transparent); }
-.swatch[aria-checked="true"] .dot { outline: 2px solid var(--color-ink); outline-offset: 2px; }
-.swatch[aria-checked="true"] { color: var(--color-ink); }
-.swatch.custom input[type="color"] { width: 2rem; height: 2rem; padding: 0; border: 0; border-radius: 999px; background: none; cursor: pointer; }
+/* Accent colour swatches (Settings -> Appearance). Logic: theme.js (ddnAccent), ui.ts paintAccent.
+ * As discordrive's Settings "Accent Colour": a row of round swatches with a mono caption. The ring sits
+ * off the dot on a paper-coloured gap (ring-offset), so every hue reads on light and dark paper; the
+ * picked one gets an ink ring and a tick in --color-accent-ink (theme.js picks black or white for it,
+ * custom colours included). "Custom" is the colour input itself: a hue wheel until a colour is chosen,
+ * then that colour. Fixed columns: one row on a desktop, 4 + 3 on a phone. */
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, 4.25rem); gap: .25rem .125rem; margin-top: .75rem; }
+.swatch {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: .5rem; min-width: 0;
+  padding: .5rem .125rem .375rem; border: 0; border-radius: var(--radius-input); background: none; cursor: pointer;
+  color: var(--color-ink-2); font: 500 .6875rem/1rem var(--font-mono); text-transform: uppercase; letter-spacing: .04em;
+  -webkit-tap-highlight-color: transparent; transition: color var(--duration-short) var(--ease-out);
+}
+.swatch .sw-l { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.swatch .dot, .swatch.custom input[type="color"] {
+  --ring: var(--color-rule-2); --ring-w: 1px;
+  display: block; flex: none; width: 2.25rem; height: 2.25rem; border-radius: 9999px;
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-ink) 10%, transparent), 0 0 0 2px var(--color-paper), 0 0 0 calc(2px + var(--ring-w)) var(--ring);
+  transition: box-shadow var(--duration-short) var(--ease-out), transform var(--duration-micro) var(--ease-out);
+  forced-color-adjust: none;
+}
+.swatch .dot { background: var(--sw); }
+.swatch:hover { color: var(--color-ink); }
+.swatch:hover :is(.dot, input[type="color"]) { --ring: var(--color-muted); }
+.swatch:active :is(.dot, input[type="color"]) { transform: scale(.94); }
+.swatch[aria-checked="true"] { color: var(--color-ink); font-weight: 600; }
+.swatch[aria-checked="true"] :is(.dot, input[type="color"]) { --ring: var(--color-ink); --ring-w: 2px; }
+/* the tick: an L of two borders, centred on the dot */
+.swatch[aria-checked="true"]::after {
+  content: ""; position: absolute; top: calc(.5rem + 1.125rem - .4375rem); left: calc(50% - .1875rem);
+  width: .375rem; height: .6875rem; border: solid var(--color-accent-ink); border-width: 0 2px 2px 0;
+  transform: rotate(45deg); pointer-events: none;
+}
+/* keyboard focus on the whole tile (dot + caption), Cobalt's 2px focus ring */
+.swatch:focus-visible, .swatch.custom:has(input:focus-visible) { outline: 2px solid var(--color-focus); outline-offset: 1px; }
+.swatch:focus:not(:focus-visible), .swatch.custom input[type="color"]:focus { outline: none; }
+/* Custom: the native colour input drawn as a swatch; a hue wheel (same lightness and chroma as the presets)
+ * with a paper hole until a colour is picked, then the colour itself. */
+.swatch.custom input[type="color"] {
+  -webkit-appearance: none; appearance: none; margin: 0; padding: 0; border: 0; cursor: pointer;
+  background:
+    radial-gradient(circle, var(--color-paper) 0 .375rem, transparent calc(.375rem + .5px)),
+    conic-gradient(from 90deg, oklch(60% 0.18 18), oklch(66% 0.16 75), oklch(62% 0.17 152), oklch(60% 0.14 195), oklch(58% 0.2 256), oklch(56% 0.19 300), oklch(60% 0.18 18));
+}
 .swatch.custom input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
-.swatch.custom input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 999px; }
-.swatch.custom[aria-checked="true"] input { outline: 2px solid var(--color-ink); outline-offset: 2px; }
+.swatch.custom input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 9999px; }
+.swatch.custom input[type="color"]::-moz-color-swatch { border: 0; border-radius: 9999px; }
+.swatch.custom:not([aria-checked="true"]) input[type="color"]::-webkit-color-swatch { opacity: 0; }
+.swatch.custom:not([aria-checked="true"]) input[type="color"]::-moz-color-swatch { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .swatch, .swatch .dot, .swatch.custom input[type="color"] { transition: none; }
+  .swatch:active :is(.dot, input[type="color"]) { transform: none; }
+}

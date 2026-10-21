@@ -27,6 +27,12 @@ contextBridge.exposeInMainWorld("ddnDesktop", {
   showInFolder: (path: string) => ipcRenderer.send("ddn:show-in-folder", String(path)),
   pickFolder: () => ipcRenderer.invoke("ddn:pick-folder") as Promise<string | null>,
   firstAccountMade: () => ipcRenderer.invoke("ddn:first-account-made"),
+  /** Back / forward of the window (the mouse's side buttons on Windows arrive as app commands). */
+  onNavigate: (cb: (dir: "back" | "forward") => void) => {
+    ipcRenderer.on("ddn:navigate", (_e, dir: unknown) => {
+      if (dir === "back" || dir === "forward") cb(dir);
+    });
+  },
   updates: {
     check: () => ipcRenderer.invoke("ddn:update-check"),
     download: () => ipcRenderer.invoke("ddn:update-download"),
