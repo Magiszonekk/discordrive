@@ -628,6 +628,10 @@ try {
   step("share");
   await p.click("[data-ddn=prev]");
   await p.waitForSelector("[data-ddn=row]:has-text('notatki.txt')", { state: "attached" }).catch(() => {});
+  // Share buttons follow the instance's health (shares on/off); wait for the row's actions, not just the row
+  // (under load the first page could still be drawn without them and the step was skipped as "no bot").
+  const sharesOn = !!(await (await fetch(`${base}/v1/health`)).json() as { shares?: boolean }).shares;
+  if (sharesOn) await p.waitForSelector("[data-ddn=row]:has-text('notatki.txt') [data-ddn=share]", { timeout: 15_000 }).catch(() => {});
   if ((await p.locator("[data-ddn=share]").count()) > 0) {
     await p.click("[data-ddn=next]");
     await p.locator("[data-ddn=row]", { hasText: "notatki.txt" }).locator("[data-ddn=share]").click();
@@ -660,7 +664,7 @@ try {
     share.revokedStopsNew = true;
     r.share = share;
     await sctx.close();
-  } else r.share = "unavailable (no bot)";
+  } else r.share = sharesOn ? false : "unavailable (no bot)";
 
   // 9. pairing a second device (another browser context), on a phone viewport
   step("pairing");
