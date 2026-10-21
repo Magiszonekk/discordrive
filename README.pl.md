@@ -47,6 +47,13 @@ na telefonach). Starsza przeglądarka zamiast formularza pokaże „Ta przegląd
 zaktualizuj ją. Zapasowej implementacji w JavaScripcie celowo nie ma: klucz zostaje w kryptografii
 samej przeglądarki.
 
+**Transfery stoją na ~20 MB/s mimo szybkiego łącza (Chrome, Brave, Edge na Linuksie).** Te przeglądarki
+łączą się z Discordem przez HTTP/3 (QUIC), które na niektórych systemach jest dużo wolniejsze od HTTP/2
+(zmierzone na łączu 111/69 MB/s: ~20 MB/s z QUIC, 63–67 MB/s bez). Można je wyłączyć w przeglądarce:
+`chrome://flags/#enable-quic` (Brave: `brave://flags/#enable-quic`) → Disabled albo polityka
+`QuicAllowed: false`; Firefox: `network.http.http3.enable` = false w `about:config`. Dotyczy wszystkich
+stron; aplikacja działa w obu przypadkach.
+
 ## Tryby
 
 Wybierany w `npm run setup`, na zawsze dla danej instancji (inny tryb = nowa instancja w innym

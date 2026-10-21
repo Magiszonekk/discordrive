@@ -337,6 +337,7 @@ export const en: Record<string, string> = {
   "diag.auto": "auto ({n})",
   "diag.conc.warn": "{n} at once with {ch} channels: above about {max} (2 per channel) Discord's per-channel limit answers \"slow down\" (429) and uploads get no faster. Add channels instead.",
   "diag.download": "Download logs",
+  "diag.quic": "Transfers stuck at about 20 MB/s on a fast line in Chrome, Brave or Edge? These browsers reach Discord over HTTP/3 (QUIC), which is slow on some systems. Turning it off often helps: chrome://flags/#enable-quic (Brave: brave://flags/#enable-quic) → Disabled; Firefox: network.http.http3.enable = false in about:config.",
   "diag.version": "Version: {app}",
   "diag.version2": "Version: {app} (this page) · {server} (the instance: reload the page to update)",
   "diag.clear": "Clear",
