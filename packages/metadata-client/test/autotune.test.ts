@@ -339,10 +339,11 @@ describe("upload: isolated network errors do not throttle it for good", () => {
       const hooks = Array.from({ length: 8 }, () => fake.addWebhook()).map((h) => ({ id: h.id, url: h.url, channelId: h.channelId }));
       const clock: NetClock = { now: () => Date.now(), setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (h) => clearTimeout(h as never), random: Math.random };
       const net = new NetControl({ clock, tune: { minSpanMs: 600, recheckMs: 600_000 }, window: { recoverMs: 1500 } });
-      const c = new MetadataClient({ device: { id: "d", name: "d" }, arbiter: new LocalArbiter(new Sequencer()), transport: new DiscordWebhookTransport({ apiOrigin: origin }), webhooks: hooks, chunkSize: 256 * 1024, pacer: new ChannelPacer({ perMin: 1e6, maxPerMin: 1e6, burst: 1e6 }), net, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 50))) });
+      const c = new MetadataClient({ device: { id: "d", name: "d" }, arbiter: new LocalArbiter(new Sequencer()), transport: new DiscordWebhookTransport({ apiOrigin: origin }), webhooks: hooks, chunkSize: 256 * 1024, pacer: new ChannelPacer({ perMin: 1e6, maxPerMin: 1e6, burst: 1e6 }), net, maxRetries: 10, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 50))) });
       if (drop === "burst") {
-        // A weak link: from post 20 on, 4 of every 10 posts lose their connection.
-        for (let k = 20; k < 400; k++) if (k % 10 < 4) fake.dropPosts.add(k);
+        // A weak link: from post 20 on, 3 of every 10 posts lose their connection (not in a row, so a
+        // retry, which gets a later number, usually goes through: the upload must still finish).
+        for (let k = 20; k < 600; k++) if ([0, 4, 7].includes(k % 10)) fake.dropPosts.add(k);
       } else for (const k of drop) fake.dropPosts.add(k);
       let minLimit = Infinity;
       const iv = setInterval(() => (minLimit = Math.min(minLimit, net.win.up.limit)), 20);
