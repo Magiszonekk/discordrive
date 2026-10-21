@@ -181,7 +181,7 @@ try {
   await p.addScriptTag({ content: bundle.outputFiles[0]!.text });
   log(`${LABEL}: ${MB} MB over ${hooks.length} channel(s), upload ${UP}, downloads ${DOWN.join(",")}`);
   res = (await p.evaluate(
-    async ({ src, hooks, mb, up, down, files }) => {
+    async ({ src, hooks, mb, up, down, files, seed }) => {
       const D = (globalThis as unknown as { DDN: never }).DDN;
       return (new Function(`return (${src})`)() as (...a: unknown[]) => Promise<unknown>)(D, hooks, mb, up, down, files, seed);
     },
