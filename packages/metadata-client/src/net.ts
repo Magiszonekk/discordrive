@@ -269,8 +269,13 @@ export interface TunerOptions {
   cap?: number;
   /** One step: × this (at least ±1). */
   factor?: number;
-  /** A step up is kept only if the total speed grew by at least this share. */
+  /** A step up is kept only if the total speed grew by at least this share… */
   minGain?: number;
+  /**
+   * …or by at least this smaller share in TWO measurements in a row (the step is measured once more
+   * before deciding): a real +8 % that one window of noise could fake is confirmed by the second.
+   */
+  smallGain?: number;
   /** A step down is kept if the speed fell by less than this share (fewer pieces, same speed). */
   maxLoss?: number;
   /** A measurement window is at least this long… */
@@ -293,7 +298,7 @@ export interface TunerOptions {
  * it did not (back), `try-fewer` one step below, `fewer` that was as fast (kept), `worse` it was not
  * (back), `errors` network errors cut it, `cap` the upper bound went down.
  */
-export type TuneWhy = "try" | "gain" | "flat" | "try-fewer" | "fewer" | "worse" | "errors" | "recover" | "cap";
+export type TuneWhy = "try" | "gain" | "confirm" | "flat" | "try-fewer" | "fewer" | "worse" | "errors" | "recover" | "cap";
 
 /** A piece in flight as the tuner sees it (from begin() to end()/drop()). */
 export type TuneToken = { t0: number };
@@ -348,7 +353,7 @@ export class AutoTuner {
     private readonly clock: NetClock = realClock,
     private readonly emit: NetEmit = () => {},
   ) {
-    this.o = { factor: o.factor ?? 1.5, minGain: o.minGain ?? 0.1, maxLoss: o.maxLoss ?? 0.05, minSpanMs: o.minSpanMs ?? 6000, minPieces: o.minPieces ?? 1.5, recheckMs: o.recheckMs ?? 60_000, shrink: o.shrink ?? false, min: Math.max(1, o.min ?? 2) };
+    this.o = { factor: o.factor ?? 1.5, minGain: o.minGain ?? 0.1, smallGain: o.smallGain ?? 0.05, maxLoss: o.maxLoss ?? 0.05, minSpanMs: o.minSpanMs ?? 6000, minPieces: o.minPieces ?? 1.5, recheckMs: o.recheckMs ?? 60_000, shrink: o.shrink ?? false, min: Math.max(1, o.min ?? 2) };
     this.cap = Math.max(1, Math.round(o.cap ?? 32));
     this.target = Math.max(Math.min(this.o.min, this.cap), Math.min(this.cap, Math.round(o.start ?? 4)));
     this.since = clock.now();
@@ -452,6 +457,9 @@ export class AutoTuner {
     }
   }
 
+  /** Speed of the first window of a step with a small gain (0 = none pending). */
+  private firstSmall = 0;
+
   /** Gain of the last step up (share); a big one, or the very first ramp, doubles instead of × factor. */
   private lastGain = 0;
   private up(n: number): number {
@@ -484,7 +492,17 @@ export class AutoTuner {
       return this.up(n) > n ? this.change(this.up(n), "try", [n, bps], null, "up", now) : this.tryDown(n, bps, now);
     }
     if (this.phase === "up") {
-      if (bps >= b.bps * (1 + this.o.minGain)) {
+      // A small gain: measure the same step once more; both windows above smallGain = a real gain.
+      const small = bps >= b.bps * (1 + this.o.smallGain);
+      if (!this.firstSmall && small && bps < b.bps * (1 + this.o.minGain)) {
+        this.firstSmall = bps;
+        this.log(n, n, "confirm", [b.n, b.bps], [n, bps]);
+        return this.restart(now);
+      }
+      const confirmed = this.firstSmall > 0 && small && (this.firstSmall + bps) / 2 >= b.bps * (1 + this.o.smallGain);
+      if (this.firstSmall && !confirmed) bps = Math.min(bps, this.firstSmall);
+      this.firstSmall = 0;
+      if (bps >= b.bps * (1 + this.o.minGain) || confirmed) {
         this.lastGain = b.bps > 0 ? bps / b.bps - 1 : 1;
         this.base = { n, bps };
         this.gained = true;
@@ -520,6 +538,7 @@ export class AutoTuner {
     const from = this.target;
     this.target = n;
     this.phase = phase;
+    this.firstSmall = 0;
     if (phase === "hold") this.holdFrom = now;
     this.restart(now);
     this.log(from, n, why, a, m);

@@ -6,6 +6,7 @@
 //
 //   npx tsx scripts/live-transfer-bench.mts webhooks.txt [--mb 1000] [--down auto,16] [--up auto]
 //        [--files 1] [--out dir] [--label before] [--speedtest] [--seed 1] [--drop-posts 20,40]
+//        [--browser-args "--disable-quic"] [--lane]
 //
 // The file is generated on the fly from a seed (no Blob of the whole size: a 1 GB Blob is written to the
 // temporary browser profile's disk and a system Chromium/Brave failed to read it back). --speedtest
@@ -14,6 +15,13 @@
 // --drop-posts 20,40: those webhook posts (numbers in the order they are sent) fail with "Failed to fetch"
 // before leaving the page, as a connection reset would; the client retries them. Shows what isolated
 // network errors do to the speed (the same posts fail in a run of any version).
+// --browser-args "...": extra command-line switches for the browser (e.g. --disable-quic: HTTP/2 over
+// TCP instead of HTTP/3 = QUIC, which Chromium uses with Discord by default).
+// --lane: downloads may also use a second connection, a hidden sandboxed iframe like the app's lane.html
+// (its opaque origin gets its own connections), so the bench measures what the app does.
+// The summary says which protocol the requests used (h3 / h2 / http/1.1 per host and per connection:
+// page or lane, from the browser's own network events through DevTools: Discord sends no
+// Timing-Allow-Origin, so the page's Resource Timing shows no protocol) and the build of the client.
 //
 // webhooks.txt: webhook URLs of a TEST server, one per line. Every posted message is deleted at the
 // end. The output (summary JSON, transfer logs, report text) has no webhook tokens or CDN links.
@@ -47,14 +55,67 @@ const LABEL = arg("label", "run");
 const SEED = Number(arg("seed", "1")) >>> 0;
 const SPEEDTEST = argv.includes("--speedtest");
 const DROP = arg("drop-posts", "").split(",").map(Number).filter((n) => n > 0);
+const BROWSER_ARGS = arg("browser-args", "").split(/\s+/).filter(Boolean);
+const LANE = argv.includes("--lane");
+const { buildId, sourceHash } = await import("../apps/web-mo/source-hash.js");
+const BUILD = buildId(sourceHash());
 const HOOK_RE = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/(\d+)\/[A-Za-z0-9_.-]+$/;
 const hooks = readFileSync(file, "utf8").split(/\s+/).filter((l) => HOOK_RE.test(l)).map((url) => ({ id: HOOK_RE.exec(url)![1]!, url }));
 if (!hooks.length) throw new Error("no webhook URLs in file");
 const log = (s: string) => console.error(`[${new Date().toISOString().slice(11, 19)}] ${s}`);
 
 /** Runs in the page: upload `mb` MB, then each download setting; returns the transfer log and the placements to delete. */
-const runSrc = async (D: never, hooks: { id: string; url: string }[], mb: number, up: string, down: string[], files: number, seed: number, drop: number[]) => {
+const runSrc = async (D: never, hooks: { id: string; url: string }[], mb: number, up: string, down: string[], files: number, seed: number, drop: number[], build: string, lane: boolean) => {
   const DD = D as unknown as typeof import("@ddv4/metadata-client") & { Sequencer: new () => never };
+  // The lane: the same protocol as the app's lane.html (one MessagePort; { id, url } → { id, st, ttfb, buf }).
+  const lanes: ((url: string, init?: { signal?: AbortSignal }) => Promise<Response>)[] = [];
+  let lanePort: MessagePort | null = null;
+  if (lane) {
+    const html = `<!doctype html><script>
+      const ctl=new Map();let port=null;
+      addEventListener('message',e=>{if(port||!e.data||e.data.ddnLane!==1||!e.ports[0])return;port=e.ports[0];port.onmessage=async m=>{const {id,url,abort}=m.data||{};
+        if(abort)return void ctl.get(id)?.abort();const ac=new AbortController();ctl.set(id,ac);const t0=performance.now();
+        try{const r=await fetch(url,{signal:ac.signal,credentials:'omit',cache:'no-store'});const ttfb=Math.round((performance.now()-t0)*10)/10;const buf=await r.arrayBuffer();port.postMessage({id,st:r.status,ttfb,buf},[buf])}
+        catch(err){port.postMessage({id,err:String(err&&err.message||err).slice(0,120),aborted:ac.signal.aborted})}finally{ctl.delete(id)}}});
+      parent.postMessage({ddnLaneReady:1},'*');<\/script>`;
+    const f = document.createElement("iframe");
+    f.setAttribute("sandbox", "allow-scripts");
+    f.style.display = "none";
+    const ready = new Promise<void>((ok) =>
+      addEventListener("message", (e) => {
+        if (e.source !== f.contentWindow || !(e.data as { ddnLaneReady?: number })?.ddnLaneReady) return;
+        const ch = new MessageChannel();
+        f.contentWindow!.postMessage({ ddnLane: 1 }, "*", [ch.port1]);
+        lanePort = ch.port2;
+        ok();
+      }),
+    );
+    f.srcdoc = html;
+    document.body.append(f);
+    await ready;
+    let seq = 0;
+    const wait = new Map<number, { ok: (r: Response) => void; err: (e: unknown) => void }>();
+    lanePort!.onmessage = (e: MessageEvent<{ id: number; st?: number; ttfb?: number; buf?: ArrayBuffer; err?: string; aborted?: boolean }>) => {
+      const w = wait.get(e.data?.id);
+      if (!w) return;
+      wait.delete(e.data.id);
+      if (e.data.err !== undefined) return w.err(e.data.aborted ? Object.assign(new Error("aborted"), { name: "AbortError" }) : new TypeError(`lane: ${e.data.err}`));
+      w.ok(new Response(e.data.buf ?? null, { status: e.data.st ?? 0, headers: { "x-ddn-ttfb": String(e.data.ttfb ?? 0) } }));
+    };
+    const call = (msg: Record<string, unknown>, signal?: AbortSignal) =>
+      new Promise<Response>((ok, err) => {
+        const id = ++seq;
+        wait.set(id, { ok, err });
+        signal?.addEventListener("abort", () => {
+          if (!wait.has(id)) return;
+          wait.delete(id);
+          lanePort!.postMessage({ id, abort: true });
+          err(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        }, { once: true });
+        lanePort!.postMessage({ id, ...msg });
+      });
+    lanes.push((url, init) => call({ url }, init?.signal));
+  }
   if (drop.length) {
     const real = globalThis.fetch.bind(globalThis);
     let posts = 0;
@@ -95,7 +156,8 @@ const runSrc = async (D: never, hooks: { id: string; url: string }[], mb: number
     transport: new DD.DiscordWebhookTransport(),
     webhooks: hooks,
   });
-  c.setTransferLog(new DD.TransferLog(mem.write, { src: "web", mode: "metadata-only" }));
+  c.setTransferLog(new DD.TransferLog(mem.write, { src: "web", mode: "metadata-only", build }));
+  if (lanes.length) c.blobs.setCdnLanes?.(lanes);
   const placements: { hook: string; msg: string }[] = [];
   const out: { ups: { MBps: number; conc: number; err?: string }[]; up?: { MBps: number; conc: number; err?: string }; downs: { setting: string; MBps: number; err?: string }[] } = { ups: [], downs: [] };
   c.setConcurrency({ upload: up === "auto" ? null : Number(up) });
@@ -186,21 +248,40 @@ if (SPEEDTEST) {
   log(`line (speed.cloudflare.com, 8 streams): download ${line.downMBps} MB/s, upload ${line.upMBps} MB/s`);
 }
 
-const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+const browser = await chromium.launch({ ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}), args: BROWSER_ARGS });
+const browserVersion = browser.version();
 type Res = { out: unknown; log: string; placements: { hook: string; msg: string }[] };
+const protoSeen: Record<string, Record<string, number>> = {};
 let res = null as Res | null;
 try {
   const p = await (await browser.newContext()).newPage();
+  // Protocols of the responses (h3 = QUIC, h2, http/1.1), per host, for the page and the lane (an iframe
+  // of the same page: its requests reach this session too, the lane by its frame).
+  const cdp = await p.context().newCDPSession(p);
+  await cdp.send("Network.enable", { maxTotalBufferSize: 0, maxResourceBufferSize: 0 });
+  const mainFrame = (await cdp.send("Page.getFrameTree")).frameTree.frame.id;
+  cdp.on("Network.responseReceived", (e) => {
+    let host = "?";
+    try {
+      host = new URL(e.response.url).host;
+    } catch {
+      /* keep ? */
+    }
+    if (!/discord(app)?\.(com|net)$/.test(host)) return;
+    const k = `${e.frameId && e.frameId !== mainFrame ? "lane" : "page"} ${host}`;
+    const pr = String(e.response.protocol ?? "?");
+    (protoSeen[k] ??= {})[pr] = (protoSeen[k]![pr] ?? 0) + 1;
+  });
   await p.goto(pageOrigin);
   await p.addScriptTag({ content: "window.__name = (f) => f;" });
   await p.addScriptTag({ content: bundle.outputFiles[0]!.text });
-  log(`${LABEL}: ${MB} MB over ${hooks.length} channel(s), upload ${UP}, downloads ${DOWN.join(",")}`);
+  log(`${LABEL}: ${MB} MB over ${hooks.length} channel(s), upload ${UP}, downloads ${DOWN.join(",")}; build ${BUILD}; browser ${browserVersion}${BROWSER_ARGS.length ? ` ${BROWSER_ARGS.join(" ")}` : ""}${LANE ? "; second connection (lane) on" : ""}`);
   res = (await p.evaluate(
-    async ({ src, hooks, mb, up, down, files, seed, drop }) => {
+    async ({ src, hooks, mb, up, down, files, seed, drop, build, lane }) => {
       const D = (globalThis as unknown as { DDN: never }).DDN;
-      return (new Function(`return (${src})`)() as (...a: unknown[]) => Promise<unknown>)(D, hooks, mb, up, down, files, seed, drop);
+      return (new Function(`return (${src})`)() as (...a: unknown[]) => Promise<unknown>)(D, hooks, mb, up, down, files, seed, drop, build, lane);
     },
-    { src: runSrc.toString(), hooks, mb: MB, up: UP, down: DOWN, files: FILES, seed: SEED, drop: DROP },
+    { src: runSrc.toString(), hooks, mb: MB, up: UP, down: DOWN, files: FILES, seed: SEED, drop: DROP, build: BUILD, lane: LANE },
   )) as Res;
 } finally {
   await browser.close();
@@ -222,8 +303,9 @@ for (const pl of res?.placements ?? []) {
   }
 }
 const rep = buildReport(parseLines(res?.log ?? "").events, { bucketS: 5 });
-const summary = { label: LABEL, at: new Date().toISOString(), mb: MB, channels: hooks.length, line, result: res?.out, deleted, posted: res?.placements.length ?? 0, report: rep.summary };
+const summary = { label: LABEL, at: new Date().toISOString(), mb: MB, channels: hooks.length, build: BUILD, browser: browserVersion, browserArgs: BROWSER_ARGS, lane: LANE, line, protocols: protoSeen, result: res?.out, deleted, posted: res?.placements.length ?? 0, report: rep.summary };
 log(JSON.stringify(res?.out));
+log(`protocols: ${Object.entries(protoSeen).map(([k, v]) => `${k}: ${Object.entries(v).map(([p, n]) => `${p} ×${n}`).join(", ")}`).join("; ")}`);
 log(`deleted ${deleted}/${res?.placements.length ?? 0} messages`);
 if (OUT) {
   mkdirSync(OUT, { recursive: true });
