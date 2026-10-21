@@ -881,3 +881,41 @@ th[aria-sort="none"] .th-sort:hover svg.i, th[aria-sort="none"] .th-sort:focus-v
 @media (prefers-reduced-motion: reduce) {
   .th-sort svg.i, .ftable-wrap[data-view="tiles"] .ftable tbody tr { transition: none; }
 }
+
+/* ── Settings → Desktop app (only in the desktop app) ──
+ * A version card (the app, its version, the update actions; a new version and the downloaded installer under
+ * it), the settings as rows with switches (the switch of Storage → Show unavailable files), the downloads
+ * folder as a row with its path in mono. */
+.dapp-ver { border: 1px solid var(--color-rule); border-radius: var(--radius-card); overflow: hidden; }
+.dapp-ver-h { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1rem; padding: .75rem .75rem .75rem 1rem; }
+.dapp-ver-h > svg.i { width: 2.25rem; height: 2.25rem; padding: .5rem; border-radius: var(--radius-input); background: var(--color-paper-2); color: var(--color-accent); stroke-width: 1.75; }
+.dapp-v { flex: 1; min-width: 10rem; font: 500 .875rem/1.25rem var(--font-body); color: var(--color-ink); font-variant-numeric: tabular-nums; }
+.dapp-v:empty::before { content: "…"; color: var(--color-muted); }
+.dapp-ver-h .row-btns { flex: none; }
+/* once the installer is downloaded, "Run the installer" is the step; Download steps back to a plain button */
+.dapp-ver-h [data-ddn="app-download"]:has(~ [data-ddn="app-open"]:not([hidden])) { border-color: var(--color-rule-2); background: var(--color-paper); color: var(--color-ink-2); }
+.dapp-new, .dapp-got { border-top: 1px solid var(--color-rule); padding: .75rem 1rem; font-size: .8125rem; line-height: 1.25rem; color: var(--color-ink-2); overflow-wrap: anywhere; }
+.dapp-new { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .625rem; background: color-mix(in oklch, var(--color-accent) 5%, var(--color-paper)); box-shadow: inset 2px 0 0 var(--color-accent); }
+.dapp-new svg.i { margin-top: 2px; color: var(--color-accent); }
+.dapp-got { background: var(--color-paper-2); font-family: var(--font-body); }
+.dapp-list { display: grid; border: 1px solid var(--color-rule); border-radius: var(--radius-card); overflow: hidden; }
+.dapp-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 3rem; padding: .625rem .75rem .625rem 1rem; border-bottom: 1px solid var(--color-rule); font-size: .875rem; line-height: 1.25rem; color: var(--color-ink); }
+.dapp-row:last-child { border-bottom: 0; }
+label.dapp-row { cursor: pointer; transition: background-color var(--duration-short) var(--ease-out); }
+label.dapp-row:hover { background: var(--color-paper-2); }
+.dapp-dir { display: grid; gap: .125rem; min-width: 0; }
+.dapp-dir .mono { font-size: .8125rem; color: var(--color-ink-2); overflow-wrap: anywhere; }
+.dapp-row .btn.sm { flex: none; }
+/* the switch (same drawing as input[data-ddn="show-unavailable"]) */
+input.switch { -webkit-appearance: none; appearance: none; position: relative; width: 2.25rem; height: 1.25rem; margin: 0; flex: none; border-radius: 9999px; background: var(--color-paper-3); outline: 1px solid var(--color-rule-2); outline-offset: -1px; cursor: pointer; transition: background-color var(--duration-short) var(--ease-out); }
+input.switch::before { content: ""; position: absolute; top: .1875rem; left: .1875rem; width: .875rem; height: .875rem; border-radius: 9999px; background: var(--color-paper); box-shadow: 0 1px 2px oklch(24% 0.02 258 / 0.25); transition: transform var(--duration-short) var(--ease-out); }
+input.switch:checked { background: var(--color-accent); outline-color: var(--color-accent); }
+input.switch:checked::before { transform: translateX(1rem); }
+input.switch:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+@media (max-width: 559.98px) {
+  .dapp-ver-h .row-btns { flex-basis: 100%; }
+  .dapp-ver-h .row-btns .btn { flex: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  input.switch, input.switch::before, label.dapp-row { transition: none; }
+}

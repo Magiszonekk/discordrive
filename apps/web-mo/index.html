@@ -537,17 +537,26 @@
           </div>
         </section>
 
-        <section id="desktop-app" aria-labelledby="app-h" data-ddn="app-section" hidden>
-          <h2 class="sec-h"><span id="app-h" data-i18n="app.h">Desktop app</span><span class="chip" data-ddn="app-update-chip" hidden data-i18n="app.newChip">New version</span></h2>
+        <!-- Desktop app (only in the app): a version card (version, check / download / run the installer, the new
+             version and the downloaded file under it), then the settings as switch rows, then the key storage note. -->
+        <section id="desktop-app" aria-labelledby="dapp-h" data-ddn="app-section" hidden>
+          <h2 class="sec-h"><span id="dapp-h" data-i18n="app.h">Desktop app</span><span class="chip chip--accent" data-ddn="app-update-chip" hidden data-i18n="app.newChip">New version</span></h2>
           <div class="sec-body">
-            <p class="hint" data-ddn="app-version"></p>
-            <div class="note warn" data-ddn="app-update" hidden><svg class="i"><use href="#i-info"/></svg><p data-ddn="app-update-text"></p></div>
-            <p class="hint" data-ddn="app-update-hint" hidden></p>
-            <div class="row-btns"><button class="btn" type="button" data-ddn="app-check" data-i18n="app.check">Check now</button><button class="btn primary" type="button" data-ddn="app-download" data-i18n="app.download" hidden>Download the new version</button><button class="btn" type="button" data-ddn="app-open" data-i18n="app.open" hidden>Run the installer</button></div>
-            <label class="ack"><input type="checkbox" data-ddn="app-check-updates"><span data-i18n="app.checkUpdates">Check for new versions</span></label>
-            <label class="ack"><input type="checkbox" data-ddn="app-autostart"><span data-i18n="app.autostart">Start with the system (in the tray)</span></label>
-            <p class="hint"><span data-i18n="app.downloads">Downloads go to:</span> <span class="mono" data-ddn="app-downloads"></span> <button class="btn sm" type="button" data-ddn="app-downloads-pick" data-i18n="app.change">Change</button></p>
-            <div class="note warn" data-ddn="app-keys-warn" hidden><svg class="i"><use href="#i-info"/></svg><p data-i18n="app.keysFile">This system has no key store (keyring) the app can use: the device key is kept in a file only your user can read. Anyone with access to your user account or a copy of the disk can use it. Your rescue kit stays the way back.</p></div>
+            <div class="dapp-ver">
+              <div class="dapp-ver-h">
+                <svg class="i" aria-hidden="true"><use href="#i-monitor"/></svg>
+                <p class="dapp-v" data-ddn="app-version"></p>
+                <div class="row-btns"><button class="btn" type="button" data-ddn="app-check" data-i18n="app.check">Check now</button><button class="btn primary" type="button" data-ddn="app-download" data-i18n="app.download" hidden>Download the new version</button><button class="btn primary" type="button" data-ddn="app-open" data-i18n="app.open" hidden>Run the installer</button></div>
+              </div>
+              <div class="dapp-new" data-ddn="app-update" hidden><svg class="i" aria-hidden="true"><use href="#i-download"/></svg><p data-ddn="app-update-text"></p></div>
+              <p class="dapp-got" data-ddn="app-update-hint" hidden></p>
+            </div>
+            <div class="dapp-list">
+              <label class="dapp-row"><span data-i18n="app.checkUpdates">Check for new versions</span><input class="switch" type="checkbox" data-ddn="app-check-updates"></label>
+              <label class="dapp-row"><span data-i18n="app.autostart">Start with the system (in the tray)</span><input class="switch" type="checkbox" data-ddn="app-autostart"></label>
+              <div class="dapp-row"><span class="dapp-dir"><span class="label-mono" data-i18n="app.downloads">Downloads go to:</span><span class="mono" data-ddn="app-downloads"></span></span><button class="btn sm" type="button" data-ddn="app-downloads-pick"><svg class="i" aria-hidden="true"><use href="#i-folder"/></svg><span data-i18n="app.change">Change</span></button></div>
+            </div>
+            <div class="note warn" data-ddn="app-keys-warn" hidden><svg class="i"><use href="#i-key"/></svg><p data-i18n="app.keysFile">This system has no key store (keyring) the app can use: the device key is kept in a file only your user can read. Anyone with access to your user account or a copy of the disk can use it. Your rescue kit stays the way back.</p></div>
           </div>
         </section>
 
