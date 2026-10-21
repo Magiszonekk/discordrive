@@ -2234,7 +2234,13 @@ async function paintUpdate(manual: boolean) {
   $("app-update").hidden = !has;
   $("app-update-chip").hidden = !has;
   $("app-download").hidden = !has;
-  if (u.available) $("app-update-text").textContent = t("app.new", { build: u.available.build || u.available.commit.slice(0, 7), date: u.available.publishedAt ? fmtDate(Date.parse(u.available.publishedAt), {}) : "" });
+  if (u.available) {
+    const txt = $("app-update-text");
+    txt.textContent = t("app.new", { build: u.available.build || u.available.commit.slice(0, 7), date: u.available.publishedAt ? fmtDate(Date.parse(u.available.publishedAt), {}) : "" }) + " ";
+    // What changed: the commits between this copy and the new build (opens in the system browser).
+    const href = u.current.commit ? `https://github.com/Magiszonekk/discordrive/compare/${u.current.commit}...${u.available.commit}` : u.available.htmlUrl;
+    if (href) txt.append(h("a", { href, target: "_blank", rel: "noopener", "data-ddn": "app-changes" }, t("app.changes")));
+  }
 }
 function wireDesktopApp() {
   if (!desktop) return;

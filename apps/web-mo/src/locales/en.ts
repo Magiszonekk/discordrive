@@ -330,6 +330,7 @@ export const en: Record<string, string> = {
   "app.new": "A new version is available ({build}, {date}). It is installed only when you run the installer.",
   "app.none": "This is the newest version.",
   "app.checking": "Checking…",
+  "app.changes": "What changed",
   "app.check": "Check now",
   "app.download": "Download the new version",
   "app.downloaded": "Downloaded and checked (SHA-256): {path}. To install: {hint}",

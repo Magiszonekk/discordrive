@@ -382,6 +382,7 @@ export const pl: Record<string, string> = {
   "app.new": "Dostępna jest nowa wersja ({build}, {date}). Instaluje się dopiero, gdy uruchomisz instalator.",
   "app.none": "To najnowsza wersja.",
   "app.checking": "Sprawdzam…",
+  "app.changes": "Co się zmieniło",
   "app.check": "Sprawdź teraz",
   "app.download": "Pobierz nową wersję",
   "app.downloaded": "Pobrano i sprawdzono (SHA-256): {path}. Instalacja: {hint}",
