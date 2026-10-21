@@ -96,7 +96,8 @@ describe("desktop agent transfers (Node, HTTP/2 to a fake Discord)", () => {
     f.close();
 
     // A separate agent process downloads slowly and is killed once a resume point with fragments is stored.
-    fake.cdnBytesPerSec = 12 * 1024 * 1024;
+    // Slow enough that the test sees resume points before the end on any machine (~15 s for 60 MB).
+    fake.cdnBytesPerSec = 4 * 1024 * 1024;
     const gets0 = fake.cdnGets;
     const child = fork(join(here, "agent-child.ts"), [], {
       execArgv: ["--import", "tsx", "--import", pathToFileURL(join(here, "mode-hook.mjs")).href],

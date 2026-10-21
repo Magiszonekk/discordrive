@@ -1077,7 +1077,7 @@ export class AppCore {
       } else await out.truncate(0);
       let offset = resume ? Math.min(j.size, j.next * chunk) : 0;
       let last = 0;
-      let lastSave = 0;
+      let saving: Promise<unknown> = Promise.resolve();
       await this.resume?.put(key, j);
       await this.c().download(
         nodeId,
@@ -1093,13 +1093,13 @@ export class AppCore {
           onWritten: (p) => {
             // The size of a fragment: the first one written tells it (all but the last are equal).
             if (!j.chunk) j.chunk = offset;
+            // A resume point after every fragment (a small JSON file per ~10 MiB written): a crash loses at
+            // most the fragments in flight. Saved in order, never two at once.
             j.next = p.next;
-            const t = Date.now();
-            if (t - lastSave < 1000) return;
-            lastSave = t;
             j.hash = toBase64(p.hash());
-            j.at = t;
-            void this.resume?.put(key, { ...j });
+            j.at = Date.now();
+            const snap = { ...j };
+            saving = saving.then(() => this.resume?.put(key, snap)).catch(() => {});
           },
           onProgress: (done, total) => {
             const t = Date.now();
@@ -1109,6 +1109,7 @@ export class AppCore {
           },
         },
       );
+      await saving;
       const { finalPath } = await out.finish();
       await this.resume?.del(key);
       return { path: finalPath, bytes: j.size, resumed };
