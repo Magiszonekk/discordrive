@@ -1,6 +1,7 @@
 # Desktop agent transport requirements (Node)
 
-Status: requirements only, no code. Covers the background "ddn agent" process for
+Status: built in `apps/desktop` (agent) and `packages/metadata-client/src/node/h2-fetch.ts` (transport);
+what is implemented and what is not yet is listed in "Implementation" at the end. Covers the background "ddn agent" process for
 the desktop app (stage 2: web UI in a wrapper + local Node agent on
 the same packages as the CLI — metadata-client, sync-core, SQLite). Scope: how the
 agent talks to Discord (webhooks + CDN) over the network. The measurements and rules
@@ -206,3 +207,21 @@ per-connection limits) since these numbers are empirical, not documented by Disc
 | conn-bench scenarios (`h2-1`/`h2-N`/`h1-N`), GOAWAY/RST_STREAM handling, 111-upload loss, proxy/IP split test | `docs/conn-bench.md` |
 | Browser second-connection experiment (sandboxed iframe, HTTP/3 default, per-context connection map) | `scripts/browser-conn-exp.mts` |
 | Transfer log format, fields, privacy rules | `docs/transfer-log.md` |
+
+## 11. Implementation (desktop app, stage 1)
+
+| requirement | where | state |
+|---|---|---|
+| §2 upload pool: separate HTTP/2 sessions, stream cap per session | `h2-fetch.ts` (`upSessions` 6, `upStreams` 6) | done; test `h2-fetch.test.ts` (4 sessions for 8 posts) |
+| §2 HTTP/1.1 fallback | `h2-fetch.ts`: http:// and origins without h2 (ALPN) go through the global fetch | done |
+| §3 download on one connection | `h2-fetch.ts`: requests without a body share one session per origin | done; test (10 downloads, 1 session) |
+| §4 stuck-connection guard, second connection only on demand | `StuckGuard` (unchanged) + `cdnLanes: [h2Fetch.onLane(1)]`: lane 1 is a separate session opened only when the guard probes | wired; no live test yet |
+| §5 GOAWAY / session error: session dead at once, never reused | `h2-fetch.ts` (`kill` on goaway/error/close) | done; test (new session after GOAWAY, no request lost) |
+| §5 REFUSED_STREAM / ENHANCE_YOUR_CALM: lower that session's cap, retry not-processed streams | `h2-fetch.ts` | done; test (2 refused, sent again, cap lowered) |
+| §6 AIMD windows, offline gate, backoff | `NetControl` (unchanged), shared by the agent's clients | done (same code as web) |
+| §6 resume after restart: upload journal | `FileResumeStore` (one atomic JSON file per entry) + `uploadPaths` resume key (folder, path, size, mtime) | done; continues when the same file is uploaded again |
+| §6 resume after restart: download journal + truncate | `downloadToDisk`: `<name>.<tag>.ddnpart`, journal every ≤1 s, cut back to the journal on resume; `resumeDownloads()` at agent start | done; test kills the agent (SIGKILL) mid-download, the next one fetches only the rest |
+| §6 metered connection from the OS (Windows NetworkCost, NetworkManager) | — | not yet: the Settings switch "Save data" works; OS detection is a later step |
+| §7 per-channel pacing, 429, Cloudflare block | unchanged (`rate-limit.ts`, `discord-transport.ts`) | done (same code as web) |
+| §8 transfer log `src: "agent"`, `ln` on every request | `TransferSource` `agent`; `x-ddn-lane` header → `timing.lane` → `ln` on upload and CDN `req` | done; files in the app's data folder (`transfer-logs/`), downloadable from Settings like in the browser |
+| §9 measurements in the agent | `scripts/desktop-bench.mts` | see `docs/conn-bench.md` when run |

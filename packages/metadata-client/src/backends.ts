@@ -233,15 +233,15 @@ export class BackendBlobStore implements BlobStore {
       await this.pacer.acquire(key);
       stats.posts++;
       const tr = log ? nowMs() : 0;
-      const timing: { ttfb?: number; st?: number } = {};
+      const timing: { ttfb?: number; st?: number; lane?: number } = {};
       const ev = log ? { dir: "up", x: tx!.x, i: tx!.i, a, hook: b.id, ch: b.logChannel ?? null, b: data.byteLength, lim: ms(tq, tr), lst: this.pacer.state(key), fl: log.fl.up } : null;
       try {
         const res = await netCall(this.net, "up", undefined, () => watchedPost(this.net, data.byteLength, () => b.put(data, filename, undefined, log ? timing : undefined)));
         this.pacer.onSuccess(key);
-        if (log) log.emit("req", { ...ev, ch: (res as { channelId?: string }).channelId ?? b.logChannel ?? null, dur: ms(tr), ttfb: timing.ttfb, st: timing.st ?? 200 });
+        if (log) log.emit("req", { ...ev, ch: (res as { channelId?: string }).channelId ?? b.logChannel ?? null, dur: ms(tr), ttfb: timing.ttfb, st: timing.st ?? 200, ...(timing.lane !== undefined ? { ln: timing.lane } : {}) });
         return res;
       } catch (e) {
-        if (log) log.emit("req", { ...ev, dur: ms(tr), ttfb: timing.ttfb, ...reqErrFields(e) });
+        if (log) log.emit("req", { ...ev, dur: ms(tr), ttfb: timing.ttfb, ...(timing.lane !== undefined ? { ln: timing.lane } : {}), ...reqErrFields(e) });
         if (e instanceof RateLimitedError) {
           this.pacer.onRateLimited(key, e.retryAfterMs, e.scope);
           if (e.global && e.retryAfterMs > 60_000) throw e;

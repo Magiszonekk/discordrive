@@ -26,13 +26,56 @@ let features = { thumbnails: false, search: false, streaming: false };
 /** plain: current server search ("" = none). */
 let searchQ = "";
 
-const cfg = (window as unknown as { DDN_CONFIG?: { discordApiOrigin?: string; serverUrl?: string; language?: string; streamMinBytes?: number } }).DDN_CONFIG ?? {};
+const cfg =
+  (window as unknown as { DDN_CONFIG?: { discordApiOrigin?: string; serverUrl?: string; language?: string; streamMinBytes?: number; desktop?: { local: boolean; invite: string | null } } }).DDN_CONFIG ?? {};
 // Language before the first paint: this browser's choice, else the instance default, else English.
 setLang(storedLang() ?? (isLang(cfg.language) ? cfg.language : "en"));
 applyStatic();
 /** Same-origin instance (served by `discordrive serve`): the API is this origin. */
 const serverUrl = cfg.serverUrl ?? location.origin;
-const worker = new Worker("./w/worker.js", { type: "module" });
+/**
+ * Desktop app (apps/desktop): its preload exposes `ddnDesktop`, and the core runs in the background agent,
+ * reached through a MessagePort; in a browser the core runs in a dedicated worker. Same core, same calls.
+ */
+interface DesktopBridge {
+  platform: string;
+  version: number;
+  /** Paths of files dropped on the window (a renderer cannot read File.path any more). */
+  pathsOf(files: File[]): string[];
+  /** Open the system file manager at a file. */
+  showInFolder(path: string): void;
+  /** Ask for a folder (downloads). */
+  pickFolder(): Promise<string | null>;
+  /** The built-in instance got its first account (it closes sign-up). */
+  firstAccountMade(): Promise<boolean>;
+  updates: {
+    check(): Promise<{ current: { version: string; build: string; commit: string | null }; available: { build: string; commit: string; publishedAt: string; htmlUrl: string } | null; kind: string }>;
+    download(): Promise<{ path: string; hint: string; busy: boolean }>;
+    settings(patch?: { checkUpdates?: boolean; autostart?: boolean; downloadsDir?: string }): Promise<{ checkUpdates: boolean; autostart: boolean; downloadsDir: string }>;
+    open(path: string): void;
+  };
+}
+const desktop = (window as unknown as { ddnDesktop?: DesktopBridge }).ddnDesktop ?? null;
+/** The agent's port arrives from the preload by a window message; calls made before it are queued. */
+function agentEndpoint() {
+  let port: MessagePort | null = null;
+  const queue: unknown[] = [];
+  const ep = {
+    onmessage: null as ((ev: MessageEvent) => void) | null,
+    postMessage(m: unknown) {
+      if (port) port.postMessage(m);
+      else queue.push(m);
+    },
+  };
+  addEventListener("message", (e) => {
+    if (e.source !== window || !(e.data as { ddnAgentPort?: boolean })?.ddnAgentPort || !e.ports[0]) return;
+    port = e.ports[0];
+    port.onmessage = (ev) => ep.onmessage?.(ev);
+    for (const m of queue.splice(0)) port.postMessage(m);
+  });
+  return ep;
+}
+const worker = desktop ? agentEndpoint() : new Worker("./w/worker.js", { type: "module" });
 const progressHandlers = new Map<string, (done: number, total: number, stages?: UploadStages) => void>();
 let onShareProgress: (done: number, total: number) => void = () => {};
 function onCoreEvent(e: CoreEvent) {
@@ -893,7 +936,7 @@ async function renderNow() {
     ui("about-storage").textContent = st.persistent ? t("status.persistent") : t("status.cache");
     ui("about-storage-t").textContent = st.persistent ? t("status.persistent.t") : t("status.cache.t");
     ui("about-device").textContent = st.deviceId ?? "-";
-    await Promise.all([renderShares(), renderStorage(), renderSecurity(), renderDiagnostics(), channelsUi.paintStorage(wh)]);
+    await Promise.all([renderShares(), renderStorage(), renderSecurity(), renderDiagnostics(), renderDesktopApp(), channelsUi.paintStorage(wh)]);
     return;
   }
 
@@ -1087,7 +1130,17 @@ function paintFailed() {
   $("upload-failed-list").replaceChildren(...failedUploads.map((x) => h("li", { "data-ddn": "upload-failed-item" }, h("span", { class: "n", title: x.file.name }, x.file.name), h("span", { class: "why", title: x.why }, x.why))));
 }
 
+/**
+ * One file of an upload batch: picked in the browser (a File), or a path on this computer (desktop app:
+ * the agent reads it from disk; `folder` = the subfolders it goes into, for a dropped folder).
+ */
+type UploadItem = { kind: "file"; f: File; name: string; size: number } | { kind: "path"; path: string; folder: string[]; name: string; size: number };
+
 async function uploadAll(files: File[], into?: string) {
+  return uploadItems(files.map((f) => ({ kind: "file" as const, f, name: f.name, size: f.size })), into);
+}
+
+async function uploadItems(files: UploadItem[], into?: string) {
   if (!files.length) return;
   if (!channelsOk) {
     toast(t("err.need_channel"), "err");
@@ -1107,7 +1160,8 @@ async function uploadAll(files: File[], into?: string) {
     const token = crypto.randomUUID();
     const cancel = h("button", { class: "iconbtn qcancel", type: "button", "data-ddn": "queue-cancel", "aria-label": t("queue.cancel"), title: t("queue.cancel") }, icon("x"));
     const speed = h("span", { "data-ddn": "queue-speed" });
-    const li = h("li", {}, h("span", { class: "qname", title: f.name }, f.name), h("span", { class: "qside" }, cancel, state), h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, fmt(f.size), speed));
+    const label = f.kind === "path" && f.folder.length ? `${f.folder.join("/")}/${f.name}` : f.name;
+    const li = h("li", {}, h("span", { class: "qname", title: label }, label), h("span", { class: "qside" }, cancel, state), h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, fmt(f.size), speed));
     li.dataset.ddn = "queue-item";
     list.append(li);
     const item = { f, state, bar, token, cancel, cancelled: false, speed };
@@ -1170,7 +1224,7 @@ async function uploadAll(files: File[], into?: string) {
       meta();
     });
     try {
-      const r = await core.upload(f, f.name, folder, token, uploadResumeKey(folder, f));
+      const r = f.kind === "file" ? await core.upload(f.f, f.name, folder, token, uploadResumeKey(folder, f.f)) : await core.uploadPath(f.path, f.folder, folder, token);
       state.className = "qstate done";
       state.textContent = t("queue.ok");
       if (r.resumed) state.title = t("queue.resumed", { n: r.resumed });
@@ -1187,7 +1241,7 @@ async function uploadAll(files: File[], into?: string) {
         // A file changed on disk after it was picked cannot be read again from this selection.
         const why = /NotReadable|could not be read/i.test(String((e as Error)?.message ?? e)) ? t("upf.gone", { name: f.name }) : errText(e);
         state.title = why;
-        failedUploads.push({ file: f, folder, why });
+        if (f.kind === "file") failedUploads.push({ file: f.f, folder, why });
       }
     } finally {
       progressHandlers.delete(token);
@@ -1221,7 +1275,10 @@ function wireFilesPage() {
     const input = e.target as HTMLInputElement;
     const files = [...(input.files ?? [])];
     input.value = "";
-    await uploadAll(files);
+    // Desktop: the agent reads the picked files from disk (resumable after a restart, nothing copied here).
+    const paths = desktop ? desktop.pathsOf(files) : [];
+    if (desktop && paths.length === files.length) await uploadPathsFromDrop(paths);
+    else await uploadAll(files);
   };
   wireQueue();
   // Drop zone + drag over the whole Files page (Dashboard).
@@ -1246,7 +1303,10 @@ function wireFilesPage() {
     e.preventDefault();
     depth = 0;
     zone.classList.remove("over");
-    void uploadAll([...(e.dataTransfer?.files ?? [])]);
+    const files = [...(e.dataTransfer?.files ?? [])];
+    // Desktop: files and whole folders straight from disk (the agent reads them; nothing is copied here).
+    if (desktop) void uploadPathsFromDrop(desktop.pathsOf(files));
+    else void uploadAll(files);
   });
   zone.onclick = () => {
     if (channelsOk) $<HTMLInputElement>("file").click();
@@ -1349,7 +1409,8 @@ function wireNet() {
   addEventListener("offline", () => void core.setOnline(false));
   if (!navigator.onLine) void core.setOnline(false);
   const p = storedNet();
-  void core.setNetPrefs({ saveData: !!p.saveData, guard: p.guard !== false, baseline: p.baseline ?? null, tune: p.tune ?? null }).then(paintNetSettings);
+  // Desktop: the agent keeps the reference speed and the automatic values itself (it runs without a window).
+  void core.setNetPrefs({ saveData: !!p.saveData, guard: p.guard !== false, ...(desktop ? {} : { baseline: p.baseline ?? null, tune: p.tune ?? null }) }).then(paintNetSettings);
   const save = $<HTMLInputElement>("net-savedata");
   const guard = $<HTMLInputElement>("net-guard");
   save.onchange = () =>
@@ -1363,7 +1424,8 @@ function wireNet() {
       storeNet({ guard: guard.checked });
       paintNetSettings(await core.setNetPrefs({ guard: guard.checked }));
     });
-  startLane();
+  // Desktop: the agent has its own connections (a second one for the guard included); no iframe lane.
+  if (!desktop) startLane();
   $("unfinished-pick").onclick = () => $<HTMLInputElement>("file").click();
   $("unfinished-forget").onclick = () =>
     void act(null, async () => {
@@ -1432,6 +1494,20 @@ function closeDownloads() {
   $("downloads").hidden = true;
   $("dl-list").replaceChildren();
 }
+/**
+ * Desktop: dropped files and folders are uploaded by the agent straight from disk, in the same queue panel
+ * as files picked in the browser (one row per file, its progress, speed and cancel).
+ */
+async function uploadPathsFromDrop(paths: string[]) {
+  if (!paths.length) return;
+  try {
+    const list = await core.listPaths(paths);
+    await uploadItems(list.map((x) => ({ kind: "path" as const, ...x })));
+  } catch (e) {
+    toast(errText(e), "err");
+  }
+}
+
 function download(id: string, name: string) {
   const box = $("downloads");
   const list = $("dl-list");
@@ -1488,6 +1564,18 @@ function download(id: string, name: string) {
     // Closes itself a few seconds after the last download went fine; a failure stays until ×.
     if (!dlRunning && !all<HTMLElement>("[data-ddn=dl-item]").some((x) => x.dataset.state === "err")) dlCloseTimer = window.setTimeout(closeDownloads, 6000);
   };
+  // Desktop: the agent writes the file straight to the downloads folder (at offsets, resumable).
+  const toDisk = async () => {
+    const r = await core.downloadToDisk(id, undefined, token);
+    state.title = r.path;
+    li.dataset.path = r.path;
+    // "Show in folder": the name of a finished download opens the system file manager at the file.
+    const nameEl = li.querySelector<HTMLElement>(".qname");
+    if (nameEl && desktop) {
+      nameEl.dataset.ddn = "dl-show";
+      nameEl.onclick = () => desktop.showInFolder(r.path);
+    }
+  };
   const viaBlob = () =>
     core.download(id, token).then((b) => {
       const a = document.createElement("a");
@@ -1497,6 +1585,7 @@ function download(id: string, name: string) {
       setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
     });
   return (async () => {
+    if (desktop) return toDisk();
     const info = await core.fileInfo(id);
     // Big files stream to disk through the service worker (the tab never holds the whole file);
     // small ones, or without a service worker, through a Blob.
@@ -2135,6 +2224,58 @@ function renderNetwork() {
   void paintConcurrency();
   void core.netStatus().then(paintNetSettings, () => null);
 }
+/** Settings → Desktop app (only in the desktop app): version and updates, autostart, downloads folder, key storage. */
+async function renderDesktopApp() {
+  if (!desktop) return;
+  $("app-section").hidden = false;
+  const [st, caps] = await Promise.all([desktop.updates.settings(), core.capabilities()]);
+  $<HTMLInputElement>("app-check-updates").checked = st.checkUpdates;
+  $<HTMLInputElement>("app-autostart").checked = st.autostart;
+  $("app-downloads").textContent = st.downloadsDir;
+  $("app-keys-warn").hidden = caps.keyProtection !== "file";
+  await paintUpdate(false);
+}
+async function paintUpdate(manual: boolean) {
+  if (!desktop) return;
+  if (manual) $("app-version").textContent = t("app.checking");
+  const u = await desktop.updates.check().catch(() => null);
+  if (!u) return;
+  $("app-version").textContent = t("app.version", { v: u.current.version, build: u.current.build }) + (manual && !u.available ? ` · ${t("app.none")}` : "");
+  const has = !!u.available;
+  $("app-update").hidden = !has;
+  $("app-update-chip").hidden = !has;
+  $("app-download").hidden = !has;
+  if (u.available) {
+    const txt = $("app-update-text");
+    txt.textContent = t("app.new", { build: u.available.build || u.available.commit.slice(0, 7), date: u.available.publishedAt ? fmtDate(Date.parse(u.available.publishedAt), {}) : "" }) + " ";
+    // What changed: the commits between this copy and the new build (opens in the system browser).
+    const href = u.current.commit ? `https://github.com/Magiszonekk/discordrive/compare/${u.current.commit}...${u.available.commit}` : u.available.htmlUrl;
+    if (href) txt.append(h("a", { href, target: "_blank", rel: "noopener", "data-ddn": "app-changes" }, t("app.changes")));
+  }
+}
+function wireDesktopApp() {
+  if (!desktop) return;
+  const d = desktop;
+  $("app-check").onclick = (e) => void act(e.currentTarget as HTMLElement, () => paintUpdate(true));
+  $("app-download").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      const r = await d.updates.download();
+      const hint = $("app-update-hint");
+      hint.textContent = t("app.downloaded", { path: r.path, hint: r.hint }) + (r.busy ? ` ${t("app.busy")}` : "");
+      hint.hidden = false;
+      const open = $("app-open");
+      open.hidden = false;
+      open.onclick = () => d.updates.open(r.path);
+    });
+  $<HTMLInputElement>("app-check-updates").onchange = (e) => void d.updates.settings({ checkUpdates: (e.currentTarget as HTMLInputElement).checked });
+  $<HTMLInputElement>("app-autostart").onchange = (e) => void d.updates.settings({ autostart: (e.currentTarget as HTMLInputElement).checked });
+  $("app-downloads-pick").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      const dir = await d.pickFolder();
+      if (dir) $("app-downloads").textContent = (await d.updates.settings({ downloadsDir: dir })).downloadsDir;
+    });
+}
+
 async function renderDiagnostics() {
   renderNetwork();
   const st = await core.transferLogStatus().catch(() => null);
@@ -2504,6 +2645,8 @@ function wireSignedOut(server: () => string) {
   $("create").onclick = (e) =>
     void act(e.currentTarget as HTMLElement, async () => {
       await core.createAccount(server(), $<HTMLInputElement>("device-name").value.trim() || defaultDeviceName(), $<HTMLInputElement>("invite").value);
+      // Desktop, "This computer only": the first account is the only one; the built-in instance closes sign-up.
+      if (cfg.desktop?.local) await desktop?.firstAccountMade();
       await core.open();
       await applyTransferLog();
       sessionStorage.removeItem(SKIP_KEY);
@@ -2674,7 +2817,38 @@ function paintModes() {
     b.setAttribute("aria-checked", String(b.dataset.mode === cur));
   });
 }
+type Accent = { get(): string; set(v: string): void; presets: { name: string; accent: string }[] };
+const ddnAccent = () => (window as unknown as { ddnAccent?: Accent }).ddnAccent ?? null;
+/** Settings -> Appearance: accent presets and a custom colour (cobalt/theme.js applies and keeps it). */
+function paintAccent() {
+  const a = ddnAccent();
+  const box = $("accent");
+  if (!a || !box) return;
+  if (!box.childElementCount) {
+    for (const p of a.presets) {
+      const b = h("button", { type: "button", role: "radio", class: "swatch", "data-accent": p.name, style: `--sw:${p.accent}` }, h("span", { class: "dot" }), h("span", { class: "sw-l" }, ""));
+      b.onclick = () => (a.set(p.name), paintAccent());
+      box.append(b);
+    }
+    const pick = h("input", { type: "color", "data-ddn": "accent-custom" }) as HTMLInputElement;
+    pick.oninput = () => (a.set(pick.value), paintAccent());
+    box.append(h("label", { class: "swatch custom", "data-accent": "custom" }, pick, h("span", { class: "sw-l", "data-i18n": "accent.custom" }, "")));
+  }
+  const cur = a.get();
+  box.querySelectorAll<HTMLElement>("[data-accent]").forEach((b) => {
+    const name = b.dataset.accent!;
+    const on = name === "custom" ? /^#/.test(cur) : name === cur;
+    b.setAttribute("aria-checked", String(on));
+    const l = b.querySelector<HTMLElement>(".sw-l");
+    if (l) l.textContent = t(`accent.${name}`);
+    if (name !== "custom") b.setAttribute("aria-label", t(`accent.${name}`));
+  });
+  if (/^#/.test(cur)) box.querySelector<HTMLInputElement>("[data-ddn=accent-custom]")!.value = cur;
+}
+
 function wireTheme() {
+  paintAccent();
+  document.addEventListener("ddn-accent", () => paintAccent());
   document.addEventListener("click", (e) => {
     const b = (e.target as Element | null)?.closest<HTMLButtonElement>("[data-ddn-ui=modes] button[data-mode], [data-ddn-ui=mode-choice] button[data-mode]");
     if (b) ddnTheme()?.set(b.dataset.mode as ThemeMode);
@@ -2713,7 +2887,8 @@ async function main() {
   wireTheme();
   wireLinks();
   wireDrawer();
-  if ("serviceWorker" in navigator) {
+  // Desktop: downloads go straight to disk through the agent; no service worker is needed (or allowed: app://).
+  if ("serviceWorker" in navigator && !desktop) {
     await navigator.serviceWorker.register("./sw.js").catch(() => {});
     // /w/ (the app worker) under its own fetch-less service worker: see src/w-sw.ts. The app worker starts
     // above before this registration exists on a first visit; it is only slower then, never wrong.
@@ -2733,12 +2908,15 @@ async function main() {
     $<HTMLButtonElement>("create").disabled = true;
     $("create").title = t("create.closed");
   }
-  const pre = new URLSearchParams(location.search).get("invite");
+  const pre = new URLSearchParams(location.search).get("invite") ?? cfg.desktop?.invite;
   if (pre) $<HTMLInputElement>("invite").value = pre;
+  // Desktop, "This computer only": the one-shot code of the first account is filled in by the app.
+  if (cfg.desktop?.local) ui("invite-field").hidden = true;
   if (!(await ed25519Supported())) showOldBrowser();
   features = await core.features();
   await core.setShowUnavailable(storedShowUnavailable());
   wireSearch();
+  wireDesktopApp();
   wireSignedOut(server);
   wireKit();
   wireHooks();

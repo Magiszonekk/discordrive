@@ -77,6 +77,25 @@ function webhookForm(filename: string, data: Uint8Array): FormData {
   return fd;
 }
 
+/**
+ * The same multipart body as webhookForm, as the parts to send one after another (Node: no copy of the
+ * fragment; FormData + Blob + the request stream held three copies of every 10 MiB post in flight).
+ */
+export function webhookMultipart(filename: string, data: Uint8Array): { contentType: string; parts: Uint8Array[] } {
+  const boundary = `----ddn${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  const enc = new TextEncoder();
+  const safe = filename.replace(/["\r\n]/g, "_");
+  const head = enc.encode(
+    `--${boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\nContent-Type: application/json\r\n\r\n` +
+      JSON.stringify({ content: "", attachments: [{ id: 0, filename }] }) +
+      `\r\n--${boundary}\r\nContent-Disposition: form-data; name="files[0]"; filename="${safe}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+  );
+  return { contentType: `multipart/form-data; boundary=${boundary}`, parts: [head, data, enc.encode(`\r\n--${boundary}--\r\n`)] };
+}
+
+/** A fetch that can send a body given as parts without copying them (h2Fetch in the desktop agent). */
+export type PartsFetch = typeof fetch & { sendParts?: (url: string, init: { method: string; headers: Record<string, string>; parts: Uint8Array[]; signal?: AbortSignal }) => Promise<Response> };
+
 export interface FetchTransportOptions {
   fetch?: typeof fetch;
   timeoutMs?: number;
@@ -97,14 +116,31 @@ export class DiscordWebhookTransport implements WebhookTransport {
     this.timeoutMs = opts.timeoutMs ?? 120_000;
   }
 
-  private async req(url: string, init: RequestInit, what: string, signal?: AbortSignal, timing?: ReqTiming): Promise<Response> {
+  /** A webhook post/edit with the fragment: as parts when the fetch can send them (no copy), else FormData. */
+  private postReq(url: string, method: string, filename: string, data: Uint8Array, what: string, signal?: AbortSignal, timing?: ReqTiming): Promise<Response> {
+    const pf = this.f as PartsFetch;
+    if (pf.sendParts) {
+      const mp = webhookMultipart(filename, data);
+      return this.req(url, { method }, what, signal, timing, (u, s) => pf.sendParts!(u, { method, headers: { "content-type": mp.contentType }, parts: mp.parts, signal: s }));
+    }
+    return this.req(url, { method, body: webhookForm(filename, data) }, what, signal, timing);
+  }
+
+  private async req(url: string, init: RequestInit, what: string, signal?: AbortSignal, timing?: ReqTiming, send?: (url: string, signal: AbortSignal) => Promise<Response>): Promise<Response> {
     if (this.apiOrigin) url = url.replace(/^https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com/, this.apiOrigin);
     let res: Response;
     const timeout = AbortSignal.timeout(this.timeoutMs);
     const t0 = timing ? nowMs() : 0;
     try {
-      res = await this.f(url, { ...init, signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
-      if (timing) ((timing.ttfb = ms(t0)), (timing.st = res.status));
+      const sig = signal ? AbortSignal.any([timeout, signal]) : timeout;
+      res = await (send ? send(url, sig) : this.f(url, { ...init, signal: sig }));
+      if (timing) {
+        timing.ttfb = ms(t0);
+        timing.st = res.status;
+        // A Node transport with its own connections says which one answered (transfer log `ln`).
+        const ln = res.headers.get("x-ddn-lane");
+        if (ln !== null && timing.lane === undefined) timing.lane = Number(ln);
+      }
     } catch (e) {
       if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
       // No HTTP answer at all (offline, reset, DNS, timeout): the link, not Discord (net.ts tells them apart).
@@ -119,7 +155,7 @@ export class DiscordWebhookTransport implements WebhookTransport {
   }
 
   async postFile(hook: WebhookRef, data: Uint8Array, filename: string, signal?: AbortSignal, timing?: ReqTiming): Promise<PostedAttachment> {
-    const res = await this.req(`${hook.url}?wait=true`, { method: "POST", body: webhookForm(filename, data) }, "webhook post", signal, timing);
+    const res = await this.postReq(`${hook.url}?wait=true`, "POST", filename, data, "webhook post", signal, timing);
     const j = (await res.json()) as { id: string; channel_id: string; attachments: { id: string; url: string; size: number }[] };
     const a = j.attachments?.[0];
     if (!a) throw new Error("webhook post: no attachment in response");
@@ -128,7 +164,7 @@ export class DiscordWebhookTransport implements WebhookTransport {
 
   async editMessageFile(hook: WebhookRef, messageId: string, data: Uint8Array, filename: string): Promise<PostedAttachment> {
     // attachments: [] of the new upload only => old attachment is dropped.
-    const res = await this.req(`${hook.url}/messages/${messageId}`, { method: "PATCH", body: webhookForm(filename, data) }, "webhook edit message");
+    const res = await this.postReq(`${hook.url}/messages/${messageId}`, "PATCH", filename, data, "webhook edit message");
     const j = (await res.json()) as { id: string; channel_id: string; attachments: { id: string; url: string; size: number }[] };
     const a = j.attachments?.[0];
     if (!a || j.attachments.length !== 1) throw new Error("webhook edit: unexpected attachments in response");

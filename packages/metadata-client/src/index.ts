@@ -2,7 +2,7 @@
 
 export * from "./types.js";
 export { MemoryTransport } from "./memory-transport.js";
-export { DiscordWebhookTransport, DiscordHttpError, RateLimitedError, parseWebhookUrl, redactWebhookUrl, isCloudflareBlock } from "./discord-transport.js";
+export { DiscordWebhookTransport, DiscordHttpError, RateLimitedError, parseWebhookUrl, redactWebhookUrl, isCloudflareBlock, webhookMultipart, type PartsFetch } from "./discord-transport.js";
 export { ChannelPacer, type PacerOptions } from "./rate-limit.js";
 export { LocalArbiter, type ArbiterApi } from "./arbiter.js";
 export {

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>discordrive</title>
+<!-- The look of the web app (Cobalt), served from the same origin (app://ddn/cobalt/). theme.js first, so the
+     light / dark choice made in the app applies here too, without a flash. -->
+<script src="../cobalt/theme.js"></script>
+<link rel="stylesheet" href="../cobalt/tokens.css">
+<link rel="stylesheet" href="../cobalt/app.css">
+<link rel="stylesheet" href="./start.css">
+</head>
+<!-- First start of the desktop app: where are the files kept? Logic in start.js (it toggles [hidden] and uses
+     the data-ddn hooks); data-t = the texts start.js translates. -->
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="s-server" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01M6 18h.01"/></symbol>
+  <symbol id="s-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+  <symbol id="s-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="s-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/></symbol>
+</svg>
+<main class="start">
+  <div class="start-card">
+    <div class="wordmark"><span class="logo" aria-hidden="true">D</span><b>DiscorDrive</b></div>
+    <h1 data-t="start.title">Where should your files live?</h1>
+
+    <section class="step" data-ddn="start-choice">
+      <button type="button" class="pick" data-ddn="start-remote">
+        <svg class="i pick-ic" aria-hidden="true"><use href="#s-server"/></svg>
+        <span class="pick-txt">
+          <b data-t="start.remote">Connect to a server</b>
+          <span data-t="start.remote.hint">An instance someone runs for you or that you run yourself (address like https://drive.example.com). Your account works in the browser too.</span>
+        </span>
+        <svg class="i pick-go" aria-hidden="true"><use href="#s-right"/></svg>
+      </button>
+      <button type="button" class="pick" data-ddn="start-local">
+        <svg class="i pick-ic" aria-hidden="true"><use href="#s-monitor"/></svg>
+        <span class="pick-txt">
+          <b data-t="start.local">This computer only</b>
+          <span data-t="start.local.hint">The app runs its own small server on this computer. Nothing to install; only this computer can reach it.</span>
+        </span>
+        <svg class="i pick-go" aria-hidden="true"><use href="#s-right"/></svg>
+      </button>
+    </section>
+
+    <section class="step" data-ddn="start-remote-form" hidden>
+      <label class="field"><span class="lab" data-t="start.address">Server address</span>
+        <input class="input" data-ddn="start-url" type="url" placeholder="https://drive.example.com" autocomplete="url" spellcheck="false"></label>
+      <p class="err" data-ddn="start-remote-err" role="alert" hidden></p>
+      <div class="acts">
+        <button type="button" class="btn" data-ddn="start-back" data-t="start.back">Back</button>
+        <button type="button" class="btn primary" data-ddn="start-connect" data-t="start.connect">Connect</button>
+      </div>
+    </section>
+
+    <section class="step" data-ddn="start-terms" hidden>
+      <h2 data-t="r.title">Before you start: read and accept</h2>
+      <div class="terms">
+        <svg class="i" aria-hidden="true"><use href="#s-alert"/></svg>
+        <div class="terms-txt">
+          <p data-t="r.tos">1. Storing files on Discord is against Discord's Terms of Service. Discord may delete the messages and attachments, or block the webhooks or the account, at any time and without warning.</p>
+          <p data-t="r.warranty">2. This software is provided "as is", without warranty of any kind (MIT licence). Data can be lost. Keep a copy of important files somewhere else.</p>
+        </div>
+      </div>
+      <p class="err" data-ddn="start-local-err" role="alert" hidden></p>
+      <div class="acts">
+        <button type="button" class="btn" data-ddn="start-back2" data-t="start.back">Back</button>
+        <button type="button" class="btn primary" data-ddn="start-accept" data-t="r.accept">I understand and accept</button>
+      </div>
+    </section>
+  </div>
+</main>
+<script src="./start.js"></script>
+</body>
+</html>

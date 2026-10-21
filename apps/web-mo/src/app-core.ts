@@ -61,10 +61,8 @@ import {
   TransferLog,
   type UploadStages,
 } from "@ddv4/metadata-client";
-import { OpfsTransferLog, gzipText } from "./transfer-log-opfs.js";
 import { NetControl, type BaselineData, type LaneFetch, type NetUiState } from "@ddv4/metadata-client";
 import { fromBase64, toBase64 } from "@ddv4/processing";
-import { claimLeadership, openOpfsIndexStore, requestPersistentStorage } from "@ddv4/metadata-client/browser";
 // Resolved at build time to ONE mode (build.ts): the other modes are not in the bundle.
 import { mode } from "ddn:mode";
 
@@ -72,8 +70,8 @@ import { mode } from "ddn:mode";
 declare const __DDN_BUILD__: string | undefined;
 export const BUILD = typeof __DDN_BUILD__ === "string" ? __DDN_BUILD__ : "dev";
 import type { ChannelsView, ModeCleanup, ModeCtx, MoveStatus, RemovalImpact, StorageRun, StorageStatus, StorageTotals } from "./modes/types.js";
-import { keystore, type StoredAccount } from "./keystore.js";
-import { IdbResumeStore } from "./resume-idb.js";
+import type { StoredAccount } from "./keystore.js";
+import type { CorePlatform, DiskFiles, PlatformResumeStore, TransferLogStore } from "./platform.js";
 
 export interface CoreConfig {
   /** Test hook: send discord.com API calls to a local fake. Never set in production. */
@@ -110,8 +108,8 @@ export interface TrashRow {
 
 /** Events pushed from the worker to the UI (not request/response). */
 export type CoreEvent =
-  | { type: "upload-progress"; token: string; done: number; total: number; stages?: UploadStages }
-  | { type: "download-progress"; token: string; done: number; total: number }
+  | { type: "upload-progress"; token: string; done: number; total: number; stages?: UploadStages; name?: string }
+  | { type: "download-progress"; token: string; done: number; total: number; name?: string }
   /** Network state for the transfer panels: ok / weak (slowing down) / offline (waiting) / resumed. */
   | { type: "net"; state: NetUiState }
   /** The reference speed changed (the UI keeps it in localStorage for the next session). */
@@ -174,6 +172,26 @@ export interface AdminInstance {
   pool?: { id: string; channelId: string; label: string; alive: boolean; retired: boolean; files: number; bytes: number; accounts: { accountId: string; bytes: number }[] }[];
 }
 
+/** Resume point of a download to disk (desktop), under `dl:<versionId>:<folder>` in the resume store. */
+interface DiskDownloadJournal {
+  v: 1;
+  nodeId: string;
+  versionId: string;
+  dir: string;
+  name: string;
+  size: number;
+  /** Plaintext bytes of one fragment (set once the first one is written). */
+  chunk?: number;
+  /** Fragments written and covered by `hash`. */
+  next: number;
+  /** Whole-file SHA-256 state after `next` fragments (base64). */
+  hash: string;
+  at: number;
+}
+
+/** Resume key of an upload from disk: the same file (path, size, modification time) into the same folder. */
+const diskResumeKey = (folder: string, path: string, size: number, mtimeMs: number) => `disk|${folder}|${size}|${Math.floor(mtimeMs)}|${path}`;
+
 /** Why the server stopped accepting this device. */
 export type AuthLost = "blocked" | "gone";
 
@@ -234,7 +252,7 @@ export class AppCore {
   private uploads = new Map<string, AbortController>();
   private downloads = new Map<string, AbortController>();
   /** Transfer logs (Settings → Diagnostics): the OPFS writer and the logger handed to the client. */
-  private tlogStore: OpfsTransferLog | null = null;
+  private tlogStore: TransferLogStore | null = null;
   private tlog: TransferLog | null = null;
   /** Settings → Diagnostics → fragments in flight (null = automatic / default); kept by the UI, applied to every client. */
   private conc: { upload: number | null; download: number | null } = { upload: null, download: null };
@@ -244,7 +262,7 @@ export class AppCore {
    */
   readonly net = new NetControl({ metered: () => meteredLink(), netType });
   private lanes: LaneFetch[] = [];
-  private resume: IdbResumeStore | null = null;
+  private resume: PlatformResumeStore | null = null;
   private snapTimer: ReturnType<typeof setInterval> | null = null;
   private gcTimer: ReturnType<typeof setTimeout> | null = null;
   private gc: ModeCleanup | null = null;
@@ -266,11 +284,22 @@ export class AppCore {
   private unavailSeen = "";
   /** Last snapshot outcome, for the status line. */
   lastSnapshot: { at: number; kind: string; written: string } | null = null;
+  /** `src` of this device's transfer log lines: the browser, or the desktop app's agent. */
+  private get logSrc(): "web" | "agent" {
+    return this.platform.kind === "desktop" ? "agent" : "web";
+  }
   /** Set by the worker host: push events to the UI. */
   onEvent: (e: CoreEvent) => void = () => {};
 
-  constructor(private readonly cfg: CoreConfig = {}) {
+  constructor(
+    private readonly cfg: CoreConfig,
+    private readonly platform: CorePlatform,
+  ) {
     this.net.onState = (state) => this.onEvent({ type: "net", state });
+    if (platform.cdnLanes?.length) {
+      this.lanes = [...platform.cdnLanes];
+      this.net.laneCount = 1 + this.lanes.length;
+    }
     this.net.baseline.onSave = (data) => this.onEvent({ type: "net-baseline", data });
     // The automatic pieces in flight a check settled on: remembered by the UI, the next session starts there.
     const tuned = () => this.onEvent({ type: "net-tune", data: { up: this.net.tune.up.accepted, down: this.net.tune.down.accepted } });
@@ -384,7 +413,7 @@ export class AppCore {
   }
 
   async status() {
-    const a = this.acct ?? (await keystore.load()) ?? null;
+    const a = this.acct ?? (await this.platform.keys.load()) ?? null;
     return {
       /** Build-time mode of this app (the instance runs the same one). */
       mode: mode.mode,
@@ -414,9 +443,9 @@ export class AppCore {
   /** New account on a server (decision #13: device key + rescue key registered). */
   async createAccount(serverUrl: string, deviceName: string, invite?: string): Promise<void> {
     const key = newAccountKey();
-    const dk = await generateDeviceKey(false);
+    const dk = await generateDeviceKey(this.platform.extractableDeviceKey);
     const r = await createAccountHttp(serverUrl, dk, key, undefined, invite?.trim() || undefined);
-    await keystore.save({
+    await this.platform.keys.save({
       serverUrl,
       instanceId: r.instanceId,
       accountId: r.accountId,
@@ -430,17 +459,18 @@ export class AppCore {
 
   /** Open the stored account: sign in, open the tree (OPFS if main tab), catch up, subscribe. */
   async open(): Promise<void> {
-    const a = await keystore.load();
+    const a = await this.platform.keys.load();
     if (!a) throw new Error("no account on this device");
     this.acct = a;
-    const lead = claimLeadership(a.accountId, (l) => {
+    const lead = this.platform.leadership(a.accountId, (l) => {
       this.leader = l;
       this.onEvent({ type: "changed" });
     });
     await Promise.race([lead.ready, new Promise((r) => setTimeout(r, 200))]);
     if (this.leader) {
-      this.persistent = await requestPersistentStorage();
-      this.store = await openOpfsIndexStore({ filename: `/index-${a.accountId}.db`, wasmUrl: this.cfg.wasmUrl });
+      const ix = await this.platform.openIndex(a.accountId);
+      this.persistent = ix.persistent;
+      this.store = ix.store;
     } else {
       this.store = new MemoryIndexStore();
     }
@@ -455,9 +485,10 @@ export class AppCore {
       timed: (x) => this.timedArbiter(x),
       leader: () => this.leader,
       discordApiOrigin: this.cfg.discordApiOrigin,
+      discordFetch: this.platform.discordFetch,
       serverTimeOf: (seq) => this.serverTimes.get(seq),
       net: this.net,
-      resume: (this.resume = new IdbResumeStore(a.accountId)),
+      resume: (this.resume = this.platform.resume(a.accountId)),
     };
     this.authLost = null;
     try {
@@ -518,7 +549,7 @@ export class AppCore {
     this.http = null;
     this.acct = null;
     this.authLost = null;
-    await keystore.clear();
+    await this.platform.keys.clear();
   }
 
   // ── instance administration (only for accounts with the admin flag; the server checks it on every call)
@@ -930,6 +961,205 @@ export class AppCore {
     return { nodeId: r.nodeId, chunks: r.chunks, sha256: r.version.plaintextSha256, resumed: r.resumed };
   }
 
+  // ── desktop: files on this computer (platform.files; the browser has none) ─────────────────────────
+
+  private disk(): DiskFiles {
+    const f = this.platform.files;
+    if (!f) throw new Error("not available here");
+    return f;
+  }
+
+  /** What this core can do beyond the browser (the UI shows the desktop actions only when set). */
+  capabilities(): { disk: boolean; platform: "web" | "desktop"; downloadsDir: string | null; keyProtection: "os" | "file" | null } {
+    return { disk: !!this.platform.files, platform: this.platform.kind, downloadsDir: this.platform.files?.downloadsDir() ?? null, keyProtection: this.platform.keyProtection ?? null };
+  }
+
+  /**
+   * Desktop: what dropping (or picking) these paths would upload: every regular file, with the folders it
+   * goes into (a dropped folder is recreated under the target, its subfolders too). Nothing is read yet.
+   */
+  async listPaths(paths: string[]): Promise<{ path: string; name: string; size: number; folder: string[] }[]> {
+    if (!Array.isArray(paths) || paths.some((p) => typeof p !== "string" || !p)) throw new Error("bad paths");
+    const disk = this.disk();
+    const out: { path: string; name: string; size: number; folder: string[] }[] = [];
+    for (const p of paths) {
+      if (await disk.isDir(p)) {
+        const base = p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "folder";
+        for (const f of await disk.walk(p)) out.push({ path: f.path, name: f.rel.at(-1)!, size: f.size, folder: [base, ...f.rel.slice(0, -1)] });
+      } else {
+        const st = await disk.stat(p);
+        out.push({ path: p, name: p.split(/[\\/]/).pop() ?? p, size: st.size, folder: [] });
+      }
+    }
+    return out;
+  }
+
+  /** The folder `names` under `parentId`, made where missing (an existing one of the same name is reused). */
+  private async folderPathOf(parentId: string, names: string[]): Promise<string> {
+    let id = parentId;
+    for (const name of names) {
+      const nfc = name.normalize("NFC");
+      const existing = this.c().store.childByKey(id, nameKey(nfc));
+      const n = existing ? this.c().store.getNode(existing) : undefined;
+      id = n && n.kind === "folder" && !n.trashed ? n.id : await this.mkdir(nfc, id);
+    }
+    return id;
+  }
+
+  /**
+   * Desktop: upload one file from disk into `folder` (names under `parentId`, made where missing), with
+   * "upload-progress" events tagged with `token` (cancel: cancelUpload(token)). The file is read piece by
+   * piece as it is sent, never whole into memory; an interrupted upload of the same file into the same
+   * folder continues where it stopped (also after the app restarted).
+   */
+  async uploadPath(path: string, folder: string[] = [], parentId = ROOT_ID, token = ""): Promise<{ nodeId: string; resumed: number; size: number }> {
+    if (typeof path !== "string" || !path || !Array.isArray(folder) || folder.some((x) => typeof x !== "string")) throw new Error("bad arguments");
+    const src = await this.disk().openSource(path);
+    const ac = new AbortController();
+    if (token) this.uploads.set(token, ac);
+    try {
+      const into = await this.folderPathOf(parentId, folder);
+      let last = 0;
+      const r = await this.c().upload(src, src.name, into, {
+        signal: ac.signal,
+        resumeKey: diskResumeKey(into, path, src.size, src.mtimeMs),
+        onProgress: (done, total, stages) => {
+          const t = Date.now();
+          if (done > 0 && done < total && t - last < 100) return;
+          last = t;
+          this.onEvent({ type: "upload-progress", token, done, total, stages, name: src.name });
+        },
+      });
+      this.version++;
+      void this.snapshotSoon();
+      return { nodeId: r.nodeId, resumed: r.resumed, size: src.size };
+    } finally {
+      this.uploads.delete(token);
+      await src.close();
+    }
+  }
+
+  /** Upload files and folders from disk one after another (tests, scripts); the window uses listPaths + uploadPath. */
+  async uploadPaths(paths: string[], parentId = ROOT_ID, token = ""): Promise<{ files: number; bytes: number; failed: { path: string; error: string }[] }> {
+    let files = 0;
+    let bytes = 0;
+    const failed: { path: string; error: string }[] = [];
+    for (const [i, f] of (await this.listPaths(paths)).entries()) {
+      try {
+        await this.uploadPath(f.path, f.folder, parentId, token ? `${token}:${i}` : "");
+        files++;
+        bytes += f.size;
+      } catch (e) {
+        failed.push({ path: f.path, error: String((e as Error)?.message ?? e) });
+      }
+    }
+    return { files, bytes, failed };
+  }
+
+  /**
+   * Download a file straight to disk (desktop): fragments are written at their offsets into
+   * `<dir>/<name>.ddnpart`, renamed to a free name when the whole-file SHA-256 matched. After every
+   * fragment a resume point is stored (next fragment + hash state); a download cut short (app closed,
+   * crash, no network) continues from there with `resumeDownloads()`, the partial file cut back to it.
+   */
+  async downloadToDisk(nodeId: string, dir?: string, token = ""): Promise<{ path: string; bytes: number; resumed: number }> {
+    const disk = this.disk();
+    const n = this.c().store.getNode(nodeId);
+    if (!n || n.kind !== "file" || !n.content) throw new Error("not a file");
+    const target = typeof dir === "string" && dir ? dir : disk.downloadsDir();
+    const key = `dl:${n.content.versionId}:${target}`;
+    const prev = (await this.resume?.get(key)) as DiskDownloadJournal | undefined;
+    const j: DiskDownloadJournal = prev?.v === 1 ? prev : { v: 1, nodeId, versionId: n.content.versionId, dir: target, name: n.name, size: n.content.sizeBytes, next: 0, hash: "", at: Date.now() };
+    const out = await disk.openTarget(target, j.name, key);
+    const ac = new AbortController();
+    if (token) this.downloads.set(token, ac);
+    let resumed = 0;
+    try {
+      // What the journal vouches for; anything past it in the partial file is cut off.
+      let resume: { versionId: string; from: number; hash: Uint8Array } | undefined;
+      const chunk = j.chunk ?? 0;
+      if (j.next > 0 && j.hash && chunk > 0 && out.size >= Math.min(j.size, j.next * chunk)) {
+        resume = { versionId: j.versionId, from: j.next, hash: fromBase64(j.hash) };
+        resumed = j.next;
+        await out.truncate(Math.min(j.size, j.next * chunk));
+      } else await out.truncate(0);
+      let offset = resume ? Math.min(j.size, j.next * chunk) : 0;
+      let last = 0;
+      let saving: Promise<unknown> = Promise.resolve();
+      await this.resume?.put(key, j);
+      await this.c().download(
+        nodeId,
+        {
+          write: async (d) => {
+            await out.writeAt(offset, d);
+            offset += d.byteLength;
+          },
+        },
+        {
+          signal: ac.signal,
+          resume,
+          onWritten: (p) => {
+            // The size of a fragment: the first one written tells it (all but the last are equal).
+            if (!j.chunk) j.chunk = offset;
+            // A resume point after every fragment (a small JSON file per ~10 MiB written): a crash loses at
+            // most the fragments in flight. Saved in order, never two at once.
+            j.next = p.next;
+            j.hash = toBase64(p.hash());
+            j.at = Date.now();
+            const snap = { ...j };
+            saving = saving.then(() => this.resume?.put(key, snap)).catch(() => {});
+          },
+          onProgress: (done, total) => {
+            const t = Date.now();
+            if (done > 0 && done < total && t - last < 100) return;
+            last = t;
+            this.onEvent({ type: "download-progress", token, done, total, name: j.name });
+          },
+        },
+      );
+      await saving;
+      const { finalPath } = await out.finish();
+      await this.resume?.del(key);
+      return { path: finalPath, bytes: j.size, resumed };
+    } catch (e) {
+      await out.close().catch(() => {});
+      throw e;
+    } finally {
+      this.downloads.delete(token);
+    }
+  }
+
+  /** Downloads to disk that did not finish (the agent continues them by itself after a restart). */
+  async unfinishedDownloads(): Promise<{ key: string; nodeId: string; name: string; dir: string; size: number; next: number }[]> {
+    const out = [];
+    for (const [key, v] of (await this.resume?.entries("dl:")) ?? []) {
+      const j = v as DiskDownloadJournal;
+      if (j?.v !== 1) continue;
+      const n = this.client?.store.getNode(j.nodeId);
+      // The file changed or is gone: the partial file stays where it is, the journal goes.
+      if (!n || n.kind !== "file" || n.content?.versionId !== j.versionId) {
+        await this.resume?.del(key);
+        continue;
+      }
+      out.push({ key, nodeId: j.nodeId, name: j.name, dir: j.dir, size: j.size, next: j.next });
+    }
+    return out;
+  }
+
+  /** Continue every unfinished download to disk (one after another); returns how many finished. */
+  async resumeDownloads(): Promise<number> {
+    let done = 0;
+    for (const d of await this.unfinishedDownloads()) {
+      try {
+        await this.downloadToDisk(d.nodeId, d.dir, `resume:${d.key}`);
+        done++;
+      } catch {
+        /* stays in the journal; tried again at the next start */
+      }
+    }
+    return done;
+  }
+
   /** What the instance does with plaintext (plain mode): the UI shows thumbnails/search only then. */
   features() {
     return mode.serverFeatures ?? { thumbnails: false, search: false, streaming: false };
@@ -1116,8 +1346,8 @@ export class AppCore {
   /** Turn this browser's transfer log on/off (the UI keeps the choice); e2ee/plain: the instance's log for this account too. */
   async setTransferLog(on: boolean, names = false): Promise<{ on: boolean; names: boolean; server: { on: boolean; all: boolean } | null }> {
     if (on) {
-      this.tlogStore ??= new OpfsTransferLog();
-      this.tlog ??= new TransferLog(this.tlogStore.write, { src: "web", mode: mode.mode, build: BUILD });
+      this.tlogStore ??= this.platform.transferLog();
+      this.tlog ??= new TransferLog(this.tlogStore.write, { src: this.logSrc, mode: mode.mode, build: BUILD });
       this.tlog.names = names;
     } else {
       await this.tlogStore?.flush();
@@ -1136,12 +1366,12 @@ export class AppCore {
 
   /** Build of this app and of the instance (Settings → Diagnostics). */
   async buildInfo(): Promise<{ app: string; server: string | null }> {
-    const h = await getHealth(this.http?.baseUrl ?? location.origin).catch(() => null);
+    const h = await getHealth(this.http?.baseUrl ?? this.platform.homeOrigin() ?? "").catch(() => null);
     return { app: BUILD, server: (h as { build?: string } | null)?.build ?? null };
   }
 
   async transferLogStatus(): Promise<{ on: boolean; names: boolean; bytes: number; where: string; server: { on: boolean; all: boolean } | null }> {
-    this.tlogStore ??= new OpfsTransferLog();
+    this.tlogStore ??= this.platform.transferLog();
     let server: { on: boolean; all: boolean } | null = null;
     if (!mode.clientSnapshots && this.http) server = await this.http.json<{ on: boolean; all: boolean }>("GET", "/v1/diagnostics/transfer-log").then((r) => r.body).catch(() => null);
     return { on: !!this.tlog, names: !!this.tlog?.names, bytes: await this.tlogStore.size(), where: this.tlogStore.where, server };
@@ -1152,7 +1382,7 @@ export class AppCore {
    * for this account, in one JSON Lines file (`src` tells them apart), gzipped when the browser can.
    */
   async transferLogFile(): Promise<{ data: Blob; gz: boolean; lines: number; serverLines: number }> {
-    this.tlogStore ??= new OpfsTransferLog();
+    this.tlogStore ??= this.platform.transferLog();
     const mine = await this.tlogStore.text();
     let srv = "";
     if (!mode.clientSnapshots && this.http) {
@@ -1161,19 +1391,19 @@ export class AppCore {
     }
     // First line: which builds wrote this file (the app here; the instance from its health), so a log
     // shared later says what version it came from even when it holds no file_start.
-    const serverBuild = await getHealth(this.http?.baseUrl ?? location.origin)
+    const serverBuild = await getHealth(this.http?.baseUrl ?? this.platform.homeOrigin() ?? "")
       .then((h) => (h as { build?: string }).build ?? null)
       .catch(() => null);
-    const head = JSON.stringify({ v: 1, t: Date.now(), src: "web", ev: "log_header", build: BUILD, mode: mode.mode, ...(serverBuild ? { serverBuild } : {}) }) + "\n";
+    const head = JSON.stringify({ v: 1, t: Date.now(), src: this.logSrc, ev: "log_header", build: BUILD, mode: mode.mode, ...(serverBuild ? { serverBuild } : {}) }) + "\n";
     const count = (s: string) => (s.match(/\n/g) ?? []).length;
-    if (!count(mine + srv)) return { ...(await gzipText("")), lines: 0, serverLines: 0 };
+    if (!count(mine + srv)) return { ...(await this.platform.gzip("")), lines: 0, serverLines: 0 };
     const all = head + mine + srv;
-    return { ...(await gzipText(all)), lines: count(all), serverLines: count(srv) };
+    return { ...(await this.platform.gzip(all)), lines: count(all), serverLines: count(srv) };
   }
 
   async clearTransferLog(): Promise<{ kept: number }> {
     // Also when logging is off now: the files from an earlier session are still in OPFS.
-    this.tlogStore ??= new OpfsTransferLog();
+    this.tlogStore ??= this.platform.transferLog();
     const r = await this.tlogStore.clear();
     if (!mode.clientSnapshots && this.http) await this.http.json("DELETE", "/v1/diagnostics/transfer-log").catch(() => null);
     return r;
@@ -1347,7 +1577,7 @@ export class AppCore {
 
   /** New device, step 1: offer to show as QR/text. The QR carries a link that opens the app on the other device. */
   async pairStart(serverUrl: string, deviceName: string): Promise<{ offer: string; link: string }> {
-    const dk = await generateDeviceKey(false);
+    const dk = await generateDeviceKey(this.platform.extractableDeviceKey);
     const p = await startPairing(dk.publicKey);
     this.pending = { p, serverUrl, deviceName, dk };
     return { offer: p.offer, link: `${serverUrl.replace(/\/$/, "")}/#pair=${p.offer}` };
@@ -1383,7 +1613,7 @@ export class AppCore {
     const r = this.pending?.result;
     if (!r) throw new Error("pairing not finished");
     const { sas: _sas, ...acct } = r;
-    await keystore.save(acct);
+    await this.platform.keys.save(acct);
     this.pending = null;
   }
 
@@ -1414,9 +1644,9 @@ export class AppCore {
 
   /** New device: login + password -> account key opened here -> device registered with the rescue key. */
   async joinWithPassword(serverUrl: string, login: string, password: string, deviceName: string): Promise<void> {
-    const dk = await generateDeviceKey(false);
+    const dk = await generateDeviceKey(this.platform.extractableDeviceKey);
     const r = await signInWithPassword(serverUrl, login, password, dk);
-    await keystore.save({
+    await this.platform.keys.save({
       serverUrl,
       instanceId: r.instanceId,
       accountId: r.accountId,
@@ -1435,10 +1665,10 @@ export class AppCore {
   async joinWithKit(serverUrl: string, kitText: string, deviceName: string): Promise<void> {
     const kit = mode.decodeKit(kitText);
     const key = accountKeyFromB64(kit.key);
-    const dk = await generateDeviceKey(false);
+    const dk = await generateDeviceKey(this.platform.extractableDeviceKey);
     const c = await getChallenge(serverUrl);
     const { deviceId } = await rescueRegisterDevice(serverUrl, key, kit.accountId, dk);
-    await keystore.save({
+    await this.platform.keys.save({
       serverUrl,
       instanceId: c.instanceId,
       accountId: kit.accountId,
@@ -1473,7 +1703,7 @@ export class AppCore {
     await this.http!.setDeviceName(deviceId, await sealDeviceName(this.key!, a.accountId, deviceId, name));
     if (deviceId === a.deviceId) {
       a.deviceName = name;
-      await keystore.save(a);
+      await this.platform.keys.save(a);
     }
   }
 
@@ -1501,7 +1731,7 @@ export class AppCore {
     const a = this.acct!;
     a.kitSavedAt = Date.now();
     a.kitFormat = mode.kitVersion;
-    await keystore.save(a);
+    await this.platform.keys.save(a);
   }
 
   /**
@@ -1515,7 +1745,7 @@ export class AppCore {
     if ((a.kitFormat ?? 0) >= (mode.kitVersion ?? 0)) return false;
     if (!(await mode.kitOutdated(this.ctx, a.kitFormat).catch(() => false))) return false;
     a.kitNudgedAt = Date.now();
-    await keystore.save(a);
+    await this.platform.keys.save(a);
     return true;
   }
 

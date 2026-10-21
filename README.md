@@ -55,6 +55,32 @@ Discord over HTTP/3 (QUIC), which on some systems is much slower than HTTP/2 (me
 `QuicAllowed: false`; Firefox: `network.http.http3.enable` = false in `about:config`. It affects every
 site; the app works either way.
 
+## Desktop app (Windows, Linux)
+
+The same drive as an app: the web app in a window plus a background agent that moves the data itself
+(several connections to Discord for uploads, files read from and written straight to disk). It keeps
+uploading, downloading and syncing with the window closed (tray icon; Quit is in the tray menu), starts
+with the system (can be switched off), and continues an interrupted download after a restart. At the
+first start pick **Connect to a server** (the address of an instance; then sign in, pair or create an
+account as in the browser) or **This computer only** (the app runs its own instance on this computer, no
+Node.js or terminal needed; only this computer can reach it).
+
+**Download:** [Releases → `main-build`](https://github.com/Magiszonekk/discordrive/releases/tag/main-build):
+`…win-x64.exe` (Windows), `…amd64.deb` (Ubuntu, Debian), `…x86_64.AppImage` (other Linux). Check the
+download with `SHA256SUMS` from the same page (`sha256sum -c SHA256SUMS --ignore-missing`).
+
+- **The builds are not code-signed.** Windows SmartScreen says “Windows protected your PC”: click
+  **More info → Run anyway**. Only do that with a file from the page above whose checksum matches.
+- **Ubuntu 24.04 and newer:** install the `.deb` (`sudo apt install ./discordrive-…-amd64.deb`); it adds
+  the AppArmor profile Chromium's sandbox needs. The AppImage cannot get one by itself on these systems
+  and says so instead of starting without the sandbox.
+- **Updates are never installed by themselves.** The app checks for a newer build every few hours
+  (Settings → Desktop app; can be switched off) and shows it in the tray and in Settings. **Download**
+  fetches the installer for your system to Downloads and checks its SHA-256; you run it yourself.
+- **Keys:** kept by the app, protected by the system key store (Windows DPAPI, Linux GNOME Keyring /
+  KWallet). Without a key store (some Linux setups) they are a file only your user can read; Settings
+  says so. Details: [docs/threat-model.md §2.12](docs/threat-model.md).
+
 ## Modes
 
 Chosen in `npm run setup`, fixed for the life of the instance (another mode = a new instance in

@@ -34,7 +34,7 @@ import type { ChannelRow, ModeCtx, ModeImpl, MoveStatus, RemovalImpact } from ".
 
 export const MODE_MARKER = "ddn-mode-marker:metadata-only";
 
-const transport = (ctx: ModeCtx) => new DiscordWebhookTransport({ apiOrigin: ctx.discordApiOrigin });
+const transport = (ctx: ModeCtx) => new DiscordWebhookTransport({ apiOrigin: ctx.discordApiOrigin, fetch: ctx.discordFetch });
 const vaults = new WeakMap<ModeCtx, WebhookVault>();
 const vault = (ctx: ModeCtx) => {
   let v = vaults.get(ctx);

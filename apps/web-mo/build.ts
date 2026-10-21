@@ -58,12 +58,13 @@ function modePlugin(mode: Mode): Plugin {
   };
 }
 
-export async function buildMode(mode: Mode, outRoot = join(here, "dist")): Promise<string> {
+/** `ident`: the build ID to show (the desktop app passes its own: its version and commit). */
+export async function buildMode(mode: Mode, outRoot = join(here, "dist"), ident0?: string): Promise<string> {
   if (!existsSync(join(here, "src", "modes", `${mode}.ts`))) throw new Error(`mode ${mode}: not available yet`);
   const out = join(outRoot, mode);
   // Hash first: a file edited during the build makes the next start rebuild again (never the other way round).
   const hash = sourceHash();
-  const ident = buildId(hash);
+  const ident = ident0 ?? buildId(hash);
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
   const common = {

@@ -27,3 +27,7 @@ var/
 
 # Build lock of `discordrive start` / setup (one build of a mode at a time)
 apps/web-mo/.build-*.lock/
+# desktop: first-start page script (plain JS, not a build output)
+!apps/desktop/static/start.js
+.stage/
+release/

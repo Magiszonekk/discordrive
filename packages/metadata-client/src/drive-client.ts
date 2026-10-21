@@ -530,7 +530,11 @@ export class DriveClient {
           let f1 = 0, f2 = 0, f3 = 0;
           try {
             const rd = await reading;
-            const data = rd.data;
+            // Only the size and the timings outlive encryption: the plaintext is dropped right after it (a
+            // 10 MiB buffer per fragment in flight would otherwise stay until the post returns).
+            let data: Uint8Array | null = rd.data;
+            const pb = data.byteLength;
+            const rdPh = rd.ph;
             if (log) f1 = nowMs();
             // Resume: the same plaintext as in the unfinished upload → its stored fragment is taken over.
             const ph = journal ? await sha256Hex(data) : "";
@@ -539,11 +543,12 @@ export class DriveClient {
               chunks[i] = prev.c;
               resumed++;
               stages.enc--;
-              sentBytes += data.byteLength;
+              sentBytes += pb;
               opts.onProgress?.(sentBytes, src.size, { ...stages });
               continue;
             }
             const ct = await encryptFragment(key, data);
+            data = null;
             if (log) f2 = nowMs();
             const blobId = newId();
             const hash = await sha256Hex(ct);
@@ -566,9 +571,9 @@ export class DriveClient {
             chunks[i] = { index: i, blobId, ciphertextSizeBytes: ct.byteLength, ciphertextHash: hash, placements: [placed] };
             if (rk) void rs!.put(rk.frags + i, { c: chunks[i]!, ph } satisfies UploadJournalFrag).catch(() => {});
             const f4 = log ? nowMs() : 0;
-            sentBytes += data.byteLength;
+            sentBytes += pb;
             // rd = from the worker taking the fragment to it being read and hashed in order; ph = the hash step.
-            if (log) log.emit("frag", { dir: "up", x: uploadId, i, pb: data.byteLength, b: ct.byteLength, rd: ms(f0, f1), enc: ms(f1, f2), hash: ms(f2, f3), put: ms(f3, f4), ph: rd.ph, dur: ms(f0), hook: placed.locationId, ch: placed.channelId ?? null, fl: log.fl.up });
+            if (log) log.emit("frag", { dir: "up", x: uploadId, i, pb, b: ct.byteLength, rd: ms(f0, f1), enc: ms(f1, f2), hash: ms(f2, f3), put: ms(f3, f4), ph: rdPh, dur: ms(f0), hook: placed.locationId, ch: placed.channelId ?? null, fl: log.fl.up });
             opts.onProgress?.(sentBytes, src.size, { ...stages });
           } finally {
             if (log) log.fl.up--;
