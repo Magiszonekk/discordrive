@@ -31,6 +31,8 @@ export interface ModeCtx {
   leader(): boolean;
   /** Test hook: Discord API origin of the fake (metadata only posts there). */
   discordApiOrigin?: string;
+  /** How this device reaches Discord (desktop agent: its own HTTP/2 connections); default: the global fetch. */
+  discordFetch?: typeof fetch;
   serverTimeOf(seq: number): number | undefined;
   /** Network state shared by every client this tab builds (gate; windows; guard). */
   net?: NetControl;

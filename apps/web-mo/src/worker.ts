@@ -2,6 +2,7 @@
 // Dedicated worker hosting AppCore (OPFS needs a worker). Simple RPC:
 // { id, method, args } -> { id, ok, result | error }.
 import { AppCore, type CoreConfig } from "./app-core.js";
+import { webPlatform } from "./web-platform.js";
 
 let core: AppCore | null = null;
 
@@ -13,7 +14,7 @@ self.onmessage = async (ev: MessageEvent<{ id: number; method: string; args: unk
   const { id, method, args } = ev.data;
   try {
     if (method === "init") {
-      core = new AppCore(args[0] as CoreConfig);
+      core = new AppCore(args[0] as CoreConfig, webPlatform({ wasmUrl: (args[0] as CoreConfig)?.wasmUrl }));
       core.onEvent = (event) => postMessage({ event });
       return postMessage({ id, ok: true, result: null });
     }

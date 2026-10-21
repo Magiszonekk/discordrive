@@ -54,7 +54,7 @@ Every line:
 |---|---|
 | `v` | format version (1) |
 | `t` | time the event was written (for `frag`/`req`/`file_end`: its end) |
-| `src` | `web` (browser), `cli`, `server` (instance, e2ee/plain) |
+| `src` | `web` (browser), `cli`, `server` (instance, e2ee/plain), `agent` (desktop app background agent) |
 | `ev` | event, below |
 | `acct` | server lines only: the account |
 | `dir` | `up` / `down` |
