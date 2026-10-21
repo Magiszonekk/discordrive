@@ -8,7 +8,7 @@
 // with a CSP; it may not navigate anywhere else (http(s) links open in the system browser), may not open
 // windows or <webview>s, and gets no permissions. IPC: one channel for the agent's port (sent only to the
 // app's own main frame), and a few invoke handlers that check the sender frame and every argument.
-import { app, BrowserWindow, Menu, MessageChannelMain, Notification, Tray, dialog, ipcMain, nativeImage, net, protocol, safeStorage, session, shell, utilityProcess, type IpcMainInvokeEvent, type UtilityProcess } from "electron";
+import { app, BrowserWindow, Menu, clipboard, MessageChannelMain, Notification, Tray, dialog, ipcMain, nativeImage, net, protocol, safeStorage, session, shell, utilityProcess, type IpcMainInvokeEvent, type UtilityProcess } from "electron";
 import { existsSync, readFileSync } from "node:fs";
 import { join, normalize, sep } from "node:path";
 import { ORIGIN, SCHEME, isAppUrl, staticPath as staticPathIn } from "./shell/paths.js";
@@ -17,6 +17,8 @@ import { DISCORD_ORIGINS } from "@ddv4/metadata-client/node";
 import { autostartOn, setAutostart, HIDDEN_ARG, type AutostartEnv } from "./shell/autostart.js";
 import { loadSettings, normaliseServerUrl, saveSettings, type DesktopSettings } from "./shell/settings.js";
 import type { AgentInit } from "./agent.js";
+import { appArmorCommand, appImageWithoutSandbox } from "./shell/sandbox.js";
+import { CHECK_EVERY_MS, assetFor, downloadVerified, installHint, installKind, isNewer, latestBuild, type AvailableBuild } from "./shell/updates.js";
 
 const APP_ID = "discordrive";
 const APP_NAME = "discordrive";
@@ -203,6 +205,70 @@ export function trayText(b: typeof busy): string {
   return `${APP_NAME}: ${parts.join(", ")}`;
 }
 
+// ── updates (never installed by the app; see shell/updates.ts) ─────────────────────────────────────
+/** This copy: from build-info.json written by package.ts (absent in a dev run). */
+function ownBuild(): { version: string; build: string; commit: string | null } {
+  try {
+    return JSON.parse(readFileSync(join(ROOT, "build-info.json"), "utf8")) as { version: string; build: string; commit: string | null };
+  } catch {
+    return { version: app.getVersion(), build: "dev", commit: null };
+  }
+}
+let update: AvailableBuild | null = null;
+let notifiedCommit = "";
+const kind = () => installKind({ platform: process.platform, appImage: process.env.APPIMAGE, execPath: process.execPath, packaged: app.isPackaged });
+async function checkUpdates(manual = false): Promise<{ current: ReturnType<typeof ownBuild>; available: AvailableBuild | null; kind: string }> {
+  const own = ownBuild();
+  if (!manual && !settings.checkUpdates) return { current: own, available: null, kind: kind() };
+  const b = await latestBuild((u, i) => net.fetch(u, i), process.env.DDN_DESKTOP_UPDATES_API).catch(() => null);
+  update = isNewer(own, b) ? b : null;
+  if (update && update.commit !== notifiedCommit && Notification.isSupported()) {
+    notifiedCommit = update.commit;
+    new Notification({ title: "A new version of discordrive is available", body: "Open discordrive → Settings → About to download it." }).show();
+  }
+  paintTray();
+  return { current: own, available: update, kind: kind() };
+}
+function wireUpdates() {
+  const fromApp = (e: IpcMainInvokeEvent) => {
+    if (!e.senderFrame || !isAppUrl(e.senderFrame.url)) throw new Error("not allowed");
+  };
+  ipcMain.handle("ddn:update-check", (e) => (fromApp(e), checkUpdates(true)));
+  ipcMain.handle("ddn:update-download", async (e) => {
+    fromApp(e);
+    if (!update) throw new Error("no new version");
+    const a = assetFor(kind(), update.assets);
+    if (!a) throw new Error("no installer for this system in the release");
+    const path = await downloadVerified((u, i) => net.fetch(u, i), update, a, app.getPath("downloads"));
+    // Transfers running: say so, do not stop them (the user installs when it suits).
+    return { path, hint: installHint(kind(), path), busy: busy.busy };
+  });
+  // Settings → Desktop app: update checks, autostart, downloads folder (a folder picked in the system dialog).
+  ipcMain.handle("ddn:app-settings", (e, patch: unknown) => {
+    fromApp(e);
+    const p = (patch && typeof patch === "object" ? patch : {}) as { checkUpdates?: unknown; autostart?: unknown; downloadsDir?: unknown };
+    if (typeof p.checkUpdates === "boolean") settings.checkUpdates = p.checkUpdates;
+    if (typeof p.autostart === "boolean" && p.autostart !== settings.autostart) {
+      settings.autostart = p.autostart;
+      setAutostart(autostartEnv(), p.autostart);
+      paintTray();
+    }
+    if (typeof p.downloadsDir === "string" && p.downloadsDir === pickedFolder) {
+      settings.downloadsDir = p.downloadsDir;
+      agent?.postMessage({ type: "downloads-dir", dir: p.downloadsDir });
+    }
+    saveSettings(DATA(), settings);
+    return { checkUpdates: settings.checkUpdates, autostart: settings.autostart, downloadsDir: downloadsDir() };
+  });
+  ipcMain.on("ddn:open-path", (e, p: unknown) => {
+    // Only the installer this app just downloaded and checked.
+    if (!e.senderFrame || !isAppUrl(e.senderFrame.url) || typeof p !== "string" || !update) return;
+    if (normalize(p).startsWith(normalize(app.getPath("downloads")) + sep) && update.assets.some((a) => p.endsWith(a.name))) void shell.openPath(p);
+  });
+  setTimeout(() => void checkUpdates(), 30_000);
+  setInterval(() => void checkUpdates(), CHECK_EVERY_MS);
+}
+
 let paused = false;
 function paintTray() {
   if (!tray) return;
@@ -210,6 +276,7 @@ function paintTray() {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: trayText(busy), enabled: false },
+      ...(update ? [{ label: "New version available…", click: showWindow }] : []),
       { type: "separator" },
       { label: "Open", click: showWindow },
       {
@@ -339,10 +406,13 @@ function wireSetupIpc() {
   ipcMain.handle("ddn:pick-folder", async (e) => {
     if (!e.senderFrame || !isAppUrl(e.senderFrame.url) || !win) throw new Error("not allowed");
     const r = await dialog.showOpenDialog(win, { properties: ["openDirectory", "createDirectory"] });
-    return r.canceled ? null : (r.filePaths[0] ?? null);
+    // Only a folder the user picked here may become the downloads folder.
+    pickedFolder = r.canceled ? null : (r.filePaths[0] ?? null);
+    return pickedFolder;
   });
 }
 let localInvite: string | null = null;
+let pickedFolder: string | null = null;
 /** Where downloads go: Settings, else the system Downloads folder (tests: DDN_DESKTOP_DOWNLOADS). */
 const downloadsDir = () => settings.downloadsDir ?? process.env.DDN_DESKTOP_DOWNLOADS ?? app.getPath("downloads");
 
@@ -395,6 +465,32 @@ async function smoke() {
   app.quit();
 }
 
+async function refuseWithoutSandbox() {
+  const pl = app.getLocale().startsWith("pl");
+  const cmd = appArmorCommand();
+  const report = process.env.DDN_DESKTOP_SANDBOX_REPORT;
+  if (report) {
+    // CI: the refusal itself is the check.
+    (await import("node:fs")).writeFileSync(report, JSON.stringify({ refused: true }));
+    app.exit(3);
+    return;
+  }
+  const r = await dialog.showMessageBox({
+    type: "error",
+    title: APP_NAME,
+    message: pl ? "Ten system blokuje piaskownicę (sandbox) aplikacji w wersji AppImage" : "This system blocks the app's sandbox in the AppImage",
+    detail: pl
+      ? "Ubuntu 24.04 i nowsze nie pozwalają programom AppImage na przestrzenie nazw użytkownika, których potrzebuje piaskownica Chromium, a bez niej aplikacja się nie uruchomi.\n\nNajprościej: zainstaluj pakiet .deb (sam dodaje potrzebny profil AppArmor).\n\nAlbo zezwól tej wersji AppImage jednym poleceniem (wymaga sudo; skopiuje się do schowka):\n\n" + cmd
+      : "Ubuntu 24.04 and newer do not let AppImages use the user namespaces Chromium's sandbox needs, and the app does not run without it.\n\nEasiest: install the .deb package (it adds the AppArmor profile it needs).\n\nOr allow this AppImage with one command (needs sudo; copied to the clipboard):\n\n" + cmd,
+    buttons: [pl ? "Pobierz .deb" : "Get the .deb", pl ? "Skopiuj polecenie" : "Copy the command", pl ? "Zamknij" : "Close"],
+    defaultId: 0,
+    cancelId: 2,
+  });
+  if (r.response === 0) await shell.openExternal("https://github.com/Magiszonekk/discordrive/releases");
+  if (r.response === 1) clipboard.writeText(cmd);
+  app.exit(0);
+}
+
 // ── start ──────────────────────────────────────────────────────────────────────────────────────────
 const single = app.requestSingleInstanceLock();
 if (!single) app.quit();
@@ -404,6 +500,11 @@ else {
     wc.on("will-attach-webview", (e) => e.preventDefault());
   });
   void app.whenReady().then(async () => {
+    // AppImage without Chromium's sandbox (blocked user namespaces): explain and stop, never run unsandboxed.
+    if (appImageWithoutSandbox({ platform: process.platform, appImage: process.env.APPIMAGE, noSandbox: app.commandLine.hasSwitch("no-sandbox") })) {
+      await refuseWithoutSandbox();
+      return;
+    }
     const dbg = (m: string) => process.env.DDN_DESKTOP_DEBUG && console.error(`[ddn] ${m}`);
     settings = loadSettings(DATA());
     dbg("settings loaded");
@@ -431,6 +532,7 @@ else {
       if (w && e.senderFrame === w.webContents.mainFrame && isAppUrl(e.senderFrame.url)) connectWindow(w);
     });
     wireSetupIpc();
+    if (!process.env.DDN_DESKTOP_SMOKE) wireUpdates();
     sealerKind = await keyStoreKind();
     dbg(`key store: ${sealerKind}`);
     // First start: autostart on by default.

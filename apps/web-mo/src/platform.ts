@@ -54,8 +54,10 @@ export interface DiskFiles {
    * for resuming) renamed to a free name (`name`, `name (1)`, …) when done.
    */
   openTarget(dir: string, name: string, partKey: string): Promise<DiskTarget & { partPath: string }>;
-  /** Default folder for downloads (the system's Downloads). */
+  /** Default folder for downloads (the system's Downloads, or the one picked in Settings). */
   downloadsDir(): string;
+  /** Change it (Settings → Desktop app). */
+  setDownloadsDir?(dir: string): void;
 }
 
 export interface CorePlatform {

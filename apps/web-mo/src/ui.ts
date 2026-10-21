@@ -48,6 +48,12 @@ interface DesktopBridge {
   pickFolder(): Promise<string | null>;
   /** The built-in instance got its first account (it closes sign-up). */
   firstAccountMade(): Promise<boolean>;
+  updates: {
+    check(): Promise<{ current: { version: string; build: string; commit: string | null }; available: { build: string; commit: string; publishedAt: string; htmlUrl: string } | null; kind: string }>;
+    download(): Promise<{ path: string; hint: string; busy: boolean }>;
+    settings(patch?: { checkUpdates?: boolean; autostart?: boolean; downloadsDir?: string }): Promise<{ checkUpdates: boolean; autostart: boolean; downloadsDir: string }>;
+    open(path: string): void;
+  };
 }
 const desktop = (window as unknown as { ddnDesktop?: DesktopBridge }).ddnDesktop ?? null;
 /** The agent's port arrives from the preload by a window message; calls made before it are queued. */
@@ -930,7 +936,7 @@ async function renderNow() {
     ui("about-storage").textContent = st.persistent ? t("status.persistent") : t("status.cache");
     ui("about-storage-t").textContent = st.persistent ? t("status.persistent.t") : t("status.cache.t");
     ui("about-device").textContent = st.deviceId ?? "-";
-    await Promise.all([renderShares(), renderStorage(), renderSecurity(), renderDiagnostics(), channelsUi.paintStorage(wh)]);
+    await Promise.all([renderShares(), renderStorage(), renderSecurity(), renderDiagnostics(), renderDesktopApp(), channelsUi.paintStorage(wh)]);
     return;
   }
 
@@ -2206,6 +2212,52 @@ function renderNetwork() {
   void paintConcurrency();
   void core.netStatus().then(paintNetSettings, () => null);
 }
+/** Settings → Desktop app (only in the desktop app): version and updates, autostart, downloads folder, key storage. */
+async function renderDesktopApp() {
+  if (!desktop) return;
+  $("app-section").hidden = false;
+  const [st, caps] = await Promise.all([desktop.updates.settings(), core.capabilities()]);
+  $<HTMLInputElement>("app-check-updates").checked = st.checkUpdates;
+  $<HTMLInputElement>("app-autostart").checked = st.autostart;
+  $("app-downloads").textContent = st.downloadsDir;
+  $("app-keys-warn").hidden = caps.keyProtection !== "file";
+  await paintUpdate(false);
+}
+async function paintUpdate(manual: boolean) {
+  if (!desktop) return;
+  if (manual) $("app-version").textContent = t("app.checking");
+  const u = await desktop.updates.check().catch(() => null);
+  if (!u) return;
+  $("app-version").textContent = t("app.version", { v: u.current.version, build: u.current.build }) + (manual && !u.available ? ` · ${t("app.none")}` : "");
+  const has = !!u.available;
+  $("app-update").hidden = !has;
+  $("app-update-chip").hidden = !has;
+  $("app-download").hidden = !has;
+  if (u.available) $("app-update-text").textContent = t("app.new", { build: u.available.build || u.available.commit.slice(0, 7), date: u.available.publishedAt ? fmtDate(Date.parse(u.available.publishedAt), {}) : "" });
+}
+function wireDesktopApp() {
+  if (!desktop) return;
+  const d = desktop;
+  $("app-check").onclick = (e) => void act(e.currentTarget as HTMLElement, () => paintUpdate(true));
+  $("app-download").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      const r = await d.updates.download();
+      const hint = $("app-update-hint");
+      hint.textContent = t("app.downloaded", { path: r.path, hint: r.hint }) + (r.busy ? ` ${t("app.busy")}` : "");
+      hint.hidden = false;
+      const open = $("app-open");
+      open.hidden = false;
+      open.onclick = () => d.updates.open(r.path);
+    });
+  $<HTMLInputElement>("app-check-updates").onchange = (e) => void d.updates.settings({ checkUpdates: (e.currentTarget as HTMLInputElement).checked });
+  $<HTMLInputElement>("app-autostart").onchange = (e) => void d.updates.settings({ autostart: (e.currentTarget as HTMLInputElement).checked });
+  $("app-downloads-pick").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      const dir = await d.pickFolder();
+      if (dir) $("app-downloads").textContent = (await d.updates.settings({ downloadsDir: dir })).downloadsDir;
+    });
+}
+
 async function renderDiagnostics() {
   renderNetwork();
   const st = await core.transferLogStatus().catch(() => null);
@@ -2815,6 +2867,7 @@ async function main() {
   features = await core.features();
   await core.setShowUnavailable(storedShowUnavailable());
   wireSearch();
+  wireDesktopApp();
   wireSignedOut(server);
   wireKit();
   wireHooks();

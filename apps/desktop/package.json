@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "tsx build.ts && electron .",
     "smoke": "tsx build.ts && tsx test/smoke.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "package": "tsx package.ts"
   },
   "devDependencies": {
     "electron": "45.0.0",

@@ -27,6 +27,12 @@ contextBridge.exposeInMainWorld("ddnDesktop", {
   showInFolder: (path: string) => ipcRenderer.send("ddn:show-in-folder", String(path)),
   pickFolder: () => ipcRenderer.invoke("ddn:pick-folder") as Promise<string | null>,
   firstAccountMade: () => ipcRenderer.invoke("ddn:first-account-made"),
+  updates: {
+    check: () => ipcRenderer.invoke("ddn:update-check"),
+    download: () => ipcRenderer.invoke("ddn:update-download"),
+    settings: (patch?: { checkUpdates?: boolean; autostart?: boolean; downloadsDir?: string }) => ipcRenderer.invoke("ddn:app-settings", patch ?? {}),
+    open: (path: string) => ipcRenderer.send("ddn:open-path", String(path)),
+  },
   setup: {
     connect: (url: string) => ipcRenderer.invoke("ddn:setup-connect", String(url)),
     local: () => ipcRenderer.invoke("ddn:setup-local"),

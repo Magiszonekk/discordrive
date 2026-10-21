@@ -7,5 +7,5 @@
       "ddn:mode": ["../web-mo/src/modes/metadata-only.ts"]
     }
   },
-  "include": ["src", "test", "build.ts", "vitest.config.ts"]
+  "include": ["src", "test", "build.ts", "package.ts", "vitest.config.ts"]
 }

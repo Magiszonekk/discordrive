@@ -228,8 +228,10 @@ export interface NodePlatformOptions {
 }
 
 /** Files on this computer for the core: sources read on demand, downloads written at offsets. */
-export function nodeDiskFiles(downloadsDir: string): DiskFiles {
+export function nodeDiskFiles(dir: string): DiskFiles & { setDownloadsDir(d: string): void } {
+  let downloadsDir = dir;
   return {
+    setDownloadsDir: (d) => void (downloadsDir = d),
     downloadsDir: () => downloadsDir,
     async isDir(p) {
       return (await stat(p)).isDirectory();

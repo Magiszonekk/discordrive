@@ -35,6 +35,7 @@ export interface AgentInit {
 }
 
 const parent = process.parentPort;
+let setDownloadsDir: (d: string) => void = () => {};
 const ports = new Set<Port>();
 let core: AppCore | null = null;
 let ready: Promise<AppCore> | null = null;
@@ -90,6 +91,7 @@ async function start(init: AgentInit): Promise<AppCore> {
     sealer: init.sealer === "os" ? osSealer : undefined,
     serverUrl: init.serverUrl ? () => init.serverUrl : undefined,
   });
+  setDownloadsDir = (d) => platform.files?.setDownloadsDir?.(d);
   const c = new AppCore({ discordApiOrigin: init.discordApiOrigin }, platform);
   c.onEvent = (e) => {
     track(e);
@@ -142,6 +144,8 @@ parent?.on("message", (e) => {
     sealWait.delete(m.id);
     if (m.ok && m.data) w?.ok(new Uint8Array(m.data));
     else w?.err(new Error(m.error ?? "key store error"));
+  } else if (m?.type === "downloads-dir" && typeof (m as { dir?: unknown }).dir === "string") {
+    setDownloadsDir((m as { dir: string }).dir);
   } else if (m?.type === "pause") {
     // Tray: pause / resume every transfer. Requests wait at the network gate (as when offline) and
     // continue where they were; nothing is cancelled.
