@@ -136,7 +136,7 @@ describe("automatic pieces in flight", () => {
     net.tune.down.setCap(32);
     expect(net.tune.down.target).toBe(16);
     net.win.down.setMax(16);
-    net.win.down.fail(clock.t - 1);
+    for (let i = 0; i < 3; i++) (clock.t += 10, net.win.down.fail(clock.t - 1)); // a burst of errors
     expect(net.win.down.limit).toBe(8);
     expect(net.tune.down.target).toBe(8);
     expect(net.tune.down.changes.at(-1)?.why).toBe("errors");
@@ -323,4 +323,51 @@ describe("end to end on a fake Discord: slow link GET, narrow CDN", () => {
       await fake.close();
     }
   }, 60_000);
+});
+
+describe("upload: isolated network errors do not throttle it for good", () => {
+  /**
+   * 160 posts of 256 KiB to a fake Discord over HTTP that answers each post after 300 ms (the line is
+   * not the limit: more in flight = faster), automatic value, 8 channels. `drop`: post numbers whose
+   * connection the fake drops (the client sees "Failed to fetch" and retries).
+   */
+  async function run(drop: number[] | "burst", posts = 160): Promise<{ secs: number; limitEnd: number; target: number; cuts: number; ignored: number; minLimit: number }> {
+    const fake = new FakeDiscord();
+    const origin = await fake.listen();
+    fake.postDelayMs = 300;
+    try {
+      const hooks = Array.from({ length: 8 }, () => fake.addWebhook()).map((h) => ({ id: h.id, url: h.url, channelId: h.channelId }));
+      const clock: NetClock = { now: () => Date.now(), setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (h) => clearTimeout(h as never), random: Math.random };
+      const net = new NetControl({ clock, tune: { minSpanMs: 600, recheckMs: 600_000 }, window: { recoverMs: 1500 } });
+      const c = new MetadataClient({ device: { id: "d", name: "d" }, arbiter: new LocalArbiter(new Sequencer()), transport: new DiscordWebhookTransport({ apiOrigin: origin }), webhooks: hooks, chunkSize: 256 * 1024, pacer: new ChannelPacer({ perMin: 1e6, maxPerMin: 1e6, burst: 1e6 }), net, maxRetries: 10, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 50))) });
+      if (drop === "burst") {
+        // A weak link: from post 20 on, 3 of every 10 posts lose their connection (not in a row, so a
+        // retry, which gets a later number, usually goes through: the upload must still finish).
+        for (let k = 20; k < 600; k++) if ([0, 4, 7].includes(k % 10)) fake.dropPosts.add(k);
+      } else for (const k of drop) fake.dropPosts.add(k);
+      let minLimit = Infinity;
+      const iv = setInterval(() => (minLimit = Math.min(minLimit, net.win.up.limit)), 20);
+      const data = new Uint8Array(posts * 256 * 1024 - 7).map((_, i) => (i * 31) & 255);
+      const t0 = Date.now();
+      await c.upload(memorySource(data), "f.bin");
+      clearInterval(iv);
+      return { secs: (Date.now() - t0) / 1000, limitEnd: net.win.up.limit, target: net.tune.up.target, cuts: net.win.up.cuts, ignored: net.win.up.ignored, minLimit };
+    } finally {
+      await fake.close();
+    }
+  }
+
+  it("~2 dropped posts per 100 on a fast line: the window stays, speed ≥ 90 % of the run without drops; a real burst still cuts", async () => {
+    const clean = await run([]);
+    const two = await run([37, 98, 141]); // ~2 per 100 posts: 3 drops in 160
+    expect(two.cuts).toBe(0);
+    expect(two.ignored).toBe(3);
+    expect(two.minLimit).toBe(clean.minLimit);
+    expect(two.limitEnd).toBeGreaterThanOrEqual(8);
+    // ≥ 90 % of the clean run (each dropped post costs its retry back-off; the rest runs at full width)
+    expect(clean.secs / two.secs).toBeGreaterThanOrEqual(0.9);
+    const weak = await run("burst");
+    expect(weak.cuts).toBeGreaterThanOrEqual(1);
+    expect(weak.minLimit).toBeLessThan(clean.minLimit);
+  }, 120_000);
 });

@@ -15,10 +15,10 @@ function sink(): ByteSink & { all(): Uint8Array } {
   const parts: Uint8Array[] = [];
   return { write: async (d) => void parts.push(new Uint8Array(d)), all: () => Buffer.concat(parts) };
 }
-function setup(o: { metered?: boolean; maxRetries?: number; downloadConcurrency?: number } = {}) {
+function setup(o: { metered?: boolean; maxRetries?: number; downloadConcurrency?: number; spanMs?: number } = {}) {
   const t = new MemoryTransport();
   const hooks = Array.from({ length: 2 }, (_, i) => ({ id: `15500000000000090${i}`, url: `mem://hook/${i}`, channelId: `chan-${i}` }));
-  const net = new NetControl({ metered: () => !!o.metered, gate: { baseMs: 5, maxMs: 40 } });
+  const net = new NetControl({ metered: () => !!o.metered, gate: { baseMs: 5, maxMs: 40 }, ...(o.spanMs ? { window: { spanMs: o.spanMs } } : {}) });
   const c = new MetadataClient({ device: { id: "dev-n", name: "n" }, arbiter: new LocalArbiter(new Sequencer()), transport: t, webhooks: hooks, chunkSize: 1000, pacer: new ChannelPacer({ perMin: 1e6, maxPerMin: 1e6, burst: 1e6 }), downloadConcurrency: o.downloadConcurrency ?? 8, maxRetries: o.maxRetries ?? 2, sleep: async (ms) => void (await new Promise((r) => setTimeout(r, Math.min(ms, 5)))), net });
   return { t, c, net };
 }
@@ -66,8 +66,9 @@ describe("weak and lost network (client)", () => {
     expect(net.gate.probes).toBeGreaterThan(0);
   });
 
-  it("the window limits the pieces in flight after network errors (8 → ≤ 4)", async () => {
-    const { t, c, net } = setup();
+  it("one network error among successes leaves the window alone; a bad spell (most requests fail) cuts it", async () => {
+    // The burst rule looks at the last spanMs (15 s in the app); this test runs in milliseconds.
+    const { t, c, net } = setup({ spanMs: 300 });
     const up = await c.upload(memorySource(data(40_000)), "f.bin");
     const orig = t.fetchCdn.bind(t);
     let inFlight = 0;
@@ -75,7 +76,7 @@ describe("weak and lost network (client)", () => {
     let n = 0;
     t.fetchCdn = async (u) => {
       n++;
-      if (n === 3) throw new TypeError("Failed to fetch"); // one network error early
+      if (n === 3) throw new TypeError("Failed to fetch"); // one isolated network error early
       inFlight++;
       if (net.win.down.cuts > 0) peakAfter = Math.max(peakAfter, inFlight);
       await new Promise((r) => setTimeout(r, 3));
@@ -83,9 +84,24 @@ describe("weak and lost network (client)", () => {
       return orig(u);
     };
     await c.download(up.nodeId, sink());
-    expect(net.win.down.cuts).toBe(1);
+    expect(net.win.down.cuts).toBe(0);
+    expect(net.win.down.ignored).toBe(1);
+    expect(net.win.down.limit).toBe(8);
+    // A bad spell: two of every three requests lose the connection for a while → cut.
+    await new Promise((r) => setTimeout(r, 400)); // the first download's successes are out of the window
+    n = 0;
+    t.fetchCdn = async (u) => {
+      n++;
+      if (n >= 3 && n <= 14 && n % 3 !== 0) throw new TypeError("Failed to fetch");
+      inFlight++;
+      if (net.win.down.cuts > 0) peakAfter = Math.max(peakAfter, inFlight);
+      await new Promise((r) => setTimeout(r, 3));
+      inFlight--;
+      return orig(u);
+    };
+    await c.download(up.nodeId, sink());
+    expect(net.win.down.cuts).toBeGreaterThanOrEqual(1);
     expect(peakAfter).toBeLessThanOrEqual(8);
-    expect(net.win.down.limit).toBeGreaterThan(4); // grew back with the successes
   });
 
   it("an HTTP error is not 'no network': it uses the retries and fails the file", async () => {

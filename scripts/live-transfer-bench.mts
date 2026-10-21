@@ -5,7 +5,15 @@
 // this checkout, so the same command measures the code before and after a change.
 //
 //   npx tsx scripts/live-transfer-bench.mts webhooks.txt [--mb 1000] [--down auto,16] [--up auto]
-//        [--files 1] [--out dir] [--label before]
+//        [--files 1] [--out dir] [--label before] [--speedtest] [--seed 1] [--drop-posts 20,40]
+//
+// The file is generated on the fly from a seed (no Blob of the whole size: a 1 GB Blob is written to the
+// temporary browser profile's disk and a system Chromium/Brave failed to read it back). --speedtest
+// first measures the line itself (speed.cloudflare.com, 8 streams, ~8 s each way, from this process),
+// so the result can be compared with what the line does. CHROMIUM_PATH = the browser to run.
+// --drop-posts 20,40: those webhook posts (numbers in the order they are sent) fail with "Failed to fetch"
+// before leaving the page, as a connection reset would; the client retries them. Shows what isolated
+// network errors do to the speed (the same posts fail in a run of any version).
 //
 // webhooks.txt: webhook URLs of a TEST server, one per line. Every posted message is deleted at the
 // end. The output (summary JSON, transfer logs, report text) has no webhook tokens or CDN links.
@@ -25,7 +33,7 @@ const arg = (k: string, d: string) => {
 };
 const file = argv.find((a, i) => !a.startsWith("--") && !argv[i - 1]?.startsWith("--"));
 if (!file) {
-  console.error("usage: npx tsx scripts/live-transfer-bench.mts webhooks.txt [--mb 1000] [--down auto,16] [--up auto] [--out dir] [--label x]");
+  console.error("usage: npx tsx scripts/live-transfer-bench.mts webhooks.txt [--mb 1000] [--down auto,16] [--up auto] [--files 1] [--out dir] [--label x] [--speedtest] [--seed 1]");
   process.exit(2);
 }
 const MB = Number(arg("mb", "1000"));
@@ -36,25 +44,50 @@ const UP = arg("up", "auto");
 const FILES = Math.max(1, Number(arg("files", "1")));
 const OUT = arg("out", "");
 const LABEL = arg("label", "run");
+const SEED = Number(arg("seed", "1")) >>> 0;
+const SPEEDTEST = argv.includes("--speedtest");
+const DROP = arg("drop-posts", "").split(",").map(Number).filter((n) => n > 0);
 const HOOK_RE = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/(\d+)\/[A-Za-z0-9_.-]+$/;
 const hooks = readFileSync(file, "utf8").split(/\s+/).filter((l) => HOOK_RE.test(l)).map((url) => ({ id: HOOK_RE.exec(url)![1]!, url }));
 if (!hooks.length) throw new Error("no webhook URLs in file");
 const log = (s: string) => console.error(`[${new Date().toISOString().slice(11, 19)}] ${s}`);
 
 /** Runs in the page: upload `mb` MB, then each download setting; returns the transfer log and the placements to delete. */
-const runSrc = async (D: never, hooks: { id: string; url: string }[], mb: number, up: string, down: string[], files: number) => {
+const runSrc = async (D: never, hooks: { id: string; url: string }[], mb: number, up: string, down: string[], files: number, seed: number, drop: number[]) => {
   const DD = D as unknown as typeof import("@ddv4/metadata-client") & { Sequencer: new () => never };
-  const size = Math.round(mb * 1e6);
-  // Built from 16 MB parts (no second copy of the whole file in the page: small machines run this too).
-  let parts: Uint8Array[] | null = [];
-  for (let o = 0; o < size; o += 16e6) {
-    const part = new Uint8Array(Math.min(16e6, size - o));
-    for (let k = 0; k < part.length; k += 65536) crypto.getRandomValues(part.subarray(k, Math.min(part.length, k + 65536)));
-    parts.push(part);
+  if (drop.length) {
+    const real = globalThis.fetch.bind(globalThis);
+    let posts = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "POST" && /\/webhooks\//.test(String(input)) && drop.includes(++posts)) {
+        await new Promise((r) => setTimeout(r, 300));
+        throw new TypeError("Failed to fetch");
+      }
+      return real(input, init);
+    }) as typeof fetch;
   }
-  const blob = new Blob(parts as BlobPart[]);
-  parts = null;
-  const src = { size: blob.size, read: async (o: number, l: number) => new Uint8Array(await blob.slice(o, o + l).arrayBuffer()) };
+  const size = Math.round(mb * 1e6);
+  // Bytes computed from the seed and the offset (xorshift per 4-byte word): any range at any time, the same
+  // bytes every run, nothing kept in memory or on disk. Not compressible enough to matter (encrypted anyway).
+  const word = (i: number) => {
+    let x = (i ^ seed ^ 0x9e3779b9) >>> 0;
+    x ^= x << 13;
+    x >>>= 0;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    return (Math.imul(x >>> 0, 0x2545f491) ^ i) >>> 0;
+  };
+  const src = {
+    size,
+    read: async (o: number, l: number) => {
+      const n = Math.max(0, Math.min(l, size - o));
+      // Whole words (little-endian, like the byte order of word() below), then the requested bytes.
+      const w0 = Math.floor(o / 4);
+      const words = new Uint32Array(Math.ceil((o + n) / 4) - w0);
+      for (let k = 0; k < words.length; k++) words[k] = word(w0 + k);
+      return new Uint8Array(words.buffer, o - w0 * 4, n).slice();
+    },
+  };
   const mem = new DD.MemoryLogSink();
   const c = new DD.MetadataClient({
     device: { id: "bench", name: "bench" },
@@ -117,6 +150,42 @@ rmSync(entry);
 const page = createServer((_q, r) => (r.writeHead(200, { "content-type": "text/html" }), r.end("<!doctype html><title>live bench</title>")));
 await new Promise<void>((r) => page.listen(0, "127.0.0.1", r));
 const pageOrigin = `http://127.0.0.1:${(page.address() as { port: number }).port}`;
+/** The line itself (speed.cloudflare.com, like scripts/conn-bench.mjs): MB/s each way, from this process. */
+async function speedtest(dir: "down" | "up", streams = 8, seconds = 8): Promise<number> {
+  const end = Date.now() + seconds * 1000;
+  const t0 = Date.now();
+  let bytes = 0;
+  const chunk = new Uint8Array(25_000_000);
+  await Promise.all(
+    Array.from({ length: streams }, async () => {
+      while (Date.now() < end) {
+        try {
+          if (dir === "down") {
+            const r = await fetch("https://speed.cloudflare.com/__down?bytes=25000000", { signal: AbortSignal.timeout(Math.max(1000, end - Date.now())) });
+            if (!r.ok || !r.body) break;
+            for await (const c of r.body as unknown as AsyncIterable<Uint8Array>) {
+              bytes += c.length;
+              if (Date.now() >= end) break;
+            }
+          } else {
+            const r = await fetch("https://speed.cloudflare.com/__up", { method: "POST", body: chunk, headers: { "content-type": "application/octet-stream" }, signal: AbortSignal.timeout(60_000) });
+            await r.arrayBuffer();
+            if (r.ok) bytes += chunk.length;
+          }
+        } catch {
+          if (dir === "down") break;
+        }
+      }
+    }),
+  );
+  return Math.round((bytes / 1e6 / ((Date.now() - t0) / 1000)) * 10) / 10;
+}
+let line: { downMBps: number; upMBps: number } | null = null;
+if (SPEEDTEST) {
+  line = { downMBps: await speedtest("down"), upMBps: await speedtest("up") };
+  log(`line (speed.cloudflare.com, 8 streams): download ${line.downMBps} MB/s, upload ${line.upMBps} MB/s`);
+}
+
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 type Res = { out: unknown; log: string; placements: { hook: string; msg: string }[] };
 let res = null as Res | null;
@@ -127,11 +196,11 @@ try {
   await p.addScriptTag({ content: bundle.outputFiles[0]!.text });
   log(`${LABEL}: ${MB} MB over ${hooks.length} channel(s), upload ${UP}, downloads ${DOWN.join(",")}`);
   res = (await p.evaluate(
-    async ({ src, hooks, mb, up, down, files }) => {
+    async ({ src, hooks, mb, up, down, files, seed, drop }) => {
       const D = (globalThis as unknown as { DDN: never }).DDN;
-      return (new Function(`return (${src})`)() as (...a: unknown[]) => Promise<unknown>)(D, hooks, mb, up, down, files);
+      return (new Function(`return (${src})`)() as (...a: unknown[]) => Promise<unknown>)(D, hooks, mb, up, down, files, seed, drop);
     },
-    { src: runSrc.toString(), hooks, mb: MB, up: UP, down: DOWN, files: FILES },
+    { src: runSrc.toString(), hooks, mb: MB, up: UP, down: DOWN, files: FILES, seed: SEED, drop: DROP },
   )) as Res;
 } finally {
   await browser.close();
@@ -153,7 +222,7 @@ for (const pl of res?.placements ?? []) {
   }
 }
 const rep = buildReport(parseLines(res?.log ?? "").events, { bucketS: 5 });
-const summary = { label: LABEL, at: new Date().toISOString(), mb: MB, channels: hooks.length, result: res?.out, deleted, posted: res?.placements.length ?? 0, report: rep.summary };
+const summary = { label: LABEL, at: new Date().toISOString(), mb: MB, channels: hooks.length, line, result: res?.out, deleted, posted: res?.placements.length ?? 0, report: rep.summary };
 log(JSON.stringify(res?.out));
 log(`deleted ${deleted}/${res?.placements.length ?? 0} messages`);
 if (OUT) {
