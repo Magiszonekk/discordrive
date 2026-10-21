@@ -919,3 +919,14 @@ input.switch:focus-visible { outline: 2px solid var(--color-focus); outline-offs
 @media (prefers-reduced-motion: reduce) {
   input.switch, input.switch::before, label.dapp-row { transition: none; }
 }
+
+/* Accent colour swatches (Settings -> Appearance). Logic: theme.js (ddnAccent), ui.ts paintAccent. */
+.swatches { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: .5rem; }
+.swatch { display: inline-flex; flex-direction: column; align-items: center; gap: .35rem; background: none; border: 0; padding: 0; cursor: pointer; color: var(--color-ink-2); font-size: .75rem; }
+.swatch .dot { width: 2rem; height: 2rem; border-radius: 999px; background: var(--sw); box-shadow: inset 0 0 0 1px color-mix(in oklch, black 12%, transparent); }
+.swatch[aria-checked="true"] .dot { outline: 2px solid var(--color-ink); outline-offset: 2px; }
+.swatch[aria-checked="true"] { color: var(--color-ink); }
+.swatch.custom input[type="color"] { width: 2rem; height: 2rem; padding: 0; border: 0; border-radius: 999px; background: none; cursor: pointer; }
+.swatch.custom input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.swatch.custom input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 999px; }
+.swatch.custom[aria-checked="true"] input { outline: 2px solid var(--color-ink); outline-offset: 2px; }

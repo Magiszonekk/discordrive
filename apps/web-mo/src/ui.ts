@@ -2817,7 +2817,38 @@ function paintModes() {
     b.setAttribute("aria-checked", String(b.dataset.mode === cur));
   });
 }
+type Accent = { get(): string; set(v: string): void; presets: { name: string; accent: string }[] };
+const ddnAccent = () => (window as unknown as { ddnAccent?: Accent }).ddnAccent ?? null;
+/** Settings -> Appearance: accent presets and a custom colour (cobalt/theme.js applies and keeps it). */
+function paintAccent() {
+  const a = ddnAccent();
+  const box = $("accent");
+  if (!a || !box) return;
+  if (!box.childElementCount) {
+    for (const p of a.presets) {
+      const b = h("button", { type: "button", role: "radio", class: "swatch", "data-accent": p.name, style: `--sw:${p.accent}` }, h("span", { class: "dot" }), h("span", { class: "sw-l" }, ""));
+      b.onclick = () => (a.set(p.name), paintAccent());
+      box.append(b);
+    }
+    const pick = h("input", { type: "color", "data-ddn": "accent-custom" }) as HTMLInputElement;
+    pick.oninput = () => (a.set(pick.value), paintAccent());
+    box.append(h("label", { class: "swatch custom", "data-accent": "custom" }, pick, h("span", { class: "sw-l", "data-i18n": "accent.custom" }, "")));
+  }
+  const cur = a.get();
+  box.querySelectorAll<HTMLElement>("[data-accent]").forEach((b) => {
+    const name = b.dataset.accent!;
+    const on = name === "custom" ? /^#/.test(cur) : name === cur;
+    b.setAttribute("aria-checked", String(on));
+    const l = b.querySelector<HTMLElement>(".sw-l");
+    if (l) l.textContent = t(`accent.${name}`);
+    if (name !== "custom") b.setAttribute("aria-label", t(`accent.${name}`));
+  });
+  if (/^#/.test(cur)) box.querySelector<HTMLInputElement>("[data-ddn=accent-custom]")!.value = cur;
+}
+
 function wireTheme() {
+  paintAccent();
+  document.addEventListener("ddn-accent", () => paintAccent());
   document.addEventListener("click", (e) => {
     const b = (e.target as Element | null)?.closest<HTMLButtonElement>("[data-ddn-ui=modes] button[data-mode], [data-ddn-ui=mode-choice] button[data-mode]");
     if (b) ddnTheme()?.set(b.dataset.mode as ThemeMode);

@@ -303,6 +303,26 @@ try {
   await p.reload();
   await p.waitForSelector("body[data-ready='1']");
   r.settingsSurvivesReload = new URL(p.url()).pathname === "/settings" && (await p.isVisible("[data-page=settings] [data-ddn=channels-toggle]"));
+  // Accent colour (Appearance): a preset recolours the main buttons, survives a reload, a custom colour too, Cobalt back.
+  {
+    const accentOf = () => p.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--color-accent").trim());
+    const before = await accentOf();
+    await p.click("[data-ddn=accent] [data-accent=emerald]");
+    const emerald = await accentOf();
+    await p.reload();
+    await p.waitForSelector("body[data-ready='1']");
+    const kept = await accentOf();
+    const checked = await p.getAttribute("[data-ddn=accent] [data-accent=emerald]", "aria-checked");
+    await p.evaluate(() => {
+      const i = document.querySelector<HTMLInputElement>("[data-ddn=accent-custom]")!;
+      i.value = "#c0392b";
+      i.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const custom = await accentOf();
+    await p.click("[data-ddn=accent] [data-accent=cobalt]");
+    const back = await accentOf();
+    r.accent = { before, emerald, kept, checked, custom, back, presets: await p.$$eval("[data-ddn=accent] [data-accent]", (e) => e.length) };
+  }
   await openChannels(p);
   if (!SERVER_SIDE && hookUrls[1]) {
     // Type the second one key by key (not paste) and add with the button.
@@ -1830,6 +1850,9 @@ try {
         resumeOk
       );
     })(),
+    accent: ((a) => a.presets === 7 && a.emerald !== a.before && /152/.test(a.emerald) && a.kept === a.emerald && a.checked === "true" && a.custom === "#c0392b" && a.back === a.before)(
+      r.accent as { before: string; emerald: string; kept: string; checked: string; custom: string; back: string; presets: number },
+    ),
     netSection: (() => {
       const n = r.netSection as Record<string, unknown> | undefined;
       return !!n && n.visible === true && n.save === true && n.guard === true && n.conc === true && n.notInDiag === true && /Network|Sieć/.test(String(n.title));
