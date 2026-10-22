@@ -592,3 +592,33 @@ serwer trzyma dodatkowo, dla tego jednego konta:
   fragment jest ≥ 1,2 × szybszy niż wszystko na starym połączeniu razem (przy zatkanym 14 MB/s vs ~75
   wychodzi kilkanaście razy). Stare żądania kończą się na starym połączeniu. Kolejna próba ≥ 5 min.
   Koszt: 0 dodatkowych bajtów (testy: na słabym/taryfowym/wolnym łączu 0 żądań drugim połączeniem).
+
+## Zaszyfrowane miniatury i podglądy (format)
+
+- Robi je **klient przy wysyłaniu** (serwer nie widzi treści): w przeglądarce i w oknie aplikacji desktopowej
+  canvas (`createImageBitmap` z orientacją EXIF) i klatka `<video>` z 10 % długości; WebP (JPEG, gdy
+  przeglądarka nie koduje WebP). Dwa rozmiary: **miniatura** — krótszy bok 320 px, dłuższy maks. 640,
+  ≤ 48 KB; **podgląd** — dłuższy bok 1280 px, ≤ 400 KB (pomiar na 10 zdjęciach 8–24 Mpx: miniatura
+  mediana 9 KB, maks. 15 KB; podgląd mediana 76 KB, maks. 304 KB). Ponad limit: niższa jakość, potem
+  mniejszy wymiar. Nie dało się zdekodować (HEIC w Chrome, uszkodzony plik): plik idzie bez miniatur.
+- **Gdzie:** obok manifestu, bez zmiany drzewa, manifestu i logu (reguły bez zmian, `RULES_VERSION` 3).
+  metadata only: dodatkowe załączniki **tej samej wiadomości** co manifest (0 nowych wiadomości; sprawdzone
+  na Discordzie: wiadomość z 3 załącznikami, GET zwraca wszystkie, PATCH z listą zachowanych ID dokłada
+  nowe bez zmiany starych). e2ee/plain: bloby `x<nazwa>` tego samego uploadu na instancji
+  (`PUT /v1/uploads/<U>/blobs/x<nazwa>`, ≤ 1 MiB, ≤ 8 na upload; `POST /v1/blobs/extras`).
+- **Szyfrowanie:** klucz z klucza pliku (HKDF, info `ddv4-file-preview-v1`), AES-256-GCM jak fragmenty;
+  nazwa załącznika = HMAC(klucz nazw z HKDF `ddv4-file-preview-name-v1`, rodzaj), więc z nazwy nie
+  widać, co jest miniaturą, a dwa urządzenia dokładające ten sam rodzaj wybierają tę samą nazwę. W treści:
+  wersja formatu, rodzaj (sprawdzany przy odczycie), wymiary, typ obrazu.
+- **Zgodność:** starsze urządzenie nie patrzy na dodatkowe załączniki (pobiera plik jak dotąd); nowsze
+  na starym pliku nie znajduje miniatur i pokazuje ikonę typu. Testy: `metadata-client/test/previews.test.ts`
+  (stary klient + nowe dane, nowy klient + stare dane), `server-discord` (e2ee), `check.ts` (3 tryby).
+- **Uzupełnianie:** Ustawienia → Miejsce → „Utwórz miniatury dla istniejących zdjęć”: pliki bez miniatur
+  pobierane po kolei, obraz robi strona, zapis jako dopisanie załączników (żadnej operacji w logu).
+  Wznawialne (lokalna tabela `previews`), plik, którego nie da się zdekodować, nie jest próbowany ponownie;
+  na łączu taryfowym tylko ręcznie.
+- **Sprzątanie / przenoszenie:** usunięcie wiadomości manifestu usuwa miniatury (metadata only), instancja
+  usuwa bloby uploadu razem (e2ee/plain); przeniesienie kanału kopiuje je razem z manifestem.
+- **plain:** serwerowe miniatury (ffmpeg) zostają jako zapas dla plików bez klienckich; klient robi swoje
+  także w plain (te same kafelki we wszystkich trybach, miniatury także dla wideo z kodekami, których
+  serwer nie ma). Do rozważenia później: wyłączenie serwerowych, gdy wszystkie pliki mają klienckie.
