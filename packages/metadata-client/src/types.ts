@@ -31,6 +31,14 @@ export interface MessageAttachment {
   id: string;
   url: string;
   size: number;
+  /** The attachment's file name (extra attachments next to a manifest are told apart by it). */
+  filename?: string;
+}
+
+/** One more file in a message (previews next to a manifest). */
+export interface ExtraFile {
+  filename: string;
+  data: Uint8Array;
 }
 
 /**
@@ -48,6 +56,16 @@ export interface ReqTiming {
 export interface WebhookTransport {
   /** POST one file as a new message (`?wait=true`). */
   postFile(hook: WebhookRef, data: Uint8Array, filename: string, signal?: AbortSignal, timing?: ReqTiming): Promise<PostedAttachment>;
+  /**
+   * POST a file plus `extra` files as ONE message (at most 9 extra: Discord takes 10 attachments). The
+   * result is the first file's attachment; the extra ones come back in `extras` (same order).
+   */
+  postFiles?(hook: WebhookRef, data: Uint8Array, filename: string, extra: ExtraFile[], signal?: AbortSignal, timing?: ReqTiming): Promise<PostedAttachment & { extras: MessageAttachment[] }>;
+  /**
+   * Add files to a message sent by this webhook, keeping every attachment it has (their IDs and bytes
+   * do not change). Returns all attachments after the edit.
+   */
+  addFiles?(hook: WebhookRef, messageId: string, keep: string[], extra: ExtraFile[]): Promise<MessageAttachment[]>;
   /** GET a message sent by this webhook; returns fresh signed CDN links. */
   getAttachments(hook: WebhookRef, messageId: string, timing?: ReqTiming): Promise<MessageAttachment[]>;
   /** Download a CDN link; `lane` = which connection (0 = default fetch, ≥1 = setCdnLanes). */

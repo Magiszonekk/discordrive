@@ -132,6 +132,7 @@ export class SqlIndexStore implements IndexStore {
       CREATE INDEX IF NOT EXISTS pieces_loc ON pieces(loc, upload_id);
       CREATE TABLE IF NOT EXISTS piece_src (upload_id TEXT PRIMARY KEY, manifest_ref TEXT NOT NULL, complete INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS unavail (upload_id TEXT PRIMARY KEY, locs TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS previews (manifest_ref TEXT PRIMARY KEY, v TEXT NOT NULL, at INTEGER NOT NULL);
     `);
     if (from < 2) {
       this.atomically(() => {
@@ -157,6 +158,36 @@ export class SqlIndexStore implements IndexStore {
       CREATE INDEX IF NOT EXISTS nodes_by_size ON nodes(parent_id, fo, sz, name_key, id);
       CREATE INDEX IF NOT EXISTS nodes_by_date ON nodes(parent_id, fo, mt, name_key, id);
     `);
+  }
+
+  /**
+   * What this device learned about a version's previews (a cache, not state: losing it costs one look
+   * at the manifest's message): JSON of the kinds found with their placements, "{}" = none known,
+   * "-" = none and this device could not make any (the backfill does not try it again).
+   */
+  previewInfo(manifestRef: string): { v: string; at: number } | undefined {
+    return this.sql.get<{ v: string; at: number }>("SELECT v, at FROM previews WHERE manifest_ref = ?", [manifestRef]);
+  }
+  setPreviewInfo(manifestRef: string, v: string, at: number): void {
+    this.sql.run("INSERT INTO previews (manifest_ref, v, at) VALUES (?, ?, ?) ON CONFLICT(manifest_ref) DO UPDATE SET v = excluded.v, at = excluded.at", [manifestRef, v, at]);
+  }
+  /** Current files (not in the trash) whose name matches, without known previews, after `after` (upload ID order). */
+  filesWithoutPreviews(nameLike: RegExp, after: string, limit: number): { nodeId: string; uploadId: string; manifestRef: string; size: number; name: string }[] {
+    const out: { nodeId: string; uploadId: string; manifestRef: string; size: number; name: string }[] = [];
+    for (let from = after; out.length < limit; ) {
+      const rows = this.sql.all<{ node_id: string; upload_id: string; manifest_ref: string; size: number; rec: string }>(
+        "SELECT f.node_id, f.upload_id, f.manifest_ref, f.size, n.rec FROM files f JOIN nodes n ON n.id = f.node_id LEFT JOIN previews p ON p.manifest_ref = f.manifest_ref WHERE f.trashed = 0 AND f.upload_id > ? AND (p.manifest_ref IS NULL OR p.v = '{}') ORDER BY f.upload_id LIMIT 500",
+        [from],
+      );
+      if (!rows.length) break;
+      for (const r of rows) {
+        const name = (JSON.parse(r.rec) as { name: string }).name;
+        if (nameLike.test(name)) out.push({ nodeId: r.node_id, uploadId: r.upload_id, manifestRef: r.manifest_ref, size: Number(r.size), name });
+        if (out.length >= limit) break;
+      }
+      from = rows.at(-1)!.upload_id;
+    }
+    return out;
   }
 
   /**

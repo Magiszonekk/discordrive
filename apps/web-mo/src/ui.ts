@@ -17,6 +17,7 @@ import { createPreview, type PreviewRow } from "./preview.js";
 import { createChannelsUi, storedShowUnavailable } from "./channels-ui.js";
 import { createAdminUi } from "./admin-ui.js";
 import { SpeedMeter, fmtDuration } from "./speed.js";
+import { makePreviews, previewSource } from "./thumbs.js";
 import type { UploadStages } from "@ddv4/metadata-client";
 
 /** Mode this bundle was built for (build.ts define). */
@@ -86,6 +87,7 @@ function onCoreEvent(e: CoreEvent) {
   else if (e.type === "changed") void render();
   else if (e.type === "notices") showNotices(e.notices);
   else if (e.type === "cleanup" && route.name === "settings") void renderStorage();
+  else if (e.type === "backfill") paintBackfillState(e.state);
   else if (e.type === "channel-move") channelsUi.onMoveEvent(e.status);
   else if (e.type === "net") paintNet(e.state);
   else if (e.type === "net-baseline") storeNet({ baseline: e.data });
@@ -635,7 +637,7 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
   } else {
     const [, label, tone] = typeOf(r.name);
     const badge = h("span", { class: `badge ${tone}` }, label);
-    if (features.thumbnails && tone === "media") void showThumb(badge, r.id);
+    if (tone === "media" && !r.unavailable?.length) showThumb(badge, r.id, r.modifiedAt ?? 0);
     const open = h("span", { title: r.name, role: "button", tabindex: "0", "data-ddn": "preview-open", "aria-label": t("pv.open.aria", { name: r.name }) }, r.name);
     open.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") {
@@ -709,22 +711,43 @@ async function shareRow(r: { id: string; name: string }) {
 const canShare = (r: { kind: string; unavailable?: string[] }) => r.kind === "file" && sharesOn && !inRecovered() && !r.unavailable?.length;
 const FINE_POINTER = matchMedia("(pointer: fine)").matches;
 
-/** plain: replace the type badge with the server's thumbnail once it exists (cached per file). */
+/**
+ * Replace a media file's type badge with its thumbnail: the encrypted one stored with the file (every
+ * mode), else plain's server thumbnail. Loaded only when the row is near the screen; kept per file for
+ * this page (blob URL) and in the browser's cache storage across reloads (thumbs-cache below).
+ */
 const thumbs = new Map<string, Promise<string | null>>();
 const thumbTries = new Map<string, number>();
-async function showThumb(badge: HTMLElement, id: string) {
-  let p = thumbs.get(id);
+const thumbSeen = new IntersectionObserver(
+  (es) => {
+    for (const e of es) {
+      if (!e.isIntersecting) continue;
+      thumbSeen.unobserve(e.target);
+      const id = (e.target as HTMLElement).dataset.thumbFor;
+      if (id) void loadThumb(e.target as HTMLElement, id);
+    }
+  },
+  { rootMargin: "400px" },
+);
+/** `id@version time`: a new version of the file (same node) is another picture. */
+function showThumb(badge: HTMLElement, id: string, at: number) {
+  badge.dataset.thumbFor = `${id}@${at}`;
+  thumbSeen.observe(badge);
+}
+async function loadThumb(badge: HTMLElement, key: string) {
+  const id = key.slice(0, key.lastIndexOf("@"));
+  let p = thumbs.get(key);
   if (!p) {
-    p = core.thumbnail(id).then((b) => (b ? URL.createObjectURL(b) : null)).catch(() => null);
-    thumbs.set(id, p);
-    // Not ready yet (made in the background after the upload): forget the miss and render again soon.
+    p = cachedThumb(key).then((b) => (b ? URL.createObjectURL(b) : null)).catch(() => null);
+    thumbs.set(key, p);
+    // plain: the server makes its own in the background after the upload; ask again a few times.
     void p.then((u) => {
-      if (u) return;
+      if (u || !features.thumbnails) return;
       const tries = (thumbTries.get(id) ?? 0) + 1;
       thumbTries.set(id, tries);
       if (tries <= 10)
         setTimeout(() => {
-          thumbs.delete(id);
+          thumbs.delete(key);
           shownList = ""; // no row animation on this refresh
           void render();
         }, 2000 * tries);
@@ -732,6 +755,19 @@ async function showThumb(badge: HTMLElement, id: string) {
   }
   const url = await p;
   if (url && badge.isConnected) badge.replaceWith(Object.assign(h("img", { class: "thumb", alt: "", "data-ddn": "thumb" }), { src: url }));
+}
+/** Thumbnails kept by the browser (Cache Storage of this origin; the desktop window has its own). */
+const THUMB_CACHE = "ddn-thumbs-v1";
+async function cachedThumb(idAt: string): Promise<Blob | null> {
+  const id = idAt.includes("@") ? idAt.slice(0, idAt.lastIndexOf("@")) : idAt;
+  const key = `/__thumb/${encodeURIComponent(myAccount ?? "")}/${encodeURIComponent(idAt)}`;
+  // Cache Storage needs a secure origin with a scheme it supports (the desktop's app:// may not have it).
+  const c = typeof caches !== "undefined" ? await caches.open(THUMB_CACHE).catch(() => null) : null;
+  const hit = await c?.match(key).catch(() => undefined);
+  if (hit) return hit.blob();
+  const b = await core.preview(id, "t");
+  if (b && c) void c.put(key, new Response(b, { headers: { "content-type": b.type } })).catch(() => {});
+  return b;
 }
 
 async function openPlayer(id: string, name: string, size: number) {
@@ -774,7 +810,20 @@ const adminUi = createAdminUi({
 /** This account, and whether it has the admin flag (asked from the server; the server checks again on every admin call). */
 let myAccount: string | null = null;
 let isAdmin = false;
-const preview = createPreview({ core, features: () => features, download: (id, name) => download(id, name), error: (e) => toast(errText(e), "err") });
+const preview = createPreview({
+  // The preview asks for the low-resolution picture first: the encrypted one stored with the file, else
+  // (plain) the server's thumbnail.
+  core: {
+    list: (folder, after, limit, sort) => core.list(folder, after, limit, sort),
+    readRange: (id, a, b) => core.readRange(id, a, b),
+    download: (id) => core.download(id),
+    thumbnail: (id) => core.preview(id, "p").then((b) => b ?? core.preview(id, "t")),
+    streamUrl: (id) => core.streamUrl(id),
+  },
+  features: () => ({ ...features, thumbnails: true }),
+  download: (id, name) => download(id, name),
+  error: (e) => toast(errText(e), "err"),
+});
 function previewFile(r: PreviewRow) {
   preview.open(r, searchQ ? { rows: searchRows } : { folder: currentFolder(), sort });
 }
@@ -1242,7 +1291,7 @@ function paintFailed() {
  * One file of an upload batch: picked in the browser (a File), or a path on this computer (desktop app:
  * the agent reads it from disk; `folder` = the subfolders it goes into, for a dropped folder).
  */
-type UploadItem = { kind: "file"; f: File; name: string; size: number } | { kind: "path"; path: string; folder: string[]; name: string; size: number };
+type UploadItem = { kind: "file"; f: File; name: string; size: number } | { kind: "path"; path: string; folder: string[]; name: string; size: number; file?: File };
 
 async function uploadAll(files: File[], into?: string) {
   return uploadItems(files.map((f) => ({ kind: "file" as const, f, name: f.name, size: f.size })), into);
@@ -1332,7 +1381,11 @@ async function uploadItems(files: UploadItem[], into?: string) {
       meta();
     });
     try {
-      const r = f.kind === "file" ? await core.upload(f.f, f.name, folder, token, uploadResumeKey(folder, f.f)) : await core.uploadPath(f.path, f.folder, folder, token);
+      // Thumbnail + preview made here from the picked file while its fragments go out (never blocks it).
+      const src = f.kind === "file" ? f.f : f.file;
+      const pv = !!src && !!previewSource(f.name);
+      if (pv) void makePreviews(src!, f.name).then((imgs) => core.uploadPreviews(token, imgs), () => core.uploadPreviews(token, null));
+      const r = f.kind === "file" ? await core.upload(f.f, f.name, folder, token, uploadResumeKey(folder, f.f), pv) : await core.uploadPath(f.path, f.folder, folder, token, pv);
       state.className = "qstate done";
       state.textContent = t("queue.ok");
       if (r.resumed) state.title = t("queue.resumed", { n: r.resumed });
@@ -1385,7 +1438,7 @@ function wireFilesPage() {
     input.value = "";
     // Desktop: the agent reads the picked files from disk (resumable after a restart, nothing copied here).
     const paths = desktop ? desktop.pathsOf(files) : [];
-    if (desktop && paths.length === files.length) await uploadPathsFromDrop(paths);
+    if (desktop && paths.length === files.length) await uploadPathsFromDrop(paths, files);
     else await uploadAll(files);
   };
   wireQueue();
@@ -1413,7 +1466,7 @@ function wireFilesPage() {
     zone.classList.remove("over");
     const files = [...(e.dataTransfer?.files ?? [])];
     // Desktop: files and whole folders straight from disk (the agent reads them; nothing is copied here).
-    if (desktop) void uploadPathsFromDrop(desktop.pathsOf(files));
+    if (desktop) void uploadPathsFromDrop(desktop.pathsOf(files), files);
     else void uploadAll(files);
   });
   zone.onclick = () => {
@@ -1606,11 +1659,13 @@ function closeDownloads() {
  * Desktop: dropped files and folders are uploaded by the agent straight from disk, in the same queue panel
  * as files picked in the browser (one row per file, its progress, speed and cancel).
  */
-async function uploadPathsFromDrop(paths: string[]) {
+async function uploadPathsFromDrop(paths: string[], files: File[] = []) {
   if (!paths.length) return;
   try {
     const list = await core.listPaths(paths);
-    await uploadItems(list.map((x) => ({ kind: "path" as const, ...x })));
+    // A dropped / picked file (not a folder's content) is also here as a File: previews are made from it.
+    const byPath = new Map(paths.map((p, i) => [p, files[i]] as const));
+    await uploadItems(list.map((x) => ({ kind: "path" as const, ...x, file: byPath.get(x.path) })));
   } catch (e) {
     toast(errText(e), "err");
   }
@@ -2244,6 +2299,7 @@ function wireSelection() {
 // ── Settings → Storage (cleanup of the trash and of old fragments; / Q4) ──
 let storageSeq = 0;
 async function renderStorage() {
+  void paintBackfill();
   // Calls overlap (cleanup start/end events, renders): only the newest answer is painted.
   const seq = ++storageSeq;
   const st = await core.storageStatus().catch(() => null);
@@ -2280,6 +2336,54 @@ function wireStorage() {
       await render();
       toast(t("st.done", { n: r.purged + r.uploads }));
     });
+  $("thumbs-backfill").onclick = () => void runBackfill(true);
+  $("thumbs-backfill-stop").onclick = () => (backfillStop = true);
+}
+
+/**
+ * "Make thumbnails for existing photos": files without previews are downloaded one at a time, the
+ * pictures are made here (this page has the decoder) and stored next to them. Stops with the page; the
+ * core remembers what is done, so the next run continues. On a metered link only when started by hand.
+ */
+let backfillRunning = false;
+let backfillStop = false;
+async function runBackfill(manual: boolean) {
+  if (backfillRunning) return;
+  backfillRunning = true;
+  backfillStop = false;
+  $("thumbs-backfill-stop").hidden = false;
+  $<HTMLButtonElement>("thumbs-backfill").disabled = true;
+  try {
+    for (;;) {
+      if (backfillStop) break;
+      const next = await core.backfillNext(3, manual);
+      if (!next.length) break;
+      for (const f of next) {
+        if (backfillStop) break;
+        let imgs = null;
+        try {
+          imgs = await makePreviews(await core.download(f.nodeId), f.name);
+        } catch {
+          imgs = null;
+        }
+        await core.backfillAdd(f.nodeId, imgs).catch(() => false);
+      }
+    }
+  } finally {
+    await core.backfillEnd().catch(() => {});
+    backfillRunning = false;
+    $("thumbs-backfill-stop").hidden = true;
+    $<HTMLButtonElement>("thumbs-backfill").disabled = false;
+    void paintBackfill();
+  }
+}
+function paintBackfillState(st: { running: boolean; done: number; made: number; left: number; metered?: boolean }) {
+  const el = $("thumbs-backfill-state");
+  el.textContent = st.metered && !st.running ? t("th.metered") : st.running || st.done ? t("th.state", { done: st.done, made: st.made, left: st.left }) : st.left ? "" : t("th.none");
+}
+async function paintBackfill() {
+  const st = await core.backfillState().catch(() => null);
+  if (st) paintBackfillState(st);
 }
 
 // ── Settings → Diagnostics: transfer logs ──
@@ -3054,6 +3158,10 @@ async function main() {
     void act($("auth-lost-forget"), async () => {
       if (!(await confirmDanger(t("lost.forget"), t("lost.forget.t"), t("lost.forget.yes")))) return;
       await core.forgetThisBrowser();
+      // Thumbnails are pictures of the files: they go with the account's data on this browser.
+      if (typeof caches !== "undefined") await caches.delete(THUMB_CACHE).catch(() => false);
+      for (const u of thumbs.values()) void u.then((x) => x && URL.revokeObjectURL(x));
+      thumbs.clear();
       myAccount = null;
       isAdmin = false;
       navigate("/", true);

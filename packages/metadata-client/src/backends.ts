@@ -12,13 +12,13 @@
 // BackendBlobStore spreads new blobs over the writable backends (round-robin, the one whose limiter
 // frees up first wins) and paces them per `paceKey` (Discord limits posts per channel).
 
-import { AbortedError, type BlobGetContext, type BlobPutContext, type BlobStore, type LaneFetch } from "./blob-store.js";
+import { AbortedError, type BlobGetContext, type BlobPutContext, type BlobStore, type ExtraPlacement, type LaneFetch } from "./blob-store.js";
 import { RateLimitedError } from "./discord-transport.js";
 import { LinkAhead, type LinkAheadOptions, type LinkHow, type LinkItem } from "./link-ahead.js";
 import { guardedRead, netCall, retryFree, watchedPost, type LaneTiming, type NetControl } from "./net.js";
 import { ChannelPacer } from "./rate-limit.js";
 import { hostOf, ms, nowMs, reqErrFields, type TransferLog } from "./transfer-log.js";
-import { DISCORD_PROVIDER, isDiscordPlacement, type DiscordPlacement, type Placement, type PostedAttachment, type ReqTiming, type WebhookRef, type WebhookTransport } from "./types.js";
+import { DISCORD_PROVIDER, isDiscordPlacement, type DiscordPlacement, type ExtraFile, type MessageAttachment, type Placement, type PostedAttachment, type ReqTiming, type WebhookRef, type WebhookTransport } from "./types.js";
 
 /** One fixed, overwritable place on a backend (the snapshot pointer). Discord: a message edited in place. */
 export interface BackendSlot {
@@ -51,6 +51,12 @@ export interface BlobBackend {
   retired: boolean;
   /** Store one blob; `timing` is filled for transfer logs. Retries and pacing are the store's business. */
   put(data: Uint8Array, filename: string, signal?: AbortSignal, timing?: ReqTiming): Promise<Placement>;
+  /** Store a blob with small extra blobs in one go (Discord: one message); absent = no extras on this backend. */
+  putWithExtras?(data: Uint8Array, filename: string, extras: ExtraFile[], signal?: AbortSignal, timing?: ReqTiming): Promise<{ placement: Placement; extras: ExtraPlacement[] }>;
+  /** The extras stored with `p`. */
+  extrasOf?(p: Placement, signal?: AbortSignal): Promise<ExtraPlacement[]>;
+  /** Add extras next to `p` (existing ones stay). */
+  addExtras?(p: Placement, extras: ExtraFile[]): Promise<ExtraPlacement[]>;
   /** Read one blob, with the backend's own retries. */
   get(p: Placement, signal?: AbortSignal, ctx?: BlobGetContext): Promise<Uint8Array>;
   /**
@@ -214,8 +220,52 @@ export class BackendBlobStore implements BlobStore {
   }
 
   async put(data: Uint8Array, filename: string, ctx: BlobPutContext = {}): Promise<Placement> {
-    const tx = ctx.uploadId !== undefined ? { x: ctx.uploadId, i: ctx.index ?? 0 } : undefined;
+    const tx = ctx.uploadId !== undefined ? { x: ctx.uploadId, i: typeof ctx.index === "string" && ctx.index !== "m" ? ("m" as const) : (ctx.index ?? 0) } : undefined;
     return this.postOn(() => this.next(), data, filename, ctx.stats ?? { posts: 0 }, tx);
+  }
+
+  /**
+   * A blob with its extras in one post where the chosen backend can (Discord: one message), else the blob
+   * alone (the extras are optional by contract). Paced and retried like put.
+   */
+  async putWithExtras(data: Uint8Array, filename: string, extras: ExtraFile[], ctx: BlobPutContext = {}): Promise<{ placement: Placement; extras: ExtraPlacement[] }> {
+    const tx = ctx.uploadId !== undefined ? { x: ctx.uploadId, i: typeof ctx.index === "string" && ctx.index !== "m" ? ("m" as const) : (ctx.index ?? 0) } : undefined;
+    let got: ExtraPlacement[] = [];
+    const placement = await this.postOn(() => this.next(), data, filename, ctx.stats ?? { posts: 0 }, tx, (b, d, f, s, t) =>
+      b.putWithExtras && extras.length ? b.putWithExtras(d, f, extras, s, t).then((r) => ((got = r.extras), r.placement)) : b.put(d, f, s, t),
+    );
+    return { placement, extras: got };
+  }
+
+  async extrasOf(p: Placement, signal?: AbortSignal): Promise<ExtraPlacement[]> {
+    const b = this.registry.for(p);
+    return b.extrasOf ? b.extrasOf(p, signal) : [];
+  }
+
+  async addExtras(p: Placement, extras: ExtraFile[]): Promise<ExtraPlacement[]> {
+    const b = this.registry.for(p);
+    if (!b.addExtras) throw new Error("this storage cannot keep previews");
+    for (let attempt = 0; ; attempt++) {
+      await this.pacer.acquire(b.paceKey);
+      try {
+        const r = await b.addExtras(p, extras);
+        this.pacer.onSuccess(b.paceKey);
+        return r;
+      } catch (e) {
+        if (e instanceof RateLimitedError) {
+          this.pacer.onRateLimited(b.paceKey, e.retryAfterMs, e.scope);
+          if (e.global && e.retryAfterMs > 60_000) throw e;
+          continue;
+        }
+        if (attempt >= this.maxRetries) throw e;
+        await this.backoff(attempt + 1);
+      }
+    }
+  }
+
+  /** post() with extras in the same message where the backend can (moving a manifest with its previews). */
+  async postWithExtras(data: Uint8Array, filename: string, extras: ExtraFile[], exclude?: ReadonlySet<string>): Promise<Placement> {
+    return this.postOn(() => this.next(exclude), data, filename, { posts: 0 }, undefined, (b, d, f, s, t) => (b.putWithExtras ? b.putWithExtras(d, f, extras, s, t).then((r) => r.placement) : b.put(d, f, s, t)));
   }
 
   /** Store one blob with pacing and retries (round-robin over the writable backends, minus `exclude`). */
@@ -223,7 +273,14 @@ export class BackendBlobStore implements BlobStore {
     return this.postOn(() => this.next(exclude), data, filename, stats);
   }
 
-  private async postOn(pick: () => BlobBackend, data: Uint8Array, filename: string, stats: { posts: number }, tx?: { x: string; i: number | "m" }): Promise<Placement> {
+  private async postOn(
+    pick: () => BlobBackend,
+    data: Uint8Array,
+    filename: string,
+    stats: { posts: number },
+    tx?: { x: string; i: number | "m" },
+    send: (b: BlobBackend, data: Uint8Array, filename: string, signal: AbortSignal | undefined, timing: ReqTiming | undefined) => Promise<Placement> = (b, d, f, s, t) => b.put(d, f, s, t),
+  ): Promise<Placement> {
     let attempt = 0;
     const log = tx ? this.log : null;
     for (let a = 0; ; a++) {
@@ -236,7 +293,7 @@ export class BackendBlobStore implements BlobStore {
       const timing: { ttfb?: number; st?: number; lane?: number } = {};
       const ev = log ? { dir: "up", x: tx!.x, i: tx!.i, a, hook: b.id, ch: b.logChannel ?? null, b: data.byteLength, lim: ms(tq, tr), lst: this.pacer.state(key), fl: log.fl.up } : null;
       try {
-        const res = await netCall(this.net, "up", undefined, () => watchedPost(this.net, data.byteLength, () => b.put(data, filename, undefined, log ? timing : undefined)));
+        const res = await netCall(this.net, "up", undefined, () => watchedPost(this.net, data.byteLength, () => send(b, data, filename, undefined, log ? timing : undefined)));
         this.pacer.onSuccess(key);
         if (log) log.emit("req", { ...ev, ch: (res as { channelId?: string }).channelId ?? b.logChannel ?? null, dur: ms(tr), ttfb: timing.ttfb, st: timing.st ?? 200, ...(timing.lane !== undefined ? { ln: timing.lane } : {}) });
         return res;
@@ -384,6 +441,44 @@ export class DiscordWebhooks {
     }
   }
 
+  /**
+   * The attachments of a placement's message (one GET through the webhook, paced with the link look-ahead).
+   * Their fresh links are cached, so reading an extra right after needs no second GET.
+   */
+  async messageAttachments(p: DiscordPlacement, fresh = false): Promise<MessageAttachment[]> {
+    const k = `${p.locationId}:${p.messageId}`;
+    const hit = fresh ? undefined : this.msgCache.get(k);
+    if (hit && hit.until > Date.now()) return hit.atts;
+    const hook = this.hook(p.locationId);
+    for (let attempt = 0; ; attempt++) {
+      // The same per-webhook pace as the link look-ahead (the same Discord bucket: GET of a message).
+      await this.links.pacer.acquire(hook.id);
+      try {
+        const atts = await netCall(this.rt.net, "down", undefined, () => this.transport.getAttachments(hook, p.messageId));
+        this.links.pacer.onSuccess(hook.id);
+        this.rememberLinks(p, atts);
+        return atts;
+      } catch (e) {
+        if (e instanceof RateLimitedError) {
+          this.links.pacer.onRateLimited(hook.id, e.retryAfterMs, "shared");
+          continue;
+        }
+        if (retryFree(e)) continue;
+        if (attempt >= this.maxRetries) throw e;
+        await this.backoff(attempt + 1);
+      }
+    }
+  }
+  private readonly msgCache = new Map<string, { atts: MessageAttachment[]; until: number }>();
+  /** Keep the attachments of a message and their links (reads of its extras use them). */
+  rememberLinks(p: DiscordPlacement, atts: MessageAttachment[]): void {
+    const k = `${p.locationId}:${p.messageId}`;
+    this.msgCache.delete(k);
+    this.msgCache.set(k, { atts, until: Date.now() + 10 * 60_000 });
+    while (this.msgCache.size > 2000) this.msgCache.delete(this.msgCache.keys().next().value!);
+    for (const a of atts) this.links.put({ provider: DISCORD_PROVIDER, locationId: p.locationId, channelId: p.channelId, messageId: p.messageId, attachmentId: a.id }, a.url);
+  }
+
   /** Fetch a stored attachment: its link (ready from the look-ahead, or fetched now), then the CDN. */
   async read(p: DiscordPlacement, signal?: AbortSignal, ctx?: BlobGetContext): Promise<Uint8Array> {
     const hook = this.hook(p.locationId);
@@ -431,6 +526,13 @@ export class DiscordWebhooks {
   }
 }
 
+/** An extra attachment of the message `p` is in, as a placement of its own. */
+function extraOf(p: DiscordPlacement, a: MessageAttachment): ExtraPlacement {
+  const name = a.filename ?? "";
+  const dot = name.lastIndexOf(".");
+  return { name: dot > 0 ? name.slice(0, dot) : name, size: a.size, placement: { provider: DISCORD_PROVIDER, locationId: p.locationId, channelId: p.channelId, messageId: p.messageId, attachmentId: a.id } };
+}
+
 /** One user webhook as a storage backend: posts into its channel, reads through fresh CDN links. */
 export class DiscordWebhookBackend implements BlobBackend {
   readonly kind = DISCORD_PROVIDER;
@@ -467,6 +569,33 @@ export class DiscordWebhookBackend implements BlobBackend {
     const res = await this.dw.transport.postFile(this.hook, data, filename, signal, timing);
     if (!this.hook.channelId) this.hook.channelId = res.channelId;
     return placementOf(res);
+  }
+
+  /** One message: the blob first, the extras as its other attachments. */
+  async putWithExtras(data: Uint8Array, filename: string, extras: ExtraFile[], signal?: AbortSignal, timing?: ReqTiming): Promise<{ placement: Placement; extras: ExtraPlacement[] }> {
+    const t = this.dw.transport;
+    if (!t.postFiles) return { placement: await this.put(data, filename, signal, timing), extras: [] };
+    const res = await t.postFiles(this.hook, data, filename, extras, signal, timing);
+    if (!this.hook.channelId) this.hook.channelId = res.channelId;
+    const placement = placementOf(res);
+    return { placement, extras: res.extras.map((a) => extraOf(placement, a)) };
+  }
+
+  /** The other attachments of the blob's message (a GET of the message; its fresh links are kept for reads). */
+  async extrasOf(p: Placement, _signal?: AbortSignal): Promise<ExtraPlacement[]> {
+    if (!isDiscordPlacement(p)) throw new Error(`not a Discord placement: ${p.provider}`);
+    const atts = await this.dw.messageAttachments(p);
+    return atts.filter((a) => a.id !== p.attachmentId).map((a) => extraOf(p, a));
+  }
+
+  async addExtras(p: Placement, extras: ExtraFile[]): Promise<ExtraPlacement[]> {
+    if (!isDiscordPlacement(p)) throw new Error(`not a Discord placement: ${p.provider}`);
+    const t = this.dw.transport;
+    if (!t.addFiles) throw new Error("this transport cannot edit messages");
+    const now = await this.dw.messageAttachments(p, true);
+    const atts = await t.addFiles(this.hook, p.messageId, now.map((a) => a.id), extras);
+    this.dw.rememberLinks(p, atts);
+    return atts.filter((a) => a.id !== p.attachmentId).map((a) => extraOf(p, a));
   }
 
   get(p: Placement, signal?: AbortSignal, ctx?: BlobGetContext): Promise<Uint8Array> {

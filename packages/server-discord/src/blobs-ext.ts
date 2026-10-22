@@ -6,6 +6,12 @@
 //                                     bytes, x-ddn-sha256 = hex SHA-256. Needs this device's
 //                                     lease on U (rule 8). Same (U, i, hash) again = the stored
 //                                     placement, nothing posted twice (resume).
+//   PUT    /v1/uploads/<U>/blobs/x<name>  an extra blob next to the manifest (encrypted thumbnail /
+//                                     preview, ≤ 1 MiB, at most 8 per upload): with the lease while
+//                                     uploading, or later to a committed upload of this account (added
+//                                     once per name; the same name again answers the stored one)
+//   POST   /v1/blobs/extras           {attachmentIds: manifests (≤ 100)} -> their extra blobs
+//                                     (name, size, placement); deleted and moved with the upload
 //   GET    /v1/uploads/<U>            state + stored blob indexes (resume after a restart)
 //   POST   /v1/uploads/<U>/final      all blobs stored, commit follows: never cleaned as abandoned
 //   DELETE /v1/uploads/<U>            cancel: blobs deleted, U refused from now on (tombstone)
@@ -51,6 +57,10 @@ import type { ServerTransferLogs } from "./transfer-logs.js";
 
 /** Largest blob accepted (a fragment is 10 MiB incl. IV + tag; a manifest of 1327 fragments ~160 KB). */
 export const MAX_BLOB_BYTES = 10 * 1024 * 1024 + 64 * 1024;
+/** Extra blobs (previews next to a manifest): size and count per upload. */
+export const MAX_EXTRA_BYTES = 1024 * 1024;
+export const MAX_EXTRAS = 8;
+const EXTRA_IDX = /^x[A-Za-z0-9_-]{8,40}$/;
 export const DEFAULT_INFLIGHT_BYTES = 192 * 1024 * 1024;
 export const FRAGMENT_RETENTION_MS = 30 * 24 * 3600_000;
 export const HEALTH_EVERY_MS = 15 * 60_000;
@@ -380,15 +390,31 @@ export class BlobsExtension implements ServerExtension {
   private async putBlob(r: ExtRequest, u: string, idx: string): Promise<void> {
     const s = r.session();
     if (!isClientId(u)) throw new HttpError(400, "bad_upload_id");
-    if (!/^(m|\d{1,6})$/.test(idx)) throw new HttpError(400, "bad_index");
+    const extra = EXTRA_IDX.test(idx);
+    if (!extra && !/^(m|\d{1,6})$/.test(idx)) throw new HttpError(400, "bad_index");
     const sha = String(r.req.headers["x-ddn-sha256"] ?? "").toLowerCase();
     if (!HEX64.test(sha)) throw new HttpError(400, "bad_sha256");
     const len = Number(r.req.headers["content-length"] ?? NaN);
     if (!Number.isInteger(len)) throw new HttpError(411, "length_required");
-    if (len > MAX_BLOB_BYTES) throw new HttpError(413, "body_too_large");
-    this.requireLease(s.accountId, s.deviceId, u);
-    const up = this.upload(s.accountId, u);
-    if (up && up.state !== "open" && up.state !== "final") throw new HttpError(up.state === "committed" ? 409 : 410, up.state === "committed" ? "upload_committed" : "upload_gone");
+    if (len > (extra ? MAX_EXTRA_BYTES : MAX_BLOB_BYTES)) throw new HttpError(413, "body_too_large");
+    let up = this.upload(s.accountId, u);
+    if (extra && up?.state === "committed") {
+      // Added later to a stored file: once per name (a second device adding the same kind gets the first).
+      const have = this.db.prepare("SELECT * FROM s_blobs WHERE account_id = ? AND upload_id = ? AND idx = ? AND deleted_at IS NULL").get(s.accountId, u, idx) as BlobRow | undefined;
+      if (have) {
+        for await (const _ of r.req) void _;
+        return r.send(200, { placement: placementOfRow(have), reused: true });
+      }
+    } else {
+      this.requireLease(s.accountId, s.deviceId, u);
+      if (up && up.state !== "open" && up.state !== "final") throw new HttpError(up.state === "committed" ? 409 : 410, up.state === "committed" ? "upload_committed" : "upload_gone");
+    }
+    if (extra) {
+      if (!up) throw new HttpError(409, "manifest_first");
+      const n = this.db.prepare("SELECT count(*) AS n FROM s_blobs WHERE account_id = ? AND upload_id = ? AND idx LIKE 'x%' AND deleted_at IS NULL").get(s.accountId, u) as { n: number };
+      if (Number(n.n) >= MAX_EXTRAS) throw new HttpError(409, "too_many_extras");
+    }
+    up = this.upload(s.accountId, u);
     if (!up)
       this.db.prepare("INSERT INTO s_uploads (account_id, upload_id, state, device_id, created_at, active_at) VALUES (?, ?, 'open', ?, ?, ?)").run(s.accountId, u, s.deviceId, this.now, this.now);
     else this.db.prepare("UPDATE s_uploads SET active_at = ? WHERE account_id = ? AND upload_id = ?").run(this.now, s.accountId, u);
@@ -432,17 +458,17 @@ export class BlobsExtension implements ServerExtension {
       fl = ++this.inflightSeq;
       this.inflight.set(fl, hooks.map((h) => h.id));
       try {
-        p = await this.o.sender.post(hooks, buf, filename, ac.signal, tlog ? { log: tlog, x: u, i: idx === "m" ? "m" : Number(idx) } : undefined);
+        p = await this.o.sender.post(hooks, buf, filename, ac.signal, tlog ? { log: tlog, x: u, i: idx === "m" || extra ? "m" : Number(idx) } : undefined);
       } catch (e) {
         const he = senderHttpError(e);
-        if (tlog) tlog.emit("frag", { dir: "up", x: u, i: idx === "m" ? "m" : Number(idx), b: len, budget: r1(t1 - t0), body: r1(t2 - t1), hash: r1(t3 - t2), dur: r1(performance.now() - t0), ok: false, st: (he as { status?: number }).status ?? 500, fl: tlog.fl.up });
+        if (tlog) tlog.emit("frag", { dir: "up", x: u, i: idx === "m" || extra ? "m" : Number(idx), b: len, budget: r1(t1 - t0), body: r1(t2 - t1), hash: r1(t3 - t2), dur: r1(performance.now() - t0), ok: false, st: (he as { status?: number }).status ?? 500, fl: tlog.fl.up });
         throw he;
       }
-      if (tlog) tlog.emit("frag", { dir: "up", x: u, i: idx === "m" ? "m" : Number(idx), b: len, budget: r1(t1 - t0), body: r1(t2 - t1), hash: r1(t3 - t2), post: r1(performance.now() - t3), dur: r1(performance.now() - t0), ok: true, hook: p.locationId, ch: p.channelId, fl: tlog.fl.up });
+      if (tlog) tlog.emit("frag", { dir: "up", x: u, i: idx === "m" || extra ? "m" : Number(idx), b: len, budget: r1(t1 - t0), body: r1(t2 - t1), hash: r1(t3 - t2), post: r1(performance.now() - t3), dur: r1(performance.now() - t0), ok: true, hook: p.locationId, ch: p.channelId, fl: tlog.fl.up });
       for (const h of hooks) if (h.alive === false) this.o.hooks.setAlive(h.id, false);
       // Re-check: cancelled or reaped while posting -> do not keep it.
       const now = this.upload(s.accountId, u);
-      if (!now || (now.state !== "open" && now.state !== "final")) {
+      if (!now || (now.state !== "open" && now.state !== "final" && !(extra && now.state === "committed"))) {
         await this.deleteMessage(p.locationId, p.messageId).catch(() => {});
         throw new HttpError(410, "upload_gone");
       }
@@ -668,7 +694,7 @@ export class BlobsExtension implements ServerExtension {
   async route(r: ExtRequest): Promise<boolean> {
     const { method, path } = r;
     if (!path.startsWith("/v1/")) return false;
-    const ub = /^\/v1\/uploads\/([A-Za-z0-9_-]{8,64})\/blobs\/(m|\d{1,6})$/.exec(path);
+    const ub = /^\/v1\/uploads\/([A-Za-z0-9_-]{8,64})\/blobs\/(m|\d{1,6}|x[A-Za-z0-9_-]{8,40})$/.exec(path);
     if (ub && method === "PUT") return (await this.putBlob(r, ub[1]!, ub[2]!), true);
     if (method === "POST" && path === "/v1/uploads/released") return (this.released(r, await r.json()), true);
     if (path === "/v1/diagnostics/transfer-log") return (await this.diagnostics(r), true);
@@ -703,6 +729,24 @@ export class BlobsExtension implements ServerExtension {
       tlog?.emit("links", { dir: "down", n: rows.length, dur: r1(performance.now() - t0), via: this.o.bot ? "bot" : "webhook" });
       // Keyed by the ID the client asked for: after a move that is the old one (its manifest keeps it).
       return (r.send(200, { urls: rows.map((b, i) => ({ attachmentId: asked[i], url: fresh.get(b.attachment_id) })) }), true);
+    }
+    if (method === "POST" && path === "/v1/blobs/extras") {
+      const s = r.session();
+      const ids = (await r.json() as { attachmentIds?: unknown })?.attachmentIds;
+      if (!Array.isArray(ids) || ids.length > 100) throw new HttpError(400, "bad_attachments");
+      const out: Record<string, { name: string; size: number; placement: DiscordPlacement }[]> = {};
+      for (const id of ids) {
+        const a = String(id);
+        if (!/^\d{15,22}$/.test(a)) throw new HttpError(400, "bad_attachment");
+        const m = this.channelStore.resolveBlob(a, s.accountId) as BlobRow | undefined;
+        if (!m || m.idx !== "m") {
+          out[a] = [];
+          continue;
+        }
+        const rows = this.db.prepare("SELECT * FROM s_blobs WHERE account_id = ? AND upload_id = ? AND idx LIKE 'x%' AND deleted_at IS NULL ORDER BY created_at").all(s.accountId, m.upload_id) as unknown as BlobRow[];
+        out[a] = rows.map((b) => ({ name: b.idx.slice(1), size: b.size, placement: placementOfRow(b) }));
+      }
+      return (r.send(200, { extras: out }), true);
     }
     if (method === "POST" && path === "/v1/blobs/describe") {
       const s = r.session();

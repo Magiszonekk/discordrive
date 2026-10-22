@@ -121,6 +121,11 @@ export class MetadataClient extends DriveClient {
     return this.wh.post(data, filename, { posts: 0 }, exclude);
   }
 
+  /** postBlobExcept with extra attachments in the same message (previews next to a manifest). */
+  async postBlobExceptWithExtras(data: Uint8Array, filename: string, extras: { filename: string; data: Uint8Array }[], exclude: ReadonlySet<string>): Promise<Placement> {
+    return this.wh.postWithExtras(data, filename, extras, exclude);
+  }
+
   /** Post one blob to one given backend (snapshot objects: only on the pointer's channel). */
   async postBlobTo(hookId: string, data: Uint8Array, filename: string): Promise<Placement> {
     return this.wh.postTo(hookId, data, filename);

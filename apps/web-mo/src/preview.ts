@@ -24,7 +24,8 @@
 // fragments overlapping the range are fetched and decrypted), images/PDF the whole file with
 // core.download (local decryption and verification, like Download), audio/video stream through
 // the same source as the video player (service worker /ddn/file/<id>, or the server stream URL in
-// plain). plain: the server thumbnail is shown while the full image loads.
+// plain). The low-resolution preview stored with the file (or plain's server thumbnail) is shown while
+// the full image loads, and as the poster of a video.
 //
 // No DOM access at module load: the pure helpers below are unit-tested in Node
 // (apps/ddn-server/test/preview.test.ts).
@@ -542,7 +543,7 @@ export function createPreview(deps: PreviewDeps): Preview {
               .then((b) => {
                 // Checked again here: the thumbnail may come after the full image, a next file or the close.
                 if (!b || my !== seq || img.dataset.full) return;
-                img.src = own(new Blob([b], { type: "image/jpeg" }));
+                img.src = own(b.type ? b : new Blob([b], { type: "image/jpeg" }));
                 img.dataset.placeholder = "1";
                 body.replaceChildren(img);
               })
@@ -583,6 +584,13 @@ export function createPreview(deps: PreviewDeps): Preview {
           if (my !== seq) return;
           el.src = direct ?? `./ddn/file/${encodeURIComponent(f.id)}?size=${size}`;
           el.dataset.source = direct ? "server" : "sw";
+          if (el instanceof HTMLVideoElement && deps.features().thumbnails)
+            void deps.core
+              .thumbnail(f.id)
+              .then((b) => {
+                if (b && my === seq && !el.poster) el.poster = own(b);
+              })
+              .catch(() => {});
           el.addEventListener("error", () => {
             if (my === seq && media === el) done(message(t("pv.media")));
           });

@@ -280,6 +280,40 @@ describe("e2ee: blobs through the instance", () => {
     expect(s.data().byteLength).toBe(3000);
   });
 
+  it("previews next to the manifest: stored as blobs of the upload, read from the CDN, added later, deleted with the upload", async () => {
+    let t = Date.UTC(2026, 9, 22);
+    const I = await instance({ now: () => t });
+    const A = await account(I.url, I.origin);
+    const pic = (kind: "t" | "p", n: number) => ({ kind, mime: "image/webp", width: kind === "t" ? 320 : 1280, height: 200, data: bytes(n, n) });
+    const posts0 = I.fake.posts;
+    const up = await A.client.upload(memorySource(bytes(3000, 21)), "foto.jpg", undefined, { previews: Promise.resolve([pic("t", 4000), pic("p", 30_000)]) });
+    // 1 fragment + manifest + 2 previews (on the instance each blob is a message of its own).
+    expect(I.fake.posts - posts0).toBe(4);
+    const t1 = await A.client.readPreview(up.version.manifestRef, "t");
+    expect(t1?.data.byteLength).toBe(4000);
+    expect((await A.client.readPreview(up.version.manifestRef, "p"))?.data.byteLength).toBe(30_000);
+    // The server sees only ciphertext: the preview bytes are nowhere in what Discord stored.
+    for (const m of I.fake.messages.values()) for (const x of m.attachments) expect(Buffer.from(x.data).includes(Buffer.from(bytes(4000, 4000).subarray(0, 64)))).toBe(false);
+    // An older file without previews gets them later (the upload is committed by then).
+    const old = await A.client.upload(memorySource(bytes(2000, 22)), "alt.jpg");
+    expect(await A.client.readPreview(old.version.manifestRef, "t")).toBeNull();
+    expect(await A.client.addPreviews(old.version.manifestRef, [pic("t", 5000)], old.uploadId)).toEqual(["t"]);
+    expect((await A.client.readPreview(old.version.manifestRef, "t"))?.data.byteLength).toBe(5000);
+    // The same name again (another device racing): the stored one stays, nothing posted twice.
+    const before = I.fake.posts;
+    await A.api.request("PUT", `/v1/uploads/${old.uploadId}/blobs/x${"A".repeat(22)}`, { body: bytes(10) as BodyInit, headers: { "x-ddn-sha256": await sha256Hex(bytes(10)) } });
+    await A.api.request("PUT", `/v1/uploads/${old.uploadId}/blobs/x${"A".repeat(22)}`, { body: bytes(11) as BodyInit, headers: { "x-ddn-sha256": await sha256Hex(bytes(11)) } });
+    expect(I.fake.posts - before).toBe(1);
+    // Another account cannot add to or list this upload's previews.
+    const B = await account(I.url, I.origin);
+    await expect(B.api.request("PUT", `/v1/uploads/${old.uploadId}/blobs/x${"B".repeat(22)}`, { body: bytes(10) as BodyInit, headers: { "x-ddn-sha256": await sha256Hex(bytes(10)) } }).then((r) => r.status)).resolves.toBeGreaterThanOrEqual(400);
+    // Released + retention: the fragments, the manifest and the previews are all deleted.
+    await A.api.json("POST", "/v1/uploads/released", { uploads: [{ uploadId: up.uploadId, at: t }, { uploadId: old.uploadId, at: t }] });
+    t += 31 * 24 * 3600_000;
+    expect((await I.ext.tick()).purged).toBe(2);
+    expect(I.fake.messages.size).toBe(0);
+  });
+
   it("account channels in Settings: own webhooks replace the pool for that account only; the mode is locked in the database", async () => {
     const I = await instance();
     const A = await account(I.url, I.origin);
