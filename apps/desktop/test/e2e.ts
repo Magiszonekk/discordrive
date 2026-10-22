@@ -281,41 +281,63 @@ try {
     // tsx names inner functions with a helper the page does not have.
     await p.evaluate("window.__name = (f) => f");
 
-    // Video: the player dialog (Play), then a seek to 15 s (beyond the first window).
-    const clip = row("clip.webm");
-    await p.waitForSelector(`[data-ddn=row][data-id="${clip.id}"]`, { timeout: 30_000 });
-    const video = await p.evaluate(
-      async ({ id, size }) => {
-        const v = document.querySelector<HTMLVideoElement>('[data-ddn="player"]')!;
-        v.muted = true;
-        v.src = `./ddn/file/${encodeURIComponent(id)}?size=${size}`;
-        const ev = (name: string, ms = 30_000) => new Promise<boolean>((res) => {
-          const t = setTimeout(() => res(false), ms);
-          v.addEventListener(name, () => (clearTimeout(t), res(true)), { once: true });
-          v.addEventListener("error", () => (clearTimeout(t), res(false)), { once: true });
-        });
-        const meta = await ev("loadedmetadata");
-        const duration = v.duration;
-        await v.play().catch(() => {});
-        const playing = await new Promise<boolean>((res) => {
-          const t0 = performance.now();
-          const tick = () => (v.currentTime > 0.3 ? res(true) : performance.now() - t0 > 30_000 ? res(false) : setTimeout(tick, 100));
-          tick();
-        });
-        v.pause();
-        v.currentTime = 15;
-        const seeked = await ev("seeked");
-        const after = v.currentTime;
-        // A frame at the new position is there (the second Range arrived), not only the time.
-        const frame = v.readyState >= 2;
-        v.removeAttribute("src");
-        v.load();
-        return { meta, duration, playing, seeked, after, frame, error: v.error?.code ?? null };
-      },
-      { id: clip.id, size: clip.size },
-    );
-    r.video = video;
-    check("videoPlaysAndSeeks", video.meta && video.playing && video.seeked && video.frame && video.after >= 14.5 && video.after <= 15.5 && Math.abs(video.duration - 20) < 1);
+    // Video formats: each one through the real player (the row's Play button), play, seek to the middle and to
+    // the end. MP4 as phones and cameras write it (moov at the END: the player asks for the file's last bytes
+    // first), MP4 faststart, HEVC (phones), and a large file (many 10 MiB fragments).
+    const vids: { name: string; args: string[]; dur: number; expectPlay: boolean | "decoder" }[] = [
+      { name: "clip.webm", args: [], dur: 20, expectPlay: true },
+      { name: "h264-moov-end.mp4", args: ["-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=25:duration=20", "-f", "lavfi", "-i", "sine=frequency=330:duration=20", "-c:v", "libx264", "-preset", "ultrafast", "-b:v", "4M", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"], dur: 20, expectPlay: true },
+      { name: "h264-faststart.mp4", args: ["-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=25:duration=20", "-c:v", "libx264", "-preset", "ultrafast", "-b:v", "4M", "-pix_fmt", "yuv420p", "-movflags", "+faststart"], dur: 20, expectPlay: true },
+      { name: "hevc.mp4", args: ["-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=25:duration=10", "-c:v", "libx265", "-preset", "ultrafast", "-tag:v", "hvc1", "-x265-params", "log-level=error", "-pix_fmt", "yuv420p"], dur: 10, expectPlay: "decoder" },
+    ];
+    // Large: ~520 MB H.264 (moov at the end), 52 fragments. Generated once (noise does not compress).
+    const bigMb = Number(process.env.DDN_E2E_BIG_MB ?? 520);
+    if (bigMb > 0) vids.push({ name: "big-moov-end.mp4", args: ["-f", "lavfi", "-i", `testsrc2=size=640x360:rate=25:duration=${Math.ceil((bigMb * 8) / 40)}`, "-c:v", "libx264", "-preset", "ultrafast", "-b:v", "40M", "-maxrate", "40M", "-bufsize", "80M", "-x264-params", "nal-hrd=cbr", "-pix_fmt", "yuv420p"], dur: Math.ceil((bigMb * 8) / 40), expectPlay: true });
+    for (const v of vids) if (v.args.length) ff([...v.args, join(mdir, v.name)]);
+    await p.evaluate((paths) => (window as unknown as { ddnCore: { uploadPaths(p: string[]): Promise<unknown> } }).ddnCore.uploadPaths(paths), vids.filter((v) => v.args.length).map((v) => join(mdir, v.name)));
+    const all2 = (await p.evaluate(() => (window as unknown as { ddnCore: { list(): Promise<{ rows: { id: string; name: string; size: number }[] }> } }).ddnCore.list())).rows;
+    await p.evaluate(() => location.reload());
+    await p.waitForSelector("[data-page=files]:not([hidden])", { timeout: 60_000 });
+    await p.evaluate("window.__name = (f) => f");
+    const formats: Record<string, unknown> = {};
+    for (const v of vids) {
+      const f = all2.find((x) => x.name === v.name)!;
+      await p.waitForSelector(`[data-ddn=row][data-id="${f.id}"]`, { timeout: 30_000 });
+      // The row's Play button, as the user does (it opens the player dialog).
+      const play = p.locator(`[data-ddn=row][data-id="${f.id}"] [data-ddn=play]`);
+      const t0 = Date.now();
+      if (await play.count()) await play.click();
+      else await p.evaluate(({ id, size }) => { const el = document.querySelector<HTMLVideoElement>('[data-ddn="player"]')!; el.src = `./ddn/file/${encodeURIComponent(id)}?size=${size}`; document.querySelector<HTMLDialogElement>('[data-ddn-ui="player-dialog"]')!.showModal(); void el.play().catch(() => {}); }, { id: f.id, size: f.size });
+      const res = await p.evaluate(async (want) => {
+        const el = document.querySelector<HTMLVideoElement>('[data-ddn="player"]')!;
+        el.muted = true;
+        const t0 = performance.now();
+        const until = (cond: () => boolean, ms: number) => new Promise<boolean>((res) => { const tick = () => (cond() ? res(true) : el.error || performance.now() - t0 > ms ? res(false) : setTimeout(tick, 100)); tick(); });
+        const meta = await until(() => el.readyState >= 1, 90_000);
+        const metaMs = Math.round(performance.now() - t0);
+        await el.play().catch(() => {});
+        const playing = meta && (await until(() => el.currentTime > 0.3, 60_000));
+        const seek = async (to: number) => {
+          el.currentTime = to;
+          const ok = await new Promise<boolean>((res) => { const t = setTimeout(() => res(false), 60_000); el.addEventListener("seeked", () => (clearTimeout(t), res(true)), { once: true }); });
+          return ok && Math.abs(el.currentTime - to) < 1.5 && el.readyState >= 2;
+        };
+        const mid = playing ? await seek(want / 2) : false;
+        const end = playing ? await seek(Math.max(0, want - 1)) : false;
+        const msg = document.querySelector('[data-ddn="player-msg"]:not([hidden])')?.textContent ?? null;
+        const out = { meta, metaMs, duration: el.duration, playing, mid, end, error: el.error?.code ?? null, message: msg, offersDownload: !!document.querySelector('[data-ddn="player-msg"]:not([hidden]) [data-ddn="player-download"]') };
+        el.pause();
+        return out;
+      }, v.dur);
+      await p.evaluate(() => document.querySelector<HTMLDialogElement>('[data-ddn-ui="player-dialog"]')?.close());
+      formats[v.name] = { ...res, size: f.size, wallMs: Date.now() - t0 };
+      if (v.expectPlay === true) check(`video_${v.name}`, res.playing && res.mid && res.end && Math.abs(res.duration - v.dur) < 1.5);
+      // HEVC: plays where the platform has a decoder; where it does not, the player must say so and offer the download.
+      else check(`video_${v.name}`, (res.playing && res.mid) || (!!res.message && res.offersDownload));
+      if (v.expectPlay === true) check(`video_${v.name}_noMessage`, !res.message);
+    }
+    r.videoFormats = formats;
+    const clip = all2.find((x) => x.name === "clip.webm")!;
     // Range answers straight from the protocol handler: 206 with Content-Range, a window, not the whole file.
     const head = await p.evaluate(async ({ id, size }) => {
       const res = await fetch(`./ddn/file/${encodeURIComponent(id)}?size=${size}`, { headers: { range: `bytes=${size - 100}-` } });

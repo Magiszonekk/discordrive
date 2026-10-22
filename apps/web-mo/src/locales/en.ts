@@ -212,6 +212,13 @@ export const en: Record<string, string> = {
   "dev.pairWrongDevice": "This code pairs a NEW device. Open it on a device that is already signed in.",
 
   // player
+  "player.why.codec": "This app cannot play this video’s format here (for example HEVC/H.265 without a decoder on this computer).",
+  "player.why.decode": "The video could not be decoded (damaged file or an unsupported variant of the format).",
+  "player.why.network": "The video could not be read (connection or storage error).",
+  "player.why.slow": "The video does not start: nothing arrived in {s} s.",
+  "player.dlOpen": "Download and open in the system player",
+  "player.dl": "Download",
+  "player.opening": "Downloading, the system player opens when it is done…",
   "player.close": "Close player",
 
   // rescue kit dialog

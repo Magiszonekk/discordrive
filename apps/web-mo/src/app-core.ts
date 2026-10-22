@@ -1533,7 +1533,11 @@ export class AppCore {
     const n = this.c().store.getNode(nodeId)!;
     return { ...r, name: n.name };
   }
-  private readonly rangeCache = new Map<string, Uint8Array>();
+  /**
+   * Decrypted fragments of the last ranges (players read windows that overlap, seeking goes back): a few,
+   * never the whole file (a 1 GB video streamed would otherwise stay in memory fragment by fragment).
+   */
+  private readonly rangeCache = new LruMap<string, Uint8Array>(6);
 
   // ── rename, move, trash (sync-core rules 1–6, Q1–Q3, Q9) ───────────
 
@@ -1954,5 +1958,26 @@ export class AppCore {
     if (this.snapTimer) clearInterval(this.snapTimer);
     if (this.gcTimer) clearTimeout(this.gcTimer);
     if (this.unavailTimer) clearInterval(this.unavailTimer);
+  }
+}
+
+/** A Map that keeps its `max` newest entries (by insertion / last set). */
+class LruMap<K, V> extends Map<K, V> {
+  constructor(private readonly max: number) {
+    super();
+  }
+  override get(k: K): V | undefined {
+    const v = super.get(k);
+    if (v !== undefined) {
+      super.delete(k);
+      super.set(k, v);
+    }
+    return v;
+  }
+  override set(k: K, v: V): this {
+    super.delete(k);
+    super.set(k, v);
+    while (this.size > this.max) super.delete(this.keys().next().value as K);
+    return this;
   }
 }

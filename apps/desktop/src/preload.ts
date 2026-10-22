@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld("ddnDesktop", {
   version: 1,
   pathsOf: (files: File[]) => [...files].map((f) => webUtils.getPathForFile(f)).filter(Boolean),
   showInFolder: (path: string) => ipcRenderer.send("ddn:show-in-folder", String(path)),
+  /** Open a file the agent downloaded in the system's default app (a video the window cannot play). */
+  openFile: (path: string) => ipcRenderer.send("ddn:open-file", String(path)),
   pickFolder: () => ipcRenderer.invoke("ddn:pick-folder") as Promise<string | null>,
   firstAccountMade: () => ipcRenderer.invoke("ddn:first-account-made"),
   /** Copy a text to the system clipboard (the window has no clipboard permission; the main process writes it). */

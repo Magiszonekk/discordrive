@@ -49,6 +49,8 @@ interface DesktopBridge {
   pickFolder(): Promise<string | null>;
   /** The built-in instance got its first account (it closes sign-up). */
   firstAccountMade(): Promise<boolean>;
+  /** Open a file the app downloaded in the system's default app (older app builds lack it). */
+  openFile?(path: string): void;
   /** Copy a text to the system clipboard (the window has no clipboard permission). Older app builds lack it. */
   copyText?(text: string): Promise<boolean>;
   /** The window's back / forward commands (the mouse's side buttons on Windows). */
@@ -782,16 +784,60 @@ async function cachedThumb(idAt: string): Promise<Blob | null> {
   return b;
 }
 
+/** No data at all within this long: the player says so instead of an endless spinner. */
+const PLAYER_STALL_MS = 45_000;
+let playerWatch = 0;
 async function openPlayer(id: string, name: string, size: number) {
   const d = ui<HTMLDialogElement>("player-dialog");
   const v = $<HTMLVideoElement>("player");
+  const msg = $("player-msg");
   ui("player-title").textContent = name;
+  msg.hidden = true;
+  v.hidden = false;
+  const my = ++playerWatch;
+  // Why it does not play, in words, with a way out (download; the desktop app opens it in the system player).
+  const fail = (why: "codec" | "decode" | "network" | "slow") => {
+    if (my !== playerWatch) return;
+    v.pause();
+    v.hidden = true;
+    $("player-why").textContent = t(`player.why.${why}`, { s: Math.round(PLAYER_STALL_MS / 1000) });
+    const b = $<HTMLButtonElement>("player-download");
+    b.textContent = desktop ? t("player.dlOpen") : t("player.dl");
+    b.disabled = false;
+    b.onclick = () =>
+      void act(b, async () => {
+        if (!desktop) return download(id, name);
+        b.disabled = true;
+        $("player-why").textContent = t("player.opening");
+        const r = await core.downloadToDisk(id, undefined, crypto.randomUUID());
+        desktop.openFile?.(r.path);
+        closePlayer();
+      });
+    msg.hidden = false;
+  };
+  v.onerror = () => {
+    const c = v.error?.code;
+    fail(c === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ? (codecLikelyMissing(name) ? "codec" : "decode") : c === MediaError.MEDIA_ERR_DECODE ? "decode" : "network");
+  };
+  // A stream the player cannot decode can still load its metadata with no picture (e.g. HEVC with audio):
+  // no video track after loadedmetadata = no decoder.
+  v.onloadedmetadata = () => {
+    if (my === playerWatch && v.videoWidth === 0 && /\.(mp4|m4v|mov|mkv|webm)$/i.test(name) && codecLikelyMissing(name)) fail("codec");
+  };
+  setTimeout(() => {
+    if (my === playerWatch && d.open && v.readyState < 1 && !v.error) fail("slow");
+  }, PLAYER_STALL_MS);
   // plain: straight from the server (Range on the plaintext); other modes: the service worker decrypts here.
   const direct = features.streaming ? await core.streamUrl(id).catch(() => null) : null;
   v.src = direct ?? `./ddn/file/${encodeURIComponent(id)}?size=${size}`;
   v.dataset.source = direct ? "server" : "sw";
   if (!d.open) d.showModal();
   void v.play().catch(() => {});
+}
+/** HEVC is the usual case of "the format exists but this platform has no decoder" (phones record it). */
+function codecLikelyMissing(name: string): boolean {
+  const v = document.createElement("video");
+  return /\.(mp4|m4v|mov|mkv)$/i.test(name) && !v.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"');
 }
 // File preview: logic in preview.ts; ←/→ walk the open folder
 // (or the search hits in plain).
@@ -840,6 +886,7 @@ function previewFile(r: PreviewRow) {
   preview.open(r, searchQ ? { rows: searchRows } : { folder: currentFolder(), sort });
 }
 function closePlayer() {
+  playerWatch++;
   const v = $<HTMLVideoElement>("player");
   v.pause();
   v.removeAttribute("src");

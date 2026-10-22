@@ -52,9 +52,10 @@ export async function handleStreamRequest(
   });
 }
 
-function guessType(name: string): string {
+/** Content type of a file by its name (players need it: an MP4 that starts with `mdat` is not sniffed). */
+export function guessType(name: string): string {
   const ext = name.toLowerCase().split(".").pop() ?? "";
   return (
-    { mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", mkv: "video/x-matroska", mp3: "audio/mpeg", ogg: "audio/ogg", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", pdf: "application/pdf", txt: "text/plain; charset=utf-8" } as Record<string, string>
+    { mp4: "video/mp4", m4v: "video/mp4", mov: "video/quicktime", "3gp": "video/3gpp", webm: "video/webm", mkv: "video/x-matroska", mp3: "audio/mpeg", m4a: "audio/mp4", aac: "audio/aac", ogg: "audio/ogg", opus: "audio/ogg", flac: "audio/flac", wav: "audio/wav", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", pdf: "application/pdf", txt: "text/plain; charset=utf-8" } as Record<string, string>
   )[ext] ?? "application/octet-stream";
 }

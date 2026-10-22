@@ -201,7 +201,7 @@ parent?.on("message", (e) => {
         if (typeof q.nodeId !== "string" || !Number.isSafeInteger(q.start) || !Number.isSafeInteger(q.end)) throw new Error("bad range");
         const c = await (ready ?? Promise.reject(new Error("agent not initialised")));
         const r = await c.readRange(q.nodeId, q.start as number, q.end as number);
-        parent.postMessage({ type: "range-result", id: q.id, ok: true, data: r.data, size: r.size, start: r.start, end: r.end });
+        parent.postMessage({ type: "range-result", id: q.id, ok: true, data: r.data, size: r.size, start: r.start, end: r.end, name: r.name });
       } catch (err) {
         parent.postMessage({ type: "range-result", id: q.id, ok: false, error: String((err as Error)?.message ?? err) });
       }

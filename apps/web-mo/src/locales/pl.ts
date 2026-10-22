@@ -224,6 +224,13 @@ export const pl: Record<string, string> = {
   "dev.pairWrongDevice": "Ten kod paruje NOWE urządzenie. Otwórz go na urządzeniu, które jest już zalogowane.",
 
   // odtwarzacz
+  "player.why.codec": "Ta aplikacja nie odtworzy tutaj formatu tego filmu (np. HEVC/H.265 bez dekodera na tym komputerze).",
+  "player.why.decode": "Nie udało się zdekodować filmu (uszkodzony plik albo nieobsługiwana odmiana formatu).",
+  "player.why.network": "Nie udało się odczytać filmu (błąd połączenia albo miejsca przechowywania).",
+  "player.why.slow": "Film nie startuje: przez {s} s nic nie przyszło.",
+  "player.dlOpen": "Pobierz i otwórz w systemowym odtwarzaczu",
+  "player.dl": "Pobierz",
+  "player.opening": "Pobieranie, po zakończeniu otworzy się systemowy odtwarzacz…",
   "player.close": "Zamknij odtwarzacz",
 
   // okno zestawu ratunkowego
