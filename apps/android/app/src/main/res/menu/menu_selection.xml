@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item android:id="@+id/action_sel_sync" android:title="@string/action_sync_selected"
+        android:icon="@drawable/ic_sync" app:showAsAction="always"/>
+    <item android:id="@+id/action_sel_delete_cloud" android:title="@string/action_delete_cloud"
+        android:icon="@drawable/ic_delete" app:showAsAction="always"/>
+    <item android:id="@+id/action_sel_move" android:title="@string/action_move_to_album"
+        app:showAsAction="never"/>
+    <item android:id="@+id/action_sel_fav_add" android:title="@string/sel_fav_add"
+        app:showAsAction="never"/>
+    <item android:id="@+id/action_sel_fav_remove" android:title="@string/sel_fav_remove"
+        app:showAsAction="never"/>
+    <item android:id="@+id/action_sel_delete_everywhere" android:title="@string/action_delete_everywhere"
+        app:showAsAction="never"/>
+    <item android:id="@+id/action_sel_delete_local" android:title="@string/action_delete_local"
+        app:showAsAction="never"/>
+</menu>
