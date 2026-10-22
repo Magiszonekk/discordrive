@@ -60,11 +60,18 @@ import {
   type PendingPairing,
   TransferLog,
   type UploadStages,
+  type PreviewImage,
+  type PreviewKind,
 } from "@ddv4/metadata-client";
 import { NetControl, type BaselineData, type LaneFetch, type NetUiState } from "@ddv4/metadata-client";
 import { fromBase64, toBase64 } from "@ddv4/processing";
 // Resolved at build time to ONE mode (build.ts): the other modes are not in the bundle.
 import { mode } from "ddn:mode";
+
+/** How long an upload waits for the page's previews when the manifest goes out (none by then: without). */
+const PREVIEW_WAIT_MS = 20_000;
+/** Names the thumbnail backfill looks at (what the page can make previews from). */
+const PREVIEW_NAMES = /\.(jpe?g|jfif|png|gif|webp|avif|bmp|mp4|m4v|webm|mov|mkv|ogv)$/i;
 
 /** Build of this app (build.ts define: version + source hash + commit); "dev" when run unbuilt. */
 declare const __DDN_BUILD__: string | undefined;
@@ -116,6 +123,8 @@ export type CoreEvent =
   | { type: "net-baseline"; data: BaselineData }
   | { type: "net-tune"; data: { up: number; down: number } }
   | { type: "share-progress"; done: number; total: number }
+  /** "Make thumbnails for existing photos": the UI makes them (it has the decoder), the core stores them. */
+  | { type: "backfill"; state: BackfillState }
   | { type: "changed" }
   | { type: "cleanup"; running: boolean }
   /** Moving a channel: progress of the job (this tab in metadata only, the instance in e2ee/plain). */
@@ -124,6 +133,18 @@ export type CoreEvent =
   | { type: "notices"; notices: UiNotice[] }
   /** The server no longer accepts this device: the account was blocked or deleted, or the device revoked. */
   | { type: "auth-lost"; code: AuthLost };
+
+/** Thumbnails for files uploaded without them: progress (kept across restarts by `after`). */
+export interface BackfillState {
+  running: boolean;
+  done: number;
+  made: number;
+  failed: number;
+  /** Files left, as far as the index knows (image and video names without known previews). */
+  left: number;
+  /** Stopped because the link is metered (it continues only when started by hand). */
+  metered?: boolean;
+}
 
 export interface AdminAccount {
   accountId: string;
@@ -941,24 +962,120 @@ export class AppCore {
     return id;
   }
 
+  /**
+   * Thumbnail / preview of an upload in progress (`token`), handed over by the UI that makes them from the
+   * file (the core has no image decoder in the desktop agent). Waited for when the manifest goes out.
+   */
+  private readonly previewWaits = new Map<string, { promise: Promise<PreviewImage[] | null>; resolve: (v: PreviewImage[] | null) => void }>();
+  private previewsFor(token: string): Promise<PreviewImage[] | null> | undefined {
+    if (!token) return undefined;
+    let w = this.previewWaits.get(token);
+    if (!w) {
+      let resolve!: (v: PreviewImage[] | null) => void;
+      const promise = new Promise<PreviewImage[] | null>((r) => (resolve = r));
+      this.previewWaits.set(token, (w = { promise, resolve }));
+    }
+    // Never waits long: a UI that makes none (old page, a type without previews) says so, or this ends it.
+    setTimeout(() => w!.resolve(null), PREVIEW_WAIT_MS);
+    return w.promise;
+  }
+  /** The UI's pictures for the upload `token` (null: none). Before or after the upload asked for them. */
+  uploadPreviews(token: string, imgs: PreviewImage[] | null): void {
+    const ok = Array.isArray(imgs) ? imgs.filter((x) => x && (x.kind === "t" || x.kind === "p") && x.data instanceof Uint8Array && typeof x.mime === "string") : null;
+    let w = this.previewWaits.get(token);
+    if (!w) {
+      this.previewWaits.set(token, (w = { promise: Promise.resolve(ok), resolve: () => {} }));
+      setTimeout(() => this.previewWaits.delete(token), PREVIEW_WAIT_MS * 2);
+    } else w.resolve(ok);
+  }
+
   /** Upload with byte progress pushed as "upload-progress" events tagged with `token`. Cancel: cancelUpload(token). */
-  async upload(file: Blob, name: string, parentId = ROOT_ID, token = "", resumeKey?: string) {
+  async upload(file: Blob, name: string, parentId = ROOT_ID, token = "", resumeKey?: string, previews = false) {
     let last = 0;
     const ac = new AbortController();
     if (token) this.uploads.set(token, ac);
     const r = await this.c().upload(blobSource(file), name, parentId, {
       signal: ac.signal,
       resumeKey,
+      previews: previews ? this.previewsFor(token) : undefined,
       onProgress: (done, total, stages) => {
         const t = Date.now();
         if (done > 0 && done < total && t - last < 100) return;
         last = t;
         this.onEvent({ type: "upload-progress", token, done, total, stages });
       },
-    }).finally(() => this.uploads.delete(token));
+    }).finally(() => (this.uploads.delete(token), this.previewWaits.delete(token)));
     this.version++;
     void this.snapshotSoon();
     return { nodeId: r.nodeId, chunks: r.chunks, sha256: r.version.plaintextSha256, resumed: r.resumed };
+  }
+
+  // ── thumbnails and previews (made by the client at upload; see metadata-client/previews.ts) ──────────
+
+  /** Thumbnail ("t") or preview ("p") of a file: the encrypted one stored with it, else (plain) the server's. */
+  async preview(nodeId: string, kind: PreviewKind = "t"): Promise<Blob | null> {
+    const n = this.c().store.getNode(nodeId);
+    const ref = n?.content?.manifestRef;
+    if (ref) {
+      const img = await this.c().readPreview(ref, kind).catch(() => null);
+      if (img) return new Blob([img.data as BlobPart], { type: img.mime });
+    }
+    return kind === "t" && mode.thumbnail ? mode.thumbnail(this.ctx!, nodeId).catch(() => null) : null;
+  }
+
+  /** Previews of these files as far as this device already knows them (no network): which have one. */
+  knownPreviews(nodeIds: string[]): string[] {
+    const s = this.store as unknown as { previewInfo?(r: string): { v: string } | undefined };
+    return nodeIds.filter((id) => {
+      const ref = this.c().store.getNode(id)?.content?.manifestRef;
+      const k = ref ? s.previewInfo?.(ref) : undefined;
+      return !!k && k.v !== "{}";
+    });
+  }
+
+  private backfill: BackfillState = { running: false, done: 0, made: 0, failed: 0, left: 0 };
+  /** Within one run: where the walk over the files is (upload ID order). Files done are marked in the index. */
+  private backfillCursor = "";
+  private filesWithoutPreviews(after: string, limit: number) {
+    const s = this.store as unknown as { filesWithoutPreviews?: SqlIndexStore["filesWithoutPreviews"] };
+    return s.filesWithoutPreviews?.(PREVIEW_NAMES, after, limit) ?? [];
+  }
+  backfillState(): BackfillState {
+    return { ...this.backfill, left: this.backfill.running ? this.backfill.left : this.filesWithoutPreviews("", 1000).length };
+  }
+  /**
+   * Next files for "Make thumbnails for existing photos": the page downloads each, makes the pictures and
+   * gives them back (backfillAdd). Resumable: a file done (or found impossible) is marked in the index.
+   * Metered link: only when started by hand (`manual`).
+   */
+  backfillNext(limit = 5, manual = false): { nodeId: string; name: string; size: number }[] {
+    if (meteredLink() && !manual) {
+      this.backfill = { ...this.backfill, running: false, metered: true };
+      this.onEvent({ type: "backfill", state: this.backfill });
+      return [];
+    }
+    if (!this.backfill.running) {
+      this.backfillCursor = "";
+      this.backfill = { running: true, done: 0, made: 0, failed: 0, left: this.filesWithoutPreviews("", 1000).length };
+    }
+    const list = this.filesWithoutPreviews(this.backfillCursor, Math.max(1, Math.min(50, limit)));
+    if (list.length) this.backfillCursor = list.at(-1)!.uploadId;
+    return list.map((x) => ({ nodeId: x.nodeId, name: x.name, size: x.size }));
+  }
+  /** Pictures made for an existing file (null = the page could not make any: marked, not tried again). */
+  async backfillAdd(nodeId: string, imgs: PreviewImage[] | null): Promise<boolean> {
+    const c = this.c().store.getNode(nodeId)?.content;
+    const ok = Array.isArray(imgs) ? imgs.filter((x) => x && (x.kind === "t" || x.kind === "p") && x.data instanceof Uint8Array) : [];
+    let made = false;
+    if (c && ok.length) made = (await this.c().addPreviews(c.manifestRef, ok, c.uploadId).catch(() => [])).length > 0;
+    if (c && !made) (this.store as unknown as { setPreviewInfo?(r: string, v: string, at: number): void }).setPreviewInfo?.(c.manifestRef, "-", Date.now());
+    this.backfill = { ...this.backfill, done: this.backfill.done + 1, made: this.backfill.made + (made ? 1 : 0), failed: this.backfill.failed + (made ? 0 : 1), left: Math.max(0, this.backfill.left - 1) };
+    this.onEvent({ type: "backfill", state: this.backfill });
+    return made;
+  }
+  backfillEnd(): void {
+    this.backfill = { ...this.backfill, running: false };
+    this.onEvent({ type: "backfill", state: this.backfillState() });
   }
 
   // ── desktop: files on this computer (platform.files; the browser has none) ─────────────────────────
@@ -1012,7 +1129,7 @@ export class AppCore {
    * piece as it is sent, never whole into memory; an interrupted upload of the same file into the same
    * folder continues where it stopped (also after the app restarted).
    */
-  async uploadPath(path: string, folder: string[] = [], parentId = ROOT_ID, token = ""): Promise<{ nodeId: string; resumed: number; size: number }> {
+  async uploadPath(path: string, folder: string[] = [], parentId = ROOT_ID, token = "", previews = false): Promise<{ nodeId: string; resumed: number; size: number }> {
     if (typeof path !== "string" || !path || !Array.isArray(folder) || folder.some((x) => typeof x !== "string")) throw new Error("bad arguments");
     const src = await this.disk().openSource(path);
     const ac = new AbortController();
@@ -1023,6 +1140,7 @@ export class AppCore {
       const r = await this.c().upload(src, src.name, into, {
         signal: ac.signal,
         resumeKey: diskResumeKey(into, path, src.size, src.mtimeMs),
+        previews: previews ? this.previewsFor(token) : undefined,
         onProgress: (done, total, stages) => {
           const t = Date.now();
           if (done > 0 && done < total && t - last < 100) return;
@@ -1035,6 +1153,7 @@ export class AppCore {
       return { nodeId: r.nodeId, resumed: r.resumed, size: src.size };
     } finally {
       this.uploads.delete(token);
+      this.previewWaits.delete(token);
       await src.close();
     }
   }

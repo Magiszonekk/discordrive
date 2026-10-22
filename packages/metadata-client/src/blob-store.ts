@@ -9,15 +9,15 @@
 // The bytes are the same in every mode (discordrive fragment format); only
 // the transport differs. A mode bundle imports one implementation only.
 
-import type { Placement } from "./types.js";
+import type { ExtraFile, Placement } from "./types.js";
 import type { TransferLog } from "./transfer-log.js";
 import type { NetControl } from "./net.js";
 
 export interface BlobPutContext {
   /** Upload the blob belongs to (fragments and the manifest of one version). */
   uploadId?: string;
-  /** Fragment index, or "m" for the manifest. */
-  index?: number | "m";
+  /** Fragment index, "m" for the manifest, `x<name>` for an extra blob next to it (instance only). */
+  index?: number | "m" | `x${string}`;
   /** Plaintext SHA-256 is not known here; this is the ciphertext hash (hex), when the caller has it. */
   sha256?: string;
   signal?: AbortSignal;
@@ -33,8 +33,26 @@ export interface BlobGetContext {
   i?: number | "m";
 }
 
+/** Extra blobs stored next to another one (previews next to a manifest): name, size, where. */
+export interface ExtraPlacement {
+  /** The name it was stored under, without the extension. */
+  name: string;
+  size: number;
+  placement: Placement;
+}
+
 export interface BlobStore {
   put(data: Uint8Array, filename: string, ctx?: BlobPutContext): Promise<Placement>;
+  /**
+   * Store a blob together with small extra blobs that belong to it (previews next to a manifest). Discord:
+   * one message with several attachments; the instance: blobs of the same upload. A store without it
+   * (or a backend that cannot) stores only the main blob: callers treat the extras as optional.
+   */
+  putWithExtras?(data: Uint8Array, filename: string, extras: ExtraFile[], ctx?: BlobPutContext): Promise<{ placement: Placement; extras: ExtraPlacement[] }>;
+  /** The extra blobs stored next to `p` (Discord: the other attachments of its message). */
+  extrasOf?(p: Placement, signal?: AbortSignal): Promise<ExtraPlacement[]>;
+  /** Add extra blobs next to `p` later (existing ones stay). */
+  addExtras?(p: Placement, extras: ExtraFile[], ctx?: { uploadId?: string }): Promise<ExtraPlacement[]>;
   get(p: Placement, signal?: AbortSignal, ctx?: BlobGetContext): Promise<Uint8Array>;
   /** Channels new blobs are spread over (DriveClient sizes the upload concurrency from it). */
   lanes?(): number;

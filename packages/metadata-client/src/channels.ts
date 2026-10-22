@@ -45,6 +45,8 @@ export interface ChannelClient extends DriveClient {
   fetchPlacement(p: Placement): Promise<Uint8Array>;
   postBlob(d: Uint8Array, f: string): Promise<Placement>;
   postBlobExcept(d: Uint8Array, f: string, exclude: ReadonlySet<string>): Promise<Placement>;
+  /** The same with extra attachments in one message (previews next to a manifest). */
+  postBlobExceptWithExtras?(d: Uint8Array, f: string, extras: { filename: string; data: Uint8Array }[], exclude: ReadonlySet<string>): Promise<Placement>;
   postBlobTo(hookId: string, d: Uint8Array, f: string): Promise<Placement>;
   /** Backend from the vault by ID (throws if unknown). */
   backend(id: string): BlobBackend;
@@ -324,7 +326,16 @@ export class ChannelMover {
     }
     const m2: ChunkManifest = { ...manifest, chunks };
     const mct = await encryptManifest(key, m2);
-    const at = await c.postBlobExcept(mct, `${newId()}${BLOB_EXT}`, exclude);
+    // The previews next to the manifest go with it (same bytes, same names). Unreadable: moved without them.
+    const extras: { filename: string; data: Uint8Array }[] = [];
+    if (c.postBlobExceptWithExtras) {
+      const have = await c.previewsOf(manifestRef).catch(() => ({}) as Awaited<ReturnType<typeof c.previewsOf>>);
+      for (const x of Object.values(have)) {
+        const data = await c.fetchPlacement(x.placement).catch(() => null);
+        if (data) extras.push({ filename: `${x.name}${BLOB_EXT}`, data });
+      }
+    }
+    const at = extras.length ? await c.postBlobExceptWithExtras!(mct, `${newId()}${BLOB_EXT}`, extras, exclude) : await c.postBlobExcept(mct, `${newId()}${BLOB_EXT}`, exclude);
     return { manifestRef: encodeManifestRef({ ...loc, at }), pieces: piecesOf(m2, at, mct.byteLength) };
   }
 }

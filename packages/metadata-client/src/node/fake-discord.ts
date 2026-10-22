@@ -146,6 +146,8 @@ export class FakeDiscord {
   /** Bot token accepted by POST /api/v10/attachments/refresh-urls (null = refresh off). */
   botToken: string | null = null;
   refreshCalls = 0;
+  /** Message edits (PATCH) answered. */
+  patches = 0;
 
   private msgJson(mid: string, m: Msg) {
     return {
@@ -239,29 +241,48 @@ export class FakeDiscord {
 
     if (!mid && req.method === "GET") return this.send(res, 200, { id: webhookId, channel_id: hook.channelId, guild_id: "fake-guild", name: hook.name }, cors);
 
-    // files[0] of the multipart body, found by its part header and the closing boundary (cheap: a 10 MiB
-    // post through Request.formData() cost the fake more CPU than the client it measures).
-    const readFile = async (): Promise<{ filename: string; data: Uint8Array } | null> => {
+    // files[i] of the multipart body, found by their part headers and the closing boundary (cheap: a 10 MiB
+    // post through Request.formData() cost the fake more CPU than the client it measures), and the kept
+    // attachment IDs of payload_json (an edit keeps the listed ones, like Discord).
+    const readBody = async (): Promise<{ files: { filename: string; data: Uint8Array }[]; keep: string[] } | null> => {
       const chunks: Buffer[] = [];
       for await (const c of req) chunks.push(c as Buffer);
       const body = Buffer.concat(chunks);
       const b = /boundary=(?:"([^"]+)"|([^;\s]+))/.exec(String(req.headers["content-type"] ?? ""));
       if (!b) return null;
       const boundary = Buffer.from(`--${b[1] ?? b[2]}`);
-      const at = body.indexOf('name="files[0]"');
-      if (at < 0) return null;
-      const headEnd = body.indexOf("\r\n\r\n", at);
-      const end = body.indexOf(Buffer.concat([Buffer.from("\r\n"), boundary]), headEnd);
-      if (headEnd < 0 || end < 0) return null;
-      const filename = /filename="([^"]*)"/.exec(body.subarray(at, headEnd).toString("utf8"))?.[1] || "blob";
-      return { filename, data: new Uint8Array(body.buffer, body.byteOffset + headEnd + 4, end - headEnd - 4) };
+      const sep = Buffer.concat([Buffer.from("\r\n"), boundary]);
+      const files: { filename: string; data: Uint8Array }[] = [];
+      for (let i = 0; i < 10; i++) {
+        const at = body.indexOf(`name="files[${i}]"`);
+        if (at < 0) break;
+        const headEnd = body.indexOf("\r\n\r\n", at);
+        const end = body.indexOf(sep, headEnd);
+        if (headEnd < 0 || end < 0) return null;
+        const filename = /filename="([^"]*)"/.exec(body.subarray(at, headEnd).toString("utf8"))?.[1] || "blob";
+        files.push({ filename, data: new Uint8Array(body.buffer, body.byteOffset + headEnd + 4, end - headEnd - 4) });
+      }
+      let keep: string[] = [];
+      const pj = body.indexOf('name="payload_json"');
+      if (pj >= 0) {
+        const hs = body.indexOf("\r\n\r\n", pj);
+        const pe = body.indexOf(sep, hs);
+        try {
+          const j = JSON.parse(body.subarray(hs + 4, pe).toString("utf8")) as { attachments?: { id: unknown; filename?: string }[] };
+          keep = (j.attachments ?? []).filter((a) => typeof a.id === "string").map((a) => a.id as string);
+        } catch {
+          /* no JSON: nothing kept */
+        }
+      }
+      return { files, keep };
     };
 
     if (!mid && req.method === "POST") {
       const wait = this.limited(hook.channelId);
       if (wait > 0) this.rejectedByChannel.set(hook.channelId, (this.rejectedByChannel.get(hook.channelId) ?? 0) + 1);
       if (wait > 0) return this.send(res, 429, { message: "The resource is being rate limited.", retry_after: wait, global: false }, { ...cors, "x-ratelimit-scope": "shared" });
-      const f = await readFile();
+      const rb = await readBody();
+      const f = rb?.files[0] ?? null;
       if (this.postDelayMs) await new Promise((r) => setTimeout(r, this.postDelayMs));
       const no = ++this.postNo;
       if (this.dropPosts.has(no) || (this.dropPostEvery > 0 && Math.random() < this.dropPostEvery)) {
@@ -269,13 +290,16 @@ export class FakeDiscord {
         return void req.socket.destroy();
       }
       if (!f) return this.send(res, 400, { message: "no file" }, cors);
-      if (f.data.byteLength > 20 * 1024 * 1024) return this.send(res, 413, { message: "Request entity too large" }, cors);
+      if (rb!.files.reduce((n, x) => n + x.data.byteLength, 0) > 20 * 1024 * 1024) return this.send(res, 413, { message: "Request entity too large" }, cors);
       const id = this.id();
-      const aid = this.id();
-      this.blobs.set(aid, f.data);
-      this.attMeta.set(aid, { channelId: hook.channelId, filename: f.filename });
       // With blobDir the bytes live only on disk (a message keeps the ID and the name).
-      const msg: Msg = { webhookId, channelId: hook.channelId, attachments: [{ id: aid, filename: f.filename, data: this.blobDir ? new Uint8Array(0) : f.data, size: f.data.byteLength }] };
+      const msg: Msg = { webhookId, channelId: hook.channelId, attachments: [] };
+      for (const x of rb!.files) {
+        const aid = this.id();
+        this.blobs.set(aid, x.data);
+        this.attMeta.set(aid, { channelId: hook.channelId, filename: x.filename });
+        msg.attachments.push({ id: aid, filename: x.filename, data: this.blobDir ? new Uint8Array(0) : x.data, size: x.data.byteLength });
+      }
       this.messages.set(id, msg);
       this.posts++;
       this.postsByChannel.set(hook.channelId, (this.postsByChannel.get(hook.channelId) ?? 0) + 1);
@@ -304,13 +328,19 @@ export class FakeDiscord {
       return void res.end();
     }
     if (req.method === "PATCH") {
-      const f = await readFile();
-      if (!f) return this.send(res, 400, { message: "no file" }, cors);
-      for (const a of msg.attachments) this.blobs.delete(a.id);
-      const aid = this.id();
-      this.blobs.set(aid, f.data);
-      this.attMeta.set(aid, { channelId: msg.channelId, filename: f.filename });
-      msg.attachments = [{ id: aid, filename: f.filename, data: this.blobDir ? new Uint8Array(0) : f.data, size: f.data.byteLength }];
+      const rb = await readBody();
+      if (!rb || (!rb.files.length && !rb.keep.length)) return this.send(res, 400, { message: "no file" }, cors);
+      // Attachments listed by ID stay as they are; the others are dropped; new files are added.
+      for (const a of msg.attachments) if (!rb.keep.includes(a.id)) this.blobs.delete(a.id);
+      msg.attachments = msg.attachments.filter((a) => rb.keep.includes(a.id));
+      if (msg.attachments.length + rb.files.length > 10) return this.send(res, 400, { message: "too many attachments" }, cors);
+      for (const x of rb.files) {
+        const aid = this.id();
+        this.blobs.set(aid, x.data);
+        this.attMeta.set(aid, { channelId: msg.channelId, filename: x.filename });
+        msg.attachments.push({ id: aid, filename: x.filename, data: this.blobDir ? new Uint8Array(0) : x.data, size: x.data.byteLength });
+      }
+      this.patches++;
       return this.send(res, 200, this.msgJson(mid!, msg), cors);
     }
     return this.send(res, 405, { message: "Method Not Allowed" }, cors);

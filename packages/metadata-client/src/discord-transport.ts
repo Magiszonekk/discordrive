@@ -8,7 +8,7 @@
 
 import { NetworkError } from "./net.js";
 import type { LaneFetch } from "./blob-store.js";
-import type { MessageAttachment, PostedAttachment, ReqTiming, WebhookRef, WebhookTransport } from "./types.js";
+import type { ExtraFile, MessageAttachment, PostedAttachment, ReqTiming, WebhookRef, WebhookTransport } from "./types.js";
 import { ms, nowMs } from "./transfer-log.js";
 
 export class RateLimitedError extends Error {
@@ -70,10 +70,19 @@ async function rateLimitFrom(res: Response): Promise<RateLimitedError> {
  * ~8.5 MB/s, FormData/Blob at 180-400 MB/s (the renderer copies a typed-array body slowly; a Blob is
  * handed to the network service by reference).
  */
-function webhookForm(filename: string, data: Uint8Array): FormData {
+function webhookForm(filename: string, data: Uint8Array, extra: ExtraFile[] = []): FormData {
+  const files = [{ filename, data }, ...extra];
   const fd = new FormData();
-  fd.append("payload_json", JSON.stringify({ content: "", attachments: [{ id: 0, filename }] }));
-  fd.append("files[0]", new Blob([data as BlobPart], { type: "application/octet-stream" }), filename);
+  fd.append("payload_json", JSON.stringify({ content: "", attachments: files.map((f, i) => ({ id: i, filename: f.filename })) }));
+  files.forEach((f, i) => fd.append(`files[${i}]`, new Blob([f.data as BlobPart], { type: "application/octet-stream" }), f.filename));
+  return fd;
+}
+
+/** A message edit that keeps the attachments `keep` (by ID) and adds `extra`. */
+function addFilesForm(keep: string[], extra: ExtraFile[]): FormData {
+  const fd = new FormData();
+  fd.append("payload_json", JSON.stringify({ attachments: [...keep.map((id) => ({ id })), ...extra.map((f, i) => ({ id: i, filename: f.filename }))] }));
+  extra.forEach((f, i) => fd.append(`files[${i}]`, new Blob([f.data as BlobPart], { type: "application/octet-stream" }), f.filename));
   return fd;
 }
 
@@ -81,16 +90,17 @@ function webhookForm(filename: string, data: Uint8Array): FormData {
  * The same multipart body as webhookForm, as the parts to send one after another (Node: no copy of the
  * fragment; FormData + Blob + the request stream held three copies of every 10 MiB post in flight).
  */
-export function webhookMultipart(filename: string, data: Uint8Array): { contentType: string; parts: Uint8Array[] } {
+export function webhookMultipart(filename: string, data: Uint8Array, extra: ExtraFile[] = []): { contentType: string; parts: Uint8Array[] } {
   const boundary = `----ddn${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
   const enc = new TextEncoder();
-  const safe = filename.replace(/["\r\n]/g, "_");
-  const head = enc.encode(
-    `--${boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\nContent-Type: application/json\r\n\r\n` +
-      JSON.stringify({ content: "", attachments: [{ id: 0, filename }] }) +
-      `\r\n--${boundary}\r\nContent-Disposition: form-data; name="files[0]"; filename="${safe}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
-  );
-  return { contentType: `multipart/form-data; boundary=${boundary}`, parts: [head, data, enc.encode(`\r\n--${boundary}--\r\n`)] };
+  const files = [{ filename, data }, ...extra];
+  const part = (i: number, name: string) => `\r\n--${boundary}\r\nContent-Disposition: form-data; name="files[${i}]"; filename="${name.replace(/["\r\n]/g, "_")}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
+  const parts: Uint8Array[] = [
+    enc.encode(`--${boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\nContent-Type: application/json\r\n\r\n` + JSON.stringify({ content: "", attachments: files.map((f, i) => ({ id: i, filename: f.filename })) })),
+  ];
+  files.forEach((f, i) => parts.push(enc.encode(part(i, f.filename)), f.data));
+  parts.push(enc.encode(`\r\n--${boundary}--\r\n`));
+  return { contentType: `multipart/form-data; boundary=${boundary}`, parts };
 }
 
 /** A fetch that can send a body given as parts without copying them (h2Fetch in the desktop agent). */
@@ -117,13 +127,37 @@ export class DiscordWebhookTransport implements WebhookTransport {
   }
 
   /** A webhook post/edit with the fragment: as parts when the fetch can send them (no copy), else FormData. */
-  private postReq(url: string, method: string, filename: string, data: Uint8Array, what: string, signal?: AbortSignal, timing?: ReqTiming): Promise<Response> {
+  private postReq(url: string, method: string, filename: string, data: Uint8Array, what: string, signal?: AbortSignal, timing?: ReqTiming, extra: ExtraFile[] = []): Promise<Response> {
     const pf = this.f as PartsFetch;
     if (pf.sendParts) {
-      const mp = webhookMultipart(filename, data);
+      const mp = webhookMultipart(filename, data, extra);
       return this.req(url, { method }, what, signal, timing, (u, s) => pf.sendParts!(u, { method, headers: { "content-type": mp.contentType }, parts: mp.parts, signal: s }));
     }
-    return this.req(url, { method, body: webhookForm(filename, data) }, what, signal, timing);
+    return this.req(url, { method, body: webhookForm(filename, data, extra) }, what, signal, timing);
+  }
+
+  async postFiles(hook: WebhookRef, data: Uint8Array, filename: string, extra: ExtraFile[], signal?: AbortSignal, timing?: ReqTiming): Promise<PostedAttachment & { extras: MessageAttachment[] }> {
+    if (extra.length > 9) throw new Error("webhook post: at most 10 attachments");
+    const res = await this.postReq(`${hook.url}?wait=true`, "POST", filename, data, "webhook post", signal, timing, extra);
+    const j = (await res.json()) as { id: string; channel_id: string; attachments: { id: string; url: string; size: number; filename?: string }[] };
+    const atts = j.attachments ?? [];
+    // Discord answers the attachments in the order they were sent; matched by name to be sure.
+    const first = atts.find((a) => a.filename === filename) ?? atts[0];
+    if (!first) throw new Error("webhook post: no attachment in response");
+    const extras = extra.map((f) => atts.find((a) => a.filename === f.filename && a !== first));
+    if (extras.some((x) => !x)) throw new Error("webhook post: an attachment is missing in the response");
+    return { webhookId: hook.id, channelId: j.channel_id, messageId: j.id, attachmentId: first.id, sizeBytes: first.size, url: first.url, extras: extras.map((a) => ({ id: a!.id, url: a!.url, size: a!.size, filename: a!.filename })) };
+  }
+
+  async addFiles(hook: WebhookRef, messageId: string, keep: string[], extra: ExtraFile[]): Promise<MessageAttachment[]> {
+    if (keep.length + extra.length > 10) throw new Error("webhook edit: at most 10 attachments");
+    // Measured on Discord (2026-10-22): a PATCH listing the kept attachments by ID plus new files keeps the
+    // old ones byte for byte under the same IDs.
+    const res = await this.req(`${hook.url}/messages/${messageId}`, { method: "PATCH", body: addFilesForm(keep, extra) }, "webhook edit message");
+    const j = (await res.json()) as { attachments: { id: string; url: string; size: number; filename?: string }[] };
+    const atts = (j.attachments ?? []).map((a) => ({ id: a.id, url: a.url, size: a.size, filename: a.filename }));
+    if (keep.some((id) => !atts.some((a) => a.id === id))) throw new Error("webhook edit: an attachment was dropped");
+    return atts;
   }
 
   private async req(url: string, init: RequestInit, what: string, signal?: AbortSignal, timing?: ReqTiming, send?: (url: string, signal: AbortSignal) => Promise<Response>): Promise<Response> {
@@ -173,8 +207,8 @@ export class DiscordWebhookTransport implements WebhookTransport {
 
   async getAttachments(hook: WebhookRef, messageId: string, timing?: ReqTiming): Promise<MessageAttachment[]> {
     const res = await this.req(`${hook.url}/messages/${messageId}`, { method: "GET" }, "webhook get message", undefined, timing);
-    const j = (await res.json()) as { attachments: { id: string; url: string; size: number }[] };
-    return (j.attachments ?? []).map((a) => ({ id: a.id, url: a.url, size: a.size }));
+    const j = (await res.json()) as { attachments: { id: string; url: string; size: number; filename?: string }[] };
+    return (j.attachments ?? []).map((a) => ({ id: a.id, url: a.url, size: a.size, filename: a.filename }));
   }
 
   /** Extra connections for CDN reads (web: sandboxed iframes); lane 0 is this transport's own fetch. */

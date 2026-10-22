@@ -1,7 +1,7 @@
 // In-memory fake of the Discord webhook surface, for automatic tests.
 // Deterministic snowflake-like IDs; optional failure injection.
 
-import type { MessageAttachment, PostedAttachment, WebhookRef, WebhookTransport } from "./types.js";
+import type { ExtraFile, MessageAttachment, PostedAttachment, WebhookRef, WebhookTransport } from "./types.js";
 
 interface StoredMessage {
   webhookId: string;
@@ -45,6 +45,35 @@ export class MemoryTransport implements WebhookTransport {
     return { webhookId: hook.id, channelId, messageId, attachmentId, sizeBytes: copy.byteLength, url: this.link(attachmentId) };
   }
 
+  async postFiles(hook: WebhookRef, data: Uint8Array, filename: string, extra: ExtraFile[]): Promise<PostedAttachment & { extras: MessageAttachment[] }> {
+    if (extra.length > 9) throw new Error("400 too many attachments");
+    const r = await this.postFile(hook, data, filename);
+    const m = this.messages.get(r.messageId)!;
+    const extras = extra.map((f) => this.attach(m, f));
+    return { ...r, extras };
+  }
+
+  private attach(m: StoredMessage, f: ExtraFile): MessageAttachment {
+    if (f.data.byteLength > this.maxBytes) throw new Error("413 Payload Too Large");
+    const id = this.snowflake();
+    const copy = new Uint8Array(f.data);
+    m.attachments.push({ id, data: copy, filename: f.filename });
+    this.blobs.set(id, copy);
+    return { id, url: this.link(id), size: copy.byteLength, filename: f.filename };
+  }
+
+  async addFiles(hook: WebhookRef, messageId: string, keep: string[], extra: ExtraFile[]): Promise<MessageAttachment[]> {
+    const m = this.messages.get(messageId);
+    if (!m || m.webhookId !== hook.id) throw new Error("404 Unknown Message");
+    if (keep.length + extra.length > 10) throw new Error("400 too many attachments");
+    // Like Discord: attachments not listed are dropped, listed ones stay as they are.
+    for (const a of m.attachments) if (!keep.includes(a.id)) this.blobs.delete(a.id);
+    m.attachments = m.attachments.filter((a) => keep.includes(a.id));
+    for (const f of extra) this.attach(m, f);
+    this.edits++;
+    return m.attachments.map((a) => ({ id: a.id, url: this.link(a.id), size: a.data.byteLength, filename: a.filename }));
+  }
+
   async editMessageFile(hook: WebhookRef, messageId: string, data: Uint8Array, filename: string): Promise<PostedAttachment> {
     const m = this.messages.get(messageId);
     if (!m || m.webhookId !== hook.id) throw new Error("404 Unknown Message");
@@ -62,7 +91,7 @@ export class MemoryTransport implements WebhookTransport {
   async getAttachments(hook: WebhookRef, messageId: string): Promise<MessageAttachment[]> {
     const m = this.messages.get(messageId);
     if (!m || m.webhookId !== hook.id) throw new Error("404 Unknown Message");
-    return m.attachments.map((a) => ({ id: a.id, url: this.link(a.id), size: a.data.byteLength }));
+    return m.attachments.map((a) => ({ id: a.id, url: this.link(a.id), size: a.data.byteLength, filename: a.filename }));
   }
 
   async fetchCdn(url: string, _signal?: AbortSignal, _timing?: unknown, _lane?: number): Promise<Uint8Array> {

@@ -14,11 +14,11 @@
 import { guardedRead, netCall, retryFree, watchedPost, NetworkError, type LaneTiming, type NetControl } from "./net.js";
 import type { LaneFetch } from "./blob-store.js";
 import { sha256Hex } from "./file-crypto.js";
-import { AbortedError, type BlobGetContext, type BlobPutContext, type BlobStore } from "./blob-store.js";
+import { AbortedError, type BlobGetContext, type BlobPutContext, type BlobStore, type ExtraPlacement } from "./blob-store.js";
 import { errText, hostOf, ms, nowMs, type TransferLog } from "./transfer-log.js";
 import type { HttpApi } from "./http-api.js";
 import { ServerError } from "./http-api.js";
-import { isDiscordPlacement, type DiscordPlacement, type Placement } from "./types.js";
+import { isDiscordPlacement, type DiscordPlacement, type ExtraFile, type Placement } from "./types.js";
 
 export const SERVER_BLOB_STORE_MARKER = "ddn-server-blobs";
 
@@ -37,6 +37,8 @@ export interface ServerBlobStoreOptions {
   sleep?: (ms: number) => Promise<void>;
   fetchCdn?: (url: string, signal?: AbortSignal, timing?: { ttfb?: number; st?: number }) => Promise<Uint8Array>;
 }
+
+const stripExtOf = (n: string) => (n.lastIndexOf(".") > 0 ? n.slice(0, n.lastIndexOf(".")) : n);
 
 export class ServerBlobStore implements BlobStore {
   readonly marker = SERVER_BLOB_STORE_MARKER;
@@ -96,6 +98,33 @@ export class ServerBlobStore implements BlobStore {
         if (!r.ok) throw new Error(`cdn: HTTP ${r.status}`);
         return new Uint8Array(await r.arrayBuffer());
       });
+  }
+
+  /**
+   * The manifest, then its extras as blobs `x<name>` of the same upload (the instance keeps, moves and
+   * deletes them with it). An extra that fails is left out: they are optional.
+   */
+  async putWithExtras(data: Uint8Array, filename: string, extras: ExtraFile[], ctx: BlobPutContext = {}): Promise<{ placement: DiscordPlacement; extras: ExtraPlacement[] }> {
+    const placement = await this.put(data, filename, ctx);
+    const out: ExtraPlacement[] = [];
+    for (const x of extras) {
+      const name = stripExtOf(x.filename);
+      const p = await this.put(x.data, x.filename, { ...ctx, index: `x${name}` as never, sha256: undefined }).catch(() => null);
+      if (p) out.push({ name, size: x.data.byteLength, placement: p });
+    }
+    return { placement, extras: out };
+  }
+
+  async extrasOf(p: Placement): Promise<ExtraPlacement[]> {
+    if (!isDiscordPlacement(p)) return [];
+    const r = await this.api.json<{ extras: Record<string, ExtraPlacement[]> }>("POST", "/v1/blobs/extras", { attachmentIds: [p.attachmentId] });
+    return r.body.extras[p.attachmentId] ?? [];
+  }
+
+  async addExtras(p: Placement, extras: ExtraFile[], ctx: { uploadId?: string } = {}): Promise<ExtraPlacement[]> {
+    if (!ctx.uploadId) throw new Error("server blobs need an upload ID");
+    for (const x of extras) await this.put(x.data, x.filename, { uploadId: ctx.uploadId, index: `x${stripExtOf(x.filename)}` as never });
+    return this.extrasOf(p);
   }
 
   async put(data: Uint8Array, _filename: string, ctx: BlobPutContext = {}): Promise<DiscordPlacement> {

@@ -29,7 +29,8 @@ import {
   type IndexStore,
 } from "@ddv4/sync-core";
 import type { ArbiterApi } from "./arbiter.js";
-import { AbortedError, throwIfAborted, type BlobStore } from "./blob-store.js";
+import { AbortedError, throwIfAborted, type BlobStore, type ExtraPlacement } from "./blob-store.js";
+import { PREVIEW_KINDS, matchExtras, openPreview, previewKeys, sealPreview, type PreviewImage, type PreviewKind } from "./previews.js";
 import {
   FRAGMENT_FORMAT_VERSION,
   decryptFragment,
@@ -71,6 +72,8 @@ export const DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024 - 28;
  */
 export const BLOB_EXT = ".txt";
 export const MANIFEST_SCHEMA_VERSION = 1;
+/** A version found without previews is looked at again after this long (another device may add them). */
+export const PREVIEW_NONE_RECHECK_MS = 24 * 3600_000;
 const MANIFEST_REF_PREFIX = "ddn1:";
 const MANIFEST_REF2_PREFIX = "ddn2:";
 
@@ -242,6 +245,12 @@ export interface UploadOptions {
   resumeKey?: string;
   /** Cancel: stops the fragment in flight; the store drops what was sent (e2ee/plain). */
   signal?: AbortSignal;
+  /**
+   * Thumbnail / preview of the file (made by the caller from the plaintext while the fragments go out).
+   * Encrypted with the file key and stored with the manifest; awaited only when the manifest is posted.
+   * A rejection or a picture that does not fit the limits is skipped: the file is uploaded without it.
+   */
+  previews?: Promise<PreviewImage[] | null>;
 }
 
 export interface DownloadOptions {
@@ -424,6 +433,8 @@ export class DriveClient {
     const bad = validateName(nfc);
     if (bad) throw new Error(`invalid name: ${bad}`);
     const signal = opts.signal;
+    // The pictures are awaited only when the manifest goes out: a failure before that is not "unhandled".
+    opts.previews?.catch(() => {});
     throwIfAborted(signal);
     const deviceId = this.d.device.id;
     // Resume: the same upload ID, file key and node ID as the unfinished
@@ -599,8 +610,13 @@ export class DriveClient {
       const manifest: ChunkManifest = { schemaVersion: MANIFEST_SCHEMA_VERSION, chunkSizeBytes: this.chunkSize, chunks };
       const mct = await encryptManifest(key, manifest);
       throwIfAborted(signal);
+      // Previews go with the manifest (same message): a failed or missing one never fails the upload.
+      const extras = opts.previews ? await this.sealPreviews(key.rawB64, opts.previews) : [];
       await renew();
-      const mplaced = await this.blobs.put(mct, `${newId()}${BLOB_EXT}`, { uploadId, index: "m", sha256: await sha256Hex(mct), signal, stats });
+      const mctx = { uploadId, index: "m" as const, sha256: await sha256Hex(mct), signal, stats };
+      const withX = extras.length && this.blobs.putWithExtras ? await this.blobs.putWithExtras(mct, `${newId()}${BLOB_EXT}`, extras, mctx) : null;
+      const mplaced = withX ? withX.placement : await this.blobs.put(mct, `${newId()}${BLOB_EXT}`, mctx);
+      const madePreviews = withX ? matchExtras(await previewKeys(key.rawB64), withX.extras) : null;
       const version: ContentRef = {
         versionId: newId(),
         uploadId,
@@ -627,6 +643,11 @@ export class DriveClient {
         "upload_commit+create",
       );
       log?.emit("commit", { dir: "up", x: uploadId, dur: ms(tf) });
+      // This device knows where the previews it just stored are (no look at the message later).
+      if (madePreviews) {
+        this.previewIndex.set(version.manifestRef, Promise.resolve(madePreviews));
+        (this.store as unknown as { setPreviewInfo?(r: string, v: string, at: number): void }).setPreviewInfo?.(version.manifestRef, JSON.stringify(madePreviews), this.now());
+      }
       await forget();
       endLog(true);
       return { nodeId, uploadId, version, chunks: count, posts: stats.posts, resumed };
@@ -641,6 +662,91 @@ export class DriveClient {
     } finally {
       await this.d.arbiter.releaseLease(uploadId, deviceId);
     }
+  }
+
+  /** Pictures from the caller, checked and encrypted for storage next to the manifest (failures dropped). */
+  private async sealPreviews(fileKey: string, p: Promise<PreviewImage[] | null>): Promise<{ filename: string; data: Uint8Array }[]> {
+    const imgs = await p.catch(() => null);
+    if (!imgs?.length) return [];
+    const keys = await previewKeys(fileKey);
+    const out: { filename: string; data: Uint8Array }[] = [];
+    for (const k of PREVIEW_KINDS) {
+      const img = imgs.find((x) => x.kind === k);
+      if (!img) continue;
+      try {
+        const b = await sealPreview(keys, img);
+        out.push({ filename: `${b.name}${BLOB_EXT}`, data: b.data });
+      } catch {
+        /* not within the limits: left out */
+      }
+    }
+    return out;
+  }
+
+  /** Preview attachments found per manifest (null = none; kept for this session, a store re-reads on a miss). */
+  private readonly previewIndex = new Map<string, Promise<Partial<Record<PreviewKind, ExtraPlacement>>>>();
+
+  /**
+   * Where the pictures of a version are (a look at its manifest's message), {} when it has none. Kept in
+   * the local index where it has a table for it (a "none" is looked at again after PREVIEW_NONE_RECHECK_MS:
+   * another device may add them).
+   */
+  async previewsOf(manifestRef: string, signal?: AbortSignal): Promise<Partial<Record<PreviewKind, ExtraPlacement>>> {
+    let p = this.previewIndex.get(manifestRef);
+    if (!p) {
+      const db = this.store as unknown as { previewInfo?(r: string): { v: string; at: number } | undefined; setPreviewInfo?(r: string, v: string, at: number): void };
+      p = (async () => {
+        const known = db.previewInfo?.(manifestRef);
+        const none = known && (known.v === "{}" || known.v === "-");
+        if (known && (!none || this.now() - known.at < PREVIEW_NONE_RECHECK_MS)) return none ? {} : (JSON.parse(known.v) as Partial<Record<PreviewKind, ExtraPlacement>>);
+        const loc = decodeManifestRef(manifestRef);
+        if (!this.blobs.extrasOf) return {};
+        const extras = await this.blobs.extrasOf(loc.at, signal);
+        const found = matchExtras(await previewKeys(loc.k), extras);
+        // "-" (tried, none could be made) stays "-" while there are still none.
+        db.setPreviewInfo?.(manifestRef, Object.keys(found).length || known?.v !== "-" ? JSON.stringify(found) : "-", this.now());
+        return found;
+      })();
+      this.previewIndex.set(manifestRef, p);
+      p.catch(() => this.previewIndex.delete(manifestRef));
+      while (this.previewIndex.size > 5000) this.previewIndex.delete(this.previewIndex.keys().next().value!);
+    }
+    return p;
+  }
+
+  /** One picture of a version, decrypted; null when the version has none of that kind. */
+  async readPreview(manifestRef: string, kind: PreviewKind, signal?: AbortSignal): Promise<PreviewImage | null> {
+    const at = (await this.previewsOf(manifestRef, signal))[kind];
+    if (!at) return null;
+    const loc = decodeManifestRef(manifestRef);
+    return openPreview(await previewKeys(loc.k), kind, await this.blobs.get(at.placement, signal));
+  }
+
+  /**
+   * Add pictures to an existing version (made later from its content). Kinds it already has are kept;
+   * returns which kinds were added. Nothing in the tree or the log changes.
+   */
+  async addPreviews(manifestRef: string, imgs: PreviewImage[], uploadId?: string): Promise<PreviewKind[]> {
+    if (!this.blobs.addExtras) throw new Error("this storage cannot keep previews");
+    const loc = decodeManifestRef(manifestRef);
+    this.previewIndex.delete(manifestRef);
+    (this.store as unknown as { setPreviewInfo?(r: string, v: string, at: number): void }).setPreviewInfo?.(manifestRef, "{}", 0);
+    const have = await this.previewsOf(manifestRef);
+    const keys = await previewKeys(loc.k);
+    const add: { filename: string; data: Uint8Array }[] = [];
+    const kinds: PreviewKind[] = [];
+    for (const img of imgs) {
+      if (have[img.kind] || kinds.includes(img.kind)) continue;
+      const b = await sealPreview(keys, img);
+      add.push({ filename: `${b.name}${BLOB_EXT}`, data: b.data });
+      kinds.push(img.kind);
+    }
+    if (!add.length) return [];
+    const extras = await this.blobs.addExtras(loc.at, add, { uploadId });
+    const found = matchExtras(keys, extras);
+    this.previewIndex.set(manifestRef, Promise.resolve(found));
+    (this.store as unknown as { setPreviewInfo?(r: string, v: string, at: number): void }).setPreviewInfo?.(manifestRef, JSON.stringify(found), this.now());
+    return kinds;
   }
 
   /** Manifests are immutable per version: small LRU (manifest layer on demand). */

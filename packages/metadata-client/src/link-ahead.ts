@@ -95,6 +95,14 @@ export class LinkAhead {
     return null;
   }
 
+  /** A link learned elsewhere (a GET of the whole message): kept like a fetched one. */
+  put(p: DiscordPlacement, url: string): void {
+    const exp = linkExpiry(url);
+    const t = this.now();
+    this.cache.set(p.attachmentId, { url, until: exp ? Math.min(exp - this.o.marginMs, t + 6 * 3600_000) : t + this.o.defaultTtlMs });
+    while (this.cache.size > this.o.maxCached) this.cache.delete(this.cache.keys().next().value!);
+  }
+
   /** The CDN refused this link (403/404): forget it, the next need() fetches a new one. */
   drop(p: DiscordPlacement): void {
     if (this.cache.delete(p.attachmentId)) this.stats.stale++;

@@ -1258,6 +1258,88 @@ try {
   await nav(p, "files");
   r.contextMenu = cm;
 
+  // 10b''. Encrypted thumbnails made at upload (every mode): a photo, a video, a damaged JPEG and a text file
+  // in their own folder; tiles show the thumbnails of the photo and the video, the damaged one keeps its type
+  // badge and was uploaded fine; the preview shows the low-resolution picture first; a file uploaded without
+  // thumbnails gets them from "Make thumbnails for existing photos" in Settings.
+  step("thumbnails");
+  {
+    const th: Record<string, any> = {};
+    const tDir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-th-"));
+    // A 3000x2000 photo-like picture (detail everywhere, like a real photo) and an 8 s video.
+    execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "mandelbrot=size=3000x2000", "-frames:v", "1", "-q:v", "3", join(tDir, "foto.jpg")]);
+    execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=25:duration=8", "-c:v", "libvpx-vp9", "-b:v", "300k", "-deadline", "realtime", "-cpu-used", "8", join(tDir, "film.webm")]);
+    writeFileSync(join(tDir, "zepsute.jpg"), Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(5000, 7)]));
+    writeFileSync(join(tDir, "opis.txt"), "no thumbnail for text\n");
+    const thId = await p.evaluate(async () => (window as unknown as { ddnCore: { mkdir(n: string): Promise<string> } }).ddnCore.mkdir("Miniatury"));
+    await p.goto(`${base}/folder/${thId}`);
+    await p.waitForSelector("body[data-ready='1']");
+    await p.click("[data-ddn=view] [data-view=tiles]");
+    await p.setInputFiles("[data-ddn=file]", ["foto.jpg", "film.webm", "zepsute.jpg", "opis.txt"].map((n) => join(tDir, n)));
+    await p.waitForFunction((done) => document.querySelector("[data-ddn-ui=queue-title]")?.textContent === done, L.uploaded, { timeout: 120_000 });
+    await count(p, /^4 /);
+    const tile = (name: string) => p.locator("[data-ddn=row]", { hasText: name });
+    await tile("foto.jpg").locator("img[data-ddn=thumb]").waitFor({ timeout: 30_000 }).catch(() => {});
+    await tile("film.webm").locator("img[data-ddn=thumb]").waitFor({ timeout: 30_000 }).catch(() => {});
+    const thumbOf = (name: string) =>
+      tile(name).evaluate((tr) => {
+        const img = tr.querySelector<HTMLImageElement>("img[data-ddn=thumb]");
+        return img ? { w: img.naturalWidth, h: img.naturalHeight, ok: img.complete && img.naturalWidth > 0 } : null;
+      });
+    th.photo = await thumbOf("foto.jpg");
+    th.video = await thumbOf("film.webm");
+    th.damaged = await thumbOf("zepsute.jpg");
+    th.text = await thumbOf("opis.txt");
+    await shot(p, "27-tiles-thumbnails");
+    // Stored encrypted next to the manifest, readable again after a reload (from the browser's cache or Discord).
+    th.stored = await p.evaluate(async () => {
+      const c = (window as unknown as { ddnCore: { list(f: string): Promise<{ rows: { id: string; name: string }[] }>; preview(id: string, k: string): Promise<Blob | null> } }).ddnCore;
+      const rows = (await c.list(location.pathname.split("/").pop()!)).rows;
+      const out: Record<string, { t: number | null; p: number | null; type: string | null }> = {};
+      for (const r of rows) {
+        const t = await c.preview(r.id, "t");
+        const pv = await c.preview(r.id, "p");
+        out[r.name] = { t: t?.size ?? null, p: pv?.size ?? null, type: t?.type ?? null };
+      }
+      return out;
+    });
+    // The preview shows the low-resolution picture first, then the full photo.
+    await p.click("[data-ddn=view] [data-view=list]");
+    await tile("foto.jpg").locator("[data-ddn=preview-open]").click();
+    await p.waitForSelector("[data-ddn=preview-dialog][open][data-file='foto.jpg'] img[data-ddn=preview-img]", { timeout: 30_000 });
+    th.lowresFirst = await p.evaluate(() => {
+      const img = document.querySelector<HTMLImageElement>("[data-ddn=preview-img]");
+      return !!img && (img.dataset.placeholder === "1" || img.dataset.full === "1");
+    });
+    await p.waitForSelector("[data-ddn=preview-dialog][open][data-file='foto.jpg'][data-state=ready]", { timeout: 60_000 });
+    th.fullAfter = await p.evaluate(() => document.querySelector<HTMLImageElement>("[data-ddn=preview-img]")?.naturalWidth ?? 0);
+    await p.click("[data-ddn=preview-close]");
+    // A file uploaded without thumbnails (as an older app would): "Make thumbnails for existing photos".
+    const oldId = await p.evaluate(async (folder) => {
+      const c = (window as unknown as { ddnCore: { upload(b: Blob, n: string, parent: string): Promise<{ nodeId: string }> } }).ddnCore;
+      const cv = new OffscreenCanvas(800, 600);
+      const g = cv.getContext("2d")!;
+      g.fillStyle = "#3a7";
+      g.fillRect(0, 0, 800, 600);
+      g.fillStyle = "#fff";
+      g.fillRect(100, 100, 300, 200);
+      const jpg = await cv.convertToBlob({ type: "image/jpeg", quality: 0.9 });
+      return (await c.upload(jpg, "stare.jpg", folder)).nodeId;
+    }, thId);
+    // Before: no client thumbnail (plain may already show its server one; "p" is client-only in every mode).
+    th.oldBefore = await p.evaluate((id) => (window as unknown as { ddnCore: { preview(id: string, k: string): Promise<Blob | null> } }).ddnCore.preview(id, "p").then((b) => !!b), oldId);
+    await nav(p, "settings");
+    await p.waitForSelector("[data-ddn=thumbs-backfill]");
+    await p.click("[data-ddn=thumbs-backfill]");
+    await p.waitForFunction(() => !(document.querySelector<HTMLButtonElement>("[data-ddn=thumbs-backfill]")?.disabled ?? true) && !!document.querySelector("[data-ddn=thumbs-backfill-state]")?.textContent, null, { timeout: 60_000 });
+    th.backfillText = await p.textContent("[data-ddn=thumbs-backfill-state]");
+    th.oldAfter = await p.evaluate((id) => (window as unknown as { ddnCore: { preview(id: string, k: string): Promise<Blob | null> } }).ddnCore.preview(id, "p").then((b) => b?.size ?? 0), oldId);
+    // Run again: nothing left (the damaged JPEG is remembered as impossible, not tried each time).
+    th.backfillLeft = await p.evaluate(() => (window as unknown as { ddnCore: { backfillState(): Promise<{ left: number }> } }).ddnCore.backfillState().then((s) => s.left));
+    await nav(p, "files");
+    r.thumbnails = th;
+  }
+
   // 10c'''. The network goes away mid-download (context.setOffline): the panel
   // says "waiting for the network" (no error); it comes back: "resumed", the file completes with the right
   // SHA-256. The second connection (sandboxed iframe lane) downloads a file with Origin: null. Save data and
@@ -1926,6 +2008,18 @@ try {
         o.tiles.view === "tiles" && o.tiles.grid && o.tiles.cols >= 3 && o.tiles.pressed === "tiles" && o.tilesKept.view === "tiles" && o.tilesKept.grid && o.viewChecked === "true" && o.listAgain === true &&
         o.phone.view === "tiles" && o.phone.grid && o.phone.cols >= 2 && o.phone.noHScroll && o.phone.longPress && o.phone.noPreview && o.phone.trashShown &&
         JSON.stringify(o.trashItems) === JSON.stringify(["menu-restore", "menu-purge"]) && o.trashRestored === true && o.nativeInInputs === true
+      );
+    })(),
+    thumbnails: (() => {
+      const o = r.thumbnails as Record<string, any> | undefined;
+      if (!o) return false;
+      const fits = (x: { w: number; h: number; ok: boolean } | null, short: number, long: number) => !!x && x.ok && Math.min(x.w, x.h) <= short && Math.max(x.w, x.h) <= long;
+      return (
+        fits(o.photo, 320, 640) && Math.min(o.photo.w, o.photo.h) === 320 && fits(o.video, 320, 640) && o.damaged === null && o.text === null &&
+        o.stored["foto.jpg"].t > 0 && o.stored["foto.jpg"].t <= 48 * 1024 && o.stored["foto.jpg"].p > o.stored["foto.jpg"].t && o.stored["foto.jpg"].p <= 400 * 1024 &&
+        /image\/(webp|jpeg)/.test(o.stored["foto.jpg"].type) && o.stored["film.webm"].t > 0 && o.stored["zepsute.jpg"].t === null && o.stored["opis.txt"].t === null &&
+        o.lowresFirst === true && o.fullAfter === 3000 &&
+        o.oldBefore === false && o.oldAfter > 0 && o.backfillLeft === 0
       );
     })(),
     queueCloses: (() => {

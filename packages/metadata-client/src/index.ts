@@ -16,7 +16,7 @@ export {
   sha256Hex,
   type FileKey,
 } from "./file-crypto.js";
-export { type BlobStore, type BlobPutContext, type BlobGetContext, type LaneFetch, AbortedError, throwIfAborted } from "./blob-store.js";
+export { type BlobStore, type BlobPutContext, type BlobGetContext, type ExtraPlacement, type LaneFetch, AbortedError, throwIfAborted } from "./blob-store.js";
 export { DriveClient, piecesOf, readVersionRange, mbps, type DriveClientOptions, type DownloadOptions, type UploadStages, type ResumeStore, type UploadJournal, type UploadJournalFrag, resumeKeys } from "./drive-client.js";
 export { AdaptiveWindow, AutoTuner, NetControl, NetGate, NetworkError, SpeedBaseline, StuckGuard, guardedRead, isNetworkError, netCall, realClock, retryFree, type BaselineData, type GateState, type NetClock, type NetUiState, type TunerOptions, type TuneWhy, type WindowOptions } from "./net.js";
 export {
@@ -32,6 +32,22 @@ export {
   type PrefetchItem,
 } from "./backends.js";
 export { MemoryBackend, MemoryBucket, MEMORY_BACKEND_KIND, memoryBackendFactory } from "./memory-backend.js";
+export {
+  PREVIEW_KINDS,
+  PREVIEW_LIMITS,
+  PREVIEW_FORMAT_VERSION,
+  PREVIEW_READ_MAX,
+  EXTRA_NAME_RE,
+  checkImage,
+  matchExtras,
+  openPreview,
+  previewKeys,
+  sealPreview,
+  stripExt,
+  type PreviewImage,
+  type PreviewKind,
+  type PreviewKeys,
+} from "./previews.js";
 export { LinkAhead, linkExpiry, type LinkAheadOptions, type LinkHow, type LinkItem } from "./link-ahead.js";
 export { TransferLog, MemoryLogSink, TRANSFER_LOG_VERSION, scrubText, errText as logErrText, hostOf, nowMs, type TransferLogOptions, type TransferDir, type TransferSource, type LimiterState } from "./transfer-log.js";
 // e2ee/plain clients: import { ServerBlobStore } from "@ddv4/metadata-client/server-blobs" (kept out of this index).
