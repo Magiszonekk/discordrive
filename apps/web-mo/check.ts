@@ -121,6 +121,9 @@ for (const f of walkSrc(join(here, "src"))) {
 const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-web-"));
 const video = join(dir, "klip.webm");
 execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=8", "-c:v", "libvpx-vp9", "-b:v", "400k", "-deadline", "realtime", "-cpu-used", "8", video]);
+// An MP4 as phones and cameras write it: `moov` at the end (the player asks for the last bytes first).
+const mp4 = join(dir, "telefon.mp4");
+execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=8", "-c:v", "libx264", "-preset", "ultrafast", "-b:v", "6M", "-pix_fmt", "yuv420p", mp4]);
 const doc = join(dir, "notatki.txt");
 writeFileSync(doc, "Zażółć gęślą jaźń\n".repeat(1000));
 // Bigger than one fragment (10 MiB) so the progress has several steps.
@@ -589,6 +592,42 @@ try {
   r.videoSource = await p.getAttribute("[data-ddn=player]", "data-source");
   await shot(p, "05-video");
   await p.click("[data-ddn-ui=player-close]");
+  // MP4 with `moov` at the end, through the same path: opens, seeks to 6 s.
+  await p.evaluate(async (bytes) => {
+    const f = new File([new Uint8Array(bytes)], "telefon.mp4", { type: "video/mp4" });
+    await (window as unknown as { ddnCore: { upload(b: Blob, n: string): Promise<unknown> } }).ddnCore.upload(f, "telefon.mp4");
+  }, [...readFileSync(mp4)]);
+  await p.reload();
+  await p.waitForSelector("body[data-ready='1']");
+  await p.locator("[data-ddn=row]", { hasText: "telefon.mp4" }).locator("[data-ddn=play]").click();
+  r.videoMp4 = await p.evaluate(
+    () =>
+      new Promise<{ duration: number; t: number; err: string | null; seeked: boolean }>((resolve) => {
+        const v = document.querySelector<HTMLVideoElement>("[data-ddn=player]")!;
+        let seeked = false;
+        const done = () => resolve({ duration: v.duration, t: v.currentTime, err: v.error?.message ?? null, seeked });
+        v.addEventListener("error", done, { once: true });
+        v.addEventListener("seeked", () => ((seeked = true), setTimeout(done, 300)), { once: true });
+        const tu = () => {
+          if (v.currentTime > 0.2 && !seeked) {
+            v.removeEventListener("timeupdate", tu);
+            v.currentTime = 6;
+          }
+        };
+        v.addEventListener("timeupdate", tu);
+        setTimeout(done, 30_000);
+      }),
+  );
+  await p.click("[data-ddn-ui=player-close]");
+  // Gone again (later steps count the files of the root).
+  await p.evaluate(async () => {
+    const c = (window as unknown as { ddnCore: { list(): Promise<{ rows: { id: string; name: string }[] }>; trash(ids: string[]): Promise<unknown>; purge(ids: string[]): Promise<unknown> } }).ddnCore;
+    const id = (await c.list()).rows.find((x) => x.name === "telefon.mp4")!.id;
+    await c.trash([id]);
+    await c.purge([id]);
+  });
+  await p.reload();
+  await p.waitForSelector("body[data-ready='1']");
 
   // 5b. a folder has its own address: open it, reload, the breadcrumb is rebuilt from the index
   step("folder route");
@@ -1920,6 +1959,7 @@ try {
       return !!c && c.lines === 0 && c.emptyToast && c.toastSaysKept;
     })(),
     video: !v.err && v.duration > 7 && v.seeked && v.t >= 5.5,
+    videoMp4MoovAtEnd: ((m) => !m.err && m.duration > 7 && m.seeked && m.t >= 5.5)(r.videoMp4 as { duration: number; t: number; err: string | null; seeked: boolean }),
     paging: pg.page1 === 50 && pg.page2 === 14,
     secondTab: st2.secondary && st2.rows === 50 && st2.page2 === 14 && st2.liveUpdate,
     share: typeof share === "string" ? !!remote : share.sha256Ok === true && share.revokedStopsNew === true && share.linkHasKeyAfterHash === true,
@@ -1941,10 +1981,11 @@ try {
       const o = (r.ops as { storage?: { before: { by: string; last: string; waiting: string }; after: { last: string; result: string; waiting: string } } } | undefined)?.storage;
       if (!o) return false;
       // Who cleans matches the mode; before the first run "not yet", after it a time; the purged
-      // notatki.txt version waits for the retention (the purged folder had no upload).
+      // notatki.txt version waits for the retention (the purged folder had no upload), and so does the
+      // telefon.mp4 of the video step (uploaded and purged there).
       const by = SERVER_SIDE ? /server|serwer/ : /browser|przeglądarka/;
       // e2ee/plain: "last cleanup" is the instance's background pass (every 30 s on a live server), so it may be set already.
-      return by.test(o.before.by) && (SERVER_SIDE || /not yet|jeszcze nie/.test(o.before.last)) && !/not yet|jeszcze nie/.test(o.after.last) && /\d/.test(o.after.result) && /^1 /.test(o.after.waiting);
+      return by.test(o.before.by) && (SERVER_SIDE || /not yet|jeszcze nie/.test(o.before.last)) && !/not yet|jeszcze nie/.test(o.after.last) && /\d/.test(o.after.result) && /^2 /.test(o.after.waiting);
     })(),
     passwordSignIn: (() => {
       const o = r.ops as Record<string, unknown> | undefined;

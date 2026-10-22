@@ -15,7 +15,7 @@ import { dirname, join, normalize, sep } from "node:path";
 import { ORIGIN, SCHEME, isAppUrl, staticPath as staticPathIn } from "./shell/paths.js";
 import { pathToFileURL } from "node:url";
 import { DISCORD_ORIGINS } from "@ddv4/metadata-client/node";
-import { MAX_OPEN_RANGE, STREAM_PREFIX, parseRange } from "@ddv4/metadata-client";
+import { STREAM_PREFIX, guessType, parseRange } from "@ddv4/metadata-client";
 import { autostartOn, setAutostart, HIDDEN_ARG, type AutostartEnv } from "./shell/autostart.js";
 import { loadSettings, normaliseServerUrl, saveSettings, type DesktopSettings } from "./shell/settings.js";
 import type { AgentInit } from "./agent.js";
@@ -131,15 +131,29 @@ async function onAgentMessage(a: UtilityProcess, m: { type?: string; id?: number
 
 // ── media and large previews: Range requests answered by the agent ─────────────────────────────────
 // In a browser a service worker answers /ddn/file/<id> (the player seeks, only the fragments needed are
-// fetched and decrypted). app:// has no service worker, so the protocol handler does the same here: each
-// Range goes to the agent (AppCore.readRange: a few fragments, decrypted there, cached), the answer is a
-// 206 with Content-Range. A request without Range gets the first window as 206 (the player then asks in
-// ranges); no request holds more than one window, never the whole file.
-type RangeResult = { ok: boolean; data?: Uint8Array; size?: number; start?: number; end?: number; error?: string };
+// fetched and decrypted). app:// has no service worker, so the protocol handler does the same here, asking the
+// agent (AppCore.readRange: a few fragments, decrypted there, a small cache) one window at a time.
+// An open range ("bytes=N-", what players send) is answered with the WHOLE rest of the file as a stream, one
+// window per pull: Chromium takes a shorter answer to an open range on a custom protocol as the end of the file
+// (an MP4 whose `moov` is at the end then fails to open, and seeking inside it fails). The stream is pulled
+// only as fast as the player reads, and a seek cancels it (the player opens a new range), so no request holds
+// more than a window in memory.
+type RangeResult = { ok: boolean; data?: Uint8Array; size?: number; start?: number; end?: number; name?: string; error?: string };
 const rangeWait = new Map<number, (r: RangeResult) => void>();
 let rangeSeq = 0;
-/** Window for an open-ended Range ("bytes=N-"): as in the browser's service worker. */
+/** Bytes per agent call (about the size of a fragment). */
 const STREAM_WINDOW = 4 * 1024 * 1024;
+async function agentRange(nodeId: string, start: number, end: number): Promise<RangeResult> {
+  if (!agent) agent = startAgent();
+  await agentReady;
+  const a = agent;
+  const id = ++rangeSeq;
+  return new Promise<RangeResult>((res) => {
+    const t = setTimeout(() => (rangeWait.delete(id), res({ ok: false, error: "timeout" })), 120_000);
+    rangeWait.set(id, (x) => (clearTimeout(t), res(x)));
+    a.postMessage({ type: "range", id, nodeId, start, end });
+  });
+}
 async function streamResponse(req: Request, u: URL): Promise<Response> {
   let nodeId: string;
   try {
@@ -148,31 +162,42 @@ async function streamResponse(req: Request, u: URL): Promise<Response> {
     return new Response("bad id", { status: 400 });
   }
   if (req.method !== "GET" || !/^[A-Za-z0-9_:-]{1,128}$/.test(nodeId)) return new Response("not found", { status: 404 });
-  const size = Number(u.searchParams.get("size") ?? NaN);
-  const range = Number.isFinite(size) && size > 0 ? parseRange(req.headers.get("range"), size, STREAM_WINDOW) : null;
-  if (range === "invalid") return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
-  const start = range?.start ?? 0;
-  const end = range?.end ?? start + (Number.isFinite(size) ? STREAM_WINDOW : MAX_OPEN_RANGE) - 1;
-  if (!agent) agent = startAgent();
-  await agentReady;
-  const a = agent;
-  const id = ++rangeSeq;
-  const r = await new Promise<RangeResult>((res) => {
-    const t = setTimeout(() => (rangeWait.delete(id), res({ ok: false, error: "timeout" })), 120_000);
-    rangeWait.set(id, (x) => (clearTimeout(t), res(x)));
-    a.postMessage({ type: "range", id, nodeId, start, end });
-  });
-  if (!r.ok || !r.data) return new Response(r.error ?? "error", { status: 404 });
-  const whole = r.start === 0 && r.end === r.size! - 1;
-  return new Response(r.data as BodyInit, {
-    status: whole ? 200 : 206,
-    headers: {
-      "accept-ranges": "bytes",
-      "content-length": String(r.data.byteLength),
-      "cache-control": "no-store",
-      ...(whole ? {} : { "content-range": `bytes ${r.start}-${r.end}/${r.size}` }),
+  const rangeHeader = req.headers.get("range");
+  // The size comes with the URL (?size=); without it the first window tells it.
+  let size = Number(u.searchParams.get("size") ?? NaN);
+  const parsed = Number.isFinite(size) && size > 0 ? parseRange(rangeHeader, size, Number.MAX_SAFE_INTEGER) : null;
+  if (parsed === "invalid") return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
+  const start = parsed?.start ?? 0;
+  const first = await agentRange(nodeId, start, start + STREAM_WINDOW - 1);
+  if (!first.ok || !first.data) return new Response(first.error ?? "error", { status: 404 });
+  size = first.size!;
+  const end = parsed ? Math.min(parsed.end, size - 1) : size - 1;
+  const type = guessType(first.name ?? "");
+  const headers: Record<string, string> = { "accept-ranges": "bytes", "content-type": type, "content-length": String(end - start + 1), "cache-control": "no-store" };
+  const whole = !rangeHeader && start === 0 && end === size - 1;
+  if (!whole) headers["content-range"] = `bytes ${start}-${end}/${size}`;
+  let next = start;
+  let pending: Uint8Array | null = first.data.subarray(0, Math.min(first.data.byteLength, end - start + 1));
+  const body = new ReadableStream<Uint8Array>(
+    {
+      async pull(c) {
+        if (pending) {
+          const d = pending;
+          pending = null;
+          next += d.byteLength;
+          c.enqueue(d);
+        } else {
+          const r = await agentRange(nodeId, next, Math.min(end, next + STREAM_WINDOW - 1));
+          if (!r.ok || !r.data || !r.data.byteLength) return c.error(new Error(r.error ?? "read failed"));
+          next += r.data.byteLength;
+          c.enqueue(r.data);
+        }
+        if (next > end) c.close();
+      },
     },
-  });
+    { highWaterMark: 0 },
+  );
+  return new Response(body, { status: whole ? 200 : 206, headers });
 }
 
 /** Hand a window a fresh direct channel to the agent (a reloaded window asks again). */
@@ -552,6 +577,12 @@ function wireSetupIpc() {
     // Only files the agent wrote: under the downloads folder.
     const dl = normalize(downloadsDir());
     if (normalize(p).startsWith(dl + sep)) shell.showItemInFolder(p);
+  });
+  ipcMain.on("ddn:open-file", (e, p: unknown) => {
+    if (!e.senderFrame || !isAppUrl(e.senderFrame.url) || typeof p !== "string" || p.length > 4096) return;
+    // Only files the agent wrote (under the downloads folder), and only media: never something executable.
+    const dl = normalize(downloadsDir());
+    if (normalize(p).startsWith(dl + sep) && /\.(mp4|m4v|mov|mkv|webm|avi|wmv|3gp|ts|mts|m2ts|mp3|m4a|flac|ogg|opus|wav)$/i.test(p)) void shell.openPath(p);
   });
   ipcMain.handle("ddn:pick-folder", async (e) => {
     if (!e.senderFrame || !isAppUrl(e.senderFrame.url) || !win) throw new Error("not allowed");

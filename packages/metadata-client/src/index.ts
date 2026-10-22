@@ -244,4 +244,4 @@ export {
   type PairingMailbox,
   type PendingPairing,
 } from "./pairing.js";
-export { handleStreamRequest, parseRange, STREAM_PREFIX, MAX_OPEN_RANGE } from "./stream.js";
+export { handleStreamRequest, parseRange, guessType, STREAM_PREFIX, MAX_OPEN_RANGE } from "./stream.js";
