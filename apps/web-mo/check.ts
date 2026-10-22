@@ -1326,13 +1326,14 @@ try {
       const jpg = await cv.convertToBlob({ type: "image/jpeg", quality: 0.9 });
       return (await c.upload(jpg, "stare.jpg", folder)).nodeId;
     }, thId);
-    th.oldBefore = await p.evaluate((id) => (window as unknown as { ddnCore: { preview(id: string, k: string): Promise<Blob | null> } }).ddnCore.preview(id, "t").then((b) => !!b), oldId);
+    // Before: no client thumbnail (plain may already show its server one; "p" is client-only in every mode).
+    th.oldBefore = await p.evaluate((id) => (window as unknown as { ddnCore: { preview(id: string, k: string): Promise<Blob | null> } }).ddnCore.preview(id, "p").then((b) => !!b), oldId);
     await nav(p, "settings");
     await p.waitForSelector("[data-ddn=thumbs-backfill]");
     await p.click("[data-ddn=thumbs-backfill]");
     await p.waitForFunction(() => !(document.querySelector<HTMLButtonElement>("[data-ddn=thumbs-backfill]")?.disabled ?? true) && !!document.querySelector("[data-ddn=thumbs-backfill-state]")?.textContent, null, { timeout: 60_000 });
     th.backfillText = await p.textContent("[data-ddn=thumbs-backfill-state]");
-    th.oldAfter = await p.evaluate((id) => (window as unknown as { ddnCore: { preview(id: string, k: string): Promise<Blob | null> } }).ddnCore.preview(id, "t").then((b) => b?.size ?? 0), oldId);
+    th.oldAfter = await p.evaluate((id) => (window as unknown as { ddnCore: { preview(id: string, k: string): Promise<Blob | null> } }).ddnCore.preview(id, "p").then((b) => b?.size ?? 0), oldId);
     // Run again: nothing left (the damaged JPEG is remembered as impossible, not tried each time).
     th.backfillLeft = await p.evaluate(() => (window as unknown as { ddnCore: { backfillState(): Promise<{ left: number }> } }).ddnCore.backfillState().then((s) => s.left));
     await nav(p, "files");
