@@ -2,6 +2,23 @@
 <resources>
     <string name="app_name">discordrive</string>
 
+    <!-- discordrive account (pairing, rescue kit) -->
+    <string name="ddn_join_menu">Dołącz do konta discordrive</string>
+    <string name="ddn_server">Adres instancji (https://…)</string>
+    <string name="ddn_device_name">Nazwa tego urządzenia</string>
+    <string name="ddn_join_start">Pokaż kod do sparowania</string>
+    <string name="ddn_join_wait">Na zalogowanym urządzeniu: Urządzenia → zeskanuj kod albo wklej tekst → Paruj. Kod jest ważny 10 minut.</string>
+    <string name="ddn_sas">Kod do porównania: %1$s (od: %2$s). Czy drugie urządzenie pokazuje dokładnie ten sam kod?</string>
+    <string name="ddn_sas_yes">Tak, ten sam</string>
+    <string name="ddn_sas_no">Nie, inny</string>
+    <string name="ddn_sas_rejected">Parowanie przerwane. Na drugim urządzeniu odwołaj nowe urządzenie z listy.</string>
+    <string name="ddn_kit_hint">…albo wklej zestaw ratunkowy (ddn-kit…)</string>
+    <string name="ddn_kit_go">Dołącz zestawem ratunkowym</string>
+    <string name="ddn_bad_server">Podaj adres instancji (https://…)</string>
+    <string name="ddn_error">Błąd: %1$s</string>
+    <string name="ddn_already">To urządzenie jest już na koncie jako „%1$s” (%2$s).</string>
+    <string name="ddn_joined">Dołączono (silnik %1$s): stan do operacji %2$d (snapshot do %3$d), %4$d ms. W katalogu głównym: %5$d — %6$s</string>
+
     <!-- Login -->
     <string name="login_title">DiscorDrive Gallery</string>
     <string name="login_subtitle">Twoje zdjęcia, zaszyfrowane end-to-end</string>

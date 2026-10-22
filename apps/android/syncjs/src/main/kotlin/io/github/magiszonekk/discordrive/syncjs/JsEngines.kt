@@ -1,5 +1,7 @@
 package io.github.magiszonekk.discordrive.syncjs
 
+import io.github.magiszonekk.discordrive.core.JsEngine
+import io.github.magiszonekk.discordrive.core.JsEngineException
 import android.content.Context
 import android.util.Log
 

@@ -24,12 +24,19 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    // The account vectors of :core:ddn (made by the TypeScript code) also feed the on-device index test.
+    sourceSets["androidTest"].assets.srcDir(rootProject.layout.projectDirectory.dir("core/ddn/src/test/resources"))
+    packaging {
+        resources.excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+    }
 }
 
 dependencies {
+    api(project(":core:ddn"))
     implementation(libs.quickjs.android)
     implementation(libs.javascriptengine)
 
+    androidTestImplementation(testFixtures(project(":core:ddn")))
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.junit4)

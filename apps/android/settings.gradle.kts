@@ -17,6 +17,7 @@ rootProject.name = "discordrive-android"
 
 include(":core:crypto")
 include(":core:api")
+include(":core:ddn")
 
 // The Android app module needs the Android SDK; core modules are pure JVM so
 // crypto/API work can be built and tested on any machine with a JDK.
