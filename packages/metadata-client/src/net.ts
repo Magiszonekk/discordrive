@@ -296,9 +296,10 @@ export interface TunerOptions {
 /**
  * Why the value changed: `try` a step up from a measured value, `gain` the step helped (next one), `flat`
  * it did not (back), `try-fewer` one step below, `fewer` that was as fast (kept), `worse` it was not
- * (back), `errors` network errors cut it, `cap` the upper bound went down.
+ * (back), `errors` network errors cut it, `cap` the upper bound went down, `uncap` it rose again (the value
+ * goes back to what the bound had cut).
  */
-export type TuneWhy = "try" | "gain" | "confirm" | "flat" | "try-fewer" | "fewer" | "worse" | "errors" | "recover" | "cap";
+export type TuneWhy = "try" | "gain" | "confirm" | "flat" | "try-fewer" | "fewer" | "worse" | "errors" | "recover" | "cap" | "uncap";
 
 /** A piece in flight as the tuner sees it (from begin() to end()/drop()). */
 export type TuneToken = { t0: number };
@@ -355,16 +356,41 @@ export class AutoTuner {
   ) {
     this.o = { factor: o.factor ?? 1.5, minGain: o.minGain ?? 0.1, smallGain: o.smallGain ?? 0.05, maxLoss: o.maxLoss ?? 0.05, minSpanMs: o.minSpanMs ?? 6000, minPieces: o.minPieces ?? 1.5, recheckMs: o.recheckMs ?? 60_000, shrink: o.shrink ?? false, min: Math.max(1, o.min ?? 2) };
     this.cap = Math.max(1, Math.round(o.cap ?? 32));
-    this.target = Math.max(Math.min(this.o.min, this.cap), Math.min(this.cap, Math.round(o.start ?? 4)));
+    this.start = Math.round(o.start ?? 4);
+    this.target = Math.max(Math.min(this.o.min, this.cap), Math.min(this.cap, this.start));
     this.since = clock.now();
   }
 
-  /** New upper bound (channels, memory): the value follows down at once, up only by measuring. */
+  /**
+   * The value the bound cut away (null: none). A cut by the bound is not a measurement: an app that starts
+   * with one channel (bound 3) and gets nine more must not keep 3 for the session (and remember it).
+   */
+  private capped: number | null = null;
+  /** The first value: a remembered value never starts below it (the tuner goes lower by measuring). */
+  private readonly start: number;
+
+  /**
+   * New upper bound (channels, memory): the value follows down at once; when the bound rises again, it goes
+   * back to what the bound had cut (at most the new bound), the rest only by measuring.
+   */
   setCap(cap: number): void {
     cap = Math.max(1, Math.round(cap));
     if (cap === this.cap) return;
     this.cap = cap;
-    if (this.target > cap) this.change(cap, "cap", null, null, "hold");
+    if (this.target > cap) {
+      this.capped = Math.max(this.capped ?? 0, this.target);
+      this.change(cap, "cap", null, null, this.measured > 0 || this.base ? "hold" : "base");
+    } else if (this.capped !== null && this.target < this.capped) {
+      const n = Math.min(cap, this.capped);
+      if (n >= this.capped) this.capped = null;
+      // Nothing measured yet: measure from there (the first ramp); otherwise hold it until the next check.
+      this.change(n, "uncap", null, null, this.measured > 0 ? "hold" : "base");
+    }
+  }
+
+  /** The value is at the bound (a measurement there says nothing about more pieces). */
+  get atCap(): boolean {
+    return this.target >= this.cap;
   }
 
   /** Value before the last cut by errors (what a recovery goes back to). */
@@ -473,7 +499,12 @@ export class AutoTuner {
 
   /** Start from a value learned earlier (another session): used until the first check measures it. */
   seed(n: number): void {
-    if (!(n >= 1) || this.measured > 0 || this.changes.length > 0) return;
+    // Bound changes (channels added at start) are not measurements: a value remembered from earlier still applies.
+    if (!(n >= 1) || this.measured > 0 || this.changes.some((c) => c.why !== "cap" && c.why !== "uncap")) return;
+    // Not below the first value: a value remembered from a session cut short (a narrow bound, a small
+    // file) would otherwise stay the start for good; a narrow line goes down again by measuring.
+    n = Math.max(n, this.start);
+    if (this.target < n && this.cap < n) this.capped = Math.max(this.capped ?? 0, n);
     const v = Math.max(Math.min(this.o.min, this.cap), Math.min(this.cap, Math.round(n)));
     if (v === this.target) return;
     this.target = v;

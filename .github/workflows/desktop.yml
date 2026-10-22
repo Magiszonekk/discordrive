@@ -48,10 +48,14 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb
+          sudo apt-get install -y -qq xvfb ffmpeg
           # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; the sandbox needs them
           # (an installed .deb ships its own AppArmor profile instead).
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: "Windows: ffmpeg (test media for the player and previews)"
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress > /dev/null && ffmpeg -version | head -n1
 
       - name: Typecheck
         run: npm run typecheck -w @ddv4/desktop
@@ -70,7 +74,7 @@ jobs:
             npx tsx apps/desktop/test/smoke.ts
           fi
 
-      - name: End to end in Electron (both first-start choices, disk transfers, window closed, restart)
+      - name: End to end in Electron (both first-start choices, disk transfers, copy, player and previews, window closed, restart)
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
             xvfb-run -a npx tsx apps/desktop/test/e2e.ts

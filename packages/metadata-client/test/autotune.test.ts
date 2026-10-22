@@ -130,6 +130,42 @@ describe("automatic pieces in flight", () => {
     expect(t2.at(-1)!.t - 1_000_000).toBeLessThan((t1.at(-1)!.t - 1_000_000) * 0.95);
   });
 
+  it("a bound cut at start (no channels yet, or one) is undone when the channels arrive; a remembered value still applies", () => {
+    const clock = new VClock();
+    // The app opened before its channel list was known (bound 3), then 10 channels (bound 20).
+    const a = new AutoTuner("up", { start: 8, cap: 32, shrink: true }, clock);
+    a.setCap(3);
+    expect(a.target).toBe(3);
+    a.setCap(20);
+    expect(a.target).toBe(8);
+    // The first ramp still doubles from there (nothing measured yet).
+    const tr = simulate({ line: 60e6, perPiece: 1e6, delayMs: 300, tuner: a, clock, pieces: 120, size: 10.5e6 });
+    expect(tr.some((x) => x.n === 16)).toBe(true);
+    // A value remembered from the last session (16), seeded while the bound was still 3: it applies once the bound allows.
+    const b = new AutoTuner("up", { start: 8, cap: 32, shrink: true }, new VClock());
+    b.setCap(3);
+    b.seed(16);
+    expect(b.target).toBe(3);
+    b.setCap(20);
+    expect(b.target).toBe(16);
+    // A real cut by fewer channels still holds (5 channels: bound 10).
+    b.setCap(10);
+    expect(b.target).toBe(10);
+    // A remembered value below the start (3, from a session the bound cut short) starts at 8.
+    const c = new AutoTuner("up", { start: 8, cap: 32, shrink: true }, new VClock());
+    c.seed(3);
+    expect(c.target).toBe(8);
+  });
+
+  it("the client: 10 channels after an empty vault (first open) upload with 8, not 3", () => {
+    const net = new NetControl();
+    const t = new MemoryTransport();
+    const hooks = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `1${String(i).padStart(17, "0")}`, url: `mem://h/${i}`, channelId: `c${i}` }));
+    const mk = (h: { id: string; url: string; channelId?: string }[]) => new MetadataClient({ device: { id: "d", name: "d" }, arbiter: new LocalArbiter(new Sequencer()), transport: t, net, webhooks: h });
+    expect(mk([{ id: "0", url: "unset://" }]).uploadConcurrency).toBe(3);
+    expect(mk(hooks(10)).uploadConcurrency).toBe(8);
+  });
+
   it("a small but real gain (+8 %, owner's 8 → 16: 21.3 → 23.1 MB/s) is confirmed by a second window and kept; noise without a gain is not", () => {
     // Line model: each piece gets at most 2.66 MB/s (8 in flight = 21.3 MB/s), the line gives 23.1 in total
     // (16 in flight = 23.1: +8.4 %). Noise case: no gain at all, ±3 % wobble.

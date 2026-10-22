@@ -15,6 +15,7 @@ import { dirname, join, normalize, sep } from "node:path";
 import { ORIGIN, SCHEME, isAppUrl, staticPath as staticPathIn } from "./shell/paths.js";
 import { pathToFileURL } from "node:url";
 import { DISCORD_ORIGINS } from "@ddv4/metadata-client/node";
+import { MAX_OPEN_RANGE, STREAM_PREFIX, parseRange } from "@ddv4/metadata-client";
 import { autostartOn, setAutostart, HIDDEN_ARG, type AutostartEnv } from "./shell/autostart.js";
 import { loadSettings, normaliseServerUrl, saveSettings, type DesktopSettings } from "./shell/settings.js";
 import type { AgentInit } from "./agent.js";
@@ -115,6 +116,10 @@ async function onAgentMessage(a: UtilityProcess, m: { type?: string; id?: number
     } catch (e) {
       a.postMessage({ type: "sealed", id: m.id, ok: false, error: String((e as Error)?.message ?? e) });
     }
+  } else if (m.type === "range-result") {
+    const w = rangeWait.get(m.id!);
+    rangeWait.delete(m.id!);
+    w?.(m as unknown as RangeResult);
   } else if (m.type === "status") {
     busy = m as unknown as typeof busy;
     paintTray();
@@ -122,6 +127,52 @@ async function onAgentMessage(a: UtilityProcess, m: { type?: string; id?: number
     const up = m.kind === "up-done";
     new Notification({ title: up ? "Upload finished" : "Download finished", body: `${m.name ?? ""} (${Math.round((m.bytes ?? 0) / 1e6)} MB)` }).show();
   }
+}
+
+// ── media and large previews: Range requests answered by the agent ─────────────────────────────────
+// In a browser a service worker answers /ddn/file/<id> (the player seeks, only the fragments needed are
+// fetched and decrypted). app:// has no service worker, so the protocol handler does the same here: each
+// Range goes to the agent (AppCore.readRange: a few fragments, decrypted there, cached), the answer is a
+// 206 with Content-Range. A request without Range gets the first window as 206 (the player then asks in
+// ranges); no request holds more than one window, never the whole file.
+type RangeResult = { ok: boolean; data?: Uint8Array; size?: number; start?: number; end?: number; error?: string };
+const rangeWait = new Map<number, (r: RangeResult) => void>();
+let rangeSeq = 0;
+/** Window for an open-ended Range ("bytes=N-"): as in the browser's service worker. */
+const STREAM_WINDOW = 4 * 1024 * 1024;
+async function streamResponse(req: Request, u: URL): Promise<Response> {
+  let nodeId: string;
+  try {
+    nodeId = decodeURIComponent(u.pathname.slice(STREAM_PREFIX.length));
+  } catch {
+    return new Response("bad id", { status: 400 });
+  }
+  if (req.method !== "GET" || !/^[A-Za-z0-9_:-]{1,128}$/.test(nodeId)) return new Response("not found", { status: 404 });
+  const size = Number(u.searchParams.get("size") ?? NaN);
+  const range = Number.isFinite(size) && size > 0 ? parseRange(req.headers.get("range"), size, STREAM_WINDOW) : null;
+  if (range === "invalid") return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
+  const start = range?.start ?? 0;
+  const end = range?.end ?? start + (Number.isFinite(size) ? STREAM_WINDOW : MAX_OPEN_RANGE) - 1;
+  if (!agent) agent = startAgent();
+  await agentReady;
+  const a = agent;
+  const id = ++rangeSeq;
+  const r = await new Promise<RangeResult>((res) => {
+    const t = setTimeout(() => (rangeWait.delete(id), res({ ok: false, error: "timeout" })), 120_000);
+    rangeWait.set(id, (x) => (clearTimeout(t), res(x)));
+    a.postMessage({ type: "range", id, nodeId, start, end });
+  });
+  if (!r.ok || !r.data) return new Response(r.error ?? "error", { status: 404 });
+  const whole = r.start === 0 && r.end === r.size! - 1;
+  return new Response(r.data as BodyInit, {
+    status: whole ? 200 : 206,
+    headers: {
+      "accept-ranges": "bytes",
+      "content-length": String(r.data.byteLength),
+      "cache-control": "no-store",
+      ...(whole ? {} : { "content-range": `bytes ${r.start}-${r.end}/${r.size}` }),
+    },
+  });
 }
 
 /** Hand a window a fresh direct channel to the agent (a reloaded window asks again). */
@@ -487,6 +538,15 @@ function wireSetupIpc() {
     }
     return true;
   });
+  // Copy (rescue kit, pairing code, share links, invite codes): the window gets no permissions at all, so
+  // the web Clipboard API is refused there; the main process writes the text instead. Write only, plain
+  // text, from the app's own frames, bounded (a rescue kit with many channels is a few KB).
+  ipcMain.handle("ddn:copy-text", (e, text: unknown) => {
+    if (!e.senderFrame || !isAppUrl(e.senderFrame.url)) throw new Error("not allowed");
+    if (typeof text !== "string" || text.length > MAX_COPY_CHARS) throw new Error("bad text");
+    clipboard.writeText(text);
+    return true;
+  });
   ipcMain.on("ddn:show-in-folder", (e, p: unknown) => {
     if (!e.senderFrame || !isAppUrl(e.senderFrame.url) || typeof p !== "string" || p.length > 4096) return;
     // Only files the agent wrote: under the downloads folder.
@@ -501,6 +561,8 @@ function wireSetupIpc() {
     return pickedFolder;
   });
 }
+/** Longest text the window may copy (a rescue kit lists every channel's webhook). */
+const MAX_COPY_CHARS = 256 * 1024;
 let localInvite: string | null = null;
 let pickedFolder: string | null = null;
 /** Where downloads go: Settings, else the system Downloads folder (tests: DDN_DESKTOP_DOWNLOADS). */
@@ -610,7 +672,9 @@ else {
     protocol.handle(SCHEME, async (req) => {
       // The web app's config (an instance serves the same file): where its server is and, on the built-in
       // instance before its first account, the one-shot sign-up code (the app fills it in, nobody types it).
-      if (new URL(req.url).pathname === "/config.js") {
+      const reqUrl = new URL(req.url);
+      if (reqUrl.pathname.startsWith(STREAM_PREFIX)) return streamResponse(req, reqUrl);
+      if (reqUrl.pathname === "/config.js") {
         const cfg = { serverUrl: server?.url ?? null, mode: server?.mode ?? null, desktop: { local: server?.kind === "local", invite: server?.kind === "local" ? localInvite : null } };
         return new Response(`window.DDN_CONFIG=${JSON.stringify(cfg)};\n`, { headers: { "content-type": "text/javascript", "content-security-policy": csp(), "cache-control": "no-store" } });
       }
