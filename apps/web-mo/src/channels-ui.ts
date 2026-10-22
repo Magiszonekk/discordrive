@@ -321,7 +321,8 @@ export function createChannelsUi(d: ChannelsUiDeps) {
   }
 
   // ── Storage totals + the unavailable switch ─────────────────────
-  async function paintStorage(wh: ChannelsView | null) {
+  /** Totals only: the per-channel numbers live in the channel list (Settings → Channels). */
+  async function paintStorage(_wh: ChannelsView | null) {
     const st = await core.storageTotals().catch(() => null);
     if (!st) return;
     $("st-all").textContent = t("st.files", { files: tn("files.meta.files", st.files), size: fmtSize(st.bytes) });
@@ -331,18 +332,6 @@ export function createChannelsUi(d: ChannelsUiDeps) {
     $("st-discord").textContent = st.discordBytes === null ? "—" : fmtSize(st.discordBytes);
     $("st-all").title = t("st.took", { ms: st.tookMs });
     $("st-all").dataset.tookMs = String(st.tookMs);
-    const list = $("st-channels");
-    const rows = wh?.webhooks ?? [];
-    list.hidden = rows.length === 0;
-    list.replaceChildren(
-      ...rows.map((w) => {
-        const li = h("li", { "data-ddn": "st-channel", "data-id": w.id }, icon("hash"), h("span", { class: "dname" }, w.label || "webhook"));
-        if (w.critical) li.append(chip(t("ch.critical"), "accent", t("ch.critical.t")));
-        li.append(chip(w.retired ? t("ch.retired") : w.alive === false ? t("ch.sum.dead", { n: 1 }).replace(/^1\s*/, "") : t("ch.sum.ok").split(" ").pop()!, w.retired ? "warning" : w.alive === false ? "error" : "success"));
-        li.append(h("span", { class: "when" }, `${tn("files.meta.files", w.files)} · ${fmtSize(w.bytes)}`));
-        return li;
-      }),
-    );
   }
 
   function wireStorage() {

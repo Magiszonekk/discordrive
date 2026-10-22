@@ -171,6 +171,13 @@ export const en: Record<string, string> = {
 
   // settings
   "set.h": "Settings",
+  "set.tabs": "Settings sections",
+  "set.tab.channels": "Channels",
+  "set.tab.account": "Account & security",
+  "set.tab.storage": "Storage",
+  "set.tab.network": "Network & transfers",
+  "set.tab.appearance": "Appearance",
+  "set.tab.app": "App",
   "set.account": "Account",
   "set.account.id": "Account",
   "set.account.device": "This device",

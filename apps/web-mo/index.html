@@ -220,7 +220,7 @@
           <label class="btn primary upload-btn" data-ddn-ui="upload-btn"><span data-i18n="files.upload">Upload files</span><input type="file" multiple data-ddn="file" data-i18n-attr="aria-label=files.upload.aria"></label>
         </div>
       </div>
-      <div class="note warn need-channel" data-ddn-ui="need-channel" hidden><svg class="i"><use href="#i-info"/></svg><p><span data-i18n="files.needChannel"></span> <a class="link" href="/settings#channels" data-link data-i18n="files.needChannel.link">Settings → Channels</a></p></div>
+      <div class="note warn need-channel" data-ddn-ui="need-channel" hidden><svg class="i"><use href="#i-info"/></svg><p><span data-i18n="files.needChannel"></span> <a class="link" href="/settings/channels" data-link data-i18n="files.needChannel.link">Settings → Channels</a></p></div>
       <div class="dropzone" role="button" tabindex="0" data-ddn-ui="dropzone"><svg class="i"><use href="#i-cloud"/></svg><span data-i18n="files.drop">Drop files here to upload</span></div>
 
       <section class="uploads" data-ddn-ui="queue" hidden aria-live="polite">
@@ -229,7 +229,7 @@
           <button class="iconbtn" type="button" data-ddn-ui="queue-close" data-i18n-attr="aria-label=queue.hide" hidden><svg class="i"><use href="#i-x"/></svg></button>
         </div>
         <p class="netstate" data-ddn="queue-net" role="status" hidden></p>
-        <p class="netstate" data-ddn="queue-lean" data-state="lean" role="status" hidden><span data-ddn-ui="queue-lean-t"></span> <a class="link" href="/settings#network" data-link data-i18n="lean.link">Settings</a></p>
+        <p class="netstate" data-ddn="queue-lean" data-state="lean" role="status" hidden><span data-ddn-ui="queue-lean-t"></span> <a class="link" href="/settings/network" data-link data-i18n="lean.link">Settings</a></p>
         <ul class="qlist" data-ddn-ui="queue-list"></ul>
         <p class="hint" data-i18n="queue.note"></p>
       </section>
@@ -240,7 +240,7 @@
           <button class="iconbtn" type="button" data-ddn="dl-close" data-i18n-attr="aria-label=queue.hide" hidden><svg class="i"><use href="#i-x"/></svg></button>
         </div>
         <p class="netstate" data-ddn="dl-net" role="status" hidden></p>
-        <p class="netstate" data-ddn="dl-lean" data-state="lean" role="status" hidden><span data-ddn-ui="dl-lean-t"></span> <a class="link" href="/settings#network" data-link data-i18n="lean.link">Settings</a></p>
+        <p class="netstate" data-ddn="dl-lean" data-state="lean" role="status" hidden><span data-ddn-ui="dl-lean-t"></span> <a class="link" href="/settings/network" data-link data-i18n="lean.link">Settings</a></p>
         <ul class="qlist" data-ddn="dl-list"></ul>
         <p class="hint" data-i18n="dl.note"></p>
       </section>
@@ -415,8 +415,17 @@
     <!-- Settings -->
     <main class="page narrow" data-page="settings" aria-labelledby="set-h" hidden>
       <h1 class="page-title" id="set-h" data-i18n="set.h">Settings</h1>
-      <div class="sections">
-        <section aria-labelledby="acc-h">
+      <!-- Tabs: each is an address (/settings/<tab>), so Back/Forward, a reload and a shared link keep it. -->
+      <nav class="settings-tabs" data-ddn="settings-tabs" data-i18n-attr="aria-label=set.tabs">
+        <a href="/settings/channels" data-link data-ddn="settings-tab" data-tab="channels"><svg class="i"><use href="#i-hash"/></svg><span data-i18n="set.tab.channels">Channels</span></a>
+        <a href="/settings/account" data-link data-ddn="settings-tab" data-tab="account"><svg class="i"><use href="#i-lock"/></svg><span data-i18n="set.tab.account">Account &amp; security</span></a>
+        <a href="/settings/storage" data-link data-ddn="settings-tab" data-tab="storage"><svg class="i"><use href="#i-trash"/></svg><span data-i18n="set.tab.storage">Storage</span></a>
+        <a href="/settings/network" data-link data-ddn="settings-tab" data-tab="network"><svg class="i"><use href="#i-download"/></svg><span data-i18n="set.tab.network">Network &amp; transfers</span></a>
+        <a href="/settings/appearance" data-link data-ddn="settings-tab" data-tab="appearance"><svg class="i"><use href="#i-settings"/></svg><span data-i18n="set.tab.appearance">Appearance</span></a>
+        <a href="/settings/app" data-link data-ddn="settings-tab" data-tab="app"><svg class="i"><use href="#i-info"/></svg><span data-i18n="set.tab.app">App</span></a>
+      </nav>
+      <div class="sections" data-ddn="settings-sections">
+        <section id="account" aria-labelledby="acc-h" data-tab="account">
           <h2 class="sec-h" id="acc-h" data-i18n="set.account">Account</h2>
           <dl class="about">
             <div><dt class="label-mono" data-i18n="set.account.id">Account</dt><dd><span class="val mono" data-ddn-ui="acc-id"></span></dd></div>
@@ -425,7 +434,7 @@
           </dl>
         </section>
 
-        <section id="channels" aria-labelledby="hooks-h" data-ddn="channels-sec">
+        <section id="channels" aria-labelledby="hooks-h" data-ddn="channels-sec" data-tab="channels">
           <h2 class="sec-h"><button class="sec-toggle" type="button" data-ddn="channels-toggle" aria-expanded="true" aria-controls="channels-body"><svg class="i"><use href="#i-right"/></svg><span id="hooks-h" data-i18n="hooks.h">Channels &amp; webhooks</span></button><span class="chip" data-ddn-ui="hook-count"></span><span class="sec-sum" data-ddn="channels-summary"></span></h2>
           <div id="channels-body" data-ddn="channels-body">
           <p class="sec-lead" data-i18n="hooks.lead"></p>
@@ -467,13 +476,13 @@
           </div>
         </section>
 
-        <section id="rescue" aria-labelledby="kit-sec-h">
+        <section id="rescue" aria-labelledby="kit-sec-h" data-tab="account">
           <h2 class="sec-h" id="kit-sec-h" data-i18n="kit.h">Rescue kit</h2>
           <p class="sec-lead" data-i18n="set.kit.lead"></p>
           <div class="row-btns"><button class="btn" type="button" data-ddn="kit-show"><svg class="i"><use href="#i-lock"/></svg><span data-i18n="dev.kitShow">Show rescue kit</span></button></div>
         </section>
 
-        <section id="storage" aria-labelledby="st-h">
+        <section id="storage" aria-labelledby="st-h" data-tab="storage">
           <h2 class="sec-h"><span id="st-h" data-i18n="st.h">Storage</span><span class="chip" data-ddn="storage-state"></span></h2>
           <p class="sec-lead" data-i18n="st.lead"></p>
           <div class="sec-body">
@@ -483,7 +492,6 @@
               <div><dt class="label-mono" data-i18n="st.unavail">Unavailable</dt><dd><span class="val mono" data-ddn="st-unavail"></span><p data-ddn-ui="st-unavail-t"></p></dd></div>
               <div><dt class="label-mono" data-i18n="st.discord">On Discord</dt><dd><span class="val mono" data-ddn="st-discord"></span><p data-ddn-ui="st-discord-t" data-i18n="st.discord.t"></p></dd></div>
             </dl>
-            <ul class="list" data-ddn="st-channels"></ul>
             <label class="ack"><input type="checkbox" data-ddn="show-unavailable"><span data-i18n="st.showUnavail">Show unavailable files</span></label>
             <p class="hint" data-i18n="st.showUnavail.t"></p>
             <dl class="about" data-ddn="storage">
@@ -501,7 +509,7 @@
         </section>
 
         <!-- Network / transfers: save data, stuck-connection guard, pieces in flight (visible, not under Diagnostics). -->
-        <section id="network" aria-labelledby="net-h" data-ddn="net-sec">
+        <section id="network" aria-labelledby="net-h" data-ddn="net-sec" data-tab="network">
           <h2 class="sec-h"><span id="net-h" data-i18n="netS.h">Network &amp; transfers</span><span class="chip" data-ddn="net-state"></span></h2>
           <p class="sec-lead" data-i18n="netS.lead"></p>
           <div class="sec-body">
@@ -525,7 +533,7 @@
           </div>
         </section>
 
-        <section id="diagnostics" aria-labelledby="diag-h">
+        <section id="diagnostics" aria-labelledby="diag-h" data-tab="app">
           <h2 class="sec-h"><span id="diag-h" data-i18n="diag.h">Diagnostics</span><span class="chip" data-ddn="diag-state"></span></h2>
           <p class="sec-lead" data-i18n="diag.lead"></p>
           <div class="sec-body">
@@ -542,7 +550,7 @@
 
         <!-- Desktop app (only in the app): a version card (version, check / download / run the installer, the new
              version and the downloaded file under it), then the settings as switch rows, then the key storage note. -->
-        <section id="desktop-app" aria-labelledby="dapp-h" data-ddn="app-section" hidden>
+        <section id="desktop-app" aria-labelledby="dapp-h" data-ddn="app-section" data-tab="app" hidden>
           <h2 class="sec-h"><span id="dapp-h" data-i18n="app.h">Desktop app</span><span class="chip chip--accent" data-ddn="app-update-chip" hidden data-i18n="app.newChip">New version</span></h2>
           <div class="sec-body">
             <div class="dapp-ver">
@@ -563,7 +571,7 @@
           </div>
         </section>
 
-        <section id="security" aria-labelledby="sec-h">
+        <section id="security" aria-labelledby="sec-h" data-tab="account">
           <h2 class="sec-h"><span id="sec-h" data-i18n="pw.h">Security</span><span class="chip" data-ddn="pw-state"></span></h2>
           <p class="sec-lead" data-i18n="pw.lead"></p>
           <div class="sec-body">
@@ -580,7 +588,7 @@
           </div>
         </section>
 
-        <section id="sharing" aria-labelledby="sh-h">
+        <section id="sharing" aria-labelledby="sh-h" data-tab="account">
           <h2 class="sec-h"><span id="sh-h" data-i18n="sh.h">Sharing</span><span class="chip" data-ddn-ui="share-state"></span></h2>
           <p class="sec-lead" data-ddn-ui="share-lead"></p>
           <div class="sec-body">
@@ -590,7 +598,7 @@
           </div>
         </section>
 
-        <section id="appearance" aria-labelledby="app-h">
+        <section id="appearance" aria-labelledby="app-h" data-tab="appearance">
           <h2 class="sec-h" id="app-h" data-i18n="set.appearance">Appearance</h2>
           <p class="sec-lead" data-i18n="set.appearance.lead"></p>
           <div class="sec-body">
@@ -600,7 +608,7 @@
           </div>
         </section>
 
-        <section id="browser" aria-labelledby="br-h">
+        <section id="browser" aria-labelledby="br-h" data-ddn="browser-section" data-tab="app">
           <h2 class="sec-h" id="br-h" data-i18n="set.browser">About this browser</h2>
           <p class="sec-lead" data-i18n="set.browser.lead"></p>
           <div class="sec-body">
