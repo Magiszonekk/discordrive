@@ -180,12 +180,13 @@ jobs:
             adb logcat -d -s ddn-syncjs:* | grep RESULT || true
             # The interop scenario on the emulator, the index in its own JS engine (connected tests uninstall the APK).
             adb install -r -t syncjs/build/outputs/apk/androidTest/debug/syncjs-debug-androidTest.apk
+            # (each line runs on its own in working-directory apps/android)
             cd ../.. && npx tsx apps/android/interop/harness.mts --device
             # The app's browsing screens (Files, a folder, the Gallery with a web upload's thumbnail, the viewer).
-            adb install -r apps/android/app/build/outputs/apk/debug/app-debug.apk
-            adb install -r -t apps/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-            npx tsx apps/android/interop/harness.mts --app
-            mkdir -p apps/android/build/shots && adb pull /sdcard/Android/data/io.github.magiszonekk.discordrive/files/shots apps/android/build/shots || true
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            cd ../.. && npx tsx apps/android/interop/harness.mts --app
+            mkdir -p build/shots && adb pull /sdcard/Android/data/io.github.magiszonekk.discordrive/files/shots build/shots || true
 
       - name: Test report
         if: always()
