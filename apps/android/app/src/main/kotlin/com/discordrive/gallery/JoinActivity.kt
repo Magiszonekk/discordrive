@@ -87,7 +87,10 @@ class JoinActivity : AppCompatActivity() {
                     DdnAccount.save(this, acct)
                     joinNow(acct)
                 }
-                main.post { status.text = out.getOrElse { getString(R.string.ddn_error, it.message) } }
+                main.post {
+                    status.text = out.getOrElse { getString(R.string.ddn_error, it.message) }
+                    if (out.isSuccess) openAccount()
+                }
             }
         }
         no.setOnClickListener {
@@ -107,10 +110,19 @@ class JoinActivity : AppCompatActivity() {
                     DdnAccount.save(this, acct)
                     joinNow(acct)
                 }
-                main.post { status.text = out.getOrElse { getString(R.string.ddn_error, it.message) } }
+                main.post {
+                    status.text = out.getOrElse { getString(R.string.ddn_error, it.message) }
+                    if (out.isSuccess) openAccount()
+                }
             }
         }
     }
+
+    /** Joined: on to the account's files (a short pause so the summary can be read). */
+    private fun openAccount() = main.postDelayed({
+        startActivity(android.content.Intent(this, DdnActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP))
+        finish()
+    }, 1500)
 
     /** Every 2 s until the other device answered (10 minutes at most). */
     private fun poll(url: String, deviceName: String, yes: Button, no: Button) {

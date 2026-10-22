@@ -42,10 +42,37 @@ interface IndexReplica : AutoCloseable {
     fun leaseGuard(op: JsonObject): List<String>
     /** SHA-256 (hex) of the canonical state: identical on every device at the same headSeq. */
     fun stateSha256(): String
-    /** Children of a folder that are not in the trash. */
+    /** Children of a folder that are not in the trash: folders first, then by name. */
     fun children(parentId: String): List<Child>
 
-    data class Child(val id: String, val name: String, val kind: String, val size: Long?)
+    /**
+     * Files whose name ends with one of `extensions` (lower case, with the dot), anywhere outside the
+     * trash, newest version first: the Gallery. `limit` per call, `after` = the createdAt/id of the last one.
+     */
+    fun media(extensions: List<String>, limit: Int, after: Pair<Long, String>? = null): List<Child> = emptyList()
+
+    /** The whole index as a sync-core IndexSnapshot in JSON text slices (a local copy for a fast start). */
+    fun snapshotText(): Sequence<String> = throw UnsupportedOperationException("snapshotText")
+
+    /** One node (null when unknown). */
+    fun node(id: String): Child? = null
+
+    /**
+     * A node. Files: size, version (manifestRef: where the manifest is and the file key, secret), plaintext
+     * SHA-256 if known, when the version was written.
+     */
+    data class Child(
+        val id: String,
+        val name: String,
+        val kind: String,
+        val size: Long?,
+        val manifestRef: String? = null,
+        val sha256: String? = null,
+        val createdAt: Long = 0,
+        val parentId: String? = null,
+    ) {
+        val isFolder: Boolean get() = kind == "folder"
+    }
     data class ApplySummary(val headSeq: Long, val outcomes: Map<String, Int>, val results: List<JsonObject>)
 }
 

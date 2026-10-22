@@ -22,6 +22,7 @@ android {
         // CI sets a growing number (an update must have a higher versionCode than the installed one).
         versionCode = (System.getenv("ANDROID_VERSION_CODE") ?: "1").toInt()
         versionName = System.getenv("ANDROID_VERSION_NAME") ?: "0.1.0-dev"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -60,6 +61,8 @@ dependencies {
     implementation(project(":core:api"))
     implementation(project(":syncjs"))
     implementation(libs.zxing.core)
+    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
+    implementation("androidx.media3:media3-datasource:1.4.1")
     implementation(libs.okhttp)
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
@@ -70,4 +73,10 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
+
+    androidTestImplementation(testFixtures(project(":core:ddn")))
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.junit4)
+    androidTestImplementation("androidx.test:core:1.6.1")
 }

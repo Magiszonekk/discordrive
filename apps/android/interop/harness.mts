@@ -12,6 +12,8 @@
 //   npx tsx apps/android/interop/harness.mts            JVM (Gradle :core:ddn InteropTest; needs JDK 17)
 //   npx tsx apps/android/interop/harness.mts --device   the phone: the installed :syncjs test APK, its own JS
 //        engine (adb reverse to these servers; ANDROID_SERIAL picks the device; --engine quickjs forces QuickJS)
+//   --app   the app's browsing screens on the device (BrowseUiTest of the installed app + its test APK);
+//        screenshots: adb pull /sdcard/Android/data/io.github.magiszonekk.discordrive/files/shots
 //   --discord-hooks <file>   real Discord instead of the fake: a file with 3 webhook URLs of a test server
 //        (2 for the account, 1 the phone adds); every message posted is deleted at the end
 import { spawn, spawnSync } from "node:child_process";
@@ -19,7 +21,7 @@ import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { canonicalState, ROOT_ID, applyEntry, initIndex, loadSnapshot, MemoryIndexStore, uploadsTouched, RULES_VERSION, type IndexSnapshot, type LogEntry } from "@ddv4/sync-core";
+import { canonicalState, ROOT_ID, applyEntry, initIndex, inTrash, loadSnapshot, MemoryIndexStore, uploadsTouched, RULES_VERSION, type IndexSnapshot, type LogEntry, type NodeRecord } from "@ddv4/sync-core";
 import {
   ChannelPacer,
   DiscordWebhookTransport,
@@ -85,10 +87,42 @@ const loc = await createPointerMessage(io, key, r0.accountId, ts.webhook(h1.id))
 await vault.update((x) => ((x.pointer = loc), x));
 for (let i = 1; i <= 40; i++) await ts.commitOp({ type: "create", kind: "folder", nodeId: `fold-${String(i).padStart(10, "0")}`, parentId: ROOT_ID, name: `Zdjęcia ${i}` }, "mkdir");
 await writeSnapshot({ io, key, accountId: r0.accountId, pointer: loc, log: api, store: ts.store, now: () => Date.now() }, "base");
+// Files the phone reads: a photo with its thumbnail and preview (made here, as the web app does), a video,
+// a file of several fragments (chunkSize 64 KiB). Their bytes and hashes go to the phone through "files".
+const { createHash: ch } = await import("node:crypto");
+const { memorySource } = await import("@ddv4/metadata-client");
+const execFile = (await import("node:child_process")).execFileSync;
+const tmp = (await import("node:fs")).mkdtempSync(join((await import("node:os")).tmpdir(), "ddn-interop-"));
+const fsx = await import("node:fs");
+let haveFfmpeg = true;
+try {
+  execFile("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x480", "-frames:v", "1", join(tmp, "p.jpg")]);
+  execFile("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x240", "-frames:v", "1", "-c:v", "libwebp", join(tmp, "t.webp")]);
+  execFile("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25:duration=4", "-c:v", "libvpx-vp9", "-b:v", "400k", "-deadline", "realtime", "-cpu-used", "8", join(tmp, "v.webm")]);
+} catch {
+  haveFfmpeg = false;
+}
+const { randomBytes } = await import("node:crypto");
+const rnd = (n: number) => new Uint8Array(randomBytes(n));
+const photo = haveFfmpeg ? new Uint8Array(fsx.readFileSync(join(tmp, "p.jpg"))) : rnd(90_000);
+const thumb = haveFfmpeg ? new Uint8Array(fsx.readFileSync(join(tmp, "t.webp"))) : null;
+const video = haveFfmpeg ? new Uint8Array(fsx.readFileSync(join(tmp, "v.webm"))) : rnd(150_000);
+const big = rnd(300_011);
+const shaHex = (b: Uint8Array) => ch("sha256").update(b).digest("hex");
+const ups: Record<string, { nodeId: string; sha: string; size: number }> = {};
+for (const [name, data, pv] of [
+  ["Wakacje Ż.jpg", photo, thumb ? [{ kind: "t" as const, mime: "image/webp", width: 320, height: 240, data: thumb }, { kind: "p" as const, mime: "image/webp", width: 320, height: 240, data: thumb }] : null],
+  ["film.webm", video, null],
+  ["duży.bin", big, null],
+] as const) {
+  const r = await ts.upload(memorySource(data), name, "fold-0000000001", pv ? { previews: Promise.resolve(pv as never) } : {});
+  ups[name] = { nodeId: r.nodeId, sha: shaHex(data), size: data.byteLength };
+}
 // After the base: entries the phone gets from the instance (the tail), not from the snapshot.
 await ts.commitOp({ type: "rename", nodeId: "fold-0000000003", name: "Dokumenty" }, "rename");
 await ts.commitOp({ type: "trash", nodeId: "fold-0000000004" }, "trash");
 
+const row = (n: NodeRecord) => ({ id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: n.content?.sizeBytes ?? null, ref: n.content?.manifestRef ?? null, sha: n.content?.plaintextSha256 ?? null, at: n.content?.createdAt ?? 0 });
 // The phone's sync core over the RPC (InteropTest.RpcReplica implements IndexReplica with it).
 type Req = { id: number; m: string; a?: unknown };
 let store = initIndex(new MemoryIndexStore());
@@ -101,7 +135,11 @@ function core(q: Req): unknown {
     case "apply": return (q.a as LogEntry[]).map((e) => applyEntry(store, e));
     case "guard": return uploadsTouched(q.a as never);
     case "sha": return sha(canonicalState(store));
-    case "children": return [...store.childIds(q.a as string)].map((id) => store.getNode(id)!).filter((n) => !n.trashed).map((n) => ({ id: n.id, name: n.name, kind: n.kind, size: n.content?.sizeBytes ?? null }));
+    case "children": return [...store.childIds(q.a as string)].map((id) => store.getNode(id)!).filter((n) => !n.trashed).map(row);
+    case "media": {
+      const ex = q.a as string[];
+      return [...store.allNodes()].filter((n) => n.kind === "file" && n.content && !inTrash(store, n.id) && ex.some((e) => n.name.toLowerCase().endsWith(e))).sort((a, b) => b.content!.createdAt - a.content!.createdAt).map(row);
+    }
     default: throw new Error(`unknown ${q.m}`);
   }
 }
@@ -138,6 +176,7 @@ async function handle(q: Req): Promise<unknown> {
       devices: devs.length,
     };
   }
+  if (q.m === "files") return { folder: "fold-0000000001", files: ups, thumbSha: thumb ? shaHex(thumb) : null };
   if (q.m === "newHook") {
     const h = hookUrl(2, "1550000000000000303");
     return realHooks ? { ...h, channelId: (await inspectForVault(transport, h.url)).channelId } : h;
@@ -165,7 +204,8 @@ const rpc = createServer((req, res) => {
 await new Promise<void>((r) => rpc.listen(0, "127.0.0.1", r));
 const rpcUrl = `http://127.0.0.1:${(rpc.address() as { port: number }).port}`;
 
-const onDevice = process.argv.includes("--device");
+const appUi = process.argv.includes("--app");
+const onDevice = process.argv.includes("--device") || appUi;
 const ei = process.argv.indexOf("--engine");
 const engine = ei >= 0 ? process.argv[ei + 1] : "";
 let child;
@@ -173,7 +213,8 @@ if (onDevice) {
   step("phone: InteropDeviceTest on the device (adb reverse to the servers here)");
   const port = (u: string) => new URL(u).port;
   for (const u of [url, discordOrigin, rpcUrl].filter(Boolean)) spawnSync("adb", ["reverse", `tcp:${port(u)}`, `tcp:${port(u)}`], { stdio: "inherit" });
-  child = spawn("adb", ["shell", "am", "instrument", "-w", "-e", "class", "io.github.magiszonekk.discordrive.syncjs.InteropDeviceTest", "-e", "ddnRpc", rpcUrl, "-e", "ddnServer", url, "-e", "ddnDiscord", discordOrigin || "none", ...(engine ? ["-e", "ddnEngine", engine] : []), "io.github.magiszonekk.discordrive.syncjs.test/androidx.test.runner.AndroidJUnitRunner"], { stdio: ["ignore", "pipe", "inherit"] });
+  const target = appUi ? ["com.discordrive.gallery.BrowseUiTest", "io.github.magiszonekk.discordrive.test"] : ["io.github.magiszonekk.discordrive.syncjs.InteropDeviceTest", "io.github.magiszonekk.discordrive.syncjs.test"];
+  child = spawn("adb", ["shell", "am", "instrument", "-w", "-e", "class", target[0]!, "-e", "ddnRpc", rpcUrl, "-e", "ddnServer", url, "-e", "ddnDiscord", discordOrigin || "none", ...(engine ? ["-e", "ddnEngine", engine] : []), `${target[1]}/androidx.test.runner.AndroidJUnitRunner`], { stdio: ["ignore", "pipe", "inherit"] });
 } else {
   step("phone: JVM InteropTest through Gradle (pairing, join, operations)");
   child = spawn(process.platform === "win32" ? "gradlew.bat" : "./gradlew", ["--no-daemon", "-q", ":core:ddn:test", "--tests", "*InteropTest*", "-PddnInterop=1", "--rerun-tasks"], {

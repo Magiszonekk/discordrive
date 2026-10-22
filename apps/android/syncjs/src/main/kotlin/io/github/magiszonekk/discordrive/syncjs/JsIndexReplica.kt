@@ -13,7 +13,6 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.long
 
 /**
  * The account's index kept inside the JS engine (the sync core's MemoryIndexStore): log entries and
@@ -70,10 +69,37 @@ class JsIndexReplica(private val engine: JsEngine) : IndexReplica {
     }
 
     override fun children(parentId: String): List<IndexReplica.Child> =
-        json.parseToJsonElement(call("__ddnIx.children(${json.encodeToString(JsonElement.serializer(), kotlinx.serialization.json.JsonPrimitive(parentId))})")).jsonArray.map {
-            val o = it.jsonObject
-            IndexReplica.Child(o.getValue("id").jsonPrimitive.content, o.getValue("name").jsonPrimitive.content, o.getValue("kind").jsonPrimitive.content, o["size"]?.jsonPrimitive?.let { p -> if (p.content == "null") null else p.long })
+        rows(call("__ddnIx.children(${json.encodeToString(JsonElement.serializer(), JsonPrimitive(parentId))})"))
+
+    override fun media(extensions: List<String>, limit: Int, after: Pair<Long, String>?): List<IndexReplica.Child> {
+        val ext = json.encodeToString(JsonElement.serializer(), JsonArray(extensions.map { JsonPrimitive(it) }))
+        val a = if (after == null) "null" else "[${after.first}, ${json.encodeToString(JsonElement.serializer(), JsonPrimitive(after.second))}]"
+        return rows(call("__ddnIx.media($ext, $limit, $a)"))
+    }
+
+    override fun node(id: String): IndexReplica.Child? =
+        rows(call("__ddnIx.node(${json.encodeToString(JsonElement.serializer(), JsonPrimitive(id))})")).firstOrNull()
+
+    override fun snapshotText(): Sequence<String> = sequence {
+        val n = call("__ddnIx.snapText()").toInt()
+        var at = 0
+        while (at < n) {
+            yield(call("__ddnIx.textSlice($at, $CHUNK)"))
+            at += CHUNK
         }
+        call("__ddnIx.textDone()")
+    }
+
+    private fun rows(text: String): List<IndexReplica.Child> = json.parseToJsonElement(text).jsonArray.map {
+        val o = it.jsonObject
+        fun s(k: String) = o[k]?.jsonPrimitive?.takeIf { p -> p.isString }?.content
+        IndexReplica.Child(
+            id = s("id")!!, name = s("name")!!, kind = s("kind")!!,
+            size = o["size"]?.jsonPrimitive?.content?.toLongOrNull(),
+            manifestRef = s("ref"), sha256 = s("sha"),
+            createdAt = o["at"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0, parentId = s("parent"),
+        )
+    }
 
     override fun close() = engine.close()
 
@@ -83,7 +109,11 @@ class JsIndexReplica(private val engine: JsEngine) : IndexReplica {
 
         const val GLUE = """
 globalThis.__ddnIx = (function () {
-  var S = SyncCore, st = S.initIndex(new S.MemoryIndexStore()), snap = null, state = null;
+  var S = SyncCore, st = S.initIndex(new S.MemoryIndexStore()), snap = null, state = null, mediaCache = null;
+  function row(n) {
+    var c = n.content;
+    return { id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: c ? c.sizeBytes : null, ref: c ? c.manifestRef : null, sha: c ? c.plaintextSha256 : null, at: c ? c.createdAt : 0 };
+  }
   return {
     reset: function () { st = S.initIndex(new S.MemoryIndexStore()); return "ok"; },
     head: function () { return String(st.getMeta().headSeq); },
@@ -104,6 +134,10 @@ globalThis.__ddnIx = (function () {
       }
       return JSON.stringify({ results: res, outcomes: oc });
     },
+    node: function (id) { var n = st.getNode(id); return JSON.stringify(n ? [row(n)] : []); },
+    snapText: function () { state = JSON.stringify(S.takeSnapshot(st)); return String(state.length); },
+    textSlice: function (i, n) { return this.statePart(i, n); },
+    textDone: function () { state = null; return "ok"; },
     stateBegin: function () { state = S.canonicalState(st); return String(state.length); },
     statePart: function (i, n) {
       // A slice must not end between the two halves of a surrogate pair (it would not encode to UTF-8).
@@ -121,10 +155,29 @@ globalThis.__ddnIx = (function () {
       for (var id of ids) {
         var n = st.getNode(id);
         if (!n || n.trashed) continue;
-        out.push({ id: n.id, name: n.name, kind: n.kind, size: n.content ? n.content.sizeBytes : null });
+        out.push(row(n));
       }
       out.sort(function (a, b) { return a.kind === b.kind ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : a.kind === "folder" ? -1 : 1; });
       return JSON.stringify(out);
+    },
+    // The Gallery: media files outside the trash, newest first. Built once per head and kept (sorted).
+    media: function (exts, limit, after) {
+      var head = st.getMeta().headSeq;
+      if (!mediaCache || mediaCache.head !== head || mediaCache.key !== exts.join(",")) {
+        var list = [];
+        for (var n of st.allNodes()) {
+          if (n.kind !== "file" || !n.content) continue;
+          var lower = n.name.toLowerCase(), ok = false;
+          for (var i = 0; i < exts.length; i++) if (lower.endsWith(exts[i])) { ok = true; break; }
+          if (!ok || S.inTrash(st, n.id)) continue;
+          list.push(n);
+        }
+        list.sort(function (a, b) { return b.content.createdAt - a.content.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0); });
+        mediaCache = { head: head, key: exts.join(","), list: list };
+      }
+      var l = mediaCache.list, from = 0;
+      if (after) { while (from < l.length && (l[from].content.createdAt > after[0] || (l[from].content.createdAt === after[0] && l[from].id <= after[1]))) from++; }
+      return JSON.stringify(l.slice(from, from + limit).map(row));
     }
   };
 })();

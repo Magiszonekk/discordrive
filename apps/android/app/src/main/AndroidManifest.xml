@@ -21,14 +21,37 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Gallery">
 
+        <!-- Two launcher icons, one app: "discordrive" (files and folders) and "Galeria" (every photo and
+             video of the account). Separate task affinities: two cards in Recents, Back from either root
+             closes only that one. -->
         <activity
-            android:name=".MainActivity"
-            android:exported="true">
+            android:name=".DdnActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:icon="@mipmap/ic_launcher_files"
+            android:taskAffinity="io.github.magiszonekk.discordrive.files">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".DdnGallery"
+            android:exported="true"
+            android:label="@string/ddn_gallery"
+            android:icon="@mipmap/ic_launcher"
+            android:taskAffinity="io.github.magiszonekk.discordrive.gallery">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".DdnViewerActivity" android:exported="false" android:theme="@style/Theme.Gallery.Viewer" />
+
+        <!-- The phone's own photos (old gallery screen): kept for the next steps (auto backup), not in the launcher. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
 
         <!-- In-app picker: shows up as an app option when another app asks the
              system for an image/video (GET_CONTENT / PICK). -->
