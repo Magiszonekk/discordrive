@@ -9,11 +9,13 @@
 //   { type: "init", dataDir, downloadsDir, sealer, discordApiOrigin?, tlsCa? }   once, first
 //   { type: "port" } + a MessagePort                                           a window connects
 //   { type: "sealed", id, ok, data | error }                                   answer to a seal request
+//   { type: "range", id, nodeId, start, end }                                  bytes of a file (player, previews)
 //   { type: "quit" }
 // Messages to the main process:
 //   { type: "seal" | "unseal", id, data }    the OS key store lives in the main process (safeStorage)
 //   { type: "status", busy, up, down }       for the tray (what is running)
 //   { type: "notify", kind, name, bytes }    a large transfer finished
+//   { type: "range-result", id, ok, data, size, start, end | error }
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -192,6 +194,18 @@ parent?.on("message", (e) => {
     sealWait.delete(m.id);
     if (m.ok && m.data) w?.ok(new Uint8Array(m.data));
     else w?.err(new Error(m.error ?? "key store error"));
+  } else if (m?.type === "range" && typeof m.id === "number") {
+    const q = m as unknown as { id: number; nodeId: unknown; start: unknown; end: unknown };
+    void (async () => {
+      try {
+        if (typeof q.nodeId !== "string" || !Number.isSafeInteger(q.start) || !Number.isSafeInteger(q.end)) throw new Error("bad range");
+        const c = await (ready ?? Promise.reject(new Error("agent not initialised")));
+        const r = await c.readRange(q.nodeId, q.start as number, q.end as number);
+        parent.postMessage({ type: "range-result", id: q.id, ok: true, data: r.data, size: r.size, start: r.start, end: r.end });
+      } catch (err) {
+        parent.postMessage({ type: "range-result", id: q.id, ok: false, error: String((err as Error)?.message ?? err) });
+      }
+    })();
   } else if (m?.type === "downloads-dir" && typeof (m as { dir?: unknown }).dir === "string") {
     setDownloadsDir((m as { dir: string }).dir);
   } else if (m?.type === "pause") {

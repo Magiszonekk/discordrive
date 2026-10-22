@@ -49,6 +49,8 @@ interface DesktopBridge {
   pickFolder(): Promise<string | null>;
   /** The built-in instance got its first account (it closes sign-up). */
   firstAccountMade(): Promise<boolean>;
+  /** Copy a text to the system clipboard (the window has no clipboard permission). Older app builds lack it. */
+  copyText?(text: string): Promise<boolean>;
   /** The window's back / forward commands (the mouse's side buttons on Windows). */
   onNavigate?(cb: (dir: "back" | "forward") => void): void;
   updates: {
@@ -61,6 +63,14 @@ interface DesktopBridge {
   };
 }
 const desktop = (window as unknown as { ddnDesktop?: DesktopBridge }).ddnDesktop ?? null;
+/** Copy a text: in the desktop app through the app (the window has no clipboard permission), else the web API. */
+async function writeClipboard(text: string): Promise<void> {
+  if (desktop?.copyText) {
+    await desktop.copyText(text);
+    return;
+  }
+  await navigator.clipboard.writeText(text);
+}
 /** The agent's port arrives from the preload by a window message; calls made before it are queued. */
 function agentEndpoint() {
   let port: MessagePort | null = null;
@@ -806,7 +816,7 @@ const adminUi = createAdminUi({
   act,
   toast,
   confirmDanger: (title, text, yes) => confirmDanger(title, text, yes),
-  copy: (text) => navigator.clipboard.writeText(text),
+  copy: (text) => writeClipboard(text),
   me: () => myAccount,
 });
 /** This account, and whether it has the admin flag (asked from the server; the server checks again on every admin call). */
@@ -2686,7 +2696,7 @@ function defaultDeviceName(): string {
 
 async function copy(text: string, done: string) {
   try {
-    await navigator.clipboard.writeText(text);
+    await writeClipboard(text);
     toast(done);
   } catch {
     toast(t("copy.fail"), "err");

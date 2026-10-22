@@ -2,7 +2,7 @@
 //  - a MessagePort straight to the agent, through which the web app talks to its core exactly as it
 //    talks to the worker in a browser;
 //  - `ddnDesktop`: a few narrow functions (paths of dropped files, show a file in its folder, pick a
-//    folder, the first-start choice). No other Electron or Node API reaches the page.
+//    folder, the first-start choice, copy a text to the clipboard). No other Electron or Node API reaches the page.
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 let resolvePort: ((p: MessagePort) => void) | null = null;
@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld("ddnDesktop", {
   showInFolder: (path: string) => ipcRenderer.send("ddn:show-in-folder", String(path)),
   pickFolder: () => ipcRenderer.invoke("ddn:pick-folder") as Promise<string | null>,
   firstAccountMade: () => ipcRenderer.invoke("ddn:first-account-made"),
+  /** Copy a text to the system clipboard (the window has no clipboard permission; the main process writes it). */
+  copyText: (text: string) => ipcRenderer.invoke("ddn:copy-text", String(text)) as Promise<boolean>,
   /** Back / forward of the window (the mouse's side buttons on Windows arrive as app commands). */
   onNavigate: (cb: (dir: "back" | "forward") => void) => {
     ipcRenderer.on("ddn:navigate", (_e, dir: unknown) => {

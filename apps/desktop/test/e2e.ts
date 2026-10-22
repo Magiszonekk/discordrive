@@ -229,6 +229,128 @@ try {
   check("logHasFileEvents", ["file_start", "frag", "req", "file_end"].every((e) => evs.has(e)) && lines.every((l) => l.src === "agent"));
   check("buildNotDev", !!head?.build && head.build !== "dev" && /^\d+\.\d+\.\d+\+[0-9a-f]{8}(\.g[0-9a-f]{7})?$/.test(head.build));
 
+  step("copy: the rescue kit lands in the system clipboard (the window has no clipboard permission)");
+  {
+    await app.evaluate(({ clipboard }) => clipboard.writeText("e2e-before"));
+    const kit = (await p.evaluate(() => (window as unknown as { ddnCore: { rescueKit(): Promise<{ kit: string }> } }).ddnCore.rescueKit())) as { kit: string };
+    // The same button as the user: Settings → rescue kit → Copy.
+    await p.evaluate(() => {
+      const ta = document.querySelector<HTMLTextAreaElement>('[data-ddn="kit-text"]');
+      if (ta) ta.value = "";
+    });
+    await p.evaluate((k) => {
+      document.querySelector<HTMLTextAreaElement>('[data-ddn="kit-text"]')!.value = k;
+      document.querySelector<HTMLDialogElement>('[data-ddn="kit-dialog"]')?.showModal();
+      document.querySelector<HTMLButtonElement>('[data-ddn="kit-copy"]')!.click();
+    }, kit.kit);
+    let clip = "";
+    for (let i = 0; i < 50 && clip !== kit.kit; i++) {
+      await new Promise((res) => setTimeout(res, 100));
+      clip = await app.evaluate(({ clipboard }) => clipboard.readText());
+    }
+    const failToast = await p.evaluate(() => [...document.querySelectorAll(".toast, [data-ddn=toast]")].some((x) => /copy manually|ręcznie/i.test(x.textContent ?? "")));
+    r.copy = { kitChars: kit.kit.length, clipboardMatches: clip === kit.kit, failToast };
+    check("copyToClipboard", clip === kit.kit && kit.kit.startsWith("ddn-kit") && !failToast);
+    await p.evaluate(() => document.querySelector<HTMLDialogElement>('[data-ddn="kit-dialog"]')?.close());
+  }
+
+  step("media in the window: video plays and seeks, previews (image, PDF, text, audio) through app://");
+  {
+    const mdir = join(work, "media");
+    mkdirSync(mdir, { recursive: true });
+    const ff = (args: string[]) => execFileSync("ffmpeg", ["-v", "error", "-y", ...args], { stdio: "ignore" });
+    // 20 s of VP9 at a high bitrate (~10 MB: more than one 4 MiB window, so seeking needs a second Range).
+    ff(["-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=25:duration=20", "-c:v", "libvpx-vp9", "-b:v", "4M", "-deadline", "realtime", "-cpu-used", "8", join(mdir, "clip.webm")]);
+    ff(["-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:a", "libopus", join(mdir, "tone.ogg")]);
+    ff(["-f", "lavfi", "-i", "testsrc2=size=800x600", "-frames:v", "1", join(mdir, "pic.png")]);
+    writeFileSync(join(mdir, "note.txt"), "Zażółć gęślą jaźń\nline 2\n");
+    // A one-page PDF (hand-written, valid xref).
+    const objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>"];
+    let pdf = "%PDF-1.4\n";
+    const offs: number[] = [];
+    objs.forEach((o, i) => ((offs[i] = pdf.length), (pdf += `${i + 1} 0 obj\n${o}\nendobj\n`)));
+    const xref = pdf.length;
+    pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offs.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+    writeFileSync(join(mdir, "doc.pdf"), pdf);
+    const names = ["clip.webm", "tone.ogg", "pic.png", "note.txt", "doc.pdf"];
+    await p.evaluate((paths) => (window as unknown as { ddnCore: { uploadPaths(p: string[]): Promise<unknown> } }).ddnCore.uploadPaths(paths), names.map((n) => join(mdir, n)));
+    const all = (await p.evaluate(() => (window as unknown as { ddnCore: { list(): Promise<{ rows: { id: string; name: string; size: number }[] }> } }).ddnCore.list())).rows;
+    const row = (n: string) => all.find((x) => x.name === n)!;
+    await p.evaluate(() => location.reload());
+    await p.waitForSelector("[data-page=files]:not([hidden])", { timeout: 60_000 });
+    // tsx names inner functions with a helper the page does not have.
+    await p.evaluate("window.__name = (f) => f");
+
+    // Video: the player dialog (Play), then a seek to 15 s (beyond the first window).
+    const clip = row("clip.webm");
+    await p.waitForSelector(`[data-ddn=row][data-id="${clip.id}"]`, { timeout: 30_000 });
+    const video = await p.evaluate(
+      async ({ id, size }) => {
+        const v = document.querySelector<HTMLVideoElement>('[data-ddn="player"]')!;
+        v.muted = true;
+        v.src = `./ddn/file/${encodeURIComponent(id)}?size=${size}`;
+        const ev = (name: string, ms = 30_000) => new Promise<boolean>((res) => {
+          const t = setTimeout(() => res(false), ms);
+          v.addEventListener(name, () => (clearTimeout(t), res(true)), { once: true });
+          v.addEventListener("error", () => (clearTimeout(t), res(false)), { once: true });
+        });
+        const meta = await ev("loadedmetadata");
+        const duration = v.duration;
+        await v.play().catch(() => {});
+        const playing = await new Promise<boolean>((res) => {
+          const t0 = performance.now();
+          const tick = () => (v.currentTime > 0.3 ? res(true) : performance.now() - t0 > 30_000 ? res(false) : setTimeout(tick, 100));
+          tick();
+        });
+        v.pause();
+        v.currentTime = 15;
+        const seeked = await ev("seeked");
+        const after = v.currentTime;
+        // A frame at the new position is there (the second Range arrived), not only the time.
+        const frame = v.readyState >= 2;
+        v.removeAttribute("src");
+        v.load();
+        return { meta, duration, playing, seeked, after, frame, error: v.error?.code ?? null };
+      },
+      { id: clip.id, size: clip.size },
+    );
+    r.video = video;
+    check("videoPlaysAndSeeks", video.meta && video.playing && video.seeked && video.frame && video.after >= 14.5 && video.after <= 15.5 && Math.abs(video.duration - 20) < 1);
+    // Range answers straight from the protocol handler: 206 with Content-Range, a window, not the whole file.
+    const head = await p.evaluate(async ({ id, size }) => {
+      const res = await fetch(`./ddn/file/${encodeURIComponent(id)}?size=${size}`, { headers: { range: `bytes=${size - 100}-` } });
+      return { status: res.status, cr: res.headers.get("content-range"), len: (await res.arrayBuffer()).byteLength };
+    }, { id: clip.id, size: clip.size });
+    r.videoRange = head;
+    check("rangeAnswer206", head.status === 206 && head.len === 100 && head.cr === `bytes ${clip.size - 100}-${clip.size - 1}/${clip.size}`);
+
+    // Previews: open each file's preview (the row's preview button) and wait until it is ready.
+    const pv: Record<string, unknown> = {};
+    const open = async (n: string) => {
+      await p.evaluate(() => document.querySelector<HTMLButtonElement>('[data-ddn="preview-close"]')?.click());
+      await p.locator(`[data-ddn=row][data-id="${row(n).id}"] td.size`).click();
+      return p.waitForSelector(`[data-ddn=preview-dialog][open][data-file="${n}"][data-state=ready]`, { timeout: 60_000 }).then(() => true).catch(() => false);
+    };
+    pv.image = (await open("pic.png")) && (await p.$eval("[data-ddn=preview-img]", (i) => (i as HTMLImageElement).naturalWidth === 800).catch(() => false));
+    pv.text = (await open("note.txt")) && (await p.textContent("[data-ddn=preview-text]").catch(() => "")) === "Zażółć gęślą jaźń\nline 2\n";
+    pv.pdf = (await open("doc.pdf")) && (await p.$eval("[data-ddn=preview-pdf]", (f) => (f as HTMLIFrameElement).src.startsWith("blob:")).catch(() => false));
+    pv.audio = (await open("tone.ogg")) && (await p.evaluate(async () => {
+      const a = document.querySelector<HTMLAudioElement>("[data-ddn=preview-audio]");
+      if (!a) return false;
+      if (a.readyState < 1) await new Promise((res) => (a.addEventListener("loadedmetadata", res, { once: true }), a.addEventListener("error", res, { once: true }), setTimeout(res, 20_000)));
+      return a.readyState >= 1 && a.duration > 2.5 && !a.error;
+    }));
+    pv.video = (await open("clip.webm")) && (await p.evaluate(async () => {
+      const v = document.querySelector<HTMLVideoElement>("[data-ddn=preview-video]");
+      if (!v) return false;
+      if (v.readyState < 1) await new Promise((res) => (v.addEventListener("loadedmetadata", res, { once: true }), v.addEventListener("error", res, { once: true }), setTimeout(res, 20_000)));
+      return v.readyState >= 1 && !v.error;
+    }));
+    await p.evaluate(() => document.querySelector<HTMLButtonElement>('[data-ddn="preview-close"]')?.click());
+    r.previews = pv;
+    for (const [k, v] of Object.entries(pv)) check(`preview_${k}`, v === true);
+  }
+
   step("download to disk");
   const d1 = (await p.evaluate((id) => (window as unknown as { ddnCore: { downloadToDisk(id: string): Promise<unknown> } }).ddnCore.downloadToDisk(id), movie.id)) as { path: string };
   check("downloadedToDisk", d1.path === join(downloads, "movie.bin") && sha(readFileSync(d1.path)) === sha(big));
