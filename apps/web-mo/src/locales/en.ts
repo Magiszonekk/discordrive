@@ -536,6 +536,7 @@ export const en: Record<string, string> = {
   "th.run": "Make thumbnails for existing photos",
   "th.stop": "Stop",
   "th.hint": "Photos and videos uploaded before thumbnails existed (or from a device that could not make them) are downloaded one by one, and their thumbnail is made here and stored encrypted next to them. Runs while this page is open; on a metered connection only when you start it.",
+  "th.hint@plain": "Photos and videos uploaded before thumbnails existed (or from a device that could not make them) are downloaded one by one, and their thumbnail is made here and stored next to them. Runs while this page is open; on a metered connection only when you start it.",
   "th.state": "{done} done · {made} thumbnails made · {left} left",
   "th.none": "Every photo and video has a thumbnail.",
   "th.metered": "Paused: metered connection. Start it by hand to continue.",

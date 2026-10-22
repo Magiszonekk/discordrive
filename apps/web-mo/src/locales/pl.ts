@@ -568,6 +568,7 @@ export const pl: Record<string, string> = {
   "th.run": "Utwórz miniatury dla istniejących zdjęć",
   "th.stop": "Zatrzymaj",
   "th.hint": "Zdjęcia i filmy wysłane, zanim powstały miniatury (albo z urządzenia, które nie umiało ich zrobić), są pobierane po kolei, a ich miniatura powstaje tutaj i zostaje zapisana zaszyfrowana obok nich. Działa, dopóki ta strona jest otwarta; na łączu taryfowym tylko po ręcznym uruchomieniu.",
+  "th.hint@plain": "Zdjęcia i filmy wysłane, zanim powstały miniatury (albo z urządzenia, które nie umiało ich zrobić), są pobierane po kolei, a ich miniatura powstaje tutaj i zostaje zapisana obok nich. Działa, dopóki ta strona jest otwarta; na łączu taryfowym tylko po ręcznym uruchomieniu.",
   "th.state": "{done} sprawdzonych · {made} miniatur utworzonych · zostało {left}",
   "th.none": "Każde zdjęcie i film ma miniaturę.",
   "th.metered": "Wstrzymane: łącze taryfowe. Uruchom ręcznie, żeby kontynuować.",
