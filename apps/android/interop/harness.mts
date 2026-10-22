@@ -101,6 +101,7 @@ try {
   execFile("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25:duration=4", "-c:v", "libvpx-vp9", "-b:v", "400k", "-deadline", "realtime", "-cpu-used", "8", join(tmp, "v.webm")]);
 } catch {
   haveFfmpeg = false;
+  step("no ffmpeg: random bytes instead of a photo and a video (no thumbnail checks)");
 }
 const { randomBytes } = await import("node:crypto");
 const rnd = (n: number) => new Uint8Array(randomBytes(n));

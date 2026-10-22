@@ -84,6 +84,13 @@ jobs:
         working-directory: apps/android
         run: ./gradlew --no-daemon :core:ddn:test :core:crypto:test :core:api:test
 
+      - name: ffmpeg (test media for the interop scenario)
+        timeout-minutes: 5
+        run: |
+          curl -fsSL --retry 3 --max-time 180 -o "$RUNNER_TEMP/ff.tar.xz" https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+          tar -xJf "$RUNNER_TEMP/ff.tar.xz" -C "$RUNNER_TEMP"
+          echo "$(ls -d "$RUNNER_TEMP"/ffmpeg-*-linux64-gpl)/bin" >> "$GITHUB_PATH"
+
       - name: "Interop: the phone's account layer with a real instance and the TypeScript client (pairing, join from a snapshot, operations)"
         run: npx tsx apps/android/interop/harness.mts
 
@@ -154,6 +161,14 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: npm ci --no-audit --no-fund
+
+      # Test media for the interop scenario (a photo with its thumbnail, a video): a static build.
+      - name: ffmpeg
+        timeout-minutes: 5
+        run: |
+          curl -fsSL --retry 3 --max-time 180 -o "$RUNNER_TEMP/ff.tar.xz" https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+          tar -xJf "$RUNNER_TEMP/ff.tar.xz" -C "$RUNNER_TEMP"
+          echo "$(ls -d "$RUNNER_TEMP"/ffmpeg-*-linux64-gpl)/bin" >> "$GITHUB_PATH"
 
       - name: Enable KVM
         run: |
