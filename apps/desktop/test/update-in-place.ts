@@ -4,10 +4,13 @@
 // installer and SHA256SUMS), downloads, checks and installs it the way the button does (silent NSIS in
 // update mode in the same folder) and is started again by the installer. Checked: B's files are in place,
 // the app restarted, every shortcut is where the user left it and points at the app, the default desktop
-// shortcut was not created again, the Start menu shortcut is the user's file (a description the user gave
-// it is still there: a re-made shortcut gets the installer's), the data stayed.
+// shortcut was not created again, the Start menu shortcut was not re-made by the installer (a shortcut the
+// installer makes carries its description, "discordrive desktop app"), the data stayed.
 // Control: B's installer run again without update mode (as when the user runs the file by hand) re-makes
 // the default shortcuts; the same marker check sees it, so the check can tell the two apart.
+// Electron itself (Windows notifications) keeps "<Programs>\discordrive.lnk" with its own app ID and
+// notification activator: it re-writes that one shortcut (description "discordrive") when the app shows its
+// first notification. That is the app, not the update; reported, and the README says so.
 // File times are reported, not checked: NTFS gives a file re-made under the same name within seconds its
 // old creation time back ("tunnelling"), and the shell updates a shortcut's stored target data when it opens it.
 // Taskbar pins cannot be made in CI (Windows offers no API for it): a pin-like shortcut file in the
@@ -50,7 +53,11 @@ function install(exe: string, args: string[]) {
 }
 const lnk = (p: string) =>
   existsSync(p)
-    ? (JSON.parse(ps(`$s=(New-Object -ComObject WScript.Shell).CreateShortcut(${q(p)}); $i=Get-Item -LiteralPath ${q(p)}; @{target=$s.TargetPath; description=$s.Description; created=[string]$i.CreationTimeUtc.Ticks; written=[string]$i.LastWriteTimeUtc.Ticks} | ConvertTo-Json -Compress`)) as { target: string; description: string; created: string; written: string })
+    ? (JSON.parse(
+        ps(
+          `$s=(New-Object -ComObject WScript.Shell).CreateShortcut(${q(p)}); $i=Get-Item -LiteralPath ${q(p)}; $id=''; try { $id=[string](New-Object -ComObject Shell.Application).Namespace(${q(dirname(p))}).ParseName(${q(p.split(/[\\/]/).pop()!)}).ExtendedProperty('System.AppUserModel.ID') } catch {}; @{target=$s.TargetPath; description=$s.Description; appId=$id; created=[string]$i.CreationTimeUtc.Ticks; written=[string]$i.LastWriteTimeUtc.Ticks} | ConvertTo-Json -Compress`,
+        ),
+      ) as { target: string; description: string; appId: string; created: string; written: string })
     : null;
 const makeLnk = (p: string, target: string, description: string) => ps(`$s=(New-Object -ComObject WScript.Shell).CreateShortcut(${q(p)}); $s.TargetPath=${q(target)}; $s.Description=${q(description)}; $s.Save()`);
 /** What the user changed in a shortcut (its comment): a shortcut the installer makes has its own. */
@@ -58,6 +65,8 @@ const mark = (p: string, description: string) => ps(`$s=(New-Object -ComObject W
 /** Now as a .NET tick count (the unit of the file times above). */
 const ticks = () => String((BigInt(Date.now()) + 62135596800000n) * 10000n);
 const at: Record<string, string> = {};
+/** The description electron-builder's installer gives the shortcuts it makes (the app's description). */
+const INSTALLER_DESC = "discordrive desktop app";
 const appRunning = () => /discordrive\.exe/i.test(execFileSync("tasklist", ["/FI", "IMAGENAME eq discordrive.exe", "/NH"], { encoding: "utf8" }));
 /** Is this build's commit inside the installed app (its build-info.json)? False while the installer writes it. */
 const asarHas = (dir: string, s: string) => {
@@ -178,7 +187,7 @@ const checks = {
   restartedAsB: r.restartedAs === B.commit,
   movedDesktopLinkKept: !!moved && same(moved.target) && moved.description === "user: moved and renamed",
   defaultDesktopLinkNotMadeAgain: !lnk(defaultDesktopLnk),
-  startMenuLinkIsTheUsers: !!start && same(start.target) && start.description === "user: my comment",
+  startMenuLinkNotMadeAgain: !!start && same(start.target) && start.description !== INSTALLER_DESC,
   ownStartMenuLinkKept: !!own && same(own.target) && own.description === "user: own shortcut",
   dataKept: (r.after as { dataKept: boolean }).dataKept,
 };
@@ -190,7 +199,7 @@ install(exeB, ["/S"]);
 const startCtl = lnk(startLnk);
 r.control = {
   defaultDesktopLinkMadeAgain: !!lnk(defaultDesktopLnk),
-  startMenuLinkMadeAgain: !!startCtl && startCtl.description !== "user: my comment",
+  startMenuLinkMadeAgain: !!startCtl && startCtl.description === INSTALLER_DESC,
   startMenuLink: startCtl,
   movedDesktopLinkStill: !!lnk(movedLnk),
   pinLikeLinkStill: !!lnk(pinLnk),
