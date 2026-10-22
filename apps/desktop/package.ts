@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { APP_USER_MODEL_ID } from "./src/shell/app-id.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(here, "package.json"), "utf8")) as { version: string; devDependencies: Record<string, string> };
@@ -45,7 +46,7 @@ writeFileSync(
 );
 
 const config = {
-  appId: "io.github.magiszonekk.discordrive",
+  appId: APP_USER_MODEL_ID,
   productName: "discordrive",
   electronVersion,
   directories: { output: out, buildResources: join(here, "build-res") },
@@ -66,6 +67,8 @@ const config = {
   publish: null,
   artifactName: "discordrive-${version}-${os}-${arch}.${ext}",
   win: { target: [{ target: "nsis", arch: ["x64"] }], icon: join(here, "build-res", "icon.ico") },
+  // createDesktopShortcut: true = only on a fresh install ("always" would re-create it at every update). The
+  // in-app update runs this installer with --updated, which keeps the user's shortcuts (README: Updates).
   nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, createDesktopShortcut: true, runAfterFinish: true },
   linux: {
     target: [

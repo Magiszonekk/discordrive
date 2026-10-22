@@ -52,9 +52,11 @@ interface DesktopBridge {
   onNavigate?(cb: (dir: "back" | "forward") => void): void;
   updates: {
     check(): Promise<{ current: { version: string; build: string; commit: string | null }; available: { build: string; commit: string; publishedAt: string; htmlUrl: string } | null; kind: string }>;
-    download(): Promise<{ path: string; hint: string; busy: boolean }>;
+    download(): Promise<{ path: string; hint: string; busy: boolean; inPlace?: boolean }>;
     settings(patch?: { checkUpdates?: boolean; autostart?: boolean; downloadsDir?: string }): Promise<{ checkUpdates: boolean; autostart: boolean; downloadsDir: string }>;
     open(path: string): void;
+    /** Install the downloaded update in place and restart (older app builds do not have it). */
+    install?(): Promise<boolean>;
   };
 }
 const desktop = (window as unknown as { ddnDesktop?: DesktopBridge }).ddnDesktop ?? null;
@@ -2376,7 +2378,12 @@ function wireDesktopApp() {
       hint.hidden = false;
       const open = $("app-open");
       open.hidden = false;
-      open.onclick = () => d.updates.open(r.path);
+      const install = d.updates.install;
+      // Windows / AppImage: the app installs it in place and restarts; otherwise the user opens the file.
+      const inPlace = !!(r.inPlace && install);
+      open.dataset.i18n = inPlace ? "app.install" : "app.open";
+      open.textContent = t(open.dataset.i18n);
+      open.onclick = inPlace ? (ev) => void act(ev.currentTarget as HTMLElement, () => install!()) : () => d.updates.open(r.path);
     });
   $<HTMLInputElement>("app-check-updates").onchange = (e) => void d.updates.settings({ checkUpdates: (e.currentTarget as HTMLInputElement).checked });
   $<HTMLInputElement>("app-autostart").onchange = (e) => void d.updates.settings({ autostart: (e.currentTarget as HTMLInputElement).checked });

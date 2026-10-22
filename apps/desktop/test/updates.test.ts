@@ -1,12 +1,12 @@
 // Update check against a fake GitHub releases API: a build from another commit is offered, the installer
 // for this system is downloaded and its SHA-256 checked; a wrong checksum is refused and the file deleted.
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { assetFor, downloadVerified, installKind, isNewer, latestBuild, parseSums, CHANNEL_TAG, REPO } from "../src/shell/updates.js";
+import { assetFor, canInstallInPlace, downloadVerified, installHint, installKind, isNewer, latestBuild, nsisUpdateCommand, parseSums, replaceAppImage, sha256File, CHANNEL_TAG, REPO } from "../src/shell/updates.js";
 
 const deb = Buffer.from("fake deb package ".repeat(1000));
 const exe = Buffer.from("fake windows installer ".repeat(1000));
@@ -84,5 +84,42 @@ describe("update check", () => {
     sums = "";
     await expect(downloadVerified(f, b, a, dir2)).rejects.toThrow(/no checksum/);
     expect(existsSync(join(dir2, a.name))).toBe(false);
+  });
+});
+
+describe("install and restart", () => {
+  it("Windows: the installer runs silently in update mode, in this copy's folder", () => {
+    const c = nsisUpdateCommand("C:\\Users\\Jan Kowalski\\Downloads\\discordrive-0.1.0-win-x64.exe", "C:\\Users\\Jan Kowalski\\AppData\\Local\\Programs\\discordrive\\");
+    expect(c.argv0).toBe('"C:\\Users\\Jan Kowalski\\Downloads\\discordrive-0.1.0-win-x64.exe"');
+    // /D= last and unquoted (NSIS takes the rest of the line, spaces included); no trailing separator.
+    expect(c.args).toEqual(["/S", "--updated", "--force-run", "/D=C:\\Users\\Jan Kowalski\\AppData\\Local\\Programs\\discordrive"]);
+    expect(() => nsisUpdateCommand('C:\\a" /D=C:\\x', "C:\\b")).toThrow(/unexpected/);
+    expect(() => nsisUpdateCommand("C:\\a.exe", "C:\\b\n/S")).toThrow(/unexpected/);
+  });
+  it("only Windows and a writable AppImage update in place; a .deb never", () => {
+    const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-upd-"));
+    expect(canInstallInPlace("nsis")).toBe(true);
+    expect(canInstallInPlace("deb")).toBe(false);
+    expect(canInstallInPlace("dev")).toBe(false);
+    expect(canInstallInPlace("appimage")).toBe(false);
+    expect(canInstallInPlace("appimage", join(dir, "discordrive.AppImage"))).toBe(true);
+    expect(canInstallInPlace("appimage", "/proc/discordrive.AppImage")).toBe(false);
+    expect(installHint("nsis", "x", true)).toMatch(/shortcuts/);
+    expect(installHint("nsis", "x", false)).toMatch(/Run the installer/);
+    expect(installHint("deb", "/d/x.deb", true)).toMatch(/apt install/);
+  });
+  it("AppImage: the new file takes the old one's place, executable", async () => {
+    const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-upd-"));
+    const target = join(dir, "discordrive.AppImage");
+    const fresh = join(dir, "new.AppImage");
+    writeFileSync(target, "old");
+    chmodSync(target, 0o755);
+    writeFileSync(fresh, "new version");
+    const want = await sha256File(fresh);
+    replaceAppImage(fresh, target);
+    expect(readFileSync(target, "utf8")).toBe("new version");
+    expect(await sha256File(target)).toBe(want);
+    if (process.platform !== "win32") expect(statSync(target).mode & 0o111).toBe(0o111);
+    expect(readdirSync(dir).sort()).toEqual(["discordrive.AppImage", "new.AppImage"]);
   });
 });

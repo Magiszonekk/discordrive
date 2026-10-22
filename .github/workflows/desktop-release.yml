@@ -78,6 +78,49 @@ jobs:
             apps/desktop/release/build-info.json
           if-no-files-found: error
 
+  update-in-place:
+    # "Install and restart" on Windows for real: version A installed, the user's shortcuts moved/added,
+    # A updates itself to B (silent NSIS in update mode); shortcuts, data and the restart are checked.
+    name: update in place (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci --no-audit --no-fund
+
+      - name: Version A (the same code, marked as an older build)
+        env:
+          DDN_COMMIT: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        run: |
+          npm run build -w @ddv4/desktop
+          npx tsx apps/desktop/package.ts --win
+          mv apps/desktop/release "$RUNNER_TEMP/release-a"
+
+      - name: Version B (this commit)
+        env:
+          DDN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          npm run build -w @ddv4/desktop
+          npx tsx apps/desktop/package.ts --win
+          mv apps/desktop/release "$RUNNER_TEMP/release-b"
+
+      - name: Install A, move the shortcuts, update to B from the app, check
+        run: npx tsx apps/desktop/test/update-in-place.ts "$RUNNER_TEMP/release-a" "$RUNNER_TEMP/release-b"
+
   publish:
     name: publish main-build
     needs: build
