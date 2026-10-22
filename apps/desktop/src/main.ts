@@ -19,6 +19,7 @@ import { autostartOn, setAutostart, HIDDEN_ARG, type AutostartEnv } from "./shel
 import { loadSettings, normaliseServerUrl, saveSettings, type DesktopSettings } from "./shell/settings.js";
 import type { AgentInit } from "./agent.js";
 import { appArmorCommand, appImageWithoutSandbox } from "./shell/sandbox.js";
+import { APP_USER_MODEL_ID } from "./shell/app-id.js";
 import { CHECK_EVERY_MS, assetFor, canInstallInPlace, downloadVerified, installHint, installKind, isNewer, latestBuild, nsisUpdateCommand, replaceAppImage, sha256File, type AvailableBuild } from "./shell/updates.js";
 
 const APP_ID = "discordrive";
@@ -26,6 +27,10 @@ const APP_NAME = "discordrive";
 /** Built app files: static/ (start page), web/<mode>/ (the web app); nothing outside these is served. */
 const ROOT = __dirname;
 const MODES = ["metadata-only", "e2ee", "plain"] as const;
+
+// Windows: the same AppUserModelID as the installer's shortcuts (shell/app-id.ts); without it Electron uses
+// "electron.app.<name>" and a pin made from a shortcut shows up as a second taskbar icon next to the app.
+if (process.platform === "win32") app.setAppUserModelId(APP_USER_MODEL_ID);
 
 protocol.registerSchemesAsPrivileged([{ scheme: SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 

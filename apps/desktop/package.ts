@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { APP_USER_MODEL_ID } from "./src/shell/app-id.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(here, "package.json"), "utf8")) as { version: string; devDependencies: Record<string, string> };
@@ -45,7 +46,7 @@ writeFileSync(
 );
 
 const config = {
-  appId: "io.github.magiszonekk.discordrive",
+  appId: APP_USER_MODEL_ID,
   productName: "discordrive",
   electronVersion,
   directories: { output: out, buildResources: join(here, "build-res") },

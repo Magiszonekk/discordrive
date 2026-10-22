@@ -48,6 +48,8 @@ release's `SHA256SUMS`. Then:
   with the app's ID, so Electron itself writes `<Start menu>\Programs\discordrive.lnk` (with its
   notification activator) when the app shows its first notification, also when the user removed it.
   It touches only that one Start menu entry, never the desktop or pinned shortcuts.
+  The app runs with the installer's AppUserModelID (`src/shell/app-id.ts`), so a pin made from the desktop
+  shortcut, the Start menu or the running window is the same taskbar icon.
   CI (`desktop-release.yml`, job "update in place") installs a build A, moves the desktop shortcut, adds a
   Start menu shortcut, lets A update itself to B and checks the shortcuts, the data and the restart.
   Taskbar pins cannot be made in CI; to check by hand: pin discordrive to the taskbar, then Settings →

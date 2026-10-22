@@ -188,6 +188,8 @@ const checks = {
   movedDesktopLinkKept: !!moved && same(moved.target) && moved.description === "user: moved and renamed",
   defaultDesktopLinkNotMadeAgain: !lnk(defaultDesktopLnk),
   startMenuLinkNotMadeAgain: !!start && same(start.target) && start.description !== INSTALLER_DESC,
+  // The app runs with the installer's AppUserModelID: Electron's notification shortcut carries it too.
+  startMenuLinkSameAppId: start?.appId === "io.github.magiszonekk.discordrive",
   ownStartMenuLinkKept: !!own && same(own.target) && own.description === "user: own shortcut",
   dataKept: (r.after as { dataKept: boolean }).dataKept,
 };
