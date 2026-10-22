@@ -8,7 +8,7 @@ discordrive (operation log, device keys, QR pairing, uploads straight to the sto
 
 | module        | type    | contents                                                                 |
 |---------------|---------|--------------------------------------------------------------------------|
-| `:syncjs`     | Android | the sync core (`packages/sync-core`) in an embedded JS engine, behind `JsEngine` (QuickJS or the WebView's V8 sandbox) |
+| `:syncjs`     | Android | the sync core (`packages/sync-core`) in an embedded JS engine behind `JsEngine`: the WebView's V8 sandbox where available (`JsEngines.open`), QuickJS otherwise |
 | `:app`        | Android | the app (gallery UI; network layer still the old one, being replaced)    |
 | `:core:crypto`| JVM     | key hierarchy and AES-GCM packing of the old gallery (to be replaced)     |
 | `:core:api`   | JVM     | the old gallery's server client (to be replaced)                          |
