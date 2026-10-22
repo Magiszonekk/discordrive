@@ -8,7 +8,8 @@ discordrive (operation log, device keys, QR pairing, uploads straight to the sto
 
 | module        | type    | contents                                                                 |
 |---------------|---------|--------------------------------------------------------------------------|
-| `:syncjs`     | Android | the sync core (`packages/sync-core`) in an embedded JS engine, behind `JsEngine` (QuickJS or the WebView's V8 sandbox) |
+| `:core:ddn`   | JVM     | the discordrive account and network layer: device keys (Ed25519), sealed objects, the encrypted operation log, the webhook vault, device names, QR pairing, snapshots (pointer, base, segments), rescue kits, the instance's HTTP API, reads from Discord, joining an account (snapshot + log tail) |
+| `:syncjs`     | Android | the sync core (`packages/sync-core`) in an embedded JS engine behind `JsEngine`: the WebView's V8 sandbox where available (`JsEngines.open`), QuickJS otherwise |
 | `:app`        | Android | the app (gallery UI; network layer still the old one, being replaced)    |
 | `:core:crypto`| JVM     | key hierarchy and AES-GCM packing of the old gallery (to be replaced)     |
 | `:core:api`   | JVM     | the old gallery's server client (to be replaced)                          |
@@ -25,6 +26,20 @@ It is committed (building the app needs no Node); CI fails when it is stale. The
 sync-core simulator in every available engine and requires exactly the state Node reaches; its vectors
 are generated at build time (needs Node and `npm ci` at the repository root). A benchmark of a large
 account runs in the same test APK (`-e syncBenchFiles 2000,20000,50000` with `am instrument`).
+
+## Account layer and compatibility
+
+`:core:ddn` implements the formats of `packages/metadata-client` in Kotlin. They are checked two ways:
+
+- **vectors**: `packages/metadata-client/scripts/android-vectors.ts` writes `core/ddn/src/test/resources/account-vectors.json`
+  with every format made by the TypeScript code from fixed keys; `./gradlew :core:ddn:test` must read (and, where the
+  format is deterministic, write) the same bytes. CI fails when the vectors are stale.
+- **live interop**: `npx tsx apps/android/interop/harness.mts` (repository root) starts a real instance and a fake
+  Discord; a TypeScript device creates an account with a snapshot, the phone's code pairs with it by the QR offer,
+  joins (base from Discord + log tail from the instance), must reach the same state hash, then makes a folder, names
+  itself and adds a channel, which the TypeScript device sees. `--device` runs the same scenario on a phone or emulator
+  (the installed `:syncjs` test APK, index in its own JS engine; `--engine quickjs` forces QuickJS); `--discord-hooks
+  <file>` uses real Discord webhooks of a test server instead of the fake (everything posted is deleted afterwards).
 
 ## Builds and signing
 

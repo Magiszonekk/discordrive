@@ -47,6 +47,7 @@ class MainActivity : SessionActivity() {
                 R.id.action_sync -> runSync()
                 R.id.action_ai -> runAiScan(bucket = null)
                 R.id.action_settings -> startActivity(Intent(this, SettingsActivity::class.java))
+                R.id.action_ddn_join -> startActivity(Intent(this, JoinActivity::class.java))
             }
             true
         }

@@ -1,0 +1,208 @@
+// Live interop between the phone's account layer (Kotlin, apps/android/core/ddn) and the TypeScript client
+// against a REAL instance (DdnServer) and a local fake Discord, both on 127.0.0.1:
+//   1. a TS device creates the account, a vault with two channels, 40 folders, a snapshot (base + segment);
+//   2. the phone (JVM test InteropTest, started by this script through Gradle) pairs as a NEW device with
+//      the QR offer: the TS device accepts it, both show the same code;
+//   3. the phone joins: vault, pointer, base from Discord, the log tail from the instance; its state must
+//      hash like the TS device's; it names itself, makes a folder, adds a channel to the vault;
+//   4. the TS device pulls: sees the phone's folder, the phone's channel, the phone's name.
+// The JVM test has no JS engine (that is :syncjs, checked on a device), so its sync core calls come back
+// here over a small JSON RPC on 127.0.0.1 (the same sync core the phone runs in its engine), together with
+// the steps the TS device does (accept the pairing offer, check the phone's changes).
+//   npx tsx apps/android/interop/harness.mts            JVM (Gradle :core:ddn InteropTest; needs JDK 17)
+//   npx tsx apps/android/interop/harness.mts --device   the phone: the installed :syncjs test APK, its own JS
+//        engine (adb reverse to these servers; ANDROID_SERIAL picks the device; --engine quickjs forces QuickJS)
+//   --discord-hooks <file>   real Discord instead of the fake: a file with 3 webhook URLs of a test server
+//        (2 for the account, 1 the phone adds); every message posted is deleted at the end
+import { spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:http";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
+import { canonicalState, ROOT_ID, applyEntry, initIndex, loadSnapshot, MemoryIndexStore, uploadsTouched, RULES_VERSION, type IndexSnapshot, type LogEntry } from "@ddv4/sync-core";
+import {
+  ChannelPacer,
+  DiscordWebhookTransport,
+  EncryptedArbiter,
+  HttpApi,
+  MetadataClient,
+  OpCodec,
+  WebhookVault,
+  acceptPairing,
+  clientBlobIO,
+  createAccountHttp,
+  createPointerMessage,
+  generateDeviceKey,
+  inspectForVault,
+  newAccountKey,
+  openDeviceName,
+  sealDeviceName,
+  toWebhookRefs,
+  writeSnapshot,
+} from "@ddv4/metadata-client";
+import { DdnServer, FakeDiscord } from "@ddv4/metadata-client/node";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const androidDir = join(here, "..");
+const step = (s: string) => console.error(`[interop] ${s}`);
+const sha = (s: string) => createHash("sha256").update(s, "utf8").digest("hex");
+const checks: Record<string, boolean> = {};
+const check = (k: string, v: boolean) => ((checks[k] = v), v || console.error(`[interop] FAIL ${k}`));
+
+const hi = process.argv.indexOf("--discord-hooks");
+const realHooks = hi >= 0 ? (await import("node:fs")).readFileSync(process.argv[hi + 1]!, "utf8").split(/\r?\n/).map((x) => x.trim()).filter(Boolean) : null;
+if (realHooks && realHooks.length < 3) throw new Error("--discord-hooks: 3 webhook URLs");
+const fake = new FakeDiscord();
+// Real Discord: no origin mapping (an empty origin tells the phone to use discord.com itself).
+const discordOrigin = realHooks ? "" : await fake.listen();
+const srv = new DdnServer({ rateLimits: false });
+const { url } = await srv.listen(0, "127.0.0.1");
+const transport = new DiscordWebhookTransport(realHooks ? {} : { apiOrigin: discordOrigin });
+const hookUrl = (i: number, ch: string) => (realHooks ? { url: realHooks[i]!, id: realHooks[i]!.split("/").at(-2)!, channelId: "" } : fake.addWebhook(ch));
+
+step("TS device: account, vault with two channels, 40 folders, snapshot");
+const key = newAccountKey();
+const dk = await generateDeviceKey(true);
+const r0 = await createAccountHttp(url, dk, key);
+const api = new HttpApi({ baseUrl: url, accountId: r0.accountId, deviceId: r0.deviceId, key: dk, instanceId: r0.instanceId });
+const vault = new WebhookVault(api, key, r0.accountId);
+const h1 = hookUrl(0, "1550000000000000301");
+const h2 = hookUrl(1, "1550000000000000302");
+for (const h of [h1, h2]) await vault.addWebhook(await inspectForVault(transport, h.url));
+const pacer = new ChannelPacer(realHooks ? {} : { perMin: 1e6, maxPerMin: 1e6, burst: 1e6 });
+// Messages posted per webhook (real Discord: deleted at the end).
+const postedOn = new Map<string, string[]>();
+const post0 = transport.postFile.bind(transport);
+transport.postFile = async (h, d, f, ...r) => {
+  const x = await post0(h, d, f, ...r);
+  postedOn.set(h.id, [...(postedOn.get(h.id) ?? []), x.messageId]);
+  return x;
+};
+const mk = async () => new MetadataClient({ device: { id: r0.deviceId, name: "laptop" }, arbiter: new EncryptedArbiter(new OpCodec(key, r0.accountId), api), transport, webhooks: toWebhookRefs(await vault.load()), pacer, chunkSize: 64 * 1024 });
+let ts = await mk();
+const io = clientBlobIO(ts, transport, 4096);
+const loc = await createPointerMessage(io, key, r0.accountId, ts.webhook(h1.id));
+await vault.update((x) => ((x.pointer = loc), x));
+for (let i = 1; i <= 40; i++) await ts.commitOp({ type: "create", kind: "folder", nodeId: `fold-${String(i).padStart(10, "0")}`, parentId: ROOT_ID, name: `Zdjęcia ${i}` }, "mkdir");
+await writeSnapshot({ io, key, accountId: r0.accountId, pointer: loc, log: api, store: ts.store, now: () => Date.now() }, "base");
+// After the base: entries the phone gets from the instance (the tail), not from the snapshot.
+await ts.commitOp({ type: "rename", nodeId: "fold-0000000003", name: "Dokumenty" }, "rename");
+await ts.commitOp({ type: "trash", nodeId: "fold-0000000004" }, "trash");
+
+// The phone's sync core over the RPC (InteropTest.RpcReplica implements IndexReplica with it).
+type Req = { id: number; m: string; a?: unknown };
+let store = initIndex(new MemoryIndexStore());
+function core(q: Req): unknown {
+  switch (q.m) {
+    case "reset": store = initIndex(new MemoryIndexStore()); return null;
+    case "rules": return RULES_VERSION;
+    case "head": return store.getMeta().headSeq;
+    case "load": store = loadSnapshot(q.a as IndexSnapshot, new MemoryIndexStore()); return null;
+    case "apply": return (q.a as LogEntry[]).map((e) => applyEntry(store, e));
+    case "guard": return uploadsTouched(q.a as never);
+    case "sha": return sha(canonicalState(store));
+    case "children": return [...store.childIds(q.a as string)].map((id) => store.getNode(id)!).filter((n) => !n.trashed).map((n) => ({ id: n.id, name: n.name, kind: n.kind, size: n.content?.sizeBytes ?? null }));
+    default: throw new Error(`unknown ${q.m}`);
+  }
+}
+
+const tsState = () => sha(canonicalState(ts.store));
+let paired: { sas: string; deviceId: string } | null = null;
+
+async function handle(q: Req): Promise<unknown> {
+  if (q.m === "offer") {
+    // The phone showed its QR: the TS device accepts it (registers the key, leaves the sealed bundle).
+    const a = await acceptPairing(q.a as string, { accountId: r0.accountId, accountKey: key.rawB64, fromDevice: "laptop" }, (pub) => api.addDevice(pub), api.pairingMailbox());
+    paired = a;
+    return { sas: a.sas };
+  }
+  if (q.m === "expect") {
+    // What the phone must reach: the TS device's state (its log, pulled).
+    await ts.pull();
+    return { sha: tsState(), head: ts.store.getMeta().headSeq };
+  }
+  if (q.m === "verify") {
+    // The phone made changes: the TS device pulls and checks them.
+    ts = await mk();
+    await ts.pull();
+    const v = await vault.load();
+    const kids = ts.list(ROOT_ID);
+    const devs = await api.listDevices();
+    const me = devs.find((d) => d.deviceId === paired?.deviceId);
+    return {
+      sha: tsState(),
+      head: ts.store.getMeta().headSeq,
+      phoneFolder: kids.some((k) => k.name === "Z telefonu ż" && k.kind === "folder"),
+      webhooks: v.webhooks.map((w) => w.id),
+      phoneName: me ? await openDeviceName(key, r0.accountId, me.deviceId, me.nameSealed) : null,
+      devices: devs.length,
+    };
+  }
+  if (q.m === "newHook") {
+    const h = hookUrl(2, "1550000000000000303");
+    return realHooks ? { ...h, channelId: (await inspectForVault(transport, h.url)).channelId } : h;
+  }
+  if (q.m === "done") {
+    Object.assign(checks, q.a as Record<string, boolean>);
+    return null;
+  }
+  return core(q);
+}
+
+const rpc = createServer((req, res) => {
+  let body = "";
+  req.on("data", (d) => (body += d));
+  req.on("end", async () => {
+    const q = JSON.parse(body) as Req;
+    try {
+      const r = await handle(q);
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, r: r ?? null }));
+    } catch (e) {
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: false, e: String((e as Error)?.stack ?? e) }));
+    }
+  });
+});
+await new Promise<void>((r) => rpc.listen(0, "127.0.0.1", r));
+const rpcUrl = `http://127.0.0.1:${(rpc.address() as { port: number }).port}`;
+
+const onDevice = process.argv.includes("--device");
+const ei = process.argv.indexOf("--engine");
+const engine = ei >= 0 ? process.argv[ei + 1] : "";
+let child;
+if (onDevice) {
+  step("phone: InteropDeviceTest on the device (adb reverse to the servers here)");
+  const port = (u: string) => new URL(u).port;
+  for (const u of [url, discordOrigin, rpcUrl].filter(Boolean)) spawnSync("adb", ["reverse", `tcp:${port(u)}`, `tcp:${port(u)}`], { stdio: "inherit" });
+  child = spawn("adb", ["shell", "am", "instrument", "-w", "-e", "class", "io.github.magiszonekk.discordrive.syncjs.InteropDeviceTest", "-e", "ddnRpc", rpcUrl, "-e", "ddnServer", url, "-e", "ddnDiscord", discordOrigin || "none", ...(engine ? ["-e", "ddnEngine", engine] : []), "io.github.magiszonekk.discordrive.syncjs.test/androidx.test.runner.AndroidJUnitRunner"], { stdio: ["ignore", "pipe", "inherit"] });
+} else {
+  step("phone: JVM InteropTest through Gradle (pairing, join, operations)");
+  child = spawn(process.platform === "win32" ? "gradlew.bat" : "./gradlew", ["--no-daemon", "-q", ":core:ddn:test", "--tests", "*InteropTest*", "-PddnInterop=1", "--rerun-tasks"], {
+    cwd: androidDir,
+    env: { ...process.env, DDN_INTEROP_SERVER: url, DDN_INTEROP_DISCORD: discordOrigin, DDN_INTEROP_RPC: rpcUrl },
+    stdio: ["ignore", "pipe", "inherit"],
+    shell: process.platform === "win32",
+  });
+}
+let childOut = "";
+child.stdout!.on("data", (d: Buffer) => ((childOut += d.toString()), process.stderr.write(d)));
+const code: number = await new Promise((res) => child.on("close", (c) => res(c ?? 1)));
+// am instrument exits 0 even when a test fails: its report says OK or FAILURES.
+check(onDevice ? "deviceTestPassed" : "jvmTestPassed", code === 0 && (!onDevice || /\nOK \(1 test\)/.test(childOut)));
+if (onDevice) for (const u of [url, discordOrigin, rpcUrl].filter(Boolean)) spawnSync("adb", ["reverse", "--remove", `tcp:${new URL(u).port}`], { stdio: "ignore" });
+check("pairedSameCode", !!paired);
+void sealDeviceName;
+rpc.close();
+if (realHooks) {
+  // Delete what this run posted (snapshot objects, the pointer).
+  let n = 0;
+  for (const u of realHooks) {
+    const hook = { id: u.split("/").at(-2)!, url: u };
+    for (const m of postedOn.get(hook.id) ?? []) await transport.deleteMessage(hook, m).then(() => n++).catch(() => {});
+  }
+  step(`deleted ${n} messages from Discord`);
+}
+await srv.close();
+await fake.close();
+const ok = Object.values(checks).every(Boolean) && Object.keys(checks).length > 3;
+console.log(JSON.stringify({ ok, checks }, null, 1));
+process.exit(ok ? 0 : 1);

@@ -59,6 +59,7 @@ dependencies {
     implementation(project(":core:crypto"))
     implementation(project(":core:api"))
     implementation(project(":syncjs"))
+    implementation(libs.zxing.core)
     implementation(libs.okhttp)
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")

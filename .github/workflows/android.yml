@@ -11,11 +11,13 @@ on:
     paths:
       - "apps/android/**"
       - "packages/sync-core/**"
+      - "packages/metadata-client/**"
       - ".github/workflows/android.yml"
   pull_request:
     paths:
       - "apps/android/**"
       - "packages/sync-core/**"
+      - "packages/metadata-client/**"
       - ".github/workflows/android.yml"
   workflow_dispatch:
 
@@ -64,9 +66,26 @@ jobs:
           git diff --exit-code -- ../../apps/android/syncjs/src/main/assets/sync-core.js \
             || { echo "::error::apps/android/syncjs/src/main/assets/sync-core.js is stale: run npx tsx scripts/android-assets.ts in packages/sync-core and commit it"; exit 1; }
 
-      - name: JVM tests (crypto, API)
+      - name: The account vectors (made by the TypeScript client) are current
+        working-directory: packages/metadata-client
+        run: |
+          npx tsx scripts/android-vectors.ts > /dev/null
+          # The IVs and the pairing keys are random: compare everything else.
+          node -e '
+            const f = "../../apps/android/core/ddn/src/test/resources/account-vectors.json";
+            const cur = JSON.parse(require("fs").readFileSync(f, "utf8"));
+            const old = JSON.parse(require("child_process").execSync(`git show HEAD:apps/android/core/ddn/src/test/resources/account-vectors.json`, { cwd: "../.." }).toString());
+            const fixed = (v) => ({ subkeys: v.subkeyProbe, ed: v.ed25519, op: v.op.decrypted, vault: v.vault.content, names: v.deviceName.cleaned, head: v.snapshots.headSeq, state: v.snapshots.stateSha256AtHead, kit1: v.kits.kit1, kit3: v.kits.kit3 });
+            if (JSON.stringify(fixed(cur)) !== JSON.stringify(fixed(old))) { console.error("::error::account-vectors.json is stale: run npx tsx scripts/android-vectors.ts in packages/metadata-client and commit it"); process.exit(1); }
+          '
+          git checkout -- ../../apps/android/core/ddn/src/test/resources/account-vectors.json
+
+      - name: JVM tests (account layer against the TypeScript vectors, crypto, API)
         working-directory: apps/android
-        run: ./gradlew --no-daemon :core:crypto:test :core:api:test
+        run: ./gradlew --no-daemon :core:ddn:test :core:crypto:test :core:api:test
+
+      - name: "Interop: the phone's account layer with a real instance and the TypeScript client (pairing, join from a snapshot, operations)"
+        run: npx tsx apps/android/interop/harness.mts
 
       - name: Debug build and the instrumentation test APK
         working-directory: apps/android
@@ -159,6 +178,9 @@ jobs:
             adb logcat -c
             ./gradlew --no-daemon :syncjs:connectedDebugAndroidTest || { adb logcat -d -s ddn-syncjs:* AndroidRuntime:E TestRunner:*; exit 1; }
             adb logcat -d -s ddn-syncjs:* | grep RESULT || true
+            # The interop scenario on the emulator, the index in its own JS engine (connected tests uninstall the APK).
+            adb install -r -t syncjs/build/outputs/apk/androidTest/debug/syncjs-debug-androidTest.apk
+            cd ../.. && npx tsx apps/android/interop/harness.mts --device
 
       - name: Test report
         if: always()
