@@ -161,9 +161,9 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Build the test APK first (outside the emulator's time budget)
+      - name: Build the test APKs first (outside the emulator's time budget)
         working-directory: apps/android
-        run: ./gradlew --no-daemon :syncjs:assembleDebugAndroidTest
+        run: ./gradlew --no-daemon :syncjs:assembleDebugAndroidTest :app:assembleDebug :app:assembleDebugAndroidTest
 
       - name: Compatibility test and benchmark on the emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -181,11 +181,18 @@ jobs:
             # The interop scenario on the emulator, the index in its own JS engine (connected tests uninstall the APK).
             adb install -r -t syncjs/build/outputs/apk/androidTest/debug/syncjs-debug-androidTest.apk
             cd ../.. && npx tsx apps/android/interop/harness.mts --device
+            # The app's browsing screens (Files, a folder, the Gallery with a web upload's thumbnail, the viewer).
+            adb install -r apps/android/app/build/outputs/apk/debug/app-debug.apk
+            adb install -r -t apps/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            npx tsx apps/android/interop/harness.mts --app
+            mkdir -p apps/android/build/shots && adb pull /sdcard/Android/data/io.github.magiszonekk.discordrive/files/shots apps/android/build/shots || true
 
       - name: Test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-sync-core-report
-          path: apps/android/syncjs/build/reports/androidTests/
+          path: |
+            apps/android/syncjs/build/reports/androidTests/
+            apps/android/build/shots/
           retention-days: 14

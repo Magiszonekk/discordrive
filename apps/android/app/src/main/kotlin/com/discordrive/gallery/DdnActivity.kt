@@ -91,17 +91,16 @@ open class DdnActivity : AppCompatActivity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (session == null && DdnAccount.load(this) != null && ::list.isInitialized) recreate()
-    }
-
+    private var refreshing = false
     private fun refresh() {
         val s = session ?: return
+        if (refreshing) return
+        refreshing = true
         swipe.isRefreshing = true
         thread {
             s.refresh()
             main.post {
+                refreshing = false
                 swipe.isRefreshing = false
                 show()
             }
@@ -206,10 +205,12 @@ open class DdnActivity : AppCompatActivity() {
     internal fun findRecycler(): RecyclerView? = if (::list.isInitialized) list else null
     internal fun openFolderForTest(id: String, name: String) { gallery = false; nav.selectedItemId = 1; path += id to name; show() }
     internal fun showGalleryForTest() { nav.selectedItemId = 2 }
-    internal fun firstCellHasPicture(): Boolean {
-        val f = list.layoutManager?.findViewByPosition(0) as? FrameLayout ?: return false
-        val img = f.getChildAt(0) as ImageView
-        return img.drawable is android.graphics.drawable.BitmapDrawable
+    internal fun isDrawn(): Boolean = list.isLaidOut && list.childCount > 0
+
+    /** A cell of the grid shows a decoded picture (a thumbnail, not the type icon). */
+    internal fun firstCellHasPicture(): Boolean = (0 until list.childCount).any { i ->
+        val img = (list.getChildAt(i) as? FrameLayout)?.getChildAt(0) as? ImageView
+        img?.drawable is android.graphics.drawable.BitmapDrawable
     }
 
     companion object {

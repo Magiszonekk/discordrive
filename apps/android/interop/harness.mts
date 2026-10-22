@@ -224,6 +224,10 @@ if (onDevice) {
     shell: process.platform === "win32",
   });
 }
+// Ended early (Ctrl+C, a timeout): the device keeps no reverse ports to servers that are gone.
+const cleanup = () => { if (onDevice) spawnSync("adb", ["reverse", "--remove-all"], { stdio: "ignore" }); };
+process.on("SIGINT", () => (cleanup(), process.exit(130)));
+process.on("SIGTERM", () => (cleanup(), process.exit(143)));
 let childOut = "";
 child.stdout!.on("data", (d: Buffer) => ((childOut += d.toString()), process.stderr.write(d)));
 const code: number = await new Promise((res) => child.on("close", (c) => res(c ?? 1)));

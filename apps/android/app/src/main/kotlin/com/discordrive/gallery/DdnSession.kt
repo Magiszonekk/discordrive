@@ -9,6 +9,7 @@ import io.github.magiszonekk.discordrive.core.FileFormat
 import io.github.magiszonekk.discordrive.core.FileReader
 import io.github.magiszonekk.discordrive.core.IndexReplica
 import io.github.magiszonekk.discordrive.core.InstanceApi
+import io.github.magiszonekk.discordrive.core.JsEngineException
 import io.github.magiszonekk.discordrive.core.Vault
 import io.github.magiszonekk.discordrive.syncjs.JsEngines
 import io.github.magiszonekk.discordrive.syncjs.JsIndexReplica
@@ -30,7 +31,7 @@ class DdnSession private constructor(private val app: Context, val acct: Account
     private lateinit var replica: IndexReplica
     lateinit var sync: AccountSync
         private set
-    val discord = Discord()
+    val discord = Discord(apiOrigin = testDiscordOrigin)
     val files: FileReader = FileReader(discord, { id -> webhookUrl(id) })
     @Volatile var engineName: String = "?"
         private set
@@ -43,13 +44,32 @@ class DdnSession private constructor(private val app: Context, val acct: Account
     private fun webhookUrl(id: String): String =
         Vault.webhooks(sync.vault).firstOrNull { it.id == id }?.url ?: throw IllegalStateException("channel $id is not in this account's vault")
 
-    /** Run on the index thread (and wait). */
-    fun <T> ix(f: (IndexReplica) -> T): T = thread.submit(Callable { f(replica) }).get()
+    /**
+     * Run on the index thread (and wait). The V8 sandbox can die under the app (the system freezes or kills
+     * it while the app is in the background: "sandbox dead", "cannot set freezer state"); then the session
+     * moves to QuickJS for good (the index is rebuilt from the local copy, no network) and runs `f` again.
+     */
+    fun <T> ix(f: (IndexReplica) -> T): T = thread.submit(Callable {
+        try {
+            f(replica)
+        } catch (e: JsEngineException) {
+            if (engineName == "quickjs") throw e
+            Log.w(TAG, "$engineName failed (${e.message}); continuing on QuickJS")
+            runCatching { replica.close() }
+            start(quickJsOnly = true)
+            // The new sync starts with an empty vault: files are read through its webhooks.
+            runCatching { sync.loadVault() }
+            f(replica)
+        }
+    }).get()
 
     private fun <T> later(f: () -> T): Future<T> = thread.submit(Callable(f))
 
-    private fun open() = later {
-        val core = JsEngines.openSyncCore(app)
+    private fun open() = later { start(quickJsOnly = false) }.get()
+
+    /** (Re)build the index in an engine: the local copy if there is one. On the index thread. */
+    private fun start(quickJsOnly: Boolean): Boolean {
+        val core = JsEngines.openSyncCore(app, quickJsOnly)
         engineName = core.engine.name
         replica = JsIndexReplica(core.engine)
         val api = InstanceApi(acct.serverUrl, acct.accountId, acct.deviceId, acct.device, acct.instanceId)
@@ -61,11 +81,11 @@ class DdnSession private constructor(private val app: Context, val acct: Account
             } else false
         }.getOrElse { Log.w(TAG, "local copy unreadable, joining again: ${it.message}"); false }
         headSeq = replica.headSeq
-        loaded
-    }.get()
+        return loaded
+    }
 
     /** Vault + log tail (or a join from the snapshot when there is no local copy); saves the local copy. */
-    fun refresh(): Long = later {
+    fun refresh(): Long = ix { _ ->
         try {
             if (headSeq == 0L && !localCopy.exists()) sync.join() else {
                 sync.loadVault()
@@ -79,10 +99,11 @@ class DdnSession private constructor(private val app: Context, val acct: Account
             lastError = e.message
             Log.w(TAG, "refresh: ${e.message}")
             // Offline: the vault is still needed to read files (last one seen).
+            if (e is JsEngineException) throw e
             if (Vault.webhooks(sync.vault).isEmpty()) runCatching { sync.loadVault() }
         }
         headSeq
-    }.get()
+    }
 
     private fun saveCopy() {
         val tmp = File(localCopy.path + ".tmp")
@@ -109,6 +130,9 @@ class DdnSession private constructor(private val app: Context, val acct: Account
         fun isVideo(name: String) = VIDEO_EXT.any { name.lowercase().endsWith(it) }
 
         @Volatile private var current: DdnSession? = null
+
+        /** Tests only (instrumentation against a local fake Discord): where https://discord.com goes. Never set in the app. */
+        @Volatile var testDiscordOrigin: String? = null
 
         /** The open session (opened on first use; null when this phone has no discordrive account). Off the main thread. */
         @Synchronized

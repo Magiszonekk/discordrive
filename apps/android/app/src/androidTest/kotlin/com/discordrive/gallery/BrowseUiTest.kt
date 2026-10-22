@@ -68,7 +68,8 @@ class BrowseUiTest {
         DdnAccount.save(ctx, AccountSync.finishPairing(server, "Pixel 7 (UI test)", dev, res, anon))
         val r = LinkedHashMap<String, Boolean>()
 
-        // The fake Discord answers with links on 127.0.0.1 (adb reverse); the app reads them as they are.
+        // The harness's fake Discord (adb reverse to 127.0.0.1) instead of discord.com.
+        DdnSession.testDiscordOrigin = args.getString("ddnDiscord")!!.takeUnless { it == "none" }
         DdnSessionDirs.cacheDir = ctx.cacheDir
         ActivityScenario.launch<DdnActivity>(Intent(ctx, DdnActivity::class.java)).use { s ->
             r["filesRoot"] = waitUntil { items(s) >= 39 }
@@ -78,8 +79,14 @@ class BrowseUiTest {
             shot("2-folder")
             s.onActivity { a -> a.showGalleryForTest() }
             r["galleryTwoMedia"] = waitUntil { items(s) == 2 }
-            // The thumbnail of the photo arrives (decrypted from the web upload).
-            r["thumbnailShown"] = waitUntil { var ok = false; s.onActivity { a -> ok = a.firstCellHasPicture() }; ok }
+            // The thumbnail of the photo (stored by the web upload) is decrypted through the tiles' path; on an
+            // unlocked screen the tile shows it too (a locked phone draws no window: then only the first check).
+            val sess = DdnSession.get(ctx)!!
+            val photoRow = sess.media(10, null).first { it.name.endsWith(".jpg") }
+            r["thumbnailDecoded"] = DdnThumbs.load(sess, photoRow.manifestRef!!, 't', 320)?.let { it.width == 320 && it.height == 240 } == true
+            val drawn = waitUntil(5_000) { var ok = false; s.onActivity { a -> ok = a.isDrawn() }; ok }
+            if (drawn) r["thumbnailShown"] = waitUntil { var ok = false; s.onActivity { a -> ok = a.firstCellHasPicture() }; ok }
+            Log.i("ddn-ui", "window drawn: $drawn")
             shot("3-gallery")
         }
         val photo = DdnSession.get(ctx)!!.media(10, null).first { it.name.endsWith(".jpg") }
