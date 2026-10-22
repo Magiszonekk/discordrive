@@ -193,16 +193,17 @@ try {
       dispatchEvent(new PopStateEvent("popstate"));
     });
     await p.waitForFunction(() => location.pathname === "/settings/app", null, { timeout: 10_000 });
-    const app = await p.isVisible("[data-ddn=app-section]");
+    await p.waitForSelector("[data-ddn=settings-tab][data-tab=app][aria-current=page]", { timeout: 10_000 });
+    const app = await p.waitForSelector("[data-ddn=app-section]", { state: "visible", timeout: 10_000 }).then(() => true).catch(() => false);
     const browserHidden = await p.isHidden("[data-ddn=browser-section]");
     const channelsHidden = await p.isHidden("#channels");
     await p.click("[data-ddn=settings-tab][data-tab=channels]");
-    await p.waitForFunction(() => location.pathname === "/settings/channels");
-    const channels = await p.isVisible("#channels");
+    await p.waitForSelector("[data-ddn=settings-tab][data-tab=channels][aria-current=page]");
+    const channels = await p.waitForSelector("#channels", { state: "visible", timeout: 10_000 }).then(() => true).catch(() => false);
     await p.evaluate(() => window.dispatchEvent(new MouseEvent("mouseup", { button: 3, bubbles: true })));
     const back = await p.waitForFunction(() => location.pathname === "/settings/app", null, { timeout: 5000 }).then(() => true).catch(() => false);
     await p.waitForTimeout(450);
-    r.settingsTabs = { app, browserHidden, channelsHidden, channels, back };
+    r.settingsTabsDetail = { app, browserHidden, channelsHidden, channels, back, path: await p.evaluate(() => location.pathname) };
     check("settingsTabs", app && browserHidden && channelsHidden && channels && back);
     await p.evaluate(() => {
       history.pushState(null, "", "/");

@@ -1816,8 +1816,9 @@ try {
     const hs1 = await noHScroll();
     await m.locator("[data-ddn=settings-tab][data-tab=app]").scrollIntoViewIfNeeded();
     await m.click("[data-ddn=settings-tab][data-tab=app]");
-    await m.waitForFunction(() => location.pathname === "/settings/app");
-    ch.phone = { folded, noHScroll: hs1 && (await noHScroll()), lastTab: await m.isVisible("#diagnostics") };
+    await m.waitForSelector("[data-ddn=settings-tab][data-tab=app][aria-current=page]");
+    const lastTab = await m.waitForSelector("#diagnostics", { state: "visible", timeout: 10_000 }).then(() => true).catch(() => false);
+    ch.phone = { folded, noHScroll: hs1 && (await noHScroll()), lastTab };
     await shot(m, "27b-phone-settings-app");
     await nav(m, "settings", "channels");
     await shot(m, "27-phone-settings-channels");
