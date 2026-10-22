@@ -981,3 +981,68 @@ input.switch:focus-visible { outline: 2px solid var(--color-focus); outline-offs
   .swatch, .swatch .dot, .swatch.custom input[type="color"] { transition: none; }
   .swatch:active :is(.dot, input[type="color"]) { transform: none; }
 }
+
+/* ── encrypted thumbnails and the low-resolution preview (feat/previews, 2026-10-22) ──
+ * Every mode now swaps a media file's type badge for img.thumb[data-ddn=thumb] once the row is near the
+ * screen (lazy), so the badge and the picture share one slot: same width, same layout height, and the
+ * picture develops in on the badge's own tint instead of popping onto an empty slot. */
+.thumb { object-position: 50% 35%; background-color: color-mix(in oklab, var(--color-accent) 8%, var(--color-paper-2)); animation: thumb-in var(--duration-short) var(--ease-out); }
+@keyframes thumb-in { from { opacity: 0; filter: blur(3px); } }
+/* Desktop list: badge and picture are both 2.875rem wide (the name does not shift sideways); the picture is
+ * 1.75rem tall but takes the badge's 20px line (negative block margin), so the row keeps its height. */
+@media (min-width: 768px) {
+  .ftable-wrap:not([data-view="tiles"]) .ftable .c-name .nm > .badge.media { width: 2.875rem; padding-inline: 0; text-align: center; }
+  .ftable-wrap:not([data-view="tiles"]) .ftable .c-name .nm > .thumb { width: 2.875rem; height: 1.75rem; margin-block: -.25rem; border-radius: var(--radius-chip); }
+}
+/* A video's picture says it is a video: a play mark on the thumbnail (tiles: a disc in the middle of the
+ * 4:3 area; list: a small mark in the picture). The play button marks a playable video row. */
+.ftable tbody tr:has([data-ddn="play"]) .c-name .nm:has(> .thumb)::after {
+  content: ""; position: absolute; pointer-events: none;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Ccircle cx='20' cy='20' r='20' fill='%23121826' fill-opacity='.62'/%3E%3Cpath d='M16 13.2v13.6c0 .8.9 1.3 1.6.9l10.6-6.8c.6-.4.6-1.4 0-1.8l-10.6-6.8c-.7-.4-1.6.1-1.6.9z' fill='%23fff'/%3E%3C/svg%3E") center / 1rem no-repeat;
+  animation: thumb-in var(--duration-short) var(--ease-out);
+}
+@media (min-width: 768px) {
+  .ftable-wrap:not([data-view="tiles"]) .ftable .c-name .nm:has(> .thumb) { position: relative; }
+  .ftable-wrap:not([data-view="tiles"]) .ftable tbody tr:has([data-ddn="play"]) .c-name .nm:has(> .thumb)::after { left: 0; top: calc(50% - .875rem); width: 2.875rem; height: 1.75rem; }
+}
+@media (max-width: 767.98px) {
+  .ftable-wrap:not([data-view="tiles"]) .ftable td.c-name:has(.thumb) { position: relative; }
+  .ftable-wrap:not([data-view="tiles"]) .ftable tbody tr:has([data-ddn="play"]) .c-name .nm:has(> .thumb)::after { left: 1rem; top: 1rem; width: 3.25rem; height: 2rem; background-size: 1.125rem; }
+}
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm:has(> .thumb) { position: relative; }
+.ftable-wrap[data-view="tiles"] .ftable tbody tr:has([data-ddn="play"]) .c-name .nm:has(> .thumb)::after { left: 0; right: 0; top: 0; aspect-ratio: 4 / 3; background-size: 2.5rem; }
+/* Tiles: the thumbnail fills the 4:3 sheet; portraits and panoramas are cropped (a little above the
+ * middle, where faces and horizons sit), the hairline keeps light pictures off the card. */
+.ftable-wrap[data-view="tiles"] .ftable .c-name .nm > .thumb { object-position: 50% 35%; }
+.ftable-wrap[data-view="tiles"] .ftable tbody tr:hover .c-name .nm > .thumb { filter: brightness(1.03); }
+@media (prefers-reduced-motion: reduce) { .thumb, .ftable tbody tr .c-name .nm:has(> .thumb)::after { animation: none; } }
+
+/* Preview: the low-resolution picture first (data-placeholder), then the full one in the same <img>.
+ * The placeholder fills the same contained area as the full photo, without the frame (it would outline the
+ * empty bars), blurred and a touch dimmed; when the full photo is decoded the blur clears instead of
+ * snapping. A thin indeterminate bar on top says the full picture is still coming. */
+.pv-img { transition: filter var(--duration-long) var(--ease-out); }
+.pv-img[data-placeholder] { outline: 0; filter: blur(10px) saturate(1.1) brightness(.97); }
+.preview .pv-body { position: relative; }
+.preview[data-state="loading"] .pv-body:has(> .pv-img[data-placeholder])::before {
+  content: ""; position: absolute; z-index: 1; top: 0; left: 0; width: 32%; height: 2px; border-radius: 0 2px 2px 0;
+  background: var(--color-accent); animation: pv-indet 1.4s var(--ease-in-out) infinite;
+}
+@keyframes pv-indet { from { transform: translateX(-100%); } to { transform: translateX(312.5%); } }
+@media (prefers-reduced-motion: reduce) {
+  .pv-img { transition: none; }
+  /* no sliding: the bar spans the top and only breathes (an indicator, so it keeps running) */
+  .preview[data-state="loading"] .pv-body:has(> .pv-img[data-placeholder])::before { width: 100%; animation: pv-pulse 1.2s var(--ease-in-out) infinite alternate; }
+}
+
+/* Settings → Storage: "Make thumbnails for existing photos" is its own block under the cleanup: a hairline
+ * above it, the hint tied to the button (same as a switch and its hint), the progress as a live note in the
+ * accent while it runs (Stop shown), neutral when it has finished or paused. */
+.row-btns:has(> [data-ddn="thumbs-backfill"]) { margin-top: .5rem; padding-top: 1.5rem; border-top: 1px solid var(--color-rule); }
+.row-btns:has(> [data-ddn="thumbs-backfill"]) .btn { white-space: normal; text-align: left; }
+.row-btns:has(> [data-ddn="thumbs-backfill"]) + .hint { margin-top: -.5rem; max-width: 68ch; }
+[data-ddn="thumbs-backfill"]:disabled { cursor: progress; opacity: .6; }
+[data-ddn="thumbs-backfill-stop"]::before { content: ""; flex: none; width: .5625rem; height: .5625rem; border-radius: 1px; background: currentColor; }
+[data-ddn="thumbs-backfill-state"] { border-left-color: var(--color-rule-2); font-variant-numeric: tabular-nums; }
+.sec-body:has([data-ddn="thumbs-backfill-stop"]:not([hidden])) [data-ddn="thumbs-backfill-state"]:not(:empty) { display: flex; align-items: center; gap: .625rem; border-left-color: var(--color-accent); color: var(--color-ink); }
+.sec-body:has([data-ddn="thumbs-backfill-stop"]:not([hidden])) [data-ddn="thumbs-backfill-state"]::before { content: ""; flex: none; width: .5rem; height: .5rem; border-radius: 9999px; background: var(--color-accent); animation: pv-pulse .9s var(--ease-in-out) infinite alternate; }
