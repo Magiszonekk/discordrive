@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Soft dark ring behind the synced dot so it stays visible on bright photos.
+     Separate from sync_dot because the runtime tint must not recolour the ring. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="#59000000"/>
+</shape>

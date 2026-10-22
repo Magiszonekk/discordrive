@@ -1,0 +1,292 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DiscorDrive Gallery</string>
+
+    <!-- Login -->
+    <string name="login_title">DiscorDrive Gallery</string>
+    <string name="login_subtitle">Twoje zdjęcia, zaszyfrowane end-to-end</string>
+    <string name="login_server">Adres serwera</string>
+    <string name="login_email">E-mail lub nazwa użytkownika</string>
+    <string name="login_password">Hasło</string>
+    <string name="login_button">Zaloguj się</string>
+    <string name="login_progress">Logowanie… (wyprowadzanie kluczy)</string>
+
+    <!-- Main -->
+    <string name="action_search">Szukaj</string>
+    <string name="action_sync">Synchronizuj</string>
+    <string name="action_ai">Analiza AI</string>
+    <string name="action_settings">Ustawienia</string>
+    <string name="empty_gallery">Brak multimediów na urządzeniu.\nZrób zdjęcie albo nadaj uprawnienia w ustawieniach systemu.</string>
+    <string name="sync_done">Synchronizacja zakończona</string>
+    <string name="sync_already_running">Synchronizacja już trwa</string>
+    <string name="sync_started_bg">Synchronizacja uruchomiona — działa w tle (postęp w powiadomieniu)</string>
+    <string name="ai_started_bg">Analiza AI uruchomiona — działa w tle (postęp w powiadomieniu)</string>
+    <string name="sync_section">Synchronizacja</string>
+    <string name="sync_section_hint">„Do chmury" wysyła pliki, których chmura jeszcze nie ma. „Z chmury" pobiera do galerii pliki, których nie ma na tym urządzeniu (np. po przesiadce na nowy telefon).</string>
+    <string name="sync_to_cloud_action">Wyślij do chmury</string>
+    <string name="sync_from_cloud_action">Pobierz z chmury</string>
+    <string name="sync_from_cloud">Pobieranie z chmury</string>
+    <string name="download_started_bg">Pobieranie z chmury uruchomione — działa w tle (postęp w powiadomieniu)</string>
+    <string name="download_full_files">Pełne pliki (do galerii urządzenia)</string>
+    <string name="download_previews_only">Tylko podglądy (galeria offline)</string>
+    <string name="previews_started_bg">Pobieranie podglądów uruchomione — działa w tle (postęp w powiadomieniu)</string>
+    <string name="sync_previews">Pobieranie podglądów</string>
+    <string name="sync_previews_done">podglądów</string>
+    <string name="viewer_needs_session">Pobranie pełnego pliku wymaga zalogowania</string>
+    <string name="viewer_fetching_video">Pobieranie wideo z chmury…</string>
+    <string name="viewer_cloud_only">Ten element jest tylko w chmurze (brak lokalnej kopii)</string>
+    <string name="sync_notif_channel">Synchronizacja w tle</string>
+    <string name="sync_notif_title">Synchronizacja</string>
+    <string name="sync_notif_paused">Synchronizacja wstrzymana</string>
+    <string name="sync_notif_paused_fmt">%1$s — wstrzymano</string>
+    <string name="sync_notif_progress">%1$d / %2$d</string>
+    <string name="sync_notif_pause">Pauza</string>
+    <string name="sync_notif_cancel">Anuluj</string>
+    <string name="sync_notif_cancelling_fmt">%1$s — anulowanie…</string>
+    <string name="ai_notif_new">nowych</string>
+    <string name="sync_notif_resume">Wznów</string>
+    <string name="badge_synced_desc">Zsynchronizowane</string>
+
+    <!-- Search -->
+    <string name="search_hint">Szukaj w tagach i opisach…</string>
+    <string name="search_empty">Brak wyników. Uruchom „Analizę AI”, aby otagować zdjęcia.</string>
+    <string name="search_indexing">Pobieranie indeksu tagów…</string>
+
+    <!-- Viewer -->
+    <string name="viewer_no_enrichment">Brak tagów — uruchom „Analizę AI”</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Ustawienia</string>
+    <string name="settings_account">Konto</string>
+    <string name="settings_logout">Wyloguj</string>
+    <string name="settings_login">Zaloguj się</string>
+    <string name="update_check">Sprawdź aktualizacje</string>
+    <string name="update_check_failed">Nie udało się sprawdzić aktualizacji</string>
+
+    <!-- Wygląd / akcent -->
+    <string name="settings_appearance">Wygląd</string>
+    <string name="settings_appearance_hint">Kolor akcentu używany w przyciskach, przełącznikach i elementach interfejsu.</string>
+    <string name="settings_accent">Kolor akcentu</string>
+    <string name="accent_picker_title">Wybierz kolor akcentu</string>
+    <string name="accent_changed">Zmieniono kolor akcentu</string>
+    <string name="accent_blue">Niebieski</string>
+    <string name="accent_purple">Fioletowy</string>
+    <string name="accent_green">Zielony</string>
+    <string name="accent_orange">Pomarańczowy</string>
+    <string name="accent_pink">Różowy</string>
+    <string name="accent_teal">Turkusowy</string>
+
+    <!-- Strefa niebezpieczna -->
+    <string name="settings_danger">Strefa niebezpieczna</string>
+    <string name="settings_danger_hint">Operacje nieodwracalne — każda wymaga potwierdzenia.</string>
+    <string name="danger_wipe_cloud">Wyczyść dane w chmurze</string>
+    <string name="danger_wipe_local">Usuń wszystkie zdjęcia i wideo z telefonu</string>
+    <string name="danger_wipe_cloud_title">Wyczyść dane w chmurze?</string>
+    <string name="danger_wipe_cloud_msg">Trwale usunie z chmury WSZYSTKIE pliki, foldery i analizy AI tego konta. Kopie lokalne na telefonie pozostaną. Tej operacji nie można cofnąć.</string>
+    <string name="danger_wipe_cloud_confirm">Usuń z chmury</string>
+    <string name="danger_wipe_cloud_progress">Usuwanie z chmury…</string>
+    <string name="danger_wipe_cloud_done">Usunięto z chmury: %1$d plików, %2$d folderów</string>
+    <string name="danger_wipe_local_title">Usunąć wszystkie zdjęcia i wideo z telefonu?</string>
+    <string name="danger_wipe_local_msg">Usunie z pamięci urządzenia wszystkie zdjęcia i filmy (%1$d). Pliki zsynchronizowane do chmury pozostaną w chmurze. Tej operacji nie można cofnąć.</string>
+    <string name="danger_wipe_local_confirm">Usuń z telefonu</string>
+    <string name="danger_wipe_local_empty">Brak lokalnych zdjęć i filmów do usunięcia</string>
+    <string name="update_up_to_date">Masz najnowszą wersję</string>
+    <string name="update_available_title">Dostępna aktualizacja</string>
+    <string name="update_available_msg">Nowa wersja %1$s jest dostępna. Zaktualizować teraz?</string>
+    <string name="update_install">Aktualizuj</string>
+    <string name="update_later">Później</string>
+    <string name="update_downloading">Pobieranie aktualizacji…</string>
+    <string name="update_need_permission">Aby zainstalować aktualizację, zezwól tej aplikacji na instalowanie nieznanych aplikacji.</string>
+    <string name="settings_not_logged_in">Niezalogowany — galeria działa offline. Zaloguj się, by synchronizować i odzyskać ustawienia.</string>
+    <string name="settings_server_url">Serwer DiscorDrive (URL)</string>
+    <string name="settings_server_hint">Adres instancji DiscorDrive używanej do logowania. Domyślnie instancja testowa — podaj własny adres, jeśli hostujesz DiscorDrive samodzielnie. Zmiana działa przy następnym logowaniu.</string>
+    <string name="settings_ai">Sztuczna inteligencja</string>
+    <string name="settings_ai_hint">Endpoint w formacie OpenAI (/v1/chat/completions). Obrazy są zmniejszane przed wysłaniem. Tagi i opisy są szyfrowane end-to-end.</string>
+    <string name="settings_ai_url">AI endpoint URL</string>
+    <string name="settings_ai_key">Klucz API</string>
+    <string name="settings_ai_model">Model</string>
+    <string name="saf_summary">Zdjęcia i wideo · szukaj po tagach AI</string>
+    <!-- leading ★ so DocumentsUI's alphabetical sort puts it above the albums -->
+    <string name="saf_all_photos">★ Wszystkie zdjęcia i wideo</string>
+    <string name="picker_title">Wybierz z galerii</string>
+    <string name="picker_search_hint">Szukaj: tagi, opis, transkrypt…</string>
+    <string name="picker_empty">Brak pasujących plików</string>
+    <string name="logo_brand">DiscorDrive</string>
+    <!-- quoted: Android trims a bare leading space in resources -->
+    <string name="logo_suffix">" Gallery"</string>
+    <string name="date_today">Dzisiaj</string>
+    <string name="date_yesterday">Wczoraj</string>
+    <string name="viewer_edit_ai">Edytuj</string>
+    <string name="edit_ai_title">Edytuj analizę</string>
+    <string name="edit_ai_desc_hint">Opis</string>
+    <string name="edit_ai_tags_hint">Tagi</string>
+    <string name="edit_ai_tags_help">Oddziel tagi przecinkami</string>
+    <string name="edit_ai_saved">Zapisano zmiany analizy</string>
+    <string name="settings_fetch_models">Wybierz model z listy</string>
+    <string name="models_picker_title">Dostępne modele</string>
+    <string name="models_fetching">Pobieranie listy modeli…</string>
+    <string name="models_fetch_failed">Nie udało się pobrać listy: %1$s</string>
+    <string name="models_need_url">Najpierw wpisz adres URL endpointu</string>
+    <string name="settings_ai_auto">Analizuj automatycznie po synchronizacji</string>
+    <string name="settings_save">Zapisz</string>
+    <string name="settings_saved">Zapisano ustawienia</string>
+
+    <!-- Albums -->
+    <plurals name="album_count">
+        <item quantity="one">%d plik</item>
+        <item quantity="few">%d pliki</item>
+        <item quantity="many">%d plików</item>
+        <item quantity="other">%d plików</item>
+    </plurals>
+    <string name="album_ai_action">Analizuj ten album</string>
+    <string name="album_desc_action">Opis albumu</string>
+    <string name="album_desc_title">Opis albumu „%1$s”</string>
+    <string name="album_desc_hint">np. zapisane z Pinteresta, najczęściej memy</string>
+    <string name="album_desc_help">Używane jako dodatkowy kontekst przy analizie AI zdjęć z tego albumu.</string>
+    <string name="album_desc_saved">Zapisano opis albumu</string>
+    <string name="album_clear_ai_action">Usuń analizy AI z albumu</string>
+    <string name="album_clear_ai_confirm">Usunąć wszystkie analizy AI (tagi i opisy) zdjęć z albumu „%1$s”? Zdjęcia i tak zostają.</string>
+    <string name="ai_cleared">Usunięto analiz AI: %1$d</string>
+    <string name="settings_clear_ai">Usuń wszystkie analizy AI</string>
+    <string name="settings_clear_ai_summary">Kasuje tagi i opisy AI wszystkich zdjęć (w chmurze i lokalnie). Same zdjęcia zostają.</string>
+    <string name="settings_clear_ai_confirm">Usunąć analizy AI WSZYSTKICH zdjęć? Tej operacji nie można cofnąć — trzeba będzie przeanalizować ponownie.</string>
+    <string name="viewer_clear_ai">Usuń analizę AI</string>
+    <string name="viewer_analyze_ai">Analizuj AI</string>
+    <string name="viewer_analyzing">Analizuję…</string>
+    <string name="viewer_not_synced">Zdjęcie nie jest jeszcze zsynchronizowane</string>
+    <string name="viewer_info_title">Informacje o pliku</string>
+    <string name="viewer_info_loading">Wczytuję informacje…</string>
+    <string name="viewer_info_name">Nazwa: %1$s</string>
+    <string name="viewer_info_album">Album: %1$s</string>
+    <string name="viewer_info_type">Typ: %1$s</string>
+    <string name="viewer_info_size">Rozmiar: %1$s</string>
+    <string name="viewer_info_date">Dodano: %1$s</string>
+    <string name="viewer_info_cloud">Chmura: %1$s</string>
+    <string name="viewer_info_cloud_no">niezsynchronizowane</string>
+    <string name="viewer_info_cloud_synced">zsynchronizowane</string>
+    <string name="viewer_info_cloud_yes">zsynchronizowane (%1$s)</string>
+    <string name="viewer_info_ai">Analiza AI (cache): %1$s</string>
+    <string name="viewer_info_yes">tak</string>
+    <string name="viewer_info_no">nie</string>
+
+    <!-- Background sync -->
+    <string name="settings_bg">Synchronizacja w tle</string>
+    <string name="settings_bg_hint">Co ok. 3 godziny aplikacja po cichu zsynchronizuje nowe zdjęcia (sesja odblokowywana z Android Keystore, bez hasła).</string>
+    <string name="settings_bg_enabled">Włącz synchronizację w tle</string>
+    <string name="settings_bg_wifi">Tylko przez Wi-Fi</string>
+    <string name="settings_bg_charging">Tylko podczas ładowania</string>
+    <string name="settings_ai_limit">Limit analiz w jednym przebiegu (0 = bez limitu)</string>
+    <string name="settings_ai_concurrency">Równoległe zapytania AI (np. 2 dla 2 kont)</string>
+    <string name="settings_transcribe">Transkrypcja audio (opcjonalnie)</string>
+    <string name="settings_transcribe_hint">Endpoint mowa-na-tekst (format OpenAI /v1/audio/transcriptions). Gdy ustawiony, analiza wideo dorzuca transkrypcję ścieżki dźwiękowej jako kontekst. Puste = wyłączone.</string>
+    <string name="settings_transcribe_url">URL transkrypcji</string>
+    <string name="settings_transcribe_key">Klucz transkrypcji</string>
+    <string name="settings_transcribe_model">Model transkrypcji (np. whisper-1)</string>
+
+    <!-- File actions / trash -->
+    <string name="action_move_to_album">Przenieś do albumu…</string>
+    <string name="action_sync_selected">Synchronizuj zaznaczone</string>
+    <string name="action_sync_this">Synchronizuj to zdjęcie</string>
+    <string name="sync_one_done">Zsynchronizowano</string>
+    <string name="sync_one_already">Już zsynchronizowane</string>
+    <string name="action_delete_cloud">Usuń z chmury (do kosza)</string>
+    <string name="action_delete_local">Usuń z telefonu</string>
+    <string name="action_delete_everywhere">Usuń wszędzie</string>
+    <string name="action_new_album">➕ Nowy album…</string>
+    <string name="new_album_hint">Nazwa albumu</string>
+    <string name="moved_to">Przeniesiono do „%s”</string>
+    <string name="deleted_to_trash">Przeniesiono do kosza (30 dni na przywrócenie)</string>
+    <string name="trash_title">Kosz</string>
+    <string name="trash_hint">Pliki w koszu są trwale usuwane po 30 dniach.</string>
+    <string name="trash_empty">Kosz jest pusty</string>
+    <string name="trash_restore">Przywróć</string>
+    <string name="trash_purge">Usuń trwale</string>
+    <string name="trash_purge_confirm">Trwale usunąć „%s”? Tej operacji nie można cofnąć.</string>
+    <string name="trash_empty_action">Opróżnij kosz</string>
+    <string name="trash_empty_confirm">Trwale usunąć wszystkie pliki z kosza? Tej operacji nie można cofnąć.</string>
+    <string name="trash_emptied">Usunięto trwale %d plików</string>
+    <string name="trash_restored">Przywrócono „%s”</string>
+    <string name="trash_deleted_at">Usunięto: %s</string>
+    <string name="search_cloud_only">☁️ tylko w chmurze</string>
+
+    <!-- Multi-select -->
+    <string name="selection_count">Zaznaczono: %d</string>
+    <string name="selection_exit">Zakończ zaznaczanie</string>
+    <string name="sel_trash_confirm">Przenieść do kosza %d plików? Będzie można je przywrócić przez 30 dni.</string>
+    <string name="sel_everywhere_confirm">Usunąć %d plików z chmury (do kosza) i z telefonu?</string>
+    <string name="sel_trashed">Do kosza: %d plików</string>
+    <string name="sel_trashed_partial">Do kosza: %1$d plików (%2$d niezsynchronizowanych pominięto)</string>
+    <string name="sel_moved">Przeniesiono %1$d plików do „%2$s”</string>
+    <string name="sel_none_synced">Żaden z zaznaczonych plików nie jest jeszcze zsynchronizowany</string>
+
+    <!-- Favorites -->
+    <string name="favorites_title">Ulubione</string>
+    <string name="viewer_fav_add">Dodaj do ulubionych</string>
+    <string name="viewer_fav_remove">Usuń z ulubionych</string>
+    <string name="fav_added">Dodano do ulubionych</string>
+    <string name="fav_removed">Usunięto z ulubionych</string>
+    <string name="sel_fav_add">Dodaj do ulubionych</string>
+    <string name="sel_fav_remove">Usuń z ulubionych</string>
+    <string name="sel_fav_added">Dodano do ulubionych: %d</string>
+    <string name="sel_fav_removed">Usunięto z ulubionych: %d</string>
+
+    <!-- Wallpaper -->
+    <string name="viewer_set_wallpaper">Ustaw jako tapetę</string>
+    <string name="wallpaper_ui_title">Ustaw tapetę</string>
+    <string name="wallpaper_hint">Przesuń i przybliż zdjęcie, aby wykadrować tapetę</string>
+    <string name="wallpaper_home">Ekran główny</string>
+    <string name="wallpaper_lock">Ekran blokady</string>
+    <string name="wallpaper_both">Oba ekrany</string>
+    <string name="wallpaper_done">Ustawiono tapetę</string>
+    <string name="wallpaper_load_failed">Nie udało się wczytać zdjęcia</string>
+
+    <!-- Photo editor -->
+    <string name="viewer_edit_photo">Edytuj zdjęcie</string>
+    <string name="edit_title">Edytuj</string>
+    <string name="edit_rotate">Obróć</string>
+    <string name="edit_flip">Odbij</string>
+    <string name="edit_reset">Reset</string>
+    <string name="edit_save">Zapisz kopię</string>
+    <string name="edit_saved">Zapisano kopię w galerii (album DiscorDrive)</string>
+
+    <!-- Video player -->
+    <string name="settings_video_seek">Skok podwójnego dotknięcia w wideo</string>
+    <string name="video_seek_picker_title">Skok przewijania (podwójne dotknięcie)</string>
+    <string name="video_seek_option">%d sekund</string>
+
+    <!-- Private folders -->
+    <string name="private_title">Foldery prywatne</string>
+    <string name="private_hint">Folder oznaczysz jako prywatny w jego menu (⋮). Prywatne foldery nie mają podglądu, są ukryte z wyszukiwania i wyboru plików, a każde otwarcie wymaga kodu PIN lub odcisku palca.</string>
+    <string name="private_set_pin">Ustaw kod PIN</string>
+    <string name="private_change_pin">Zmień kod PIN</string>
+    <string name="private_pin_old">Obecny kod</string>
+    <string name="private_pin_new">Nowy kod (min. 4 cyfry)</string>
+    <string name="private_pin_repeat">Powtórz nowy kod</string>
+    <string name="private_pin_saved">Zapisano kod PIN</string>
+    <string name="private_pin_mismatch">Kody się różnią</string>
+    <string name="private_pin_short">Kod musi mieć co najmniej 4 cyfry</string>
+    <string name="private_pin_wrong">Błędny kod</string>
+    <string name="private_biometric_switch">Odblokowanie odciskiem palca</string>
+    <string name="private_biometric_unavailable">Brak skonfigurowanej biometrii na urządzeniu</string>
+    <string name="private_need_pin_first">Najpierw ustaw kod PIN</string>
+    <string name="private_unlock_title">Odblokuj folder prywatny</string>
+    <string name="private_unlock_pin_hint">Kod PIN</string>
+    <string name="private_use_pin">Użyj kodu PIN</string>
+    <string name="album_make_private">Ustaw jako prywatny</string>
+    <string name="album_unmake_private">Wyłącz prywatność</string>
+    <string name="album_private_marked">Folder jest teraz prywatny — znajdziesz go na dole listy</string>
+    <string name="album_private_unmarked">Folder nie jest już prywatny</string>
+    <string name="private_need_pin_msg">Aby oznaczać foldery jako prywatne, najpierw ustaw kod PIN w ustawieniach.</string>
+    <string name="private_mark_confirm">Ustawić „%s” jako prywatny? Folder zniknie z listy, wyszukiwania i wyboru plików, a każde otwarcie będzie wymagać kodu PIN lub odcisku palca.</string>
+
+    <!-- Diagnostics -->
+    <string name="settings_diag">Diagnostyka</string>
+    <string name="settings_diag_hint">Aplikacja zapisuje logi (w tym crashe) do pliku na urządzeniu. Wysyłka na serwer jest szyfrowana end-to-end Twoim kluczem.</string>
+    <string name="diag_copy">Kopiuj logi</string>
+    <string name="diag_send">Wyślij logi na serwer</string>
+    <string name="diag_clear">Wyczyść logi</string>
+    <string name="diag_cleared">Logi wyczyszczone</string>
+    <string name="diag_copied">Skopiowano logi do schowka</string>
+    <string name="diag_sent">Wysłano logi (%s)</string>
+    <string name="diag_empty">Brak logów</string>
+</resources>
