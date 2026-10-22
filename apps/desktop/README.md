@@ -44,6 +44,10 @@ release's `SHA256SUMS`. Then:
   not change). The data folder is not touched. The installer starts the app again (`--updated`). Running the
   downloaded `.exe` by hand opens the full installer, which re-creates the default shortcuts. A copy
   installed for all users (Program Files) needs administrator rights: Windows asks for them.
+  Independent of updates: Windows shows an app's notifications only when the Start menu has a shortcut
+  with the app's ID, so Electron itself writes `<Start menu>\Programs\discordrive.lnk` (with its
+  notification activator) when the app shows its first notification, also when the user removed it.
+  It touches only that one Start menu entry, never the desktop or pinned shortcuts.
   CI (`desktop-release.yml`, job "update in place") installs a build A, moves the desktop shortcut, adds a
   Start menu shortcut, lets A update itself to B and checks the shortcuts, the data and the restart.
   Taskbar pins cannot be made in CI; to check by hand: pin discordrive to the taskbar, then Settings →
