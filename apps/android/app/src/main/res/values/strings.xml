@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">DiscorDrive Gallery</string>
+    <string name="app_name">discordrive</string>
 
     <!-- Login -->
     <string name="login_title">DiscorDrive Gallery</string>

@@ -13,7 +13,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "discordrive-gallery"
+rootProject.name = "discordrive-android"
 
 include(":core:crypto")
 include(":core:api")
@@ -24,4 +24,5 @@ val androidSdkPresent = System.getenv("ANDROID_HOME") != null ||
     File(rootDir, "local.properties").let { it.exists() && it.readText().contains("sdk.dir") }
 if (androidSdkPresent) {
     include(":app")
+    include(":syncjs")
 }
