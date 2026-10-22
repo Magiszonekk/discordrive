@@ -11,6 +11,7 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
@@ -53,9 +54,12 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
         }
         override fun leaseGuard(op: JsonObject): List<String> = rpc("guard", op).jsonArray.map { it.jsonPrimitive.content }
         override fun stateSha256(): String = rpc("sha").jsonPrimitive.content
-        override fun children(parentId: String): List<IndexReplica.Child> = rpc("children", JsonPrimitive(parentId)).jsonArray.map {
+        override fun children(parentId: String): List<IndexReplica.Child> = rows(rpc("children", JsonPrimitive(parentId)))
+        override fun media(extensions: List<String>, limit: Int, after: Pair<Long, String>?): List<IndexReplica.Child> =
+            rows(rpc("media", JsonArray(extensions.map { JsonPrimitive(it) })))
+        private fun rows(e: JsonElement) = e.jsonArray.map {
             val o = it.jsonObject
-            IndexReplica.Child(o.str("id"), o.str("name"), o.str("kind"), null)
+            IndexReplica.Child(o.str("id"), o.str("name"), o.str("kind"), o.longOrNull("size"), o.strOrNull("ref"), o.strOrNull("sha"), o.longOrNull("at") ?: 0, o.strOrNull("parent"))
         }
         override fun close() {}
     }
@@ -87,6 +91,33 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
         results["signedInOnce"] = api.logins == 1
         val kids = sync.replica.children("root")
         results["seesRenameAndTrash"] = kids.any { it.name == "Dokumenty" } && kids.none { it.name == "Zdjęcia 4" } && kids.size == 39
+
+        // 2b. Files: list, thumbnail stored with the photo, a range, whole downloads checked by hash.
+        val f = rpc("files").jsonObject
+        val reader = FileReader(sync.discord, { id -> Vault.webhooks(sync.vault).first { it.id == id }.url })
+        val inFolder = sync.replica.children(f.str("folder")).associateBy { it.name }
+        var filesOk = true
+        for ((name, meta) in f.getValue("files").jsonObject) {
+            val m = meta.jsonObject
+            val c = inFolder[name]
+            if (c?.manifestRef == null || c.size != m.getValue("size").jsonPrimitive.long) { filesOk = false; log("file $name: not listed right ($c)"); continue }
+            val out = java.io.ByteArrayOutputStream()
+            reader.download(c.manifestRef!!, c.size!!, c.sha256, out)
+            if (sha256Hex(out.toByteArray()) != m.str("sha")) { filesOk = false; log("file $name: content differs") }
+            val mid = c.size!! / 2
+            val part = reader.range(c.manifestRef!!, c.size!!, mid, mid + 99)
+            if (!part.contentEquals(out.toByteArray().copyOfRange(mid.toInt(), mid.toInt() + 100))) { filesOk = false; log("file $name: range differs") }
+        }
+        results["filesDownloadAndRange"] = filesOk
+        val photo = inFolder["Wakacje \u017B.jpg"]
+        val t = f["thumbSha"]?.jsonPrimitive?.contentOrNull
+        if (t != null) {
+            val pv = reader.preview(photo!!.manifestRef!!, 't')
+            results["thumbnailOfWebUpload"] = pv != null && sha256Hex(pv.data) == t && pv.mime == "image/webp"
+            results["noThumbnailOnVideo"] = reader.preview(inFolder["film.webm"]!!.manifestRef!!, 't') == null
+        }
+        val media = sync.replica.media(listOf(".jpg", ".webm"), 100)
+        results["galleryListsMedia"] = media.map { it.name }.toSet() == setOf("Wakacje \u017B.jpg", "film.webm")
 
         // 3. The phone works: its name, a folder, a channel added to the vault (compare-and-swap).
         sync.setOwnName(deviceName)

@@ -27,6 +27,16 @@ sync-core simulator in every available engine and requires exactly the state Nod
 are generated at build time (needs Node and `npm ci` at the repository root). A benchmark of a large
 account runs in the same test APK (`-e syncBenchFiles 2000,20000,50000` with `am instrument`).
 
+## What the app does now
+
+Two launcher icons, one app: **discordrive** (the account's files and folders) and **Galeria** (every photo and
+video of the account, newest first); each is its own card in Recents. Join an account from the menu of the old
+gallery screen or on first start: the phone shows a QR code; on a signed-in device (web or desktop app):
+Devices → scan or paste → Pair, compare the 6-digit codes. Then: folders, the photo grid with the thumbnails
+stored by the device that uploaded each file, the viewer (low-resolution preview first, then the photo; videos
+play and seek, only the fragments needed are fetched), Download → the phone's Downloads. Metadata only.
+The index lives in the phone's JS engine and a local copy on disk (lists open without the network).
+
 ## Account layer and compatibility
 
 `:core:ddn` implements the formats of `packages/metadata-client` in Kotlin. They are checked two ways:
@@ -38,7 +48,8 @@ account runs in the same test APK (`-e syncBenchFiles 2000,20000,50000` with `am
   Discord; a TypeScript device creates an account with a snapshot, the phone's code pairs with it by the QR offer,
   joins (base from Discord + log tail from the instance), must reach the same state hash, then makes a folder, names
   itself and adds a channel, which the TypeScript device sees. `--device` runs the same scenario on a phone or emulator
-  (the installed `:syncjs` test APK, index in its own JS engine; `--engine quickjs` forces QuickJS); `--discord-hooks
+  (the installed `:syncjs` test APK, index in its own JS engine; `--engine quickjs` forces QuickJS); `--app` runs the app's own screens (BrowseUiTest: Files, a folder, the Gallery
+with the thumbnail of a web upload, the viewer; screenshots under the app's external files dir); `--discord-hooks
   <file>` uses real Discord webhooks of a test server instead of the fake (everything posted is deleted afterwards).
 
 ## Builds and signing

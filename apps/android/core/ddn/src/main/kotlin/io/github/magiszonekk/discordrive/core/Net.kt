@@ -181,25 +181,28 @@ class InstanceApi(
  * instance): GET the message through the webhook for a fresh CDN link, then the CDN. `apiOrigin` replaces
  * https://discord.com in tests (a local fake); never set in the app.
  */
-class Discord(private val http: OkHttpClient = defaultHttp(), private val apiOrigin: String? = null) {
-    data class Attachment(val id: String, val url: String, val size: Long)
+open class Discord(private val http: OkHttpClient = defaultHttp(), private val apiOrigin: String? = null) {
+    data class Attachment(val id: String, val url: String, val size: Long, val filename: String = "")
 
     private fun map(url: String): String = apiOrigin?.let { url.replace(Regex("^https://(?:ptb\\.|canary\\.)?discord(?:app)?\\.com"), it) } ?: url
 
-    fun attachments(webhookUrl: String, messageId: String): List<Attachment> {
+    open fun attachments(webhookUrl: String, messageId: String): List<Attachment> {
         val j = get("$webhookUrl/messages/$messageId").toString(Charsets.UTF_8)
         return (json.parseToJsonElement(j).jsonObject["attachments"] as? JsonArray ?: JsonArray(emptyList())).map {
             val o = it.jsonObject
-            Attachment(o.str("id"), o.str("url"), o["size"]?.jsonPrimitive?.long ?: 0)
+            Attachment(o.str("id"), o.str("url"), o["size"]?.jsonPrimitive?.long ?: 0, o.strOrNull("filename") ?: "")
         }
     }
 
     /** One stored object: its message's attachment (by ID, or the only one), from the CDN. */
-    fun fetch(webhookUrl: String, messageId: String, attachmentId: String? = null): ByteArray {
+    open fun fetch(webhookUrl: String, messageId: String, attachmentId: String? = null): ByteArray {
         val atts = attachments(webhookUrl, messageId)
         val a = if (attachmentId.isNullOrEmpty()) atts.singleOrNull() ?: throw IllegalStateException("expected one attachment") else atts.firstOrNull { it.id == attachmentId }
         return get((a ?: throw IllegalStateException("attachment missing from message")).url)
     }
+
+    /** A CDN link from [attachments] (fresh for ~24 h). */
+    open fun download(cdnUrl: String): ByteArray = get(cdnUrl)
 
     private fun get(url: String): ByteArray {
         for (attempt in 0..4) {

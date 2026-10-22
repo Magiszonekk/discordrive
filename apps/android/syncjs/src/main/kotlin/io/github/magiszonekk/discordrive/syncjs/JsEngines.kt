@@ -13,9 +13,9 @@ import android.util.Log
 object JsEngines {
     private const val TAG = "ddn-syncjs"
 
-    /** Blocks (V8 starts a sandbox process): never call from the main thread. */
-    fun open(context: Context): JsEngine {
-        if (V8Engine.isSupported()) {
+    /** Blocks (V8 starts a sandbox process): never call from the main thread. `quickJsOnly`: skip V8. */
+    fun open(context: Context, quickJsOnly: Boolean = false): JsEngine {
+        if (!quickJsOnly && V8Engine.isSupported()) {
             try {
                 return V8Engine.create(context)
             } catch (e: Exception) {
@@ -27,8 +27,8 @@ object JsEngines {
     }
 
     /** The sync core loaded into [open]'s engine. */
-    fun openSyncCore(context: Context): SyncCoreRuntime {
-        val engine = open(context)
+    fun openSyncCore(context: Context, quickJsOnly: Boolean = false): SyncCoreRuntime {
+        val engine = open(context, quickJsOnly)
         return try {
             SyncCoreRuntime(engine, SyncCoreRuntime.loadBundle(context))
         } catch (e: Exception) {

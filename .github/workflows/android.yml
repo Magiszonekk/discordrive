@@ -84,6 +84,13 @@ jobs:
         working-directory: apps/android
         run: ./gradlew --no-daemon :core:ddn:test :core:crypto:test :core:api:test
 
+      - name: ffmpeg (test media for the interop scenario)
+        timeout-minutes: 5
+        run: |
+          curl -fsSL --retry 3 --max-time 180 -o "$RUNNER_TEMP/ff.tar.xz" https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+          tar -xJf "$RUNNER_TEMP/ff.tar.xz" -C "$RUNNER_TEMP"
+          echo "$(ls -d "$RUNNER_TEMP"/ffmpeg-*-linux64-gpl)/bin" >> "$GITHUB_PATH"
+
       - name: "Interop: the phone's account layer with a real instance and the TypeScript client (pairing, join from a snapshot, operations)"
         run: npx tsx apps/android/interop/harness.mts
 
@@ -155,15 +162,23 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: npm ci --no-audit --no-fund
 
+      # Test media for the interop scenario (a photo with its thumbnail, a video): a static build.
+      - name: ffmpeg
+        timeout-minutes: 5
+        run: |
+          curl -fsSL --retry 3 --max-time 180 -o "$RUNNER_TEMP/ff.tar.xz" https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+          tar -xJf "$RUNNER_TEMP/ff.tar.xz" -C "$RUNNER_TEMP"
+          echo "$(ls -d "$RUNNER_TEMP"/ffmpeg-*-linux64-gpl)/bin" >> "$GITHUB_PATH"
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Build the test APK first (outside the emulator's time budget)
+      - name: Build the test APKs first (outside the emulator's time budget)
         working-directory: apps/android
-        run: ./gradlew --no-daemon :syncjs:assembleDebugAndroidTest
+        run: ./gradlew --no-daemon :syncjs:assembleDebugAndroidTest :app:assembleDebug :app:assembleDebugAndroidTest
 
       - name: Compatibility test and benchmark on the emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -180,12 +195,20 @@ jobs:
             adb logcat -d -s ddn-syncjs:* | grep RESULT || true
             # The interop scenario on the emulator, the index in its own JS engine (connected tests uninstall the APK).
             adb install -r -t syncjs/build/outputs/apk/androidTest/debug/syncjs-debug-androidTest.apk
+            # (each line runs on its own in working-directory apps/android)
             cd ../.. && npx tsx apps/android/interop/harness.mts --device
+            # The app's browsing screens (Files, a folder, the Gallery with a web upload's thumbnail, the viewer).
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            cd ../.. && npx tsx apps/android/interop/harness.mts --app
+            mkdir -p build/shots && adb pull /sdcard/Android/data/io.github.magiszonekk.discordrive/files/shots build/shots || true
 
       - name: Test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-sync-core-report
-          path: apps/android/syncjs/build/reports/androidTests/
+          path: |
+            apps/android/syncjs/build/reports/androidTests/
+            apps/android/build/shots/
           retention-days: 14
