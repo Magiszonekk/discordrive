@@ -186,6 +186,38 @@ try {
   check("listed", rows.some((x) => x.name === "movie.bin") && rows.some((x) => x.name === "photos" && x.kind === "folder"));
   const movie = rows.find((x) => x.name === "movie.bin")!;
 
+  step("desktop texts (QA B5, B7) and Show in folder (B6)");
+  {
+    const t = await p.evaluate(() => ({
+      notes: [...document.querySelectorAll<HTMLElement>(".uploads > .hint")].map((x) => x.textContent ?? ""),
+    }));
+    r.panelNotes = t.notes;
+    check("panelNotesNoTab", t.notes.length >= 2 && t.notes.every((x) => !/\btab\b|kart/i.test(x)));
+    await p.evaluate(() => {
+      history.pushState(null, "", "/settings/app");
+      dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await p.waitForFunction(() => /\d/.test(document.querySelector("[data-ddn=diag-version]")?.textContent ?? ""), null, { timeout: 15_000 });
+    const ver = (await p.textContent("[data-ddn=diag-version]")) ?? "";
+    r.diagVersion = ver;
+    check("diagVersionNoFalseReload", !/reload|przeładuj|odśwież/i.test(ver));
+    await p.evaluate(() => {
+      history.pushState(null, "", "/");
+      dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await p.waitForSelector("[data-page=files]:not([hidden])");
+    // A download through the row button: the panel's finished entry has a visible "Show in folder".
+    await p.locator(`[data-ddn=row][data-id="${movie.id}"] [data-ddn=download]`).click();
+    const btn = await p.waitForSelector("[data-ddn=dl-show-btn]", { state: "visible", timeout: 120_000 }).then(() => true).catch(() => false);
+    const label = btn ? ((await p.textContent("[data-ddn=dl-show-btn]")) ?? "") : "";
+    const nameLooksClickable = await p.evaluate(() => getComputedStyle(document.querySelector("[data-ddn=dl-show]")!).cursor === "pointer").catch(() => false);
+    r.showInFolder = { btn, label, nameLooksClickable };
+    // The download made here is removed again (a later step checks the name of its own download).
+    await p.waitForFunction(() => document.querySelectorAll("[data-ddn=dl-item]").length > 0);
+    for (const f of readdirSync(downloads)) if (f.startsWith("movie")) (await import("node:fs")).rmSync(join(downloads, f), { force: true });
+    check("showInFolderVisible", btn && /Show in folder|Pokaż w folderze/.test(label) && nameLooksClickable);
+  }
+
   step("settings tabs: an address per tab; the desktop app card under App, no browser card; the update link");
   {
     await p.evaluate(() => {
@@ -373,7 +405,30 @@ try {
         const mid = playing ? await seek(want / 2) : false;
         const end = playing ? await seek(Math.max(0, want - 1)) : false;
         const msg = document.querySelector('[data-ddn="player-msg"]:not([hidden])')?.textContent ?? null;
-        const out = { meta, metaMs, duration: el.duration, playing, mid, end, error: el.error?.code ?? null, message: msg, offersDownload: !!document.querySelector('[data-ddn="player-msg"]:not([hidden]) [data-ddn="player-download"]') };
+        // Contrast of the message on the player's background, in this theme and the other one (QA B3: WCAG >= 4.5).
+        const lum = (c: string) => {
+          const cv = document.createElement("canvas").getContext("2d")!;
+          cv.fillStyle = c;
+          cv.fillRect(0, 0, 1, 1);
+          const [r, g, b] = cv.getImageData(0, 0, 1, 1).data;
+          const f = (v: number) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+          return 0.2126 * f(r!) + 0.7152 * f(g!) + 0.0722 * f(b!);
+        };
+        const contrast = () => {
+          const why = document.querySelector<HTMLElement>('[data-ddn="player-why"]');
+          if (!why || !msg) return null;
+          const a = lum(getComputedStyle(why).color);
+          const bg = lum(getComputedStyle(document.querySelector('[data-ddn-ui="player-dialog"]')!).backgroundColor);
+          return Math.round(((Math.max(a, bg) + 0.05) / (Math.min(a, bg) + 0.05)) * 10) / 10;
+        };
+        const root = document.documentElement;
+        const was = root.dataset.theme;
+        root.dataset.theme = "light";
+        const cLight = contrast();
+        root.dataset.theme = "dark";
+        const cDark = contrast();
+        if (was) root.dataset.theme = was;
+        const out = { meta, metaMs, duration: el.duration, playing, mid, end, error: el.error?.code ?? null, message: msg, offersDownload: !!document.querySelector('[data-ddn="player-msg"]:not([hidden]) [data-ddn="player-download"]'), contrast: { light: cLight, dark: cDark } };
         el.pause();
         return out;
       }, v.dur);
@@ -382,6 +437,7 @@ try {
       if (v.expectPlay === true) check(`video_${v.name}`, res.playing && res.mid && res.end && Math.abs(res.duration - v.dur) < 1.5);
       // HEVC: plays where the platform has a decoder; where it does not, the player must say so and offer the download.
       else check(`video_${v.name}`, (res.playing && res.mid) || (!!res.message && res.offersDownload));
+      if (res.message) check(`video_${v.name}_messageReadable`, (res.contrast.light ?? 0) >= 4.5 && (res.contrast.dark ?? 0) >= 4.5);
       if (v.expectPlay === true) check(`video_${v.name}_noMessage`, !res.message);
     }
     r.videoFormats = formats;

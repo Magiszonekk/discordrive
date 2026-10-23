@@ -1109,3 +1109,15 @@ input.switch:focus-visible { outline: 2px solid var(--color-focus); outline-offs
   .sections { min-width: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .settings-tabs a, .settings-tabs a::after { transition: none; } }
+
+/* QA fixes. The player's message sits on the player's black area: light text in both themes (it used the page's
+   ink, dark on black in the light theme, ~1.8:1). */
+dialog.player .pv-msg { color: oklch(0.92 0.01 257); }
+dialog.player .pv-msg .btn { color: var(--color-ink); background: var(--color-paper); }
+/* The panels' network notes (save data, waiting for the network): the panel's padding and type, not raw <p>. */
+.uploads > .netstate { margin: 0; padding: .5rem 1rem; border-top: 1px solid var(--color-rule); font-size: .8125rem; line-height: 1.25rem; color: var(--color-ink-2); }
+.uploads > .netstate .link { margin-left: .25rem; }
+/* "Show in folder": the finished download's name reads as a link, and a small button says it. */
+.qlist .qshow { cursor: pointer; text-decoration: underline; text-decoration-color: var(--color-rule-2); text-underline-offset: 2px; }
+.qlist .qshow:hover { text-decoration-color: currentColor; }
+.qlist [data-ddn="dl-show-btn"] { grid-column: 1 / -1; justify-self: start; }

@@ -582,7 +582,7 @@ function renderShellStatus(st: Status) {
   s.dataset.tabRole = st.leader ? "main" : "secondary";
   s.replaceChildren(
     uploading
-      ? chip(t("status.uploading", { done: uploading.done, total: uploading.total }), "accent", t("status.uploading.t"))
+      ? chip(t("status.uploading", { done: uploading.done, total: uploading.total }), "accent", t(desktop ? "status.uploadingDesktop.t" : "status.uploading.t"))
       : chip(t("status.synced"), "success", t("status.synced.t", { seq: fmtNum(st.headSeq) })),
   );
   const me = ui("me-name");
@@ -1849,7 +1849,16 @@ function download(id: string, name: string) {
     const nameEl = li.querySelector<HTMLElement>(".qname");
     if (nameEl && desktop) {
       nameEl.dataset.ddn = "dl-show";
+      nameEl.classList.add("qshow");
+      nameEl.title = t("dl.show");
+      nameEl.setAttribute("role", "button");
+      nameEl.tabIndex = 0;
       nameEl.onclick = () => desktop.showInFolder(r.path);
+      nameEl.onkeydown = (e) => void ((e.key === "Enter" || e.key === " ") && (e.preventDefault(), desktop.showInFolder(r.path)));
+      // A visible button too: the name alone did not say it could be clicked.
+      const b = h("button", { class: "btn sm", type: "button", "data-ddn": "dl-show-btn" }, icon("folder"), t("dl.show"));
+      b.onclick = () => desktop.showInFolder(r.path);
+      li.querySelector(".qfoot")?.after(b) ?? li.append(b);
     }
   };
   const viaBlob = () =>
@@ -2627,7 +2636,11 @@ async function renderDiagnostics() {
   if (st.server) parts.push(st.server.all ? t("diag.serverAll") : st.server.on ? t("diag.serverOn") : t("diag.serverOff"));
   $("diag-info").textContent = parts.filter(Boolean).join(" ");
   const b = await core.buildInfo().catch(() => null);
-  if (b) $("diag-version").textContent = b.server && b.server !== b.app ? t("diag.version2", { app: b.app, server: b.server }) : t("diag.version", { app: b.app });
+  // The same sources (hash and commit after "+"): the same build, whatever version number the package carries
+  // (the desktop app's 0.1.x, an instance's 0.2.x). Different: the page is older than the instance (a reload
+  // in a browser; the desktop app updates itself instead).
+  const src = (x: string) => x.split("+")[1] ?? x;
+  if (b) $("diag-version").textContent = b.server && src(b.server) !== src(b.app) ? t(desktop ? "diag.version2Desktop" : "diag.version2", { app: b.app, server: b.server }) : t("diag.version", { app: b.app });
 }
 function wireDiagnostics() {
   const box = $<HTMLInputElement>("diag-log");
@@ -3271,6 +3284,12 @@ async function main() {
   wireNet();
   wireSecurity();
   adminUi.wire();
+  // Desktop: the agent uploads and downloads, also with the window closed (the browser notes speak of a tab).
+  if (desktop) {
+    document.querySelector<HTMLElement>('[data-i18n="queue.note"]')!.dataset.i18n = "queue.noteDesktop";
+    document.querySelector<HTMLElement>('[data-i18n="dl.note"]')!.dataset.i18n = "dl.noteDesktop";
+    applyStatic(document);
+  }
   $("auth-lost-retry").onclick = () =>
     void act($("auth-lost-retry"), async () => {
       if (!(await core.retryAuth())) toast(t("lost.still"), "err");
