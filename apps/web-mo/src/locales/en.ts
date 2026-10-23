@@ -337,6 +337,11 @@ export const en: Record<string, string> = {
   "dl.running": "Downloading {n}",
   "dl.done": "Downloaded",
   "dl.doneErr": "Downloaded with errors ({n})",
+  "queue.noteDesktop": "The app uploads in the background: closing the window does not stop the queue (the app keeps running in the tray).",
+  "dl.noteDesktop": "Files are fetched, decrypted and written straight to the downloads folder by the app, also with the window closed.",
+  "status.uploadingDesktop.t": "The upload runs in the background while the app runs (also in the tray).",
+  "diag.version2Desktop": "Version: {app} (this window) · {server} (the instance; an update of the app brings the window up to date)",
+  "dl.show": "Show in folder",
   "dl.note": "Files are fetched and decrypted in this tab, then saved by the browser. Keep the tab open until they are complete.",
   "dl.note@plain": "Files are fetched in this tab, checked, then saved by the browser. Keep the tab open until they are complete.",
   // Settings → Diagnostics

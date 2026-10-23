@@ -1524,7 +1524,11 @@ try {
     await d4.path();
     nw.leanPanel = await p.evaluate(() => {
       const el = document.querySelector<HTMLElement>("[data-ddn=dl-lean]");
-      return { shown: !!el && !el.hidden, text: el?.textContent ?? "", why: el?.dataset.why ?? "", href: el?.querySelector("a")?.getAttribute("href") ?? "" };
+      // Aligned with the panel's title (QA B4: it had no style and sat at the panel's edge).
+      const title = el?.closest(".uploads")?.querySelector(".uploads-h .t");
+      const pad = el ? parseFloat(getComputedStyle(el).paddingLeft) : 0;
+      const aligned = !!el && !!title && Math.abs(el.getBoundingClientRect().left + pad - title.getBoundingClientRect().left) <= 1;
+      return { shown: !!el && !el.hidden, text: el?.textContent ?? "", why: el?.dataset.why ?? "", href: el?.querySelector("a")?.getAttribute("href") ?? "", aligned };
     });
     await shot(p, "32-save-data-panel");
     await nav(p, "settings", "network");
@@ -2177,7 +2181,7 @@ try {
         /network|sieć|sieci/i.test(String(o.offlineText)) && o.noErrorWhileOffline === true && o.resumedShown === true && o.offlineSha === true &&
         o.guardDefault === true && o.saveData.on === true && o.saveData.upMax <= 2 && o.saveData.downMax <= 2 && o.saveData.guard === false && o.guardDisabledBySaveData === true && o.kept === true && o.back === true && /\d/.test(String(o.info)) &&
         // save data is said in the panel (2 at once + the reason + a link to the setting), and in the section chip
-        o.leanPanel.shown === true && /2/.test(o.leanPanel.text) && o.leanPanel.why === "setting" && /settings|ustawieniach/i.test(o.leanPanel.text) && o.leanPanel.href === "/settings/network" && o.leanGone === true && !!o.chip &&
+        o.leanPanel.shown === true && /2/.test(o.leanPanel.text) && o.leanPanel.why === "setting" && /settings|ustawieniach/i.test(o.leanPanel.text) && o.leanPanel.href === "/settings/network" && (o.leanPanel as { aligned?: boolean }).aligned === true && o.leanGone === true && !!o.chip &&
         resumeOk
       );
     })(),
