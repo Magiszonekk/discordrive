@@ -177,6 +177,27 @@ async function handle(q: Req): Promise<unknown> {
       devices: devs.length,
     };
   }
+  if (q.m === "bigMb") return Number(process.env.DDN_INTEROP_BIG_MB ?? 0);
+  if (q.m === "speed") {
+    const x = q.a as { mb: number; ms: number; chunks: number; r429: number };
+    step(`phone upload: ${x.mb} MiB in ${x.chunks} fragments, ${(x.ms / 1000).toFixed(1)} s = ${((x.mb * 1.048576 * 1000) / x.ms).toFixed(1)} MB/s, 429: ${x.r429}`);
+    return null;
+  }
+  if (q.m === "messages") return realHooks ? -1 : (fake as unknown as { messages: Map<string, unknown> }).messages.size;
+  if (q.m === "phoneUpload") {
+    // The phone uploaded a file: the TS device downloads it and opens its thumbnail.
+    const a = q.a as { folder: string; name: string; sha: string; thumbSha: string };
+    const t2 = await mk();
+    await t2.pull();
+    const node = t2.list(a.folder).find((k) => k.name === a.name);
+    if (!node) return { sha: false, thumb: false, why: "not listed" };
+    const parts: Uint8Array[] = [];
+    await t2.download(node.id, { write: async (d) => void parts.push(d.slice()) });
+    const h = ch("sha256");
+    for (const x of parts) h.update(x);
+    const pv = await t2.readPreview((t2.store.getNode(node.id)!.content as { manifestRef: string }).manifestRef, "t");
+    return { sha: h.digest("hex") === a.sha, thumb: !!pv && shaHex(pv.data) === a.thumbSha && pv.width === 320, thumbW: pv ? Math.min(pv.width, pv.height) : 0 };
+  }
   if (q.m === "files") return { folder: "fold-0000000001", files: ups, thumbSha: thumb ? shaHex(thumb) : null };
   if (q.m === "newHook") {
     const h = hookUrl(2, "1550000000000000303");

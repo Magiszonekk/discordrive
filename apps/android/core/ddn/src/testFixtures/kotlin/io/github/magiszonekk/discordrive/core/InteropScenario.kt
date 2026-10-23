@@ -130,6 +130,39 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
                 put("guildId", JsonNull); put("label", "z telefonu"); put("addedAt", System.currentTimeMillis())
             })
         }
+        // 3b. The phone uploads: a file of several fragments with a thumbnail into its folder (the TS device
+        // downloads it below and checks the hash and the thumbnail); a cancelled upload leaves no message.
+        val origin = discordOrigin.takeUnless { it.isEmpty() || it == "none" }
+        val dw = DiscordWriter(apiOrigin = origin, perMin = if (origin != null) 6000.0 else 30.0, burst = if (origin != null) 100.0 else 4.0)
+        val fw = FileWriter(dw, api, { sync.writableWebhooks() }, { op -> sync.commit(op) }, chunkSize = 64 * 1024)
+        val phoneFolder = sync.folder("Z telefonu \u017C")
+        val data = randomBytes(200_003)
+        val thumb = FileWrite.Picture('t', "image/webp", 320, 240, randomBytes(3000))
+        val up = fw.upload({ data.inputStream() }, data.size.toLong(), "IMG_0001 \u017B.jpg", phoneFolder, listOf(thumb))
+        log("upload: $up")
+        results["phoneUploadApplied"] = up.outcome == "applied" && up.chunks == 4 && up.sha256 == sha256Hex(data)
+        results["phoneSeesOwnUpload"] = sync.replica.children(phoneFolder).any { it.name == "IMG_0001 \u017B.jpg" && it.size == data.size.toLong() && it.sha256 == up.sha256 }
+        val before = rpc("messages").jsonPrimitive.int
+        var n = 0
+        val cancelled = runCatching { fw.upload({ data.inputStream() }, data.size.toLong(), "przerwane.bin", phoneFolder, cancelled = { n++ >= 2 }) }.exceptionOrNull()
+        results["cancelledUploadCleaned"] = cancelled is FileWriter.Cancelled && (before < 0 || rpc("messages").jsonPrimitive.int == before)
+        val ph = rpc("phoneUpload", buildJsonObject { put("folder", phoneFolder); put("name", "IMG_0001 \u017B.jpg"); put("sha", up.sha256); put("thumbSha", sha256Hex(thumb.data)) }).jsonObject
+        results["webDownloadsPhoneUpload"] = ph.getValue("sha").jsonPrimitive.boolean
+        results["webSeesPhoneThumbnail"] = ph.getValue("thumb").jsonPrimitive.boolean
+        results["cancelledNotInTree"] = sync.replica.children(phoneFolder).none { it.name == "przerwane.bin" }
+        // Optional speed run (harness --big-mb N): N MiB in 10 MiB fragments, the phone's default parallelism.
+        rpc("bigMb").jsonPrimitive.int.takeIf { it > 0 }?.let { mb ->
+            val big = randomBytes(mb * 1024 * 1024)
+            val fw10 = FileWriter(dw, api, { sync.writableWebhooks() }, { op -> sync.commit(op) }, parallel = 3)
+            val t0 = System.currentTimeMillis()
+            val r = fw10.upload({ big.inputStream() }, big.size.toLong(), "duzy-z-telefonu.bin", phoneFolder)
+            val ms = System.currentTimeMillis() - t0
+            log("big upload: $mb MiB, ${r.chunks} fragments, $ms ms, ${"%.1f".format(mb * 1.048576 * 1000 / ms)} MB/s, posts ${dw.stats.posts}, 429 ${dw.stats.rateLimited}, retries ${dw.stats.retries}")
+            val ph2 = rpc("phoneUpload", buildJsonObject { put("folder", phoneFolder); put("name", "duzy-z-telefonu.bin"); put("sha", r.sha256); put("thumbSha", "") }).jsonObject
+            results["bigUploadReadByWeb"] = ph2.getValue("sha").jsonPrimitive.boolean
+            rpc("speed", buildJsonObject { put("mb", mb); put("ms", ms); put("chunks", r.chunks); put("r429", dw.stats.rateLimited.get()) })
+        }
+
         // A rollback by the server is refused.
         val stale = AccountSync(acct, api, Discord(apiOrigin = discordOrigin.takeUnless { it.isEmpty() || it == "none" }), newReplica(), vaultRevision = sync.vaultRevision + 5)
         results["vaultRollbackRefused"] = runCatching { stale.loadVault() }.exceptionOrNull() is VaultRollbackException

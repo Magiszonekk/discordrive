@@ -320,4 +320,28 @@
     <string name="diag_copied">Skopiowano logi do schowka</string>
     <string name="diag_sent">Wysłano logi (%s)</string>
     <string name="diag_empty">Brak logów</string>
+    <string name="ddn_up_channel">Wysyłanie do discordrive</string>
+    <string name="ddn_up_title">Wysyłanie: %1$d z %2$d</string>
+    <string name="ddn_up_starting">Przygotowanie…</string>
+    <string name="ddn_up_no_account">Najpierw dołącz ten telefon do konta discordrive.</string>
+    <plurals name="ddn_up_queued">
+        <item quantity="one">%d plik w kolejce do wysłania (folder „Z telefonu”)</item>
+        <item quantity="few">%d pliki w kolejce do wysłania (folder „Z telefonu”)</item>
+        <item quantity="many">%d plików w kolejce do wysłania (folder „Z telefonu”)</item>
+        <item quantity="other">%d pliku w kolejce do wysłania (folder „Z telefonu”)</item>
+    </plurals>
+    <string name="ddn_upload">Wyślij plik</string>
+    <string name="ddn_backup">Auto-kopia zdjęć</string>
+    <string name="ddn_backup_on">Kopiuj nowe zdjęcia i filmy automatycznie</string>
+    <string name="ddn_backup_wifi">Tylko przez Wi-Fi (bez łącza taryfowego)</string>
+    <string name="ddn_backup_charging">Tylko podczas ładowania</string>
+    <string name="ddn_backup_where">Kopie trafiają do folderu „%1$s” na koncie (podfolder dla każdego folderu z telefonu). Każde zdjęcie kopiowane raz; usunięcie na telefonie nie usuwa kopii.</string>
+    <string name="ddn_backup_folders">Foldery do kopiowania</string>
+    <string name="ddn_backup_no_folders">Brak zdjęć na telefonie albo brak uprawnienia do nich.</string>
+    <string name="ddn_backup_now">Kopiuj teraz</string>
+    <string name="ddn_backup_started">Kopiowanie w tle — postęp w powiadomieniu.</string>
+    <string name="ddn_backup_running">Trwa: %1$d z %2$d · %3$s</string>
+    <string name="ddn_backup_last">Ostatnio: %1$s · skopiowano %2$d · czeka %3$d</string>
+    <string name="ddn_backup_never">Jeszcze nie kopiowano.</string>
+    <string name="ddn_backup_partial">Jeśli dasz dostęp tylko do wybranych zdjęć (Android 14+), auto-kopia widzi tylko te wybrane. Pełny dostęp: Ustawienia telefonu → Aplikacje → discordrive → Uprawnienia → Zdjęcia i filmy → Zezwalaj zawsze.</string>
 </resources>

@@ -200,6 +200,7 @@ jobs:
             # The app's browsing screens (Files, a folder, the Gallery with a web upload's thumbnail, the viewer).
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            for p in READ_MEDIA_IMAGES READ_MEDIA_VIDEO ACCESS_MEDIA_LOCATION POST_NOTIFICATIONS; do adb shell pm grant io.github.magiszonekk.discordrive android.permission.$p || true; done
             cd ../.. && npx tsx apps/android/interop/harness.mts --app
             mkdir -p build/shots && adb pull /sdcard/Android/data/io.github.magiszonekk.discordrive/files/shots build/shots || true
 
