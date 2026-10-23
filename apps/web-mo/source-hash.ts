@@ -41,7 +41,9 @@ export function sourceHash(repo = REPO): string {
   for (const f of files) {
     h.update(relative(repo, f).replaceAll("\\", "/"));
     h.update("\0");
-    h.update(readFileSync(f));
+    // Text with CRLF (a Windows checkout) hashes as with LF: the same sources give the same ID on every system.
+    const b = readFileSync(f);
+    h.update(b.includes(0) ? b : Buffer.from(b.toString("latin1").replaceAll("\r\n", "\n"), "latin1"));
     h.update("\0");
   }
   return h.digest("hex").slice(0, 32);
