@@ -45,6 +45,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The version counts the commits (below).
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -56,6 +59,9 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: npm ci --no-audit --no-fund
+
+      - name: Version (0.1.<commits on main>: grows with every build, dpkg / App Center / NSIS compare it)
+        run: echo "DDN_VERSION=0.1.$(git rev-list --count ${{ github.event.pull_request.head.sha || github.sha }})" >> "$GITHUB_ENV"
 
       - name: Build the app
         env:
@@ -120,6 +126,49 @@ jobs:
 
       - name: Install A, move the shortcuts, update to B from the app, check
         run: npx tsx apps/desktop/test/update-in-place.ts "$RUNNER_TEMP/release-a" "$RUNNER_TEMP/release-b"
+
+  update-deb:
+    # "Install and restart" with the .deb for real: version A installed with dpkg, A updates itself to B (dpkg -i
+    # through the elevation program; pkexec needs a desktop session, so CI uses sudo -n), the package version,
+    # B's files, the restart and the data are checked.
+    name: update in place (.deb, ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci --no-audit --no-fund && sudo apt-get install -y -q xvfb
+
+      - name: Version A (the same code, an older version and commit)
+        env:
+          DDN_COMMIT: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          DDN_VERSION: "0.1.1"
+        run: |
+          npm run build -w @ddv4/desktop
+          npx tsx apps/desktop/package.ts --linux
+          mv apps/desktop/release "$RUNNER_TEMP/release-a"
+
+      - name: Version B (this commit, a higher version)
+        env:
+          DDN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          DDN_VERSION: "0.1.2"
+        run: |
+          npm run build -w @ddv4/desktop
+          npx tsx apps/desktop/package.ts --linux
+          mv apps/desktop/release "$RUNNER_TEMP/release-b"
+
+      - name: Install A, update to B from the app, check
+        run: npx tsx apps/desktop/test/update-deb.ts "$RUNNER_TEMP/release-a" "$RUNNER_TEMP/release-b"
 
   publish:
     name: publish main-build

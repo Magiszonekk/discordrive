@@ -56,7 +56,16 @@ release's `SHA256SUMS`. Then:
   Desktop app → Download → Install and restart; after the restart the pin is still there and starts the
   new version (About shows its build).
 - **AppImage: "Install and restart"** replaces the AppImage file (when its folder is writable) and starts it.
-- **.deb**: `sudo apt install <file>` (apt keeps the menu entry).
+- **.deb: "Install and restart".** The system password dialog (pkexec, polkit) runs `dpkg -i <file>` while the
+  app still runs, then the app starts again as the new version (`--updated`); the data folder stays. Without
+  pkexec the app shows `sudo dpkg -i "<file>"` with a Copy button. App Center and `apt install ./file.deb`
+  are not used: they refuse a file whose package version equals the installed one.
+  CI (job "update in place (.deb)") installs a build A, lets it update itself to B (with `sudo -n`, as pkexec
+  needs a desktop session) and checks the package version, the files, the restart and the data.
+
+**Version.** Every build of `main` has a growing package version `0.1.<number of commits>` (CI: `DDN_VERSION`):
+the installer names, About and `build-info.json` show it, and dpkg, App Center and NSIS see a newer package.
+The update check itself still compares commits.
 
 ## Electron security checklist
 

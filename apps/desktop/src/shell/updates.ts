@@ -142,7 +142,9 @@ export async function downloadVerified(f: Fetch, b: AvailableBuild, asset: Relea
 export function installHint(kind: InstallKind, path: string, inPlace: boolean): string {
   switch (kind) {
     case "deb":
-      return `sudo apt install ${JSON.stringify(path)}`;
+      return inPlace
+        ? "Install and restart: the system asks for your password, the package is installed (your data stays) and the app starts again."
+        : `in a terminal: ${debTerminalCommand(path)} — then start the app again`;
     case "appimage":
       return inPlace
         ? "Install and restart: the app closes, this AppImage file is replaced by the new one and starts again."
@@ -160,8 +162,34 @@ export function installHint(kind: InstallKind, path: string, inPlace: boolean): 
  * Can "Install and restart" update this copy in place? Windows (NSIS) always; an AppImage when its folder
  * is writable (the file is replaced next to itself); a .deb never (apt needs root).
  */
-export function canInstallInPlace(kind: InstallKind, appImage?: string): boolean {
+/**
+ * How a .deb is installed from the app: through the system password dialog (pkexec, polkit) with dpkg, or —
+ * without pkexec — the command for a terminal (sudo dpkg -i: apt and App Center refuse a file they think is
+ * installed already when only the commit differs).
+ */
+export function debInstallCommand(file: string, pkexec: string | null): { file: string; args: string[] } | null {
+  return pkexec ? { file: pkexec, args: ["dpkg", "-i", file] } : null;
+}
+export function debTerminalCommand(file: string): string {
+  return `sudo dpkg -i ${JSON.stringify(file)}`;
+}
+/** pkexec on PATH (Ubuntu and most desktops have it with polkit), or null. */
+export function findPkexec(path = process.env.PATH ?? ""): string | null {
+  for (const d of path.split(":")) {
+    if (!d) continue;
+    try {
+      accessSync(join(d, "pkexec"), constants.X_OK);
+      return join(d, "pkexec");
+    } catch {
+      /* not here */
+    }
+  }
+  return null;
+}
+
+export function canInstallInPlace(kind: InstallKind, appImage?: string, pkexec: string | null = null): boolean {
   if (kind === "nsis") return true;
+  if (kind === "deb") return !!pkexec;
   if (kind !== "appimage" || !appImage) return false;
   try {
     accessSync(dirname(appImage), constants.W_OK);

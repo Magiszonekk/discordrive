@@ -57,7 +57,7 @@ interface DesktopBridge {
   onNavigate?(cb: (dir: "back" | "forward") => void): void;
   updates: {
     check(): Promise<{ current: { version: string; build: string; commit: string | null }; available: { build: string; commit: string; publishedAt: string; htmlUrl: string } | null; kind: string }>;
-    download(): Promise<{ path: string; hint: string; busy: boolean; inPlace?: boolean }>;
+    download(): Promise<{ path: string; hint: string; busy: boolean; inPlace?: boolean; command?: string }>;
     settings(patch?: { checkUpdates?: boolean; autostart?: boolean; downloadsDir?: string }): Promise<{ checkUpdates: boolean; autostart: boolean; downloadsDir: string }>;
     open(path: string): void;
     /** Install the downloaded update in place and restart (older app builds do not have it). */
@@ -2598,6 +2598,12 @@ function wireDesktopApp() {
       open.dataset.i18n = inPlace ? "app.install" : "app.open";
       open.textContent = t(open.dataset.i18n);
       open.onclick = inPlace ? (ev) => void act(ev.currentTarget as HTMLElement, () => install!()) : () => d.updates.open(r.path);
+      // A .deb without pkexec: the terminal command to copy (opening the file starts App Center, which refuses it).
+      if (!inPlace && r.command) {
+        open.dataset.i18n = "app.copyCmd";
+        open.textContent = t("app.copyCmd");
+        open.onclick = (ev) => void act(ev.currentTarget as HTMLElement, async () => (await writeClipboard(r.command!), toast(t("app.copied"))));
+      }
     });
   $<HTMLInputElement>("app-check-updates").onchange = (e) => void d.updates.settings({ checkUpdates: (e.currentTarget as HTMLInputElement).checked });
   $<HTMLInputElement>("app-autostart").onchange = (e) => void d.updates.settings({ autostart: (e.currentTarget as HTMLInputElement).checked });

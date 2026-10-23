@@ -4,6 +4,7 @@
 //
 //   tsx package.ts [--win] [--linux] [--mac] [--dir]     (default: the current system)
 //   env DDN_BUILD_ID   text shown in About and checked by the update check (CI: the commit)
+//   the package version is the one build.ts wrote (DDN_VERSION in CI: 0.1.<commits on main>)
 //
 // Output: apps/desktop/release/ (installers, SHA256SUMS, build-info.json). No code signing (see README).
 import { execFileSync } from "node:child_process";
@@ -33,7 +34,8 @@ writeFileSync(
     {
       name: "discordrive",
       productName: "discordrive",
-      version: pkg.version,
+      // The build's version (build.ts: DDN_VERSION, growing on main), so the package names and the .deb's version match it.
+      version: (JSON.parse(readFileSync(join(stage, "dist", "build-info.json"), "utf8")) as { version: string }).version,
       description: "discordrive desktop app",
       author: { name: "discordrive", email: "noreply@example.com" },
       homepage: "https://github.com/Magiszonekk/discordrive",

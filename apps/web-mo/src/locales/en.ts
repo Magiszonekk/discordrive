@@ -352,6 +352,8 @@ export const en: Record<string, string> = {
   "app.downloaded": "Downloaded and checked (SHA-256): {path}. To install: {hint}",
   "app.busy": "Transfers are running: install after they finish (unfinished downloads continue after a restart).",
   "app.open": "Run the installer",
+  "app.copyCmd": "Copy the command",
+  "app.copied": "Copied: paste it in a terminal.",
   "app.install": "Install and restart",
   "app.checkUpdates": "Check for new versions",
   "app.autostart": "Start with the system (in the tray)",
