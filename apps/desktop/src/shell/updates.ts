@@ -63,7 +63,8 @@ type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
 
 /** The "main-build" pre-release, or null when there is none (or GitHub is unreachable / rate limited). */
 export async function latestBuild(f: Fetch, apiBase = "https://api.github.com"): Promise<AvailableBuild | null> {
-  const r = await f(`${apiBase}/repos/${REPO}/releases/tags/${CHANNEL_TAG}`, { headers: { accept: "application/vnd.github+json", "user-agent": "discordrive-desktop" } });
+  // A network that never answers: give up after 20 s (the check runs again later).
+  const r = await f(`${apiBase}/repos/${REPO}/releases/tags/${CHANNEL_TAG}`, { headers: { accept: "application/vnd.github+json", "user-agent": "discordrive-desktop" }, signal: AbortSignal.timeout(20_000) });
   if (!r.ok) return null;
   const j = (await r.json()) as { body?: string; html_url?: string; published_at?: string; assets?: { name: string; browser_download_url: string; size: number }[] };
   const assets = (j.assets ?? []).map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size }));
@@ -71,7 +72,7 @@ export async function latestBuild(f: Fetch, apiBase = "https://api.github.com"):
   let commit = "";
   let build = "";
   if (info) {
-    const ir = await f(info.url, { headers: { "user-agent": "discordrive-desktop" } });
+    const ir = await f(info.url, { headers: { "user-agent": "discordrive-desktop" }, signal: AbortSignal.timeout(20_000) });
     if (ir.ok) {
       const bi = (await ir.json().catch(() => null)) as { commit?: string; build?: string } | null;
       commit = bi?.commit ?? "";

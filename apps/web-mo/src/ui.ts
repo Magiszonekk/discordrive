@@ -61,6 +61,7 @@ interface DesktopBridge {
     download(): Promise<{ path: string; hint: string; busy: boolean; inPlace?: boolean; command?: string }>;
     settings(patch?: { checkUpdates?: boolean; autostart?: boolean; downloadsDir?: string; keyring?: "ask" | "file" }): Promise<{ checkUpdates: boolean; autostart: boolean; downloadsDir: string; keyring?: "ask" | "file"; platform?: string }>;
     open(path: string): void;
+    onProgress?(cb: (p: { done: number; total: number }) => void): void;
     /** Install the downloaded update in place and restart (older app builds do not have it). */
     install?(): Promise<boolean>;
   };
@@ -2580,7 +2581,9 @@ async function renderDesktopApp() {
   // Linux: the keyring switch (off = the user refused it at the start; on = used from the next start).
   $("app-keyring-row").hidden = st.platform !== "linux";
   $<HTMLInputElement>("app-keyring").checked = st.keyring !== "file";
-  await paintUpdate(false);
+  // Not awaited: the check asks GitHub, and a slow or hanging network must not hold up the page (every later
+  // render, a tab change too, waits for this one).
+  void paintUpdate(false);
 }
 async function paintUpdate(manual: boolean) {
   if (!desktop) return;
@@ -2604,6 +2607,12 @@ function wireDesktopApp() {
   if (!desktop) return;
   const d = desktop;
   $("app-check").onclick = (e) => void act(e.currentTarget as HTMLElement, () => paintUpdate(true));
+  // Download progress (QA N4: ~100 MB with no sign of life looked like a hang).
+  d.updates.onProgress?.((p) => {
+    const hint = $("app-update-hint");
+    hint.hidden = false;
+    hint.textContent = t("app.downloading", { done: fmtSize(p.done), total: fmtSize(p.total), p: p.total ? Math.floor((p.done / p.total) * 100) : 0 });
+  });
   $("app-download").onclick = (e) =>
     void act(e.currentTarget as HTMLElement, async () => {
       const r = await d.updates.download();

@@ -42,6 +42,12 @@ contextBridge.exposeInMainWorld("ddnDesktop", {
   updates: {
     check: () => ipcRenderer.invoke("ddn:update-check"),
     download: () => ipcRenderer.invoke("ddn:update-download"),
+    /** Progress of the download above (bytes). */
+    onProgress: (cb: (p: { done: number; total: number }) => void) => {
+      ipcRenderer.on("ddn:update-progress", (_e, p: { done?: unknown; total?: unknown }) => {
+        if (typeof p?.done === "number" && typeof p?.total === "number") cb({ done: p.done, total: p.total });
+      });
+    },
     settings: (patch?: { checkUpdates?: boolean; autostart?: boolean; downloadsDir?: string; keyring?: "ask" | "file" }) => ipcRenderer.invoke("ddn:app-settings", patch ?? {}),
     open: (path: string) => ipcRenderer.send("ddn:open-path", String(path)),
     /** Install the downloaded update and restart (Windows, AppImage); false: the user chose to wait. */
