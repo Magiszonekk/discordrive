@@ -99,6 +99,21 @@ class BrowseUiTest {
             sess.refresh()
             r["copiedOnce"] = DdnBackup.status(ctx)?.copied == 0 && cam != null && sess.children(cam.id).count { it.name == name } == 1 &&
                 z != null && sess.children(z.id).count { it.name.startsWith("notatka z telefonu") } == 1
+            // Free up space: the copied photo has a verified copy (same size and SHA-256, not in the trash).
+            ActivityScenario.launch<DdnFreeUpActivity>(Intent(ctx, DdnFreeUpActivity::class.java)).use { f ->
+                waitUntil(60_000) { var ok = false; f.onActivity { a -> ok = a.checkedForTest }; ok }
+                var sc: DdnFreeUp.Scan? = null
+                f.onActivity { a -> sc = a.scanForTest() }
+                r["freeUpFindsCopied"] = sc?.ready?.any { it.name == name && it.size == photoBytes.size.toLong() } == true
+                r["freeUpSystemRequest"] = sc?.let { DdnFreeUp.request(ctx, it.ready) } != null
+                Log.i("ddn-ui", "free up: ready ${sc?.ready?.size}, not copied ${sc?.notCopied}, changed ${sc?.changed}, gone ${sc?.gone}")
+                shot("10-free-up")
+            }
+            // Edited on the phone after the copy (same size and date kept): its bytes differ, so it is not offered.
+            val edited = photoBytes.copyOf().also { it[it.size - 3] = (it[it.size - 3] + 1).toByte() }
+            cr.openOutputStream(uri, "wt")!!.use { it.write(edited) }
+            val now = DdnFreeUp.scan(ctx)
+            r["freeUpSkipsChanged"] = now.ready.none { it.name == name }
         } finally {
             DdnBackup.set(ctx, on = false)
             cr.delete(uri, null, null)

@@ -70,6 +70,7 @@
         </activity>
         <activity android:name=".DdnBackupActivity" android:exported="false" android:label="@string/ddn_backup" />
         <activity android:name=".DdnTrashActivity" android:exported="false" android:label="@string/ddn_trash" />
+        <activity android:name=".DdnFreeUpActivity" android:exported="false" android:label="@string/ddn_free" />
         <activity android:name=".DdnSettingsActivity" android:exported="false" android:label="@string/ddn_settings" />
         <!-- Open with → discordrive: photos and videos of other apps (the system may make it the default gallery). -->
         <activity

@@ -140,7 +140,14 @@ globalThis.__ddnIx = (function () {
       }
       return JSON.stringify({ results: res, outcomes: oc });
     },
-    node: function (id) { var n = st.getNode(id); return JSON.stringify(n ? [row(n)] : []); },
+    // One node; "tat" is set when it is in the trash (itself or inside a trashed folder: 0 then).
+    node: function (id) {
+      var n = st.getNode(id);
+      if (!n) return "[]";
+      var r = row(n);
+      if (S.inTrash(st, n.id)) r.tat = n.trashed ? n.trashed.at : 0;
+      return JSON.stringify([r]);
+    },
     snapText: function () { state = JSON.stringify(S.takeSnapshot(st)); return String(state.length); },
     textSlice: function (i, n) { return this.statePart(i, n); },
     textDone: function () { state = null; return "ok"; },

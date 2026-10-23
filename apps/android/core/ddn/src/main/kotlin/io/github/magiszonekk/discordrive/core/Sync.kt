@@ -54,7 +54,7 @@ interface IndexReplica : AutoCloseable {
     /** The whole index as a sync-core IndexSnapshot in JSON text slices (a local copy for a fast start). */
     fun snapshotText(): Sequence<String> = throw UnsupportedOperationException("snapshotText")
 
-    /** One node (null when unknown). */
+    /** One node (null when unknown); [Child.trashedAt] is set when it is in the trash (0: inside a trashed folder). */
     fun node(id: String): Child? = null
 
     /**

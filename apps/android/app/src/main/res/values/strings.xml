@@ -403,5 +403,31 @@
     <string name="ddn_trash_loading">Wczytywanie kosza…</string>
     <string name="ddn_upd_play_protect">Aplikacja nie pochodzi ze Sklepu Play, więc po instalacji Play Protect może zaproponować „Skanuj aplikację” albo pokazać „Nie instaluj”. To standardowe ostrzeżenie dla aplikacji spoza Sklepu: plik jest podpisany tym samym kluczem co zainstalowana wersja i sprawdzony (SHA-256) przed instalacją. Możesz go zeskanować — instalacja się powiedzie.</string>
     <string name="ddn_open_again">„%1$s” był już wysłany z tego telefonu. Wysłać jeszcze raz? Na koncie powstanie druga kopia z „(2)” w nazwie.</string>
+    <string name="ddn_free">Zwolnij miejsce na telefonie</string>
+    <string name="ddn_free_note">Usuwa z telefonu zdjęcia i filmy, które auto-kopia wysłała na konto i których kopia jest sprawdzona: ten sam rozmiar i ta sama suma SHA-256 co plik na telefonie, plik nie jest w koszu konta. Na koncie nic się nie zmienia. Usunięte trafiają do kosza telefonu (30 dni na przywrócenie); system pyta przed usunięciem.</string>
+    <string name="ddn_free_checking">Sprawdzanie zdjęć…</string>
+    <string name="ddn_free_checking_n">Sprawdzanie: %1$d z %2$d</string>
+    <string name="ddn_free_none">Nie ma zdjęć do usunięcia: żadne nie ma jeszcze sprawdzonej kopii na koncie.</string>
+    <plurals name="ddn_free_ready">
+        <item quantity="one">%1$d plik ma kopię na koncie (%2$s)</item>
+        <item quantity="few">%1$d pliki mają kopię na koncie (%2$s)</item>
+        <item quantity="many">%1$d plików ma kopię na koncie (%2$s)</item>
+        <item quantity="other">%1$d pliku ma kopię na koncie (%2$s)</item>
+    </plurals>
+    <plurals name="ddn_free_not_copied">
+        <item quantity="one">%d plik bez kopii — zostaje</item>
+        <item quantity="few">%d pliki bez kopii — zostają</item>
+        <item quantity="many">%d plików bez kopii — zostaje</item>
+        <item quantity="other">%d pliku bez kopii — zostaje</item>
+    </plurals>
+    <string name="ddn_free_kept">%1$d zmienionych od wysłania albo usuniętych z konta — zostają</string>
+    <string name="ddn_free_old_android">Android 10 nie pozwala przenieść ich do kosza telefonu jednym potwierdzeniem; usuń je w galerii telefonu.</string>
+    <string name="ddn_free_go">Usuń z telefonu</string>
+    <plurals name="ddn_free_done">
+        <item quantity="one">Przeniesiono %d plik do kosza telefonu.</item>
+        <item quantity="few">Przeniesiono %d pliki do kosza telefonu.</item>
+        <item quantity="many">Przeniesiono %d plików do kosza telefonu.</item>
+        <item quantity="other">Przeniesiono %d pliku do kosza telefonu.</item>
+    </plurals>
     <string name="ddn_open_send">Wyślij do discordrive</string>
 </resources>
