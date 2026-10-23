@@ -21,7 +21,7 @@ import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { canonicalState, ROOT_ID, applyEntry, initIndex, inTrash, loadSnapshot, MemoryIndexStore, uploadsTouched, RULES_VERSION, type IndexSnapshot, type LogEntry, type NodeRecord } from "@ddv4/sync-core";
+import { canonicalState, ROOT_ID, applyEntry, expiredTrash, initIndex, inTrash, loadSnapshot, MemoryIndexStore, uploadsTouched, RULES_VERSION, type IndexSnapshot, type LogEntry, type NodeRecord } from "@ddv4/sync-core";
 import {
   ChannelPacer,
   DiscordWebhookTransport,
@@ -141,6 +141,12 @@ function core(q: Req): unknown {
       const ex = q.a as string[];
       return [...store.allNodes()].filter((n) => n.kind === "file" && n.content && !inTrash(store, n.id) && ex.some((e) => n.name.toLowerCase().endsWith(e))).sort((a, b) => b.content!.createdAt - a.content!.createdAt).map(row);
     }
+    case "trash":
+      return [...store.allNodes()]
+        .filter((n) => n.trashed && !(n.parentId !== null && inTrash(store, n.parentId)))
+        .sort((a, b) => b.trashed!.at - a.trashed!.at || (a.id < b.id ? -1 : 1))
+        .map((n) => ({ ...row(n), tat: n.trashed!.at }));
+    case "expired": return expiredTrash(store, q.a as number);
     default: throw new Error(`unknown ${q.m}`);
   }
 }
@@ -226,6 +232,27 @@ const rpc = createServer((req, res) => {
 await new Promise<void>((r) => rpc.listen(0, "127.0.0.1", r));
 const rpcUrl = `http://127.0.0.1:${(rpc.address() as { port: number }).port}`;
 
+// A fake of the GitHub releases API for the app's update check (--updates-apk <path to an APK of a higher
+// versionCode> --updates-code N): android-main-build with android-build.json and the APK.
+const ua = process.argv.indexOf("--updates-apk");
+let updatesApi = "";
+if (ua >= 0) {
+  const apk = fsx.readFileSync(process.argv[ua + 1]!);
+  const code = Number(process.argv[process.argv.indexOf("--updates-code") + 1] ?? 999999);
+  const sha = ch("sha256").update(apk).digest("hex");
+  const up = createServer((req, res) => {
+    const base = `http://127.0.0.1:${(up.address() as { port: number }).port}`;
+    if (req.url === "/repos/Magiszonekk/discordrive/releases/tags/android-main-build")
+      return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ published_at: new Date().toISOString(), body: "test", assets: [{ name: "android-build.json", browser_download_url: `${base}/a/info`, size: 100 }, { name: "app-b.apk", browser_download_url: `${base}/a/apk`, size: apk.length }] }));
+    if (req.url === "/a/info") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ versionCode: code, versionName: `0.1.0-${code}`, commit: "test", apk: "app-b.apk", sha256: sha }));
+    if (req.url === "/a/apk") return res.writeHead(200, { "content-type": "application/vnd.android.package-archive", "content-length": String(apk.length) }).end(apk);
+    res.writeHead(404).end();
+  });
+  await new Promise<void>((r) => up.listen(0, "127.0.0.1", r));
+  updatesApi = `http://127.0.0.1:${(up.address() as { port: number }).port}`;
+  step(`fake releases API for the update check: versionCode ${code}, ${apk.length} B`);
+}
+
 const appUi = process.argv.includes("--app");
 const onDevice = process.argv.includes("--device") || appUi;
 const ei = process.argv.indexOf("--engine");
@@ -234,9 +261,9 @@ let child;
 if (onDevice) {
   step("phone: InteropDeviceTest on the device (adb reverse to the servers here)");
   const port = (u: string) => new URL(u).port;
-  for (const u of [url, discordOrigin, rpcUrl].filter(Boolean)) spawnSync("adb", ["reverse", `tcp:${port(u)}`, `tcp:${port(u)}`], { stdio: "inherit" });
+  for (const u of [url, discordOrigin, rpcUrl, updatesApi].filter(Boolean)) spawnSync("adb", ["reverse", `tcp:${port(u)}`, `tcp:${port(u)}`], { stdio: "inherit" });
   const target = appUi ? ["com.discordrive.gallery.BrowseUiTest", "io.github.magiszonekk.discordrive.test"] : ["io.github.magiszonekk.discordrive.syncjs.InteropDeviceTest", "io.github.magiszonekk.discordrive.syncjs.test"];
-  child = spawn("adb", ["shell", "am", "instrument", "-w", "-e", "class", target[0]!, "-e", "ddnRpc", rpcUrl, "-e", "ddnServer", url, "-e", "ddnDiscord", discordOrigin || "none", ...(engine ? ["-e", "ddnEngine", engine] : []), `${target[1]}/androidx.test.runner.AndroidJUnitRunner`], { stdio: ["ignore", "pipe", "inherit"] });
+  child = spawn("adb", ["shell", "am", "instrument", "-w", "-e", "class", target[0]!, "-e", "ddnRpc", rpcUrl, "-e", "ddnServer", url, "-e", "ddnDiscord", discordOrigin || "none", ...(updatesApi ? ["-e", "ddnUpdates", updatesApi] : []), ...(engine ? ["-e", "ddnEngine", engine] : []), `${target[1]}/androidx.test.runner.AndroidJUnitRunner`], { stdio: ["ignore", "pipe", "inherit"] });
 } else {
   step("phone: JVM InteropTest through Gradle (pairing, join, operations)");
   child = spawn(process.platform === "win32" ? "gradlew.bat" : "./gradlew", ["--no-daemon", "-q", ":core:ddn:test", "--tests", "*InteropTest*", "-PddnInterop=1", "--rerun-tasks"], {
@@ -255,7 +282,7 @@ child.stdout!.on("data", (d: Buffer) => ((childOut += d.toString()), process.std
 const code: number = await new Promise((res) => child.on("close", (c) => res(c ?? 1)));
 // am instrument exits 0 even when a test fails: its report says OK or FAILURES.
 check(onDevice ? "deviceTestPassed" : "jvmTestPassed", code === 0 && (!onDevice || /\nOK \(1 test\)/.test(childOut)));
-if (onDevice) for (const u of [url, discordOrigin, rpcUrl].filter(Boolean)) spawnSync("adb", ["reverse", "--remove", `tcp:${new URL(u).port}`], { stdio: "ignore" });
+if (onDevice) for (const u of [url, discordOrigin, rpcUrl, updatesApi].filter(Boolean)) spawnSync("adb", ["reverse", "--remove", `tcp:${new URL(u).port}`], { stdio: "ignore" });
 check("pairedSameCode", !!paired);
 void sealDeviceName;
 rpc.close();

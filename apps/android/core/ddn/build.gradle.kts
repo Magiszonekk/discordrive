@@ -21,6 +21,7 @@ dependencies {
     // The interop scenario (InteropScenario) is shared by the JVM test and the on-device test of :syncjs.
     testFixturesImplementation(libs.okhttp)
     testImplementation(libs.junit.jupiter)
+    testImplementation(libs.okhttp.mockwebserver)
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 

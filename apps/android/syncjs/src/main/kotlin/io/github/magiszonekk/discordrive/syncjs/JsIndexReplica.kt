@@ -80,6 +80,11 @@ class JsIndexReplica(private val engine: JsEngine) : IndexReplica {
     override fun node(id: String): IndexReplica.Child? =
         rows(call("__ddnIx.node(${json.encodeToString(JsonElement.serializer(), JsonPrimitive(id))})")).firstOrNull()
 
+    override fun trash(): List<IndexReplica.Child> = rows(call("__ddnIx.trash()"))
+
+    override fun expiredTrash(nowServerMs: Long): List<String> =
+        json.parseToJsonElement(call("__ddnIx.expired($nowServerMs)")).jsonArray.map { it.jsonPrimitive.content }
+
     override fun snapshotText(): Sequence<String> = sequence {
         val n = call("__ddnIx.snapText()").toInt()
         var at = 0
@@ -98,6 +103,7 @@ class JsIndexReplica(private val engine: JsEngine) : IndexReplica {
             size = o["size"]?.jsonPrimitive?.content?.toLongOrNull(),
             manifestRef = s("ref"), sha256 = s("sha"),
             createdAt = o["at"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0, parentId = s("parent"),
+            trashedAt = o["tat"]?.jsonPrimitive?.content?.toLongOrNull(),
         )
     }
 
@@ -160,6 +166,17 @@ globalThis.__ddnIx = (function () {
       out.sort(function (a, b) { return a.kind === b.kind ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : a.kind === "folder" ? -1 : 1; });
       return JSON.stringify(out);
     },
+    // The trash: nodes trashed themselves (inside a trashed folder they go with it), newest first.
+    trash: function () {
+      var out = [];
+      for (var n of st.allNodes()) {
+        if (!n.trashed || (n.parentId !== null && S.inTrash(st, n.parentId))) continue;
+        var r = row(n); r.tat = n.trashed.at; out.push(r);
+      }
+      out.sort(function (a, b) { return b.tat - a.tat || (a.id < b.id ? -1 : 1); });
+      return JSON.stringify(out);
+    },
+    expired: function (now) { return JSON.stringify(S.expiredTrash(st, now)); },
     // The Gallery: media files outside the trash, newest first. Built once per head and kept (sorted).
     media: function (exts, limit, after) {
       var head = st.getMeta().headSeq;

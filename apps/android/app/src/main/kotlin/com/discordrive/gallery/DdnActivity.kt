@@ -69,8 +69,8 @@ open class DdnActivity : AppCompatActivity() {
             setPadding(dp(12), dp(12), dp(12), dp(12)); setOnClickListener { pick.launch(arrayOf("*/*")) }
         })
         bar.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_settings); setColorFilter(getColor(R.color.text)); contentDescription = getString(R.string.ddn_backup)
-            setPadding(dp(12), dp(12), dp(12), dp(12)); setOnClickListener { startActivity(Intent(this@DdnActivity, DdnBackupActivity::class.java)) }
+            setImageResource(R.drawable.ic_settings); setColorFilter(getColor(R.color.text)); contentDescription = getString(R.string.ddn_settings)
+            setPadding(dp(12), dp(12), dp(12), dp(12)); setOnClickListener { startActivity(Intent(this@DdnActivity, DdnSettingsActivity::class.java)) }
         })
         root.addView(bar)
         root.addView(status)
@@ -99,6 +99,7 @@ open class DdnActivity : AppCompatActivity() {
                 show()
                 refresh()
                 DdnBackup.schedule(this)
+                DdnApp.schedule(this)
             }
         }
     }
@@ -177,6 +178,7 @@ open class DdnActivity : AppCompatActivity() {
                 v.setOnClickListener {
                     if (c.isFolder) { path += c.id to c.name; show() } else open(c, items.filter { !it.isFolder })
                 }
+                v.setOnLongClickListener { askTrash(c); true }
             }
         }
         if (items.isEmpty()) status.append(" · " + getString(R.string.ddn_empty))
@@ -204,9 +206,30 @@ open class DdnActivity : AppCompatActivity() {
                 DdnThumbs.into(s, c.manifestRef, img, cell) { img.setImageResource(R.drawable.ic_photo); img.scaleType = ImageView.ScaleType.CENTER_INSIDE }
                 img.scaleType = ImageView.ScaleType.CENTER_CROP
                 f.setOnClickListener { open(c, items) }
+                f.setOnLongClickListener { askTrash(c); true }
             }
         }
         if (items.isEmpty()) status.append(" · " + getString(R.string.ddn_gallery_empty))
+    }
+
+    /** Long press: to the trash (30 days to restore, the trash is in Settings). */
+    private fun askTrash(c: IndexReplica.Child) {
+        val s = session ?: return
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(R.string.ddn_to_trash)
+            .setMessage(getString(R.string.ddn_to_trash_ask, c.name))
+            .setPositiveButton(R.string.ddn_to_trash) { _, _ ->
+                thread {
+                    val r = runCatching { s.moveToTrash(listOf(c.id)) }
+                    main.post {
+                        r.onSuccess { android.widget.Toast.makeText(this, if (it == "applied") getString(R.string.ddn_moved_to_trash) else getString(R.string.ddn_trash_not_done, it), android.widget.Toast.LENGTH_SHORT).show() }
+                            .onFailure { status.text = getString(R.string.ddn_error, it.message) }
+                        show()
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun open(c: IndexReplica.Child, siblings: List<IndexReplica.Child>) {

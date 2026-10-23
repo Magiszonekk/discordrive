@@ -105,6 +105,66 @@ class BrowseUiTest {
         }
     }
 
+    /**
+     * PR 5: the trash (a file to the trash from the list's long press path, the trash screen lists it, restore,
+     * delete for good; the TS device sees the same state), Settings (version, a newer build found in the fake
+     * releases API, downloaded with its SHA-256 checked, handed to the system installer), Open with (VIEW) of
+     * a photo of another app.
+     */
+    private fun trashAndSettings(sc: InteropScenario, r: LinkedHashMap<String, Boolean>, updatesApi: String?) {
+        val s = DdnSession.get(ctx)!!
+        s.refresh()
+        val folder = s.children("fold-0000000001")
+        val video = folder.first { it.name == "film.webm" }
+        val big = folder.first { it.name == "duży.bin" }
+        r["toTrash"] = s.moveToTrash(listOf(video.id)) == "applied" && s.moveToTrash(listOf(big.id)) == "applied" && s.children("fold-0000000001").none { it.id == video.id || it.id == big.id }
+        ActivityScenario.launch<DdnTrashActivity>(Intent(ctx, DdnTrashActivity::class.java)).use { t ->
+            r["trashScreenLists"] = waitUntil { var n = 0; t.onActivity { a -> n = a.countForTest() }; n >= 3 }
+            shot("5-trash")
+            t.onActivity { a -> a.selectForTest(video.id); a.actForTest(restore = true) }
+            r["restoredFromScreen"] = waitUntil { DdnSession.get(ctx)!!.children("fold-0000000001").any { it.id == video.id } }
+            t.onActivity { a -> a.selectForTest(big.id); a.actForTest(restore = false) }
+            r["purgedFromScreen"] = waitUntil { DdnSession.get(ctx)!!.node(big.id) == null }
+        }
+        // The TS device: the same tree (sha of the canonical state after its pull).
+        val want = sc.rpc("expect").jsonObject
+        s.refresh()
+        r["sameStateAsWebAfterTrash"] = s.ix { it.stateSha256() } == want.getValue("sha").jsonPrimitive.content
+        // Q4 in the background job: a phone with a purge just made does not clean (the main device does).
+        r["autoCleanWaits"] = s.autoCleanTrash(metered = false) == io.github.magiszonekk.discordrive.core.TrashPolicy.Decision.Skip("primary_cleans")
+
+        // Settings and the update check.
+        if (updatesApi != null) {
+            DdnApp.testUpdatesApi = updatesApi
+            ActivityScenario.launch<DdnSettingsActivity>(Intent(ctx, DdnSettingsActivity::class.java)).use { st ->
+                r["updateFound"] = waitUntil(30_000) { var ok = false; st.onActivity { a -> ok = a.foundForTest() != null }; ok }
+                shot("6-settings-update")
+            }
+            val b = DdnApp.newer(ctx)
+            var last = 0L
+            val f = b?.let { DdnApp.download(ctx, it, { d, _ -> last = d }) }
+            r["updateDownloadedChecked"] = f != null && f.length() == b.apkSize && io.github.magiszonekk.discordrive.core.AppUpdates.sha256File(f) == b.sha256 && last == f.length()
+            // The system installer gets it (a session is created and committed; the confirmation is the user's).
+            r["installerSession"] = f != null && runCatching { DdnApp.install(ctx, f); true }.getOrElse { Log.w("ddn-ui", "install: $it"); false } &&
+                ctx.packageManager.packageInstaller.mySessions.isNotEmpty()
+            Thread.sleep(1500)
+            shot("7-installer")
+            DdnApp.testUpdatesApi = null
+            ctx.packageManager.packageInstaller.mySessions.forEach { runCatching { ctx.packageManager.packageInstaller.abandonSession(it.sessionId) } }
+        }
+
+        // Open with → discordrive (VIEW) of a photo another app shares.
+        val bmp = Bitmap.createBitmap(800, 600, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.rgb(200, 80, 40)) }
+        val pic = File(ctx.cacheDir, "z innej aplikacji.jpg").apply { outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) } }
+        val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", pic)
+        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "image/jpeg").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        r["viewResolvesToApp"] = ctx.packageManager.queryIntentActivities(view, 0).any { it.activityInfo.name.endsWith(".DdnOpenActivity") }
+        ActivityScenario.launch<DdnOpenActivity>(view.setClass(ctx, DdnOpenActivity::class.java)).use { o ->
+            r["viewShowsPhoto"] = waitUntil(15_000) { var ok = false; o.onActivity { a -> ok = a.shownForTest() }; ok }
+            shot("8-open-with")
+        }
+    }
+
     @Test
     fun filesGalleryViewer() {
         val args = InstrumentationRegistry.getArguments()
@@ -154,6 +214,7 @@ class BrowseUiTest {
         // automatically, both through the background job (WorkManager, as in the app); the TS device downloads
         // them and checks the bytes and the thumbnail made on the phone.
         uploads(sc, r)
+        trashAndSettings(sc, r, args.getString("ddnUpdates"))
         Log.i("ddn-ui", "RESULT $r")
         sc.rpc("done", kotlinx.serialization.json.JsonObject(r.mapValues { JsonPrimitive(it.value) }))
         assertTrue("ui checks: $r", r.values.all { it })

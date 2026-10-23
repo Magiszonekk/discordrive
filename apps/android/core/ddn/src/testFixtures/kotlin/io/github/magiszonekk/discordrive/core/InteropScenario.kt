@@ -57,9 +57,11 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
         override fun children(parentId: String): List<IndexReplica.Child> = rows(rpc("children", JsonPrimitive(parentId)))
         override fun media(extensions: List<String>, limit: Int, after: Pair<Long, String>?): List<IndexReplica.Child> =
             rows(rpc("media", JsonArray(extensions.map { JsonPrimitive(it) })))
+        override fun trash(): List<IndexReplica.Child> = rows(rpc("trash"))
+        override fun expiredTrash(nowServerMs: Long): List<String> = rpc("expired", JsonPrimitive(nowServerMs)).jsonArray.map { it.jsonPrimitive.content }
         private fun rows(e: JsonElement) = e.jsonArray.map {
             val o = it.jsonObject
-            IndexReplica.Child(o.str("id"), o.str("name"), o.str("kind"), o.longOrNull("size"), o.strOrNull("ref"), o.strOrNull("sha"), o.longOrNull("at") ?: 0, o.strOrNull("parent"))
+            IndexReplica.Child(o.str("id"), o.str("name"), o.str("kind"), o.longOrNull("size"), o.strOrNull("ref"), o.strOrNull("sha"), o.longOrNull("at") ?: 0, o.strOrNull("parent"), o.longOrNull("tat"))
         }
         override fun close() {}
     }
@@ -162,6 +164,26 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
             results["bigUploadReadByWeb"] = ph2.getValue("sha").jsonPrimitive.boolean
             rpc("speed", buildJsonObject { put("mb", mb); put("ms", ms); put("chunks", r.chunks); put("r429", dw.stats.rateLimited.get()) })
         }
+
+        // 3c. The trash (PR 5): the phone trashes its upload and a folder, lists the trash (with the server time
+        // of the trash), restores the folder, deletes the file for good; the TS device sees the same tree (4).
+        // The folder "Zdjęcia 4" the TS device trashed is in the list too. Q4: a phone (not the main device)
+        // does not empty the trash before 7 days without a purge; nothing is 30 days old here anyway.
+        val upNode = sync.replica.children(phoneFolder).first { it.name == "IMG_0001 \u017B.jpg" }
+        val tmpFolder = sync.folder("Kosz test")
+        results["trashApplied"] = sync.trash(listOf(upNode.id, tmpFolder)).str("outcome") == "applied"
+        val tr = sync.replica.trash()
+        results["trashListed"] = tr.any { it.id == upNode.id && (it.trashedAt ?: 0) > 0 } && tr.any { it.id == tmpFolder } && tr.any { it.name == "Zdjęcia 4" } &&
+            sync.replica.children(phoneFolder).none { it.id == upNode.id }
+        results["restoreApplied"] = sync.restore(listOf(tmpFolder)).str("outcome") == "applied" && sync.replica.children("root").any { it.id == tmpFolder }
+        results["purgeApplied"] = sync.purge(listOf(upNode.id)).str("outcome") == "applied" && sync.replica.node(upNode.id) == null && sync.replica.trash().none { it.id == upNode.id }
+        results["lastPurgeSeen"] = (sync.lastPurgeAt ?: 0) > 0
+        val gc = api.gcStatus()
+        val nowS = gc.now
+        results["nothingExpiredYet"] = sync.replica.expiredTrash(nowS).isEmpty() && sync.replica.expiredTrash(nowS + TrashPolicy.RETENTION_MS + 1).any { it == "fold-0000000004" }
+        results["q4PhoneWaits"] = TrashPolicy.decide(sync.replica.expiredTrash(nowS + TrashPolicy.RETENTION_MS + 1), nowS + TrashPolicy.RETENTION_MS + 1, false, true, false, nowS, gc.firstEntryAt) is TrashPolicy.Decision.Clean &&
+            TrashPolicy.decide(listOf("x"), nowS, false, true, false, nowS - 1000, gc.firstEntryAt) == TrashPolicy.Decision.Skip("primary_cleans") &&
+            TrashPolicy.decide(listOf("x"), nowS, false, true, true, null, 0) == TrashPolicy.Decision.Skip("metered")
 
         // A rollback by the server is refused.
         val stale = AccountSync(acct, api, Discord(apiOrigin = discordOrigin.takeUnless { it.isEmpty() || it == "none" }), newReplica(), vaultRevision = sync.vaultRevision + 5)
