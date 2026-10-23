@@ -32,7 +32,7 @@ execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyo
 const fake = new FakeDiscord();
 const origin = await fake.listen({ tls: { key: readFileSync(join(work, "k")), cert: readFileSync(join(work, "c"), "utf8") } });
 
-type Step = { id: string; what: string; ok: boolean; note: string; shot: string };
+type Step = { id: string; what: string; ok: boolean; unchecked?: boolean; note: string; shot: string };
 const steps: Step[] = [];
 let n = 0;
 const consoleErrs: string[] = [];
@@ -67,20 +67,24 @@ async function shot(p: Page, id: string): Promise<string> {
   await p.screenshot({ path: join(shots, f) }).catch(() => {});
   return f;
 }
-async function step(p: Page, id: string, what: string, run: () => Promise<{ ok: boolean; note?: string }>) {
+// A step that could not check what it is about (e.g. the queue's progress when the upload is started by
+// path) reports "not checked" (unchecked: true): not a failure, not an ok.
+async function step(p: Page, id: string, what: string, run: () => Promise<{ ok: boolean; note?: string; unchecked?: boolean }>) {
   // QA_SKIP=S3,S4: leave steps out (a quick local try).
   if ((process.env.QA_SKIP ?? "").split(",").includes(id.split("-")[0]!)) return;
   let ok = false;
   let note = "";
+  let unchecked = false;
   try {
     const r = await run();
     ok = r.ok;
+    unchecked = !!r.unchecked;
     note = r.note ?? "";
   } catch (e) {
     note = String((e as Error)?.message ?? e).slice(0, 400);
   }
-  steps.push({ id, what, ok, note, shot: await shot(p, id) });
-  console.error(`[qa] ${id} ${ok ? "ok" : "NOT OK"} ${note}`);
+  steps.push({ id, what, ok, ...(unchecked ? { unchecked } : {}), note, shot: await shot(p, id) });
+  console.error(`[qa] ${id} ${unchecked ? "NOT CHECKED" : ok ? "ok" : "NOT OK"} ${note}`);
 }
 
 /** The whole screen (Windows: PowerShell + System.Drawing), also when the window cannot be reached. */
@@ -222,7 +226,9 @@ try {
     fake.postDelayMs = 0;
     const rows = (await core<{ rows: { name: string }[] }>("list")).rows;
     // Through remote debugging the upload starts in the agent (no row in the window's queue): the file counts.
-    return { ok: (!!mid || !app) && rows.some((x) => x.name === `qa-${MB}mb.bin`), note: `in progress: ${mid ?? (app ? "not seen" : "started by path, no queue row")}` };
+    const listed = rows.some((x) => x.name === `qa-${MB}mb.bin`);
+    if (!mid && !app) return { ok: listed, unchecked: listed, note: `the file was uploaded and listed; the queue's progress not checked (started by path through remote debugging, no queue row)` };
+    return { ok: !!mid && listed, note: `in progress: ${mid ?? "not seen"}` };
   });
   await step(p, "S4-download", "Download it: the downloads panel, the file in the folder, Show in folder", async () => {
     await p.reload();
@@ -321,6 +327,6 @@ try {
 }
 const report = { at: new Date().toISOString(), exe, build: process.env.QA_BUILD ?? null, ok: steps.length > 0 && steps.every((s) => s.ok), steps };
 writeFileSync(join(shots, "report.json"), JSON.stringify(report, null, 1));
-writeFileSync(join(shots, "report.md"), [`# QA Windows ${report.at}`, "", `build: ${report.build ?? "?"}`, "", "| step | ok | note | screenshot |", "|---|---|---|---|", ...steps.map((s) => `| ${s.id} — ${s.what} | ${s.ok ? "ok" : "**not ok**"} | ${s.note.replace(/\|/g, "/")} | ${s.shot} |`)].join("\n") + "\n");
+writeFileSync(join(shots, "report.md"), [`# QA Windows ${report.at}`, "", `build: ${report.build ?? "?"}`, "", "| step | ok | note | screenshot |", "|---|---|---|---|", ...steps.map((s) => `| ${s.id} — ${s.what} | ${s.unchecked ? "not checked" : s.ok ? "ok" : "**not ok**"} | ${s.note.replace(/\|/g, "/")} | ${s.shot} |`)].join("\n") + "\n");
 console.log(JSON.stringify(report, null, 1));
 void existsSync;

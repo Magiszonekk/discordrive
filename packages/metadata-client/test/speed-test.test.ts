@@ -3,7 +3,7 @@
 // or a test cut short (cleaned at the next start); the per-channel pacing applies as to an upload.
 import { describe, expect, it } from "vitest";
 import { Sequencer } from "@ddv4/sync-core";
-import { ChannelPacer, LocalArbiter, MemoryTransport, MetadataClient, cleanupLeftovers, discordSpeed, speedHints, type ResumeStore } from "../src/index.js";
+import { ChannelPacer, LocalArbiter, MemoryTransport, MetadataClient, RateLimitedError, cleanupLeftovers, discordSpeed, removeTestMessage, speedHints, type ResumeStore } from "../src/index.js";
 
 function memStore(): ResumeStore & { m: Map<string, unknown> } {
   const m = new Map<string, unknown>();
@@ -79,6 +79,26 @@ describe("speed test", () => {
     expect(store.m.size).toBe(0);
   });
 
+  it("deletes are tried again after a 429; a failed one stays on the list for the next start", async () => {
+    const p = { provider: "discord", locationId: "w", channelId: "c", messageId: "m1", attachmentId: "a" } as never;
+    let calls = 0;
+    const flaky = async () => {
+      if (++calls < 3) throw new RateLimitedError(20, "shared", false);
+      return "deleted";
+    };
+    expect(await removeTestMessage(flaky, p)).toBe(true);
+    expect(calls).toBe(3);
+    expect(await removeTestMessage(async () => Promise.reject(new Error("HTTP 404 Unknown Message")), p)).toBe(true);
+    // Never works: false after the tries, and cleanupLeftovers keeps the entry.
+    const store = memStore();
+    await store.put("st:0", p);
+    const failing = { blobs: { remove: async () => Promise.reject(new RateLimitedError(10, "shared", false)) } } as never;
+    expect(await cleanupLeftovers(failing, store)).toBe(0);
+    expect((await store.entries("st:")).length).toBe(1);
+    const working = { blobs: { remove: async () => "deleted" } } as never;
+    expect(await cleanupLeftovers(working, store)).toBe(1);
+    expect((await store.entries("st:")).length).toBe(0);
+  }, 30_000);
   it("the per-channel pacing applies (as to an upload)", async () => {
     const pacer = new ChannelPacer({ perMin: 30, maxPerMin: 30, burst: 2 });
     const { c } = setup(pacer);
