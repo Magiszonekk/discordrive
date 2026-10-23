@@ -1047,15 +1047,60 @@ input.switch:focus-visible { outline: 2px solid var(--color-focus); outline-offs
 .sec-body:has([data-ddn="thumbs-backfill-stop"]:not([hidden])) [data-ddn="thumbs-backfill-state"]:not(:empty) { display: flex; align-items: center; gap: .625rem; border-left-color: var(--color-accent); color: var(--color-ink); }
 .sec-body:has([data-ddn="thumbs-backfill-stop"]:not([hidden])) [data-ddn="thumbs-backfill-state"]::before { content: ""; flex: none; width: .5rem; height: .5rem; border-radius: 9999px; background: var(--color-accent); animation: pv-pulse .9s var(--ease-in-out) infinite alternate; }
 
-/* Settings tabs (functional base; the look comes from the design pass). A section of another tab is not shown.
-   Wide: a row of tabs under the title; phone: the same row, scrolled sideways. */
-.settings-tabs { display: flex; gap: .25rem; margin: 0 0 1.5rem; padding-bottom: .5rem; border-bottom: 1px solid var(--color-rule); overflow-x: auto; scrollbar-width: none; }
-.settings-tabs::-webkit-scrollbar { display: none; }
-.settings-tabs a { display: inline-flex; flex: none; align-items: center; gap: .5rem; padding: .5rem .75rem; border-radius: var(--radius-input); color: var(--color-ink-2); font: 500 .875rem/1.25rem var(--font-body); text-decoration: none; white-space: nowrap; }
-.settings-tabs a:hover { background: var(--color-paper-2); color: var(--color-ink); }
-.settings-tabs a[aria-current="page"] { background: var(--color-paper-2); color: var(--color-ink); box-shadow: inset 0 -2px 0 var(--color-accent); }
-.settings-tabs a[aria-current="page"] svg.i { color: var(--color-accent); }
-.settings-tabs svg.i { width: 16px; height: 16px; }
+/* ── Settings tabs ─────────────────────────
+ * Each tab is a link (/settings/<tab>, aria-current=page); sections of the other tabs get .tab-off.
+ * Below 1100 px: a row of underlined tabs on the hairline under the title (DiscorDrive's tab look: text only,
+ * 2 px accent under the current one), sticky on a tablet / narrow window, scrolled sideways on a phone with a
+ * fade at the edge. From 1100 px: an index rail left of the spec sheet (hairline with a 2 px accent segment), sticky,
+ * so the six tabs never get cut. The markup icons are not shown: the sidebar already speaks in icons, and two
+ * icon lists side by side read as two main menus. */
 .sections > section.tab-off { display: none; }
 .sections[data-active] > section + section { padding-top: 0; border-top: 0; }
 .sections[data-active] > section:not(.tab-off, [hidden]) ~ section:not(.tab-off, [hidden]) { padding-top: 2rem; border-top: 1px solid var(--color-rule); }
+.settings-tabs svg.i { display: none; }
+.settings-tabs a { position: relative; display: flex; align-items: center; color: var(--color-muted); font: 500 .875rem/1.25rem var(--font-body); text-decoration: none; white-space: nowrap; transition: color var(--duration-short) var(--ease-out); }
+.settings-tabs a::after { content: ""; position: absolute; background: transparent; transition: background-color var(--duration-short) var(--ease-out); }
+.settings-tabs a:hover { color: var(--color-ink); }
+.settings-tabs a:hover::after { background: var(--color-rule-2); }
+.settings-tabs a[aria-current="page"] { color: var(--color-ink); }
+.settings-tabs a[aria-current="page"]::after { background: var(--color-accent); }
+.settings-tabs a:focus-visible { outline-offset: -2px; border-radius: var(--radius-chip); }
+
+@media (max-width: 1099.98px) {
+  [data-page="settings"] .page-title { margin-bottom: 1rem; }
+  .settings-tabs {
+    position: sticky; top: 0; z-index: var(--z-raised); display: flex; gap: 1.5rem; margin: 0 0 2rem;
+    border-bottom: 1px solid var(--color-rule); background: var(--color-paper);
+    overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
+  }
+  .settings-tabs::-webkit-scrollbar { display: none; }
+  .settings-tabs a { flex: none; height: 2.75rem; }
+  /* the 2 px line sits on the row's hairline */
+  .settings-tabs a::after { left: 0; right: 0; bottom: -1px; height: 2px; border-radius: 1px; }
+  .sections > section { scroll-margin-top: 4rem; }
+}
+@media (max-width: 767.98px) {
+  /* Phone: edge to edge, not sticky (the top bar already is); the right edge fades so a cut tab reads as "more this way";
+   * the trailing padding lets the last tab scroll out of the fade. Opened by address (/settings/app), the
+   * current tab is scrolled into view where the browser supports scroll-initial-target. */
+  .settings-tabs {
+    position: static; gap: 1.25rem; margin-bottom: 1.5rem; margin-inline: -1rem; padding-inline: 1rem 2.5rem; scroll-padding-inline: 1rem 2.5rem;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+  }
+  .settings-tabs a[aria-current="page"] { scroll-initial-target: nearest; }
+  .sections > section { scroll-margin-top: 4rem; }
+}
+@media (min-width: 1100px) {
+  [data-page="settings"].page.narrow {
+    max-width: calc(42rem + 15rem); display: grid; grid-template-columns: 12.5rem minmax(0, 42rem);
+    column-gap: 2.5rem; align-items: start;
+  }
+  [data-page="settings"] .page-title { grid-column: 1 / -1; }
+  .settings-tabs { position: sticky; top: 1.5rem; display: grid; gap: .125rem; border-left: 1px solid var(--color-rule); }
+  .settings-tabs a { min-height: 2.25rem; padding: .5rem .75rem .5rem 1rem; white-space: normal; }
+  /* the 2 px segment sits on the rail's hairline */
+  .settings-tabs a::after { top: .375rem; bottom: .375rem; left: -1px; width: 2px; border-radius: 1px; }
+  .sections { min-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .settings-tabs a, .settings-tabs a::after { transition: none; } }
