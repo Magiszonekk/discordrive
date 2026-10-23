@@ -71,6 +71,7 @@
         <activity android:name=".DdnBackupActivity" android:exported="false" android:label="@string/ddn_backup" />
         <activity android:name=".DdnTrashActivity" android:exported="false" android:label="@string/ddn_trash" />
         <activity android:name=".DdnFreeUpActivity" android:exported="false" android:label="@string/ddn_free" />
+        <activity android:name=".DdnEditActivity" android:exported="false" android:theme="@style/Theme.Gallery.Viewer" />
         <activity android:name=".DdnSettingsActivity" android:exported="false" android:label="@string/ddn_settings" />
         <!-- Open with → discordrive: photos and videos of other apps (the system may make it the default gallery). -->
         <activity
@@ -145,6 +146,18 @@
         <provider
             android:name=".GalleryDocumentsProvider"
             android:authorities="${applicationId}.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+
+        <!-- The discordrive account in the system's file picker (read-only). -->
+        <provider
+            android:name=".DdnDocumentsProvider"
+            android:authorities="${applicationId}.ddn.documents"
             android:exported="true"
             android:grantUriPermissions="true"
             android:permission="android.permission.MANAGE_DOCUMENTS">

@@ -84,7 +84,7 @@ object DdnPictures {
         }
     }
 
-    private fun encode(src: Bitmap, kind: Char): FileWrite.Picture? {
+    internal fun encode(src: Bitmap, kind: Char): FileWrite.Picture? {
         run {
             var (w, h) = fit(kind, src.width, src.height)
             val maxBytes = if (kind == 't') 48 * 1024 else 400 * 1024
