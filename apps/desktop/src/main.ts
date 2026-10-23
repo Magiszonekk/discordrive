@@ -597,7 +597,7 @@ async function chooseKeyStore(): Promise<"os" | "file"> {
   if (plan === "file") return "file";
   if (plan === "explain" && !process.env.DDN_DESKTOP_SMOKE) {
     const pl = app.getLocale().startsWith("pl");
-    const r = await dialog.showMessageBox({
+    const r = process.env.DDN_DESKTOP_TEST_KEYRING_ANSWER ? { response: process.env.DDN_DESKTOP_TEST_KEYRING_ANSWER === "no" ? 1 : 0 } : await dialog.showMessageBox({
       type: "question",
       buttons: pl ? ["Utwórz magazyn kluczy", "Nie, trzymaj klucze w pliku"] : ["Create a keyring", "No, keep the keys in a file"],
       defaultId: 0,
@@ -610,7 +610,14 @@ async function chooseKeyStore(): Promise<"os" | "file"> {
     if (r.response !== 0) {
       settings.keyring = "file";
       saveSettings(DATA(), settings);
-      return "file";
+      // Chromium chose its password store at start (the keyring): left so, its first cookie or network use
+      // in this session opens the keyring's "create" window and the network waits for it (a server could not
+      // be reached until the window was closed). The switch that keeps it off the keyring is read only at
+      // start, so start again now, with the choice saved (nothing runs yet: no window, agent or instance).
+      if (process.env.DDN_DESKTOP_DEBUG || process.env.DDN_DESKTOP_DATA) console.error("[ddn] keyring refused: starting again without it");
+      app.relaunch({ ...(process.env.APPIMAGE ? { execPath: process.env.APPIMAGE } : {}), args: [...process.argv.slice(1).filter((x) => !x.startsWith("--password-store")), "--password-store=basic"] });
+      app.exit(0);
+      return new Promise<never>(() => {});
     }
   }
   const k = await keyStoreKind();

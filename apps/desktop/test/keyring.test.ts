@@ -1,4 +1,4 @@
-// The keyring on Linux (QA B1, B2): keys sealed by a keyring that is locked (or whose unlock was cancelled)
+// The keyring on Linux: keys sealed by a keyring that is locked (or whose unlock was cancelled)
 // give the window a reason to show ("The keyring is locked", retry, rescue kit), not an exception and an
 // empty window; a refused keyring is remembered (no "create a keyring" window at every start).
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";

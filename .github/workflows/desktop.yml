@@ -93,3 +93,10 @@ jobs:
           else
             npx tsx apps/desktop/test/e2e.ts
           fi
+
+      - name: "Linux: no keyring, \"No, keep the keys in a file\", then Connect to a server in the same session"
+        if: runner.os == 'Linux'
+        timeout-minutes: 12
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends gnome-keyring gcr dbus-daemon libglib2.0-bin
+          timeout 300 dbus-run-session -- xvfb-run -a npx tsx apps/desktop/test/keyring-refused.ts

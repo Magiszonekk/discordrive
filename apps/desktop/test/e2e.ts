@@ -217,7 +217,7 @@ try {
     await p.waitForSelector("[data-page=files]:not([hidden])");
   }
 
-  step("desktop texts (QA B5, B7) and Show in folder (B6)");
+  step("desktop texts and Show in folder");
   {
     const t = await p.evaluate(() => ({
       notes: [...document.querySelectorAll<HTMLElement>(".uploads > .hint")].map((x) => x.textContent ?? ""),
@@ -436,7 +436,7 @@ try {
         const mid = playing ? await seek(want / 2) : false;
         const end = playing ? await seek(Math.max(0, want - 1)) : false;
         const msg = document.querySelector('[data-ddn="player-msg"]:not([hidden])')?.textContent ?? null;
-        // Contrast of the message on the player's background, in this theme and the other one (QA B3: WCAG >= 4.5).
+        // Contrast of the message on the player's background, in this theme and the other one (WCAG >= 4.5).
         const lum = (c: string) => {
           const cv = document.createElement("canvas").getContext("2d")!;
           cv.fillStyle = c;
@@ -556,7 +556,7 @@ try {
   await gone(pid1);
   app = null;
 
-  step("keys sealed by a keyring that is not there now (QA B1): a screen with the reason, retry and the kit");
+  step("keys sealed by a keyring that is not there now: a screen with the reason, retry and the kit");
   // Linux only: Windows and macOS always have their key store (DPAPI, Keychain), so there the case is a
   // store that refuses, covered by keyring.test.ts.
   if (process.platform === "linux") {

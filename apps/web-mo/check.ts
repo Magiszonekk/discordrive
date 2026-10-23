@@ -1577,7 +1577,7 @@ try {
     await d4.path();
     nw.leanPanel = await p.evaluate(() => {
       const el = document.querySelector<HTMLElement>("[data-ddn=dl-lean]");
-      // Aligned with the panel's title (QA B4: it had no style and sat at the panel's edge).
+      // Aligned with the panel's title (without a style it sat at the panel's edge).
       const title = el?.closest(".uploads")?.querySelector(".uploads-h .t");
       const pad = el ? parseFloat(getComputedStyle(el).paddingLeft) : 0;
       const aligned = !!el && !!title && Math.abs(el.getBoundingClientRect().left + pad - title.getBoundingClientRect().left) <= 1;
