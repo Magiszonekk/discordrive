@@ -123,10 +123,21 @@ class DdnInstallReceiver : android.content.BroadcastReceiver() {
                 c.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
             PackageInstaller.STATUS_SUCCESS -> DdnApp.log("update installed")
+            // The user closed the system's window (Cancel / back): not an error.
+            PackageInstaller.STATUS_FAILURE_ABORTED -> {
+                DdnApp.log("update cancelled by the user")
+                android.widget.Toast.makeText(c, c.getString(R.string.ddn_upd_cancelled), android.widget.Toast.LENGTH_SHORT).show()
+            }
             else -> {
                 val msg = i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "status $st"
                 DdnApp.log("update failed: $msg")
-                android.widget.Toast.makeText(c, c.getString(R.string.ddn_upd_failed, msg), android.widget.Toast.LENGTH_LONG).show()
+                // Words for the user; the system's code stays in the log.
+                val why = when (st) {
+                    PackageInstaller.STATUS_FAILURE_STORAGE -> c.getString(R.string.ddn_upd_no_space)
+                    PackageInstaller.STATUS_FAILURE_CONFLICT, PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> c.getString(R.string.ddn_upd_conflict)
+                    else -> c.getString(R.string.ddn_upd_other)
+                }
+                android.widget.Toast.makeText(c, c.getString(R.string.ddn_upd_failed, why), android.widget.Toast.LENGTH_LONG).show()
             }
         }
     }
