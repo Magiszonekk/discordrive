@@ -2057,7 +2057,7 @@ try {
     settingsLayoutStable: ((x) => !!x && x.moved.length === 0)(r.settingsLayout as { moved: string[] } | undefined),
     settingsTabs: ((x) => !!x && x.everySectionOnce && x.untabbed.length === 0 && x.oneChannelList && x.reloadApp && x.back && x.anchor && x.remembered === "/settings/network" &&
       x.tabs.channels!.join() === "channels" && x.tabs.account!.join() === "account,rescue,security,sharing" && x.tabs.storage!.join() === "storage" &&
-      x.tabs.network!.join() === "network" && x.tabs.appearance!.join() === "appearance" && x.tabs.app!.join() === "diagnostics,browser")(
+      x.tabs.network!.join() === "network,speed" && x.tabs.appearance!.join() === "appearance" && x.tabs.app!.join() === "diagnostics,browser")(
       r.settingsTabs as { tabs: Record<string, string[]>; reloadApp: boolean; back: boolean; anchor: boolean; remembered: string; everySectionOnce: boolean; untabbed: string[]; oneChannelList: boolean } | undefined),
     layout: r.filesPageClean === true && r.settingsSurvivesReload === true && r.devicesSurvivesReload === true && (r.folderRoute as { path: boolean; crumb: string }).path && (r.folderRoute as { crumb: string }).crumb === "Wakacje",
     fonts: JSON.stringify(r.fontsLoaded) === JSON.stringify(["Inter", "JetBrains Mono", "Space Grotesk"]),

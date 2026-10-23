@@ -208,7 +208,7 @@ try {
     await p.waitForTimeout(500);
     const copied = await app.evaluate(({ clipboard }) => clipboard.readText());
     const files = (await p.evaluate(() => (window as unknown as { ddnCore: { list(): Promise<{ rows: unknown[] }> } }).ddnCore.list())).rows.length - files0;
-    r.speedTest = { card, up, where, copied: copied.slice(0, 40), files, msgs: fake.messages.size - msgs0 };
+    r.speedTestDetail = { card, up, where, copied: copied.slice(0, 40), files, msgs: fake.messages.size - msgs0 };
     check("speedTest", card && /MB\/s/.test(up) && /desktop/i.test(where) && /discordrive speed test/.test(copied) && files === 0 && fake.messages.size === msgs0);
     await p.evaluate(() => {
       history.pushState(null, "", "/");
