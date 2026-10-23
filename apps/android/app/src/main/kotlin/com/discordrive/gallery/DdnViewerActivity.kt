@@ -43,6 +43,7 @@ class DdnViewerActivity : AppCompatActivity() {
     private var items: List<IndexReplica.Child> = emptyList()
     private var index = 0
     private var seq = 0
+    private lateinit var edit: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,6 +58,8 @@ class DdnViewerActivity : AppCompatActivity() {
         fun btn(t: Int, f: () -> Unit) = Button(this).apply { text = getString(t); setOnClickListener { f() } }
         bar.addView(btn(R.string.ddn_prev) { go(-1) })
         bar.addView(btn(R.string.ddn_download) { download() })
+        edit = btn(R.string.ddn_edit) { items.getOrNull(index)?.let { startActivity(android.content.Intent(this, DdnEditActivity::class.java).putExtra(DdnEditActivity.EXTRA_ID, it.id)) } }
+        bar.addView(edit)
         bar.addView(btn(R.string.ddn_next) { go(1) })
         root.addView(box, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(info)
@@ -80,6 +83,8 @@ class DdnViewerActivity : AppCompatActivity() {
         releasePlayer()
         box.removeAllViews()
         info.text = "${c.name} · ${Formatter.formatShortFileSize(this, c.size ?: 0)} · ${index + 1}/${items.size}"
+        // Photos only (a video or another file has nothing to crop).
+        edit.visibility = if (DdnSession.isImage(c.name)) View.VISIBLE else View.GONE
         val ref = c.manifestRef ?: return
         when {
             DdnSession.isVideo(c.name) -> playVideo(s, c, ref)

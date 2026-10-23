@@ -450,5 +450,10 @@
     <string name="ddn_pin_remove">Usuń kod PIN</string>
     <string name="ddn_pin_remove_ask">Usunąć kod PIN? Wszystkie prywatne albumy na tym telefonie staną się zwykłe (pojawią się w Galerii).</string>
     <string name="ddn_pin_removed">Usunięto kod PIN; prywatne albumy są zwykłe.</string>
+    <string name="ddn_edit">Edytuj</string>
+    <string name="ddn_edit_save">Zapisz kopię na koncie</string>
+    <string name="ddn_edit_saved">Zapisano „%1$s” obok oryginału.</string>
+    <string name="ddn_edit_cannot">Nie udało się wczytać zdjęcia.</string>
+    <string name="ddn_saf_title">discordrive</string>
     <string name="ddn_open_send">Wyślij do discordrive</string>
 </resources>

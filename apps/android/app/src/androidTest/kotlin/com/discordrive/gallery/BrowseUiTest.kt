@@ -121,6 +121,55 @@ class BrowseUiTest {
     }
 
     /**
+     * The editor: the web upload's photo rotated and saved as a copy next to it ("<name> (edycja).jpg", with its
+     * thumbnail; the TS device downloads it and reads its thumbnail; the original is unchanged). The account in
+     * the system's picker: the provider's root, a folder's children, opening a file gives its bytes (checked
+     * against the TS hash), a thumbnail.
+     */
+    private fun editAndPicker(sc: InteropScenario, r: LinkedHashMap<String, Boolean>) {
+        val s = DdnSession.get(ctx)!!
+        val f = sc.rpc("files").jsonObject
+        val photo = s.children("fold-0000000001").first { it.name.endsWith(".jpg") }
+        DdnEditActivity.savedForTest = null
+        DdnEditActivity.loadedForTest = false
+        ActivityScenario.launch<DdnEditActivity>(Intent(ctx, DdnEditActivity::class.java).putExtra(DdnEditActivity.EXTRA_ID, photo.id)).use { e ->
+            r["editLoads"] = waitUntil(30_000) { DdnEditActivity.loadedForTest }
+            e.onActivity { a -> a.rotateForTest() }
+            shot("12-edit")
+            e.onActivity { a -> a.findViewById<android.view.View>(R.id.saveButton).performClick() }
+            r["editSaved"] = waitUntil(60_000) { DdnEditActivity.savedForTest != null }
+        }
+        val name = DdnEditActivity.editedName(photo.name)
+        s.refresh()
+        val copy = s.children("fold-0000000001").firstOrNull { it.name == name }
+        r["editCopyNextToOriginal"] = copy != null && s.children("fold-0000000001").any { it.id == photo.id && it.size == photo.size }
+        if (copy != null) {
+            val v = sc.rpc("phoneUpload", buildJsonObject { put("folder", "fold-0000000001"); put("name", name); put("sha", copy.sha256 ?: ""); put("thumbSha", "") }).jsonObject
+            r["webReadsEditedCopy"] = v.getValue("sha").jsonPrimitive.content == "true" && (v["thumbW"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0) > 0
+        }
+
+        // The provider (as the system picker calls it).
+        val auth = "${ctx.packageName}.ddn.documents"
+        val cr = ctx.contentResolver
+        val roots = cr.query(android.provider.DocumentsContract.buildRootsUri(auth), null, null, null, null)!!.use { it.count }
+        r["pickerRoot"] = roots == 1
+        val kids = cr.query(android.provider.DocumentsContract.buildChildDocumentsUri(auth, "fold-0000000001"), null, null, null, null)!!.use { c ->
+            buildList { while (c.moveToNext()) add(c.getString(c.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME))) }
+        }
+        r["pickerListsFolder"] = kids.containsAll(listOf(photo.name, "film.webm"))
+        val big = s.children("fold-0000000001").firstOrNull { it.name == "film.webm" }
+        if (big != null) {
+            val bytes = cr.openInputStream(android.provider.DocumentsContract.buildDocumentUri(auth, big.id))!!.use { it.readBytes() }
+            r["pickerOpensFile"] = io.github.magiszonekk.discordrive.core.sha256Hex(bytes) == f.getValue("files").jsonObject.getValue("film.webm").jsonObject.getValue("sha").jsonPrimitive.content
+        }
+        r["pickerThumbnail"] = runCatching {
+            android.provider.DocumentsContract.getDocumentThumbnail(cr, android.provider.DocumentsContract.buildDocumentUri(auth, photo.id), android.graphics.Point(256, 256), null)
+        }.getOrNull() != null
+        // GET_CONTENT goes to the system picker, which lists this provider's root.
+        r["getContentResolves"] = ctx.packageManager.queryIntentActivities(Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE), 0).isNotEmpty()
+    }
+
+    /**
      * Albums: the folder with the photo and the video is an album (cover = the newest, count 2). Made private
      * (a PIN set here): its media leave the Gallery, the tile shows the lock; the PIN check opens it. Then public
      * again (nothing of this reaches the account).
@@ -296,6 +345,8 @@ class BrowseUiTest {
         // them and checks the bytes and the thumbnail made on the phone.
         uploads(sc, r)
         trashAndSettings(sc, r, args.getString("ddnUpdates"))
+        // Last: the edited copy adds a file to the photo folder (the counts above stay as they were).
+        editAndPicker(sc, r)
         Log.i("ddn-ui", "RESULT $r")
         sc.rpc("done", kotlinx.serialization.json.JsonObject(r.mapValues { JsonPrimitive(it.value) }))
         assertTrue("ui checks: $r", r.values.all { it })
