@@ -21,7 +21,7 @@ import { loadSettings, normaliseServerUrl, saveSettings, type DesktopSettings } 
 import type { AgentInit } from "./agent.js";
 import { appArmorCommand, appImageWithoutSandbox } from "./shell/sandbox.js";
 import { APP_USER_MODEL_ID } from "./shell/app-id.js";
-import { CHECK_EVERY_MS, assetFor, canInstallInPlace, downloadVerified, installHint, installKind, isNewer, latestBuild, nsisUpdateCommand, replaceAppImage, sha256File, type AvailableBuild } from "./shell/updates.js";
+import { CHECK_EVERY_MS, assetFor, canInstallInPlace, debInstallCommand, debTerminalCommand, downloadVerified, findPkexec, installHint, installKind, isNewer, latestBuild, nsisUpdateCommand, replaceAppImage, sha256File, type AvailableBuild } from "./shell/updates.js";
 
 const APP_ID = "discordrive";
 const APP_NAME = "discordrive";
@@ -304,6 +304,11 @@ function ownBuild(): { version: string; build: string; commit: string | null } {
 }
 let update: AvailableBuild | null = null;
 let notifiedCommit = "";
+/**
+ * The program that installs a .deb with admin rights: pkexec (the system password dialog). Tests (CI):
+ * DDN_DESKTOP_DEB_ELEVATE names another one (e.g. "sudo -n") — pkexec needs a desktop session.
+ */
+const debElevate = (): string | null => process.env.DDN_DESKTOP_DEB_ELEVATE || findPkexec();
 const kind = () => installKind({ platform: process.platform, appImage: process.env.APPIMAGE, execPath: process.execPath, packaged: app.isPackaged });
 async function checkUpdates(manual = false): Promise<{ current: ReturnType<typeof ownBuild>; available: AvailableBuild | null; kind: string }> {
   const own = ownBuild();
@@ -321,15 +326,16 @@ async function checkUpdates(manual = false): Promise<{ current: ReturnType<typeo
 let downloaded: { path: string; sha256: string } | null = null;
 /** Started once the agent and the instance have stopped (before-quit), so the installer meets no running copy. */
 let runOnQuit: (() => void) | null = null;
-async function downloadUpdate(): Promise<{ path: string; hint: string; busy: boolean; inPlace: boolean }> {
+let debLastError = "";
+async function downloadUpdate(): Promise<{ path: string; hint: string; busy: boolean; inPlace: boolean; command?: string }> {
   if (!update) throw new Error("no new version");
   const a = assetFor(kind(), update.assets);
   if (!a) throw new Error("no installer for this system in the release");
   const path = await downloadVerified((u, i) => net.fetch(u, i), update, a, app.getPath("downloads"));
   downloaded = { path, sha256: await sha256File(path) };
-  const inPlace = canInstallInPlace(kind(), process.env.APPIMAGE);
+  const inPlace = canInstallInPlace(kind(), process.env.APPIMAGE, debElevate());
   // Transfers running: say so, do not stop them (the user installs when it suits).
-  return { path, hint: installHint(kind(), path, inPlace), busy: busy.busy, inPlace };
+  return { path, hint: installHint(kind(), path, inPlace), busy: busy.busy, inPlace, ...(kind() === "deb" && !inPlace ? { command: debTerminalCommand(path) } : {}) };
 }
 /**
  * "Install and restart": Windows runs the downloaded installer silently in update mode in this copy's
@@ -340,7 +346,7 @@ async function downloadUpdate(): Promise<{ path: string; hint: string; busy: boo
 async function installUpdate(ask = true): Promise<boolean> {
   const k = kind();
   if (!downloaded) throw new Error("download the new version first");
-  if (!canInstallInPlace(k, process.env.APPIMAGE)) throw new Error("this copy cannot update itself: install the downloaded file");
+  if (!canInstallInPlace(k, process.env.APPIMAGE, debElevate())) throw new Error(k === "deb" ? `no pkexec on this system: install it in a terminal: ${debTerminalCommand(downloaded.path)}` : "this copy cannot update itself: install the downloaded file");
   // The same file that was checked against SHA256SUMS (the Downloads folder is writable by other programs).
   if ((await sha256File(downloaded.path).catch(() => "")) !== downloaded.sha256) {
     downloaded = null;
@@ -359,6 +365,31 @@ async function installUpdate(ask = true): Promise<boolean> {
     if (r.response !== 0) return false;
   }
   const file = downloaded.path;
+  if (k === "deb") {
+    // dpkg with admin rights while this copy still runs (a .deb replaces the files of a running app safely:
+    // the running process keeps the old ones), then the app starts again as the new version. A cancelled
+    // password dialog (pkexec exit 126/127) or a dpkg error: the app keeps running and says so.
+    const [prog, ...pre] = debElevate()!.split(/\s+/);
+    const c = debInstallCommand(file, prog!)!;
+    const code = await new Promise<number>((res) => {
+      const p = spawn(c.file, [...pre, ...c.args], { stdio: ["ignore", "ignore", "pipe"] });
+      let err = "";
+      p.stderr?.on("data", (d) => (err += String(d)));
+      p.on("error", () => res(-1));
+      p.on("close", (x) => {
+        if (x) debLastError = err.trim().split("\n").slice(-3).join(" ");
+        res(x ?? -1);
+      });
+    });
+    if (code !== 0) {
+      throw new Error(code === 126 || code === 127 ? "the installation was cancelled (no password given)" : `dpkg failed (${code}): ${debLastError || "see the terminal"}; or in a terminal: ${debTerminalCommand(file)}`);
+    }
+    // The same switches as this start (e.g. --no-sandbox where the system needs it), plus --updated.
+    app.relaunch({ args: [...process.argv.slice(1).filter((x) => x !== "--updated" && !x.startsWith("--hidden")), "--updated"] });
+    quitting = true;
+    app.quit();
+    return true;
+  }
   if (k === "appimage") {
     const target = process.env.APPIMAGE!;
     replaceAppImage(file, target);

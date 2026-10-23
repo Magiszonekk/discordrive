@@ -6,7 +6,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { assetFor, canInstallInPlace, downloadVerified, installHint, installKind, isNewer, latestBuild, nsisUpdateCommand, parseSums, replaceAppImage, sha256File, CHANNEL_TAG, REPO } from "../src/shell/updates.js";
+import { assetFor, canInstallInPlace, debInstallCommand, debTerminalCommand, findPkexec, downloadVerified, installHint, installKind, isNewer, latestBuild, nsisUpdateCommand, parseSums, replaceAppImage, sha256File, CHANNEL_TAG, REPO } from "../src/shell/updates.js";
 
 const deb = Buffer.from("fake deb package ".repeat(1000));
 const exe = Buffer.from("fake windows installer ".repeat(1000));
@@ -96,7 +96,7 @@ describe("install and restart", () => {
     expect(() => nsisUpdateCommand('C:\\a" /D=C:\\x', "C:\\b")).toThrow(/unexpected/);
     expect(() => nsisUpdateCommand("C:\\a.exe", "C:\\b\n/S")).toThrow(/unexpected/);
   });
-  it("only Windows and a writable AppImage update in place; a .deb never", () => {
+  it("Windows, a writable AppImage and a .deb with pkexec update in place", () => {
     const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-upd-"));
     expect(canInstallInPlace("nsis")).toBe(true);
     expect(canInstallInPlace("deb")).toBe(false);
@@ -106,7 +106,21 @@ describe("install and restart", () => {
     expect(canInstallInPlace("appimage", "/proc/discordrive.AppImage")).toBe(false);
     expect(installHint("nsis", "x", true)).toMatch(/shortcuts/);
     expect(installHint("nsis", "x", false)).toMatch(/Run the installer/);
-    expect(installHint("deb", "/d/x.deb", true)).toMatch(/apt install/);
+    // .deb: in place only with pkexec (the system password dialog); dpkg -i, never apt / App Center (they refuse
+    // a file with the version of the installed package).
+    expect(canInstallInPlace("deb", undefined, "/usr/bin/pkexec")).toBe(true);
+    expect(installHint("deb", "/d/x.deb", true)).toMatch(/password/);
+    expect(installHint("deb", "/d/x.deb", false)).toBe(`in a terminal: sudo dpkg -i "/d/x.deb" — then start the app again`);
+    expect(debInstallCommand("/d/x.deb", "/usr/bin/pkexec")).toEqual({ file: "/usr/bin/pkexec", args: ["dpkg", "-i", "/d/x.deb"] });
+    expect(debInstallCommand("/d/x.deb", null)).toBeNull();
+    expect(debTerminalCommand("/d/a b.deb")).toBe('sudo dpkg -i "/d/a b.deb"');
+    // pkexec on PATH (Linux only: PATH separators and the executable bit are POSIX here).
+    if (process.platform !== "win32") {
+      writeFileSync(join(dir, "pkexec"), "#!/bin/sh\n");
+      chmodSync(join(dir, "pkexec"), 0o755);
+      expect(findPkexec(`/nonexistent:${dir}`)).toBe(join(dir, "pkexec"));
+      expect(findPkexec("/nonexistent")).toBeNull();
+    }
   });
   it("AppImage: the new file takes the old one's place, executable", async () => {
     const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-upd-"));

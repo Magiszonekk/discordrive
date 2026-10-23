@@ -404,6 +404,8 @@ export const pl: Record<string, string> = {
   "app.downloaded": "Pobrano i sprawdzono (SHA-256): {path}. Instalacja: {hint}",
   "app.busy": "Trwają transfery: zainstaluj po ich zakończeniu (niedokończone pobierania wznowią się po restarcie).",
   "app.open": "Uruchom instalator",
+  "app.copyCmd": "Kopiuj polecenie",
+  "app.copied": "Skopiowano: wklej w terminalu.",
   "app.install": "Zainstaluj i uruchom ponownie",
   "app.checkUpdates": "Sprawdzaj nowe wersje",
   "app.autostart": "Uruchamiaj razem z systemem (w zasobniku)",

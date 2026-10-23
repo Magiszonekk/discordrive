@@ -26,7 +26,10 @@ const modePlugin: Plugin = {
 };
 // The same build ID the web app and an instance show (`<version>+<source hash>.g<commit>`): the agent writes it
 // in its transfer logs and About / the update check read it from build-info.json.
-const VERSION = (JSON.parse(readFileSync(join(here, "package.json"), "utf8")) as { version: string }).version;
+// The package version grows with every build of main (dpkg, App Center and NSIS compare it): DDN_VERSION from CI
+// (0.1.<commits on main>), else package.json's.
+const VERSION = process.env.DDN_VERSION || (JSON.parse(readFileSync(join(here, "package.json"), "utf8")) as { version: string }).version;
+if (!/^\d+\.\d+\.\d+$/.test(VERSION)) throw new Error(`DDN_VERSION must be x.y.z, got ${VERSION}`);
 const COMMIT = process.env.DDN_COMMIT || gitCommit();
 const BUILD = buildId(sourceHash(), COMMIT ? COMMIT.slice(0, 7) : null, VERSION);
 const common = { bundle: true, platform: "node" as const, format: "cjs" as const, target: "node22", external: ["electron"], logLevel: "error" as const, sourcemap: false, plugins: [modePlugin], define: { __DDN_BUILD__: JSON.stringify(BUILD) } };
