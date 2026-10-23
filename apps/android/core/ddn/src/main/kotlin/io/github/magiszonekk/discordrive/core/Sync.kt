@@ -63,6 +63,14 @@ interface IndexReplica : AutoCloseable {
      */
     fun trash(): List<Child> = emptyList()
 
+    /**
+     * Albums: folders with media files (by `extensions`) right inside them, outside the trash, the newest
+     * first; with the count and the newest file (the cover).
+     */
+    fun albums(extensions: List<String>): List<Album> = emptyList()
+
+    data class Album(val id: String, val name: String, val count: Int, val cover: Child)
+
     /** Trashed nodes whose 30 days (server time `nowServerMs`) are over (sync-core expiredTrash). */
     fun expiredTrash(nowServerMs: Long): List<String> = emptyList()
 

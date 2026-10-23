@@ -40,6 +40,9 @@ open class DdnActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var nav: BottomNavigationView
     private var gallery = false
+    /** The Albums tab; `album` = the open album (folder ID, name) or null for the album list. */
+    private var albumsTab = false
+    private var album: Pair<String, String>? = null
     /** Folder path in Files (root first). */
     private val path = ArrayList<Pair<String, String>>()
 
@@ -58,8 +61,9 @@ open class DdnActivity : AppCompatActivity() {
         nav = BottomNavigationView(this).apply {
             menu.add(0, 1, 0, R.string.ddn_files).setIcon(R.drawable.ic_cloud_done)
             menu.add(0, 2, 1, R.string.ddn_gallery).setIcon(R.drawable.ic_photo)
+            menu.add(0, 3, 2, R.string.ddn_albums).setIcon(R.drawable.ic_albums)
             selectedItemId = if (gallery) 2 else 1
-            setOnItemSelectedListener { gallery = it.itemId == 2; show(); true }
+            setOnItemSelectedListener { gallery = it.itemId == 2; albumsTab = it.itemId == 3; album = null; show(); true }
         }
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         bar.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -82,7 +86,8 @@ open class DdnActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 // Back from a folder goes up; from the root of this icon's view it closes only this task.
-                if (!gallery && path.size > 1) { path.removeAt(path.size - 1); show() } else finish()
+                if (albumsTab && album != null) { album = null; show() }
+                else if (!gallery && !albumsTab && path.size > 1) { path.removeAt(path.size - 1); show() } else finish()
             }
         })
 
@@ -149,19 +154,32 @@ open class DdnActivity : AppCompatActivity() {
 
     private fun show() {
         val s = session ?: return
-        title.text = if (gallery) getString(R.string.ddn_gallery) else path.last().second
+        title.text = when {
+            albumsTab -> album?.second ?: getString(R.string.ddn_albums)
+            gallery -> getString(R.string.ddn_gallery)
+            else -> path.last().second
+        }
         status.text = buildString {
             append(getString(R.string.ddn_status, s.acct.deviceName, s.headSeq, s.engineName))
             s.lastError?.let { append(" · ").append(getString(R.string.ddn_offline, it)) }
         }
         thread {
-            if (gallery) {
-                val items = s.media(5000, null)
+            if (albumsTab) {
+                val open = album
+                if (open != null) {
+                    val items = s.albumMedia(open.first)
+                    main.post { if (albumsTab && album == open) showGrid(s, items) }
+                } else {
+                    val albums = s.albums()
+                    main.post { if (albumsTab && album == null) showAlbums(s, albums) }
+                }
+            } else if (gallery) {
+                val items = s.media(5000, null, DdnPrivate.all(this))
                 main.post { if (gallery) showGrid(s, items) }
             } else {
                 val folder = path.last().first
                 val items = s.children(folder)
-                main.post { if (!gallery && path.last().first == folder) showList(s, items) }
+                main.post { if (!gallery && !albumsTab && path.last().first == folder) showList(s, items) }
             }
         }
     }
@@ -216,8 +234,71 @@ open class DdnActivity : AppCompatActivity() {
                 f.setOnLongClickListener { askTrash(c); true }
             }
         }
-        if (items.isEmpty()) status.append(" · " + getString(R.string.ddn_gallery_empty))
+        if (items.isEmpty()) status.append(" · " + getString(if (gallery && DdnPrivate.all(this).isNotEmpty()) R.string.ddn_gallery_empty_private else R.string.ddn_gallery_empty))
     }
+
+    /**
+     * The albums: a cover (the newest photo) with the name and count; a private one shows a lock and no
+     * cover and asks for the PIN to open. Long press: make private / not private.
+     */
+    private fun showAlbums(s: DdnSession, albums: List<IndexReplica.Album>) {
+        val locked = DdnPrivate.all(this)
+        // Private ones last (as in the phone gallery), the rest newest first.
+        val list: List<IndexReplica.Album> = albums.filter { it.id !in locked } + albums.filter { it.id in locked }
+        val cols = maxOf(2, resources.displayMetrics.widthPixels / dp(170))
+        val cell = resources.displayMetrics.widthPixels / cols
+        this.list.layoutManager = GridLayoutManager(this, cols)
+        this.list.adapter = object : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+            override fun getItemCount() = list.size
+            override fun onCreateViewHolder(p: ViewGroup, t: Int): RecyclerView.ViewHolder {
+                val v = LinearLayout(this@DdnActivity).apply { orientation = LinearLayout.VERTICAL; layoutParams = ViewGroup.LayoutParams(cell, ViewGroup.LayoutParams.WRAP_CONTENT); setPadding(dp(4), dp(4), dp(4), dp(8)) }
+                val box = FrameLayout(this@DdnActivity)
+                box.addView(ImageView(this@DdnActivity).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(getColor(R.color.surface)) }, FrameLayout.LayoutParams(-1, -1))
+                box.addView(ImageView(this@DdnActivity).apply { setImageResource(R.drawable.ic_lock); setColorFilter(getColor(R.color.text_dim)) }, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER))
+                v.addView(box, LinearLayout.LayoutParams(-1, cell - dp(8)))
+                v.addView(TextView(this@DdnActivity).apply { textSize = 14f; setTextColor(getColor(R.color.text)); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(2), dp(4), 0, 0) })
+                v.addView(TextView(this@DdnActivity).apply { textSize = 12f; setTextColor(getColor(R.color.text_dim)); setPadding(dp(2), 0, 0, 0) })
+                return object : RecyclerView.ViewHolder(v) {}
+            }
+            override fun onBindViewHolder(h: RecyclerView.ViewHolder, i: Int) {
+                val a = list[i]
+                val priv = a.id in locked
+                val v = h.itemView as LinearLayout
+                val box = v.getChildAt(0) as FrameLayout
+                val img = box.getChildAt(0) as ImageView
+                box.getChildAt(1).visibility = if (priv) View.VISIBLE else View.GONE
+                img.setImageDrawable(null)
+                img.contentDescription = a.name
+                if (!priv) DdnThumbs.into(s, a.cover.manifestRef, img, cell) { img.setImageResource(R.drawable.ic_photo); img.scaleType = ImageView.ScaleType.CENTER_INSIDE }
+                img.scaleType = ImageView.ScaleType.CENTER_CROP
+                (v.getChildAt(1) as TextView).text = a.name
+                (v.getChildAt(2) as TextView).text = if (priv) getString(R.string.ddn_album_private) else plq(R.plurals.ddn_album_count, a.count, a.count)
+                v.setOnClickListener { if (priv) PrivateUnlock.unlock(this@DdnActivity) { openAlbum(a) } else openAlbum(a) }
+                v.setOnLongClickListener { togglePrivate(a, priv); true }
+            }
+        }
+        if (list.isEmpty()) status.append(" · " + getString(R.string.ddn_albums_empty))
+    }
+
+    private fun openAlbum(a: IndexReplica.Album) { album = a.id to a.name; show() }
+
+    private fun togglePrivate(a: IndexReplica.Album, priv: Boolean) {
+        if (priv) {
+            PrivateUnlock.unlock(this) { DdnPrivate.set(this, a.id, false); toast(getString(R.string.album_private_unmarked)); show() }
+            return
+        }
+        if (!PrivateAlbums.hasPin(this)) {
+            androidx.appcompat.app.AlertDialog.Builder(this).setMessage(R.string.private_need_pin_msg)
+                .setPositiveButton(R.string.private_set_pin) { _, _ -> startActivity(Intent(this, DdnSettingsActivity::class.java)) }
+                .setNegativeButton(android.R.string.cancel, null).show()
+            return
+        }
+        androidx.appcompat.app.AlertDialog.Builder(this).setMessage(getString(R.string.ddn_album_private_ask, a.name))
+            .setPositiveButton(android.R.string.ok) { _, _ -> DdnPrivate.set(this, a.id, true); toast(getString(R.string.album_private_marked)); show() }
+            .setNegativeButton(android.R.string.cancel, null).show()
+    }
+
+    private fun toast(m: String) = android.widget.Toast.makeText(this, m, android.widget.Toast.LENGTH_SHORT).show()
 
     /** Long press: to the trash (30 days to restore, the trash is in Settings). */
     private fun askTrash(c: IndexReplica.Child) {
@@ -267,6 +348,8 @@ open class DdnActivity : AppCompatActivity() {
     internal fun findRecycler(): RecyclerView? = if (::list.isInitialized) list else null
     internal fun openFolderForTest(id: String, name: String) { gallery = false; nav.selectedItemId = 1; path += id to name; show() }
     internal fun showGalleryForTest() { nav.selectedItemId = 2 }
+    internal fun showAlbumsForTest() { nav.selectedItemId = 3 }
+    internal fun openAlbumForTest(id: String, name: String) { album = id to name; show() }
     internal fun isDrawn(): Boolean = list.isLaidOut && list.childCount > 0
 
     /** A cell of the grid shows a decoded picture (a thumbnail, not the type icon). */
