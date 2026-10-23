@@ -1121,3 +1121,57 @@ dialog.player .pv-msg .btn { color: var(--color-ink); background: var(--color-pa
 .qlist .qshow { cursor: pointer; text-decoration: underline; text-decoration-color: var(--color-rule-2); text-underline-offset: 2px; }
 .qlist .qshow:hover { text-decoration-color: currentColor; }
 .qlist [data-ddn="dl-show-btn"] { grid-column: 1 / -1; justify-self: start; }
+
+/* ── Speed test (Settings → Network & transfers) ──
+ * The result reads as a result: the two Discord speeds are the big numbers (with their share of the line as words
+ * and a bar), the line is one smaller row under them, the rest a compact spec list; the hints are a callout and
+ * Copy sits in the card's foot. While it runs the status line has a live dot. Hooks: data-ddn=speed-*. */
+[data-ddn="speed-state"]:empty { display: none; }
+[data-ddn="speed-adv"] > .stack { margin-top: .75rem; }
+/* the options are choices, not warnings: no amber edge (as .ack.plain) */
+[data-ddn="speed-adv"] label.ack { border-left-width: 1px; border-left-color: var(--color-rule); background: var(--color-paper-2); color: var(--color-ink-2); cursor: pointer; }
+[data-ddn="speed-adv"] label.ack:has(input:checked) { border-color: color-mix(in oklch, var(--color-accent) 40%, transparent); background: color-mix(in oklch, var(--color-accent) 6%, var(--color-paper)); color: var(--color-ink); }
+/* status line: neutral after a cancel / an error; while it runs, accent edge + pulsing dot + steady digits */
+[data-ddn="speed-live"] { border-left-color: var(--color-rule-2); font-variant-numeric: tabular-nums; }
+.sec-body:has([data-ddn="speed-cancel"]:not([hidden])) [data-ddn="speed-live"]:not(:empty) { display: flex; align-items: center; gap: .625rem; border-left-color: var(--color-accent); color: var(--color-ink); }
+.sec-body:has([data-ddn="speed-cancel"]:not([hidden])) [data-ddn="speed-live"]::before { content: ""; flex: none; width: .5rem; height: .5rem; border-radius: 9999px; background: var(--color-accent); animation: pv-pulse .9s var(--ease-in-out) infinite alternate; }
+
+.speed-card { container-type: inline-size; display: grid; border: 1px solid var(--color-rule); border-radius: var(--radius-card); background: var(--color-paper); overflow: hidden; }
+.speed-card > .about { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; border: 0; border-radius: 0; }
+.speed-card > .about > div { grid-column: 1 / -1; grid-template-columns: 9rem minmax(0, 1fr); padding: .5rem 1.25rem; border-bottom: 0; font-size: .8125rem; }
+.speed-card > .about > div > dt { padding-top: .0625rem; }
+.speed-card > .about > div .val { color: var(--color-ink-2); }
+/* the two Discord numbers: first, side by side, big */
+.speed-card > .about > [data-ddn="speed-up"], .speed-card > .about > [data-ddn="speed-down"] { order: -2; grid-column: auto; grid-template-columns: minmax(0, 1fr); align-content: start; gap: .5rem; padding: 1.25rem 1.25rem 1.125rem; border-bottom: 1px solid var(--color-rule); }
+.speed-card > .about > [data-ddn="speed-up"] + [data-ddn="speed-down"] { border-left: 1px solid var(--color-rule); }
+.speed-card > .about:not(:has([data-ddn="speed-down"])) > [data-ddn="speed-up"], .speed-card > .about:not(:has([data-ddn="speed-up"])) > [data-ddn="speed-down"] { grid-column: 1 / -1; }
+.speed-card > .about > :is([data-ddn="speed-up"], [data-ddn="speed-down"]) dd { gap: .5rem; justify-items: stretch; }
+.speed-card > .about > :is([data-ddn="speed-up"], [data-ddn="speed-down"]) .val { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 .375rem; font-family: var(--font-display); color: var(--color-ink); }
+.speed-card .val .num { font: 600 clamp(1.875rem, 9cqi, 2.75rem)/1 var(--font-display); letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--color-ink); }
+.speed-card .val .unit { font: 500 .8125rem/1 var(--font-mono); letter-spacing: .02em; color: var(--color-muted); }
+.speed-card .share { font-size: .8125rem; line-height: 1.25rem; color: var(--color-ink-2); font-variant-numeric: tabular-nums; }
+.speed-card .share-bar { display: block; height: 4px; border-radius: 9999px; background: linear-gradient(to right, var(--color-accent) var(--p, 0%), var(--color-paper-3) var(--p, 0%)); }
+/* the line: one quieter row under the numbers, then the spec rows */
+.speed-card > .about > [data-ddn="speed-line"] { order: -1; padding-top: .875rem; }
+/* without the line (skipped / e2ee-plain have no Discord rows): the first spec row takes its breathing room */
+.speed-card > .about:not(:has([data-ddn="speed-line"])) > :is([data-ddn="speed-up"], [data-ddn="speed-down"]) + div:not([data-ddn="speed-down"]) { padding-top: .875rem; }
+.speed-card > .about > [data-ddn="speed-build"] { padding-bottom: 1rem; }
+.speed-card > .about > [data-ddn="speed-build"] .val { color: var(--color-muted); }
+/* hints: a callout inside the card, one marker per hint (amber for 429 / failed pieces) */
+.speed-card > .limits { margin: 0 1.25rem 1rem; padding: .75rem 1rem; gap: .5rem; border: 1px solid color-mix(in oklch, var(--color-accent) 22%, var(--color-rule)); border-radius: var(--radius-input); background: color-mix(in oklch, var(--color-accent) 5%, var(--color-paper)); font-size: .8125rem; line-height: 1.25rem; color: var(--color-ink-2); }
+.speed-card > .limits:empty { display: none; }
+.speed-card > .limits > li { position: relative; padding-left: 1.125rem; }
+.speed-card > .limits > li::before { content: ""; position: absolute; left: 0; top: .4375rem; width: .375rem; height: .375rem; border-radius: 9999px; background: var(--color-accent); }
+.speed-card > .limits > li:is([data-k="rate-limited"], [data-k="errors"], [data-k="metered"])::before, .speed-card > .limits > li:not([data-k])::before { background: var(--color-warning); }
+/* foot: Copy */
+.speed-card > .row-btns { padding: .625rem 1.25rem; border-top: 1px solid var(--color-rule); background: var(--color-paper-2); }
+/* earlier results: the whole line, steady digits */
+[data-ddn="speed-history"] li { flex-wrap: wrap; row-gap: .125rem; }
+[data-ddn="speed-history"] li .dname { white-space: normal; overflow-wrap: anywhere; font-size: .8125rem; font-weight: 400; color: var(--color-ink-2); }
+@container (max-width: 25rem) {
+  .speed-card > .about > div { grid-template-columns: minmax(0, 1fr); gap: .125rem; padding-left: 1rem; padding-right: 1rem; }
+  .speed-card > .about > :is([data-ddn="speed-up"], [data-ddn="speed-down"]) { padding: 1rem 1rem .875rem; }
+  .speed-card > .limits { margin: 0 1rem .875rem; }
+  .speed-card > .row-btns { padding: .625rem 1rem; }
+}
+@media (prefers-reduced-motion: reduce) { .sec-body:has([data-ddn="speed-cancel"]:not([hidden])) [data-ddn="speed-live"]::before { animation: none; } }

@@ -394,6 +394,10 @@ try {
       st.up = await p.textContent("[data-ddn=speed-up]");
       st.down = await p.textContent("[data-ddn=speed-down]");
       st.channels = await p.textContent("[data-ddn=speed-channels]");
+      if (shotDir) {
+        await p.locator("[data-ddn=speed-card]").scrollIntoViewIfNeeded();
+        await shot(p, "33a-speed-result");
+      }
       await p.click("[data-ddn=speed-copy]");
       st.copied = await p.evaluate(() => navigator.clipboard.readText()).catch(() => "");
       st.history = await p.locator("[data-ddn=speed-history-row]").count();

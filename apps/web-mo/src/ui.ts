@@ -2632,12 +2632,22 @@ function hintText(h: SpeedTestResult["hints"][number]): string {
 }
 function paintSpeedResult(r: SpeedTestResult) {
   const d = r.discord;
-  const row = (k: string, v: string, dd?: string) => h("div", { "data-ddn": `speed-${dd ?? k}` }, h("dt", { class: "label-mono" }, t(k)), h("dd", {}, h("span", { class: "val mono" }, v)));
-  const share = (x: number | null) => (x == null ? "" : ` · ${t("sp.ofLine", { p: Math.round(x * 100) })}`);
+  const row = (k: string, v: string | (Node | string)[], dd?: string, ...more: Node[]) => h("div", { "data-ddn": `speed-${dd ?? k}` }, h("dt", { class: "label-mono" }, t(k)), h("dd", {}, h("span", { class: "val mono" }, ...(typeof v === "string" ? [v] : v)), ...more));
+  // A Discord speed: the number and its unit apart (the number is the big one; the unit's place comes from the locale).
+  const mbps = (v: number) => {
+    const [pre = "", post = ""] = t("sp.mbps", { v: "\u0000" }).split("\u0000");
+    return [pre, h("span", { class: "num" }, spf(v)), h("span", { class: "unit" }, post)] as (Node | string)[];
+  };
+  // The share of the line under it: words + a bar.
+  const share = (x: number | null) => {
+    if (x == null) return [];
+    const p = Math.round(x * 100);
+    return [h("span", { class: "share" }, t("sp.ofLine", { p })), h("span", { class: "share-bar", style: `--p:${Math.min(100, Math.max(0, p))}%`, "aria-hidden": "true" })];
+  };
   $("speed-result").replaceChildren(
     ...(r.line ? [row("sp.line", t("sp.lineV", { d: spf(r.line.down), u: spf(r.line.up) }), "line")] : []),
-    ...(d.up != null ? [row("sp.discordUp", `${t("sp.mbps", { v: spf(d.up) })}${share(d.upShare)}`, "up")] : []),
-    ...(d.down != null ? [row("sp.discordDown", `${t("sp.mbps", { v: spf(d.down) })}${share(d.downShare)}`, "down")] : []),
+    ...(d.up != null ? [row("sp.discordUp", mbps(d.up), "up", ...share(d.upShare))] : []),
+    ...(d.down != null ? [row("sp.discordDown", mbps(d.down), "down", ...share(d.downShare))] : []),
     row("sp.channels", `${d.channels} · ${d.fragments} × ${fmtSize(d.fragmentBytes)}`, "channels"),
     row("sp.conc", concText(r), "conc"),
     row("sp.problems", `${d.rateLimited} / ${d.errors}`, "problems"),
