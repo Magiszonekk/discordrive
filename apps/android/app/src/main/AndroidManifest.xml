@@ -69,6 +69,25 @@
             </intent-filter>
         </activity>
         <activity android:name=".DdnBackupActivity" android:exported="false" android:label="@string/ddn_backup" />
+        <activity android:name=".DdnTrashActivity" android:exported="false" android:label="@string/ddn_trash" />
+        <activity android:name=".DdnSettingsActivity" android:exported="false" android:label="@string/ddn_settings" />
+        <!-- Open with → discordrive: photos and videos of other apps (the system may make it the default gallery). -->
+        <activity
+            android:name=".DdnOpenActivity"
+            android:exported="true"
+            android:label="@string/ddn_gallery"
+            android:theme="@style/Theme.Gallery.Viewer">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+            </intent-filter>
+        </activity>
+        <receiver android:name=".DdnInstallReceiver" android:exported="false" />
         <activity android:name=".DdnViewerActivity" android:exported="false" android:theme="@style/Theme.Gallery.Viewer" />
 
         <!-- The phone's own photos (old gallery screen): kept for the next steps (auto backup), not in the launcher. -->

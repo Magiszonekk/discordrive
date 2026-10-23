@@ -12,6 +12,7 @@ import io.github.magiszonekk.discordrive.core.FileReader
 import io.github.magiszonekk.discordrive.core.IndexReplica
 import io.github.magiszonekk.discordrive.core.InstanceApi
 import io.github.magiszonekk.discordrive.core.JsEngineException
+import io.github.magiszonekk.discordrive.core.TrashPolicy
 import io.github.magiszonekk.discordrive.core.Vault
 import io.github.magiszonekk.discordrive.syncjs.JsEngines
 import io.github.magiszonekk.discordrive.syncjs.JsIndexReplica
@@ -129,6 +130,39 @@ class DdnSession private constructor(private val app: Context, val acct: Account
     fun children(folderId: String): List<IndexReplica.Child> = ix { it.children(folderId) }
     fun media(limit: Int, after: Pair<Long, String>?): List<IndexReplica.Child> = ix { it.media(MEDIA_EXT, limit, after) }
     fun node(id: String): IndexReplica.Child? = ix { it.node(id) }
+
+    // ── the trash ──
+    fun trash(): List<IndexReplica.Child> = ix { it.trash() }
+
+    /** Operations on nodes (the result's outcome: "applied", "skipped", ...); the local copy is saved after. */
+    private fun op(f: () -> kotlinx.serialization.json.JsonObject): String = ix { _ ->
+        val r = f()
+        headSeq = replica.headSeq
+        saveCopy()
+        (r["outcome"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: "?"
+    }
+    fun moveToTrash(ids: List<String>): String = op { sync.trash(ids) }
+    fun restore(ids: List<String>): String = op { sync.restore(ids) }
+    fun purge(ids: List<String>): String = op { sync.purge(ids) }
+
+    /**
+     * The 30-day trash cleanup (rule Q4) from the background job: this phone is never the main device, so it
+     * purges only when no device did for 7 days, only fully synced (just pulled) and never on a metered link.
+     * Returns the decision (for the log and the tests).
+     */
+    fun autoCleanTrash(metered: Boolean): TrashPolicy.Decision = ix { _ ->
+        sync.pull()
+        val gc = sync.api.gcStatus()
+        val last = listOfNotNull(sync.lastPurgeAt, gc.lastRunAt).maxOrNull()
+        val d = TrashPolicy.decide(replica.expiredTrash(gc.now), gc.now, isPrimary = false, fullySynced = true, metered = metered, lastPurgeAt = last, logStartedAt = sync.logStartedAt ?: gc.firstEntryAt)
+        if (d is TrashPolicy.Decision.Clean) {
+            sync.purge(d.nodeIds)
+            runCatching { sync.api.gcRecordRun() }
+            headSeq = replica.headSeq
+            saveCopy()
+        }
+        d
+    }
 
     fun close() {
         runCatching { later { replica.close() }.get() }

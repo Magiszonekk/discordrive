@@ -58,6 +58,15 @@ interface IndexReplica : AutoCloseable {
     fun node(id: String): Child? = null
 
     /**
+     * The trash: nodes trashed themselves (not those inside a trashed folder), newest first, with the server
+     * time of the trash (the 30-day clock, [Child.trashedAt]).
+     */
+    fun trash(): List<Child> = emptyList()
+
+    /** Trashed nodes whose 30 days (server time `nowServerMs`) are over (sync-core expiredTrash). */
+    fun expiredTrash(nowServerMs: Long): List<String> = emptyList()
+
+    /**
      * A node. Files: size, version (manifestRef: where the manifest is and the file key, secret), plaintext
      * SHA-256 if known, when the version was written.
      */
@@ -70,6 +79,8 @@ interface IndexReplica : AutoCloseable {
         val sha256: String? = null,
         val createdAt: Long = 0,
         val parentId: String? = null,
+        /** Server time of the trash operation (only in [trash]). */
+        val trashedAt: Long? = null,
     ) {
         val isFolder: Boolean get() = kind == "folder"
     }
@@ -159,7 +170,7 @@ class AccountSync(
         while (true) {
             val batch = api.read(replica.headSeq, 1000)
             if (batch.isEmpty()) return n
-            replica.apply(batch.map(codec::decrypt))
+            observe(replica.apply(batch.map(codec::decrypt).also { seen(it) }), batch)
             n += batch.size
         }
     }
@@ -190,10 +201,55 @@ class AccountSync(
         while (replica.headSeq < seq) {
             val batch = api.read(replica.headSeq, 1000)
             if (batch.isEmpty()) break
-            val s = replica.apply(batch.map(codec::decrypt))
+            val dec = batch.map(codec::decrypt).also { seen(it) }
+            val s = replica.apply(dec)
+            observe(s, batch)
             mine = s.results.firstOrNull { it.strOrNull("opId") == env.str("opId") } ?: mine
         }
         return mine ?: throw IllegalStateException("operation not in the log")
+    }
+
+    /**
+     * What the log tells about the trash cleanup (Q4): server time of the newest applied purge by any device and
+     * of the first entry this phone saw (null = not seen in this session; the instance's /v1/gc says it too).
+     */
+    @Volatile var lastPurgeAt: Long? = null
+        private set
+    @Volatile var logStartedAt: Long? = null
+        private set
+    private val purgeAt = HashMap<Long, Long>()
+
+    private fun seen(entries: List<JsonObject>) {
+        for (e in entries) {
+            val t = e["serverTime"]?.jsonPrimitive?.long ?: continue
+            if (logStartedAt == null && e["seq"]?.jsonPrimitive?.long == 1L) logStartedAt = t
+            val op = e["op"] as? JsonObject ?: continue
+            val ops = if (op.strOrNull("type") == "group") (op["ops"] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList() else listOf(op)
+            if (ops.any { it.strOrNull("type") == "purge" }) purgeAt[e.getValue("seq").jsonPrimitive.long] = t
+        }
+    }
+
+    private fun observe(s: IndexReplica.ApplySummary, @Suppress("UNUSED_PARAMETER") raw: List<JsonObject>) {
+        for (r in s.results) {
+            val seq = r["seq"]?.jsonPrimitive?.long ?: continue
+            val t = purgeAt.remove(seq) ?: continue
+            if (r.strOrNull("outcome") == "applied") lastPurgeAt = maxOf(lastPurgeAt ?: 0, t)
+        }
+        purgeAt.clear()
+    }
+
+    /** Move nodes to the trash (one operation; a group for several). */
+    fun trash(ids: List<String>): JsonObject = commit(group(ids.map { id -> buildJsonObject { put("type", "trash"); put("nodeId", id) } }))
+
+    /** Back from the trash to where they were (or "Odzyskane" when that folder is gone). */
+    fun restore(ids: List<String>): JsonObject = commit(group(ids.map { id -> buildJsonObject { put("type", "restore"); put("nodeId", id) } }))
+
+    /** Delete for good (only nodes in the trash; unseen changes of other devices are kept, rule Q3). */
+    fun purge(ids: List<String>): JsonObject = commit(group(ids.map { id -> buildJsonObject { put("type", "purge"); put("nodeId", id) } }))
+
+    private fun group(ops: List<JsonObject>): JsonObject {
+        require(ops.isNotEmpty()) { "no nodes" }
+        return if (ops.size == 1) ops[0] else buildJsonObject { put("type", "group"); put("ops", JsonArray(ops)) }
     }
 
     /** The account's webhooks that take new pieces (not retired, not being drained). */

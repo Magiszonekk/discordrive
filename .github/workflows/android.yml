@@ -134,6 +134,53 @@ jobs:
             apps/android/app/build/outputs/apk/release/app-release*.apk
           retention-days: 14
 
+  publish:
+    # The app's update check reads this pre-release: the signed APK of the newest main and android-build.json
+    # (versionCode = the run number, so every build of main is higher than the one before).
+    name: publish android-main-build
+    needs: [build, sync-core-on-emulator]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: The APKs of this run
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: apk
+
+      - name: Replace the android-main-build pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODE: ${{ github.run_number }}
+        run: |
+          src=$(find apk -name 'app-release.apk' | head -n1)
+          # Only a build signed with the release key is published (an unsigned one cannot update the app).
+          [ -n "$src" ] || { echo "::notice::no signed release APK in this run: nothing published"; exit 0; }
+          mkdir -p out
+          name="discordrive-android-$CODE.apk"
+          cp "$src" "out/$name"
+          sha=$(sha256sum "out/$name" | awk '{print $1}')
+          printf '{"versionCode":%s,"versionName":"0.1.0-%s","commit":"%s","apk":"%s","sha256":"%s"}\n' "$CODE" "$CODE" "$GITHUB_SHA" "$name" "$sha" > out/android-build.json
+          (cd out && sha256sum "$name" > SHA256SUMS)
+          {
+            echo "Automatic build of \`main\` for Android (signed). The app checks this release and offers the new version; the system installer asks before anything is installed."
+            echo
+            echo "commit: $GITHUB_SHA"
+            echo "versionCode: $CODE"
+            echo
+            echo "SHA-256:"
+            echo '```'
+            cat out/SHA256SUMS
+            echo '```'
+          } > notes.md
+          gh release delete android-main-build --yes --cleanup-tag 2>/dev/null || true
+          gh release create android-main-build out/* --prerelease --target "$GITHUB_SHA" --title "discordrive Android — build of main (${GITHUB_SHA::7})" --notes-file notes.md
+
   sync-core-on-emulator:
     name: sync-core compatibility (emulator)
     runs-on: ubuntu-latest
@@ -178,7 +225,11 @@ jobs:
 
       - name: Build the test APKs first (outside the emulator's time budget)
         working-directory: apps/android
-        run: ./gradlew --no-daemon :syncjs:assembleDebugAndroidTest :app:assembleDebug :app:assembleDebugAndroidTest
+        # B: the same app with a higher versionCode, served by the harness's fake releases API (the update test).
+        run: |
+          ANDROID_VERSION_CODE=101 ./gradlew --no-daemon :app:assembleDebug
+          mkdir -p build/update-b && cp app/build/outputs/apk/debug/app-debug.apk build/update-b/app-b.apk
+          ANDROID_VERSION_CODE=100 ./gradlew --no-daemon :syncjs:assembleDebugAndroidTest :app:assembleDebug :app:assembleDebugAndroidTest
 
       - name: Compatibility test and benchmark on the emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -202,7 +253,8 @@ jobs:
             adb install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             for p in READ_MEDIA_IMAGES READ_MEDIA_VIDEO ACCESS_MEDIA_LOCATION POST_NOTIFICATIONS; do adb shell pm grant io.github.magiszonekk.discordrive android.permission.$p || true; done
             adb logcat -c
-            cd ../.. && npx tsx apps/android/interop/harness.mts --app || { adb logcat -d -s ddn-ui:* ddn-backup:* ddn:* AndroidRuntime:E WM-WorkerWrapper:*; exit 1; }
+            adb shell appops set io.github.magiszonekk.discordrive REQUEST_INSTALL_PACKAGES allow || true
+            cd ../.. && npx tsx apps/android/interop/harness.mts --app --updates-apk apps/android/build/update-b/app-b.apk --updates-code 101 || { adb logcat -d -s ddn-ui:* ddn-backup:* ddn:* AndroidRuntime:E WM-WorkerWrapper:*; exit 1; }
             mkdir -p build/shots && adb pull /sdcard/Android/data/io.github.magiszonekk.discordrive/files/shots build/shots || true
 
       - name: Test report

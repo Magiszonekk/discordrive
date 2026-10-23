@@ -144,6 +144,18 @@ class InstanceApi(
         }).second.jsonObject.str("deviceId")
     }
 
+    /** The cleanup bookkeeping (Q4): server time now, the last cleanup run of the account, its first entry. */
+    data class GcStatus(val now: Long, val lastRunAt: Long?, val firstEntryAt: Long?)
+
+    fun gcStatus(): GcStatus = call("GET", "/v1/gc", null).second.jsonObject.let { o ->
+        GcStatus(o.getValue("now").jsonPrimitive.long, o.longOrNull("lastRunAt"), o.longOrNull("firstEntryAt"))
+    }
+
+    /** Note a cleanup run (the trash step; no fragments were deleted by the phone). */
+    fun gcRecordRun() {
+        call("POST", "/v1/gc", buildJsonObject { put("uploads", JsonArray(emptyList())); put("run", true) })
+    }
+
     fun devices(): List<JsonObject> = call("GET", "/v1/devices", null).second.jsonObject.getValue("devices").jsonArray.map { it.jsonObject }
 
     fun setDeviceName(deviceId: String, nameSealed: String) {
