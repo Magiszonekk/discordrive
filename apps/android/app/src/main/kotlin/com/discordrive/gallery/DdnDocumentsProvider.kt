@@ -41,6 +41,7 @@ class DdnDocumentsProvider : DocumentsProvider() {
     override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor {
         val c = MatrixCursor(projection ?: DOC_COLS)
         if (documentId == "root") { c.dir("root", context!!.getString(R.string.ddn_saf_title)); return c }
+        if (documentId == RECENT) { c.dir(RECENT, context!!.getString(R.string.ddn_saf_recent)); return c }
         val s = session() ?: throw FileNotFoundException("no account")
         val n = s.node(documentId)?.takeIf { it.trashedAt == null } ?: throw FileNotFoundException(documentId)
         c.row(n)
@@ -51,6 +52,9 @@ class DdnDocumentsProvider : DocumentsProvider() {
         val c = MatrixCursor(projection ?: DOC_COLS)
         val s = session() ?: return c
         val locked = DdnPrivate.all(context!!)
+        // The newest photos and videos first (a folder of their own at the top of the account).
+        if (parentDocumentId == RECENT) { for (n in s.media(200, null, locked)) c.row(n); return c }
+        if (parentDocumentId == "root") c.dir(RECENT, context!!.getString(R.string.ddn_saf_recent))
         for (n in s.children(parentDocumentId)) if (n.id !in locked) c.row(n)
         return c
     }
@@ -65,6 +69,7 @@ class DdnDocumentsProvider : DocumentsProvider() {
 
     override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean {
         if (parentDocumentId == documentId) return false
+        if (parentDocumentId == RECENT) return false
         val s = session() ?: return false
         var p = s.node(documentId)?.parentId
         var guard = 0
@@ -129,6 +134,8 @@ class DdnDocumentsProvider : DocumentsProvider() {
 
     companion object {
         const val ROOT = "discordrive"
+        /** The virtual folder of the newest photos and videos. */
+        const val RECENT = "recent"
         private const val CACHE_MAX = 1024L * 1024 * 1024
         /** A file name for a version (its manifest reference holds the file key: never used as a name itself). */
         private fun key(ref: String) = java.security.MessageDigest.getInstance("SHA-256").digest(ref.toByteArray()).joinToString("") { "%02x".format(it) }.take(40)

@@ -157,6 +157,15 @@ class BrowseUiTest {
             buildList { while (c.moveToNext()) add(c.getString(c.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME))) }
         }
         r["pickerListsFolder"] = kids.containsAll(listOf(photo.name, "film.webm"))
+        val top = cr.query(android.provider.DocumentsContract.buildChildDocumentsUri(auth, "root"), null, null, null, null)!!.use { c ->
+            buildList { while (c.moveToNext()) add(c.getString(c.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID))) }
+        }
+        val recent = cr.query(android.provider.DocumentsContract.buildChildDocumentsUri(auth, DdnDocumentsProvider.RECENT), null, null, null, null)!!.use { it.count }
+        r["pickerRecentFolder"] = top.firstOrNull() == DdnDocumentsProvider.RECENT && recent >= 2
+        // What ACTION_OPEN_DOCUMENT hands back is the document URI: its type and size as the picker reports them.
+        val docUri = android.provider.DocumentsContract.buildDocumentUri(auth, photo.id)
+        r["openDocumentUri"] = cr.getType(docUri) == "image/jpeg" &&
+            cr.query(docUri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME, android.provider.OpenableColumns.SIZE), null, null, null)!!.use { c -> c.moveToFirst() && c.getString(0) == photo.name && c.getLong(1) == photo.size }
         val big = s.children("fold-0000000001").firstOrNull { it.name == "film.webm" }
         if (big != null) {
             val bytes = cr.openInputStream(android.provider.DocumentsContract.buildDocumentUri(auth, big.id))!!.use { it.readBytes() }

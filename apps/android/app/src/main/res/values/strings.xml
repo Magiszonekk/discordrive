@@ -455,5 +455,6 @@
     <string name="ddn_edit_saved">Zapisano „%1$s” obok oryginału.</string>
     <string name="ddn_edit_cannot">Nie udało się wczytać zdjęcia.</string>
     <string name="ddn_saf_title">discordrive</string>
+    <string name="ddn_saf_recent">Ostatnie zdjęcia i filmy</string>
     <string name="ddn_open_send">Wyślij do discordrive</string>
 </resources>
