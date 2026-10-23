@@ -19,10 +19,25 @@ import kotlin.math.roundToInt
  * uploads).
  */
 object DdnPictures {
-    fun make(cr: ContentResolver, uri: Uri): List<FileWrite.Picture> = listOfNotNull(
-        runCatching { one(cr, uri, 't') }.getOrNull(),
-        runCatching { one(cr, uri, 'p') }.getOrNull(),
-    )
+    fun make(cr: ContentResolver, uri: Uri): List<FileWrite.Picture> {
+        val viaSystem = listOfNotNull(
+            runCatching { one(cr, uri, 't') }.onFailure { android.util.Log.w("ddn-backup", "loadThumbnail: ${it.message}") }.getOrNull(),
+            runCatching { one(cr, uri, 'p') }.getOrNull(),
+        )
+        if (viaSystem.any { it.kind == 't' }) return viaSystem
+        // The system thumbnailer may not have the item yet (just written) or refuse it: decode the file itself.
+        return runCatching { fromStream(cr, uri) }.onFailure { android.util.Log.w("ddn-backup", "decode: ${it.message}") }.getOrDefault(viaSystem)
+    }
+
+    private fun fromStream(cr: ContentResolver, uri: Uri): List<FileWrite.Picture> {
+        val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        cr.openInputStream(uri)!!.use { android.graphics.BitmapFactory.decodeStream(it, null, o) }
+        if (o.outWidth <= 0) return emptyList()
+        var sample = 1
+        while (max(o.outWidth, o.outHeight) / (sample * 2) >= 1280) sample *= 2
+        val b = cr.openInputStream(uri)!!.use { android.graphics.BitmapFactory.decodeStream(it, null, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }) } ?: return emptyList()
+        return try { listOfNotNull(runCatching { encode(b, 't') }.getOrNull(), runCatching { encode(b, 'p') }.getOrNull()) } finally { b.recycle() }
+    }
 
     /** From a file (a shared photo or video copied into the queue): decoded with sampling, or a video frame. */
     fun fromFile(f: java.io.File): List<FileWrite.Picture> {
