@@ -96,7 +96,7 @@ describe("install and restart", () => {
     expect(() => nsisUpdateCommand('C:\\a" /D=C:\\x', "C:\\b")).toThrow(/unexpected/);
     expect(() => nsisUpdateCommand("C:\\a.exe", "C:\\b\n/S")).toThrow(/unexpected/);
   });
-  it("only Windows and a writable AppImage update in place; a .deb never", () => {
+  it("Windows, a writable AppImage and a .deb with pkexec update in place", () => {
     const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-upd-"));
     expect(canInstallInPlace("nsis")).toBe(true);
     expect(canInstallInPlace("deb")).toBe(false);
@@ -114,10 +114,13 @@ describe("install and restart", () => {
     expect(debInstallCommand("/d/x.deb", "/usr/bin/pkexec")).toEqual({ file: "/usr/bin/pkexec", args: ["dpkg", "-i", "/d/x.deb"] });
     expect(debInstallCommand("/d/x.deb", null)).toBeNull();
     expect(debTerminalCommand("/d/a b.deb")).toBe('sudo dpkg -i "/d/a b.deb"');
-    writeFileSync(join(dir, "pkexec"), "#!/bin/sh\n");
-    chmodSync(join(dir, "pkexec"), 0o755);
-    expect(findPkexec(`/nonexistent:${dir}`)).toBe(join(dir, "pkexec"));
-    expect(findPkexec("/nonexistent")).toBeNull();
+    // pkexec on PATH (Linux only: PATH separators and the executable bit are POSIX here).
+    if (process.platform !== "win32") {
+      writeFileSync(join(dir, "pkexec"), "#!/bin/sh\n");
+      chmodSync(join(dir, "pkexec"), 0o755);
+      expect(findPkexec(`/nonexistent:${dir}`)).toBe(join(dir, "pkexec"));
+      expect(findPkexec("/nonexistent")).toBeNull();
+    }
   });
   it("AppImage: the new file takes the old one's place, executable", async () => {
     const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-upd-"));
