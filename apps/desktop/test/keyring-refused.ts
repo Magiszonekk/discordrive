@@ -60,6 +60,18 @@ try {
   }
   const settings = JSON.parse(readFileSync(join(work, "data", "desktop-settings.json"), "utf8")) as { keyring?: string };
   result.keyringSetting = settings.keyring;
+  // The app that serves the window now is a new process (the first one exited after the answer), started
+  // with --password-store=basic: Chromium off the keyring from its start. (Without the restart a session
+  // with no GNOME prompter, as a CI runner, would still pass the checks below.)
+  result.firstExited = child.exitCode !== null || child.signalCode !== null;
+  const mains = (() => {
+    try {
+      return execFileSync("pgrep", ["-af", `remote-debugging-port=${port}`], { encoding: "utf8" }).split("\n").filter((l) => l && !/--type=/.test(l) && !/pgrep/.test(l));
+    } catch {
+      return [];
+    }
+  })();
+  result.restartedBasic = mains.some((l) => l.includes("--password-store=basic") && !l.startsWith(`${child.pid} `));
   // The keyring's "create" window used to come 10-20 s after the answer, and the network then waited for it:
   // connect after it would have come.
   const prompter = () => {
@@ -70,7 +82,7 @@ try {
     }
   };
   let prompterSeen = 0;
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 40; i++) {
     prompterSeen = Math.max(prompterSeen, prompter());
     await new Promise((r) => setTimeout(r, 1000));
   }
@@ -94,8 +106,7 @@ try {
   // Did anything create a keyring? (the "create" window was never answered here, so none should exist)
   result.keyrings = existsSync(join(home, ".local", "share", "keyrings")) ? execFileSync("ls", [join(home, ".local", "share", "keyrings")], { encoding: "utf8" }).trim() : "";
   result.prompterAtEnd = prompter();
-  ok = result.keyringSetting === "file" && reached && result.later === "ok" && prompterSeen === 0;
-  child.kill();
+  ok = result.keyringSetting === "file" && result.firstExited === true && result.restartedBasic === true && reached && result.later === "ok" && prompterSeen === 0 && result.prompterAtEnd === 0;
   daemon.kill();
 } catch (e) {
   result.error = String(e);
