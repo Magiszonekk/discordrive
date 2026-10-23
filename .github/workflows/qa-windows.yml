@@ -1,0 +1,84 @@
+name: QA Windows (installed app, screenshots)
+
+# Started by hand (gh workflow run qa-windows.yml -f run_id=<id>): installs the Windows installer of a CI run
+# silently, starts the INSTALLED app and walks the smoke scenarios S1–S8 of the QA plan with a screenshot after
+# every step (artifact qa-windows-shots: the PNGs, report.md, report.json). Discord is a local fake. It never
+# fails because a step is not ok: the report says so; it fails only when it cannot run at all.
+#   run_id: a run with the artifact "desktop-Windows" (Desktop app builds, a pull request or main);
+#           empty = the current "main-build" pre-release.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run with the desktop-Windows artifact (empty: the main-build release)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  qa:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout (the test script and the fake Discord)
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: npm ci --no-audit --no-fund
+
+      - name: ffmpeg (a test video for S5)
+        run: choco install ffmpeg -y --no-progress > /dev/null || echo "no ffmpeg (S5 is reported as not run)"
+
+      - name: The installer to test
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/inst"
+          if [ -n "$RUN_ID" ]; then
+            gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" -n desktop-Windows -D "$RUNNER_TEMP/inst"
+          else
+            gh release download main-build -R "$GITHUB_REPOSITORY" -p "*.exe" -p build-info.json -D "$RUNNER_TEMP/inst"
+          fi
+          ls -la "$RUNNER_TEMP/inst"
+          echo "QA_BUILD=$(node -p "require(process.argv[1]).build" "$RUNNER_TEMP/inst/build-info.json")" >> "$GITHUB_ENV"
+
+      - name: Install it silently (as a user, per-user)
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "$env:RUNNER_TEMP\inst\*.exe" | Select-Object -First 1
+          $p = Start-Process -FilePath $exe.FullName -ArgumentList "/S" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "installer exit $($p.ExitCode)" }
+          $u = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'discordrive*' } | Select-Object -First 1).UninstallString
+          $dir = [regex]::Match($u, '^"(.+)\\[^\\]+"').Groups[1].Value
+          "QA_EXE=$dir\discordrive.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "installed in $dir"
+
+      - name: Scenarios S1–S8 with screenshots
+        run: npx tsx apps/desktop/test/qa-windows.ts "$QA_EXE" "$RUNNER_TEMP/qa-shots" || echo "the run ended with an error (see report.json)"
+
+      - name: Screenshots and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-windows-shots
+          path: ${{ runner.temp }}/qa-shots/
+          if-no-files-found: warn
+
+      - name: Summary
+        if: always()
+        run: cat "$RUNNER_TEMP/qa-shots/report.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
