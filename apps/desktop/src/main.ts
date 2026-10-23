@@ -384,7 +384,8 @@ async function installUpdate(ask = true): Promise<boolean> {
     if (code !== 0) {
       throw new Error(code === 126 || code === 127 ? "the installation was cancelled (no password given)" : `dpkg failed (${code}): ${debLastError || "see the terminal"}; or in a terminal: ${debTerminalCommand(file)}`);
     }
-    app.relaunch({ args: ["--updated"] });
+    // The same switches as this start (e.g. --no-sandbox where the system needs it), plus --updated.
+    app.relaunch({ args: [...process.argv.slice(1).filter((x) => x !== "--updated" && !x.startsWith("--hidden")), "--updated"] });
     quitting = true;
     app.quit();
     return true;

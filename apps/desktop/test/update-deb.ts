@@ -90,10 +90,14 @@ rmSync(join(data, "last-update.json"), { force: true });
 mkdirSync(join(homedir(), "Downloads"), { recursive: true });
 
 step("start A: check, download, install B (dpkg -i through sudo -n)");
-const app = spawn("xvfb-run", ["-a", exe, "--no-sandbox"], {
+// One X server for A and for B that A starts (xvfb-run would end the display with A).
+const xvfb = spawn("Xvfb", [":97", "-screen", "0", "1280x900x24"], { detached: true, stdio: "ignore" });
+xvfb.unref();
+await sleep(1500);
+const app = spawn(exe, ["--no-sandbox"], {
   detached: true,
   stdio: ["ignore", "inherit", "inherit"],
-  env: { ...process.env, DDN_DESKTOP_UPDATES_API: base, DDN_DESKTOP_UPDATE_SELFTEST: report, DDN_DESKTOP_HIDDEN: "1", DDN_DESKTOP_DEB_ELEVATE: "sudo -n" },
+  env: { ...process.env, DISPLAY: ":97", DDN_DESKTOP_UPDATES_API: base, DDN_DESKTOP_UPDATE_SELFTEST: report, DDN_DESKTOP_HIDDEN: "1", DDN_DESKTOP_DEB_ELEVATE: "sudo -n" },
 });
 app.unref();
 const readReport = () => (existsSync(report) ? (JSON.parse(readFileSync(report, "utf8")) as { stage: string; error?: string }) : null);
@@ -109,6 +113,9 @@ try {
   execFileSync("pkill", ["-f", "/opt/discordrive/discordrive"], { stdio: "ignore" });
 } catch {}
 srv.close();
+try {
+  process.kill(-xvfb.pid!);
+} catch {}
 r.dataKept = existsSync(join(data, "keep-me.txt"));
 const checks = {
   installedA: r.installedA === true && r.versionA === A.version,
