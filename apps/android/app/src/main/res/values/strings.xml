@@ -435,5 +435,15 @@
         <item quantity="many">Usunięto z telefonu %1$d plików (%2$s). Są w koszu telefonu przez 30 dni.</item>
         <item quantity="other">Usunięto z telefonu %1$d pliku (%2$s). Jest w koszu telefonu przez 30 dni.</item>
     </plurals>
+    <string name="ddn_albums">Albumy</string>
+    <string name="ddn_albums_empty">brak folderów ze zdjęciami</string>
+    <string name="ddn_album_private">prywatny</string>
+    <plurals name="ddn_album_count">
+        <item quantity="one">%d element</item>
+        <item quantity="few">%d elementy</item>
+        <item quantity="many">%d elementów</item>
+        <item quantity="other">%d elementu</item>
+    </plurals>
+    <string name="ddn_album_private_ask">Ustawić „%1$s” jako prywatny na tym telefonie? Jego zdjęcia znikną z Galerii, kafelek albumu nie pokaże okładki, a otwarcie poprosi o kod PIN (albo odcisk palca). Na koncie i innych urządzeniach nic się nie zmienia. Przytrzymaj album, żeby to cofnąć.</string>
     <string name="ddn_open_send">Wyślij do discordrive</string>
 </resources>

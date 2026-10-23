@@ -121,6 +121,35 @@ class BrowseUiTest {
     }
 
     /**
+     * Albums: the folder with the photo and the video is an album (cover = the newest, count 2). Made private
+     * (a PIN set here): its media leave the Gallery, the tile shows the lock; the PIN check opens it. Then public
+     * again (nothing of this reaches the account).
+     */
+    private fun albums(r: LinkedHashMap<String, Boolean>) {
+        val s = DdnSession.get(ctx)!!
+        val al = s.albums()
+        val a = al.firstOrNull { it.id == "fold-0000000001" }
+        r["albumListed"] = a != null && a.count == 2 && a.name == "Zdjęcia 1"
+        PrivateAlbums.setPin(ctx, "4321")
+        DdnPrivate.set(ctx, "fold-0000000001", true)
+        try {
+            r["privateHiddenInGallery"] = s.media(100, null, DdnPrivate.all(ctx)).none { it.parentId == "fold-0000000001" } && s.media(100, null).any { it.parentId == "fold-0000000001" }
+            ActivityScenario.launch<DdnActivity>(Intent(ctx, DdnActivity::class.java)).use { sc ->
+                sc.onActivity { x -> x.showAlbumsForTest() }
+                r["albumsTab"] = waitUntil { items(sc) >= 1 }
+                shot("11-albums")
+                sc.onActivity { x -> x.openAlbumForTest("fold-0000000001", "Zdjęcia 1") }
+                r["albumOpens"] = waitUntil { items(sc) == 2 }
+            }
+            r["pinChecks"] = PrivateAlbums.verifyPin(ctx, "4321") && !PrivateAlbums.verifyPin(ctx, "0000")
+        } finally {
+            DdnPrivate.set(ctx, "fold-0000000001", false)
+            SecureStore(ctx).remove(SecureStore.PRIVATE_PIN)
+        }
+        r["publicAgain"] = s.media(100, null, DdnPrivate.all(ctx)).any { it.parentId == "fold-0000000001" }
+    }
+
+    /**
      * PR 5: the trash (a file to the trash from the list's long press path, the trash screen lists it, restore,
      * delete for good; the TS device sees the same state), Settings (version, a newer build found in the fake
      * releases API, downloaded with its SHA-256 checked, handed to the system installer), Open with (VIEW) of
@@ -261,6 +290,7 @@ class BrowseUiTest {
             r["viewerPicture"] = waitUntil { var ok = false; v.onActivity { a -> ok = a.hasPictureForTest() }; ok }
             shot("4-viewer")
         }
+        albums(r)
         // Upload from the phone (PR 4): a file shared into the queue and a photo of the camera folder copied
         // automatically, both through the background job (WorkManager, as in the app); the TS device downloads
         // them and checks the bytes and the thumbnail made on the phone.

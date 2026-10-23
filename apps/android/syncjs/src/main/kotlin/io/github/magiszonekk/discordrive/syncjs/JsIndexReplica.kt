@@ -82,6 +82,14 @@ class JsIndexReplica(private val engine: JsEngine) : IndexReplica {
 
     override fun trash(): List<IndexReplica.Child> = rows(call("__ddnIx.trash()"))
 
+    override fun albums(extensions: List<String>): List<IndexReplica.Album> {
+        val ext = json.encodeToString(JsonElement.serializer(), JsonArray(extensions.map { JsonPrimitive(it) }))
+        return json.parseToJsonElement(call("__ddnIx.albums($ext)")).jsonArray.map {
+            val o = it.jsonObject
+            IndexReplica.Album(o.getValue("id").jsonPrimitive.content, o.getValue("name").jsonPrimitive.content, o.getValue("count").jsonPrimitive.int, rows("[" + o.getValue("cover").toString() + "]").first())
+        }
+    }
+
     override fun expiredTrash(nowServerMs: Long): List<String> =
         json.parseToJsonElement(call("__ddnIx.expired($nowServerMs)")).jsonArray.map { it.jsonPrimitive.content }
 
@@ -172,6 +180,17 @@ globalThis.__ddnIx = (function () {
       }
       out.sort(function (a, b) { return a.kind === b.kind ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : a.kind === "folder" ? -1 : 1; });
       return JSON.stringify(out);
+    },
+    // Albums: the media list (built and kept by media()) grouped by folder; newest first.
+    albums: function (exts) {
+      this.media(exts, 0, null);
+      var by = {}, order = [];
+      for (var n of mediaCache.list) {
+        var a = by[n.parentId];
+        if (!a) { var f = st.getNode(n.parentId); if (!f) continue; a = by[n.parentId] = { id: f.id, name: f.name, count: 0, cover: row(n) }; order.push(a); }
+        a.count++;
+      }
+      return JSON.stringify(order);
     },
     // The trash: nodes trashed themselves (inside a trashed folder they go with it), newest first.
     trash: function () {

@@ -147,6 +147,19 @@ function core(q: Req): unknown {
         .sort((a, b) => b.trashed!.at - a.trashed!.at || (a.id < b.id ? -1 : 1))
         .map((n) => ({ ...row(n), tat: n.trashed!.at }));
     case "expired": return expiredTrash(store, q.a as number);
+    case "albums": {
+      const ex = q.a as string[];
+      const files = [...store.allNodes()].filter((n) => n.kind === "file" && n.content && !inTrash(store, n.id) && ex.some((e) => n.name.toLowerCase().endsWith(e))).sort((a, b) => b.content!.createdAt - a.content!.createdAt || (a.id < b.id ? -1 : 1));
+      const by = new Map<string, { id: string; name: string; count: number; cover: ReturnType<typeof row> }>();
+      for (const n of files) {
+        const f = store.getNode(n.parentId!);
+        if (!f) continue;
+        const a = by.get(f.id) ?? { id: f.id, name: f.name, count: 0, cover: row(n) };
+        a.count++;
+        by.set(f.id, a);
+      }
+      return [...by.values()];
+    }
     default: throw new Error(`unknown ${q.m}`);
   }
 }

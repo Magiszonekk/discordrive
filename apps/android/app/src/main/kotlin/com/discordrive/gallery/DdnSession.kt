@@ -128,7 +128,23 @@ class DdnSession private constructor(private val app: Context, val acct: Account
     fun folderPath(path: List<String>): String = ix { _ -> path.fold("root") { parent, name -> sync.folder(name, parent) } }
 
     fun children(folderId: String): List<IndexReplica.Child> = ix { it.children(folderId) }
-    fun media(limit: Int, after: Pair<Long, String>?): List<IndexReplica.Child> = ix { it.media(MEDIA_EXT, limit, after) }
+    /** The Gallery: media outside the trash, without those inside private folders of this phone (`locked`). */
+    fun media(limit: Int, after: Pair<Long, String>?, locked: Set<String> = emptySet()): List<IndexReplica.Child> = ix { r ->
+        val all = r.media(MEDIA_EXT, if (locked.isEmpty()) limit else limit * 2, after)
+        if (locked.isEmpty()) all else {
+            val parents = HashMap<String, String?>()
+            val up = { id: String -> parents.getOrPut(id) { r.node(id)?.parentId } }
+            all.filter { !DdnPrivate.hidden(locked, it.parentId, up) }.take(limit)
+        }
+    }
+
+    /** Albums (folders with photos or videos), newest first. */
+    fun albums(): List<IndexReplica.Album> = ix { it.albums(MEDIA_EXT) }
+
+    /** The media files right inside a folder, newest first. */
+    fun albumMedia(folderId: String): List<IndexReplica.Child> = ix { r ->
+        r.children(folderId).filter { !it.isFolder && (isImage(it.name) || isVideo(it.name)) }.sortedByDescending { it.createdAt }
+    }
     fun node(id: String): IndexReplica.Child? = ix { it.node(id) }
 
     // ── the trash ──

@@ -58,6 +58,10 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
         override fun media(extensions: List<String>, limit: Int, after: Pair<Long, String>?): List<IndexReplica.Child> =
             rows(rpc("media", JsonArray(extensions.map { JsonPrimitive(it) })))
         override fun trash(): List<IndexReplica.Child> = rows(rpc("trash"))
+        override fun albums(extensions: List<String>): List<IndexReplica.Album> = rpc("albums", JsonArray(extensions.map { JsonPrimitive(it) })).jsonArray.map {
+            val o = it.jsonObject
+            IndexReplica.Album(o.str("id"), o.str("name"), o.getValue("count").jsonPrimitive.int, rows(JsonArray(listOf(o.getValue("cover")))).first())
+        }
         override fun expiredTrash(nowServerMs: Long): List<String> = rpc("expired", JsonPrimitive(nowServerMs)).jsonArray.map { it.jsonPrimitive.content }
         private fun rows(e: JsonElement) = e.jsonArray.map {
             val o = it.jsonObject
@@ -120,6 +124,8 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
         }
         val media = sync.replica.media(listOf(".jpg", ".webm"), 100)
         results["galleryListsMedia"] = media.map { it.name }.toSet() == setOf("Wakacje \u017B.jpg", "film.webm")
+        val albums = sync.replica.albums(listOf(".jpg", ".webm"))
+        results["albumsByFolder"] = albums.size == 1 && albums[0].id == f.str("folder") && albums[0].count == 2 && albums[0].cover.name in setOf("Wakacje \u017B.jpg", "film.webm")
 
         // 3. The phone works: its name, a folder, a channel added to the vault (compare-and-swap).
         sync.setOwnName(deviceName)
