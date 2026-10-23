@@ -31,6 +31,17 @@ class DdnSettingsActivity : AppCompatActivity() {
     private lateinit var updProgress: ProgressBar
     private var found: AppUpdates.Build? = null
     @Volatile private var downloading = false
+    /** The user was sent to allow "install unknown apps": continue the install when back with it allowed. */
+    private var installAfterPermission = false
+
+    override fun onResume() {
+        super.onResume()
+        val b = found
+        if (installAfterPermission && b != null && DdnApp.canInstall(this)) {
+            installAfterPermission = false
+            downloadAndInstall(b)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,10 +97,12 @@ class DdnSettingsActivity : AppCompatActivity() {
         when {
             downloading -> return
             b == null -> checkUpdate(manual = true)
-            !DdnApp.canInstall(this) -> AlertDialog.Builder(this).setMessage(R.string.update_need_permission)
-                .setPositiveButton(android.R.string.ok) { _, _ -> startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))) }
+            !DdnApp.canInstall(this) -> AlertDialog.Builder(this).setMessage(getString(R.string.update_need_permission) + "\n\n" + getString(R.string.ddn_upd_play_protect))
+                .setPositiveButton(android.R.string.ok) { _, _ -> installAfterPermission = true; startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))) }
                 .setNegativeButton(android.R.string.cancel, null).show()
-            else -> downloadAndInstall(b)
+            else -> AlertDialog.Builder(this).setTitle(getString(R.string.ddn_upd_available, b.versionName)).setMessage(R.string.ddn_upd_play_protect)
+                .setPositiveButton(R.string.ddn_upd_install) { _, _ -> downloadAndInstall(b) }
+                .setNegativeButton(android.R.string.cancel, null).show()
         }
     }
 

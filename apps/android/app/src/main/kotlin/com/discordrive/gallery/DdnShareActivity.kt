@@ -61,14 +61,39 @@ class DdnShareActivity : AppCompatActivity() {
 object DdnUploads {
     const val SHARED_FOLDER = "Z telefonu"
 
+    /**
+     * A shared file's name: the provider's DISPLAY_NAME (MediaStore and document providers answer it), else
+     * MediaStore's columns for a content://media URI, else the last path segment with an extension from the
+     * type (a bare "30" from content://media/.../30 gets ".jpg").
+     */
+    fun displayName(c: android.content.Context, u: Uri, type: String? = null): String {
+        fun col(vararg cols: String): String? = runCatching {
+            c.contentResolver.query(u, cols, null, null, null)?.use { cur -> if (cur.moveToFirst()) cols.indices.firstNotNullOfOrNull { i -> cur.getString(i)?.takeIf { it.isNotBlank() } } else null }
+        }.getOrNull()
+        col(OpenableColumns.DISPLAY_NAME)?.let { return it }
+        if (u.authority == android.provider.MediaStore.AUTHORITY) col(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, android.provider.MediaStore.MediaColumns.TITLE)?.let { return it }
+        val last = u.lastPathSegment?.substringAfterLast('/') ?: "plik"
+        val t = type ?: runCatching { c.contentResolver.getType(u) }.getOrNull()
+        val ext = t?.let { android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(it) }
+        return if (ext != null && !last.contains('.')) "$last.$ext" else last
+    }
+
+    private fun sentPrefs(c: android.content.Context) = c.getSharedPreferences("ddn-sent", android.content.Context.MODE_PRIVATE)
+    private fun sentKey(c: android.content.Context, u: Uri, name: String): String {
+        val size = runCatching { c.contentResolver.query(u, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { if (it.moveToFirst()) it.getLong(0) else -1 } }.getOrNull() ?: -1
+        return "$name|$size"
+    }
+    /** This file (name and size) was sent through "Open with" before on this phone. */
+    fun sentBefore(c: android.content.Context, u: Uri, name: String) = sentPrefs(c).contains(sentKey(c, u, name))
+    fun markSent(c: android.content.Context, u: Uri, name: String) = sentPrefs(c).edit().putLong(sentKey(c, u, name), System.currentTimeMillis()).apply()
+
     /** Queue `uris` into `folderId` (null: "Z telefonu" in the root, made when missing); starts the job. */
     fun queue(c: android.content.Context, uris: List<Uri>, folderId: String?): Int {
         val s = DdnSession.get(c) ?: throw IllegalStateException("no account")
         val folder = folderId ?: s.folderPath(listOf(SHARED_FOLDER))
         var n = 0
         for (u in uris) {
-            val name = c.contentResolver.query(u, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null }
-                ?: u.lastPathSegment?.substringAfterLast('/') ?: "plik"
+            val name = displayName(c, u)
             DdnBackup.enqueueCopy(c, u, name, folder)
             n++
         }

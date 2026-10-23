@@ -35,6 +35,10 @@ class DdnTrashActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var restore: Button
     private lateinit var purge: Button
+    private lateinit var loading: android.widget.ProgressBar
+    @Volatile private var loaded = false
+    /** Tests: the screen opened in its loading state (a load may be done before a test can look). */
+    @Volatile private var loadingAtStart = false
     private var items: List<IndexReplica.Child> = emptyList()
     private val selected = LinkedHashSet<String>()
     private var serverNow = System.currentTimeMillis()
@@ -46,6 +50,11 @@ class DdnTrashActivity : AppCompatActivity() {
         root.addView(TextView(this).apply { text = getString(R.string.ddn_trash); textSize = 20f; setTypeface(typeface, Typeface.BOLD); setTextColor(getColor(R.color.text)); setPadding(pad, pad, pad, dp(4)) })
         status = TextView(this).apply { textSize = 12f; setTextColor(getColor(R.color.text_dim)); setPadding(pad, 0, pad, dp(8)); text = getString(R.string.ddn_trash_note) }
         root.addView(status)
+        // Loading (the account is synced first): not an empty trash.
+        loading = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true }
+        root.addView(loading, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
+        status.text = getString(R.string.ddn_trash_loading)
+        loadingAtStart = loading.visibility == android.view.View.VISIBLE
         list = RecyclerView(this).apply { layoutManager = LinearLayoutManager(this@DdnTrashActivity) }
         root.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END; setPadding(dp(8), dp(4), dp(8), dp(8)) }
@@ -65,12 +74,13 @@ class DdnTrashActivity : AppCompatActivity() {
             runCatching { s.refresh() }
             serverNow = runCatching { s.sync.api.gcStatus().now }.getOrDefault(System.currentTimeMillis())
             val t = s.trash()
-            main.post { items = t; selected.retainAll(t.map { it.id }.toSet()); show() }
+            main.post { items = t; loaded = true; selected.retainAll(t.map { it.id }.toSet()); show() }
         }
     }
 
     private fun show() {
-        status.text = if (items.isEmpty()) getString(R.string.ddn_trash_empty) else getString(R.string.ddn_trash_note)
+        loading.visibility = if (loaded) android.view.View.GONE else android.view.View.VISIBLE
+        status.text = if (!loaded) getString(R.string.ddn_trash_loading) else if (items.isEmpty()) getString(R.string.ddn_trash_empty) else getString(R.string.ddn_trash_note)
         restore.isEnabled = selected.isNotEmpty()
         purge.isEnabled = selected.isNotEmpty()
         list.adapter = object : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
@@ -109,6 +119,8 @@ class DdnTrashActivity : AppCompatActivity() {
     private fun act(restore: Boolean) {
         val ids = selected.toList()
         if (ids.isEmpty()) return
+        loaded = false
+        loading.visibility = android.view.View.VISIBLE
         this.restore.isEnabled = false
         purge.isEnabled = false
         thread {
@@ -142,6 +154,8 @@ class DdnTrashActivity : AppCompatActivity() {
 
     // ── for the instrumentation test ──
     internal fun countForTest(): Int = items.size
+    internal fun loadingShownForTest(): Boolean = loading.visibility == android.view.View.VISIBLE
+    internal fun openedLoadingForTest(): Boolean = loadingAtStart && status.text.isNotEmpty()
     internal fun selectForTest(id: String) { selected += id; show() }
     internal fun actForTest(restore: Boolean) = act(restore)
 

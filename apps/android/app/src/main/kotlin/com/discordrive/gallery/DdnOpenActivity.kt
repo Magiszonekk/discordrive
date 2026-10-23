@@ -31,15 +31,16 @@ class DdnOpenActivity : AppCompatActivity() {
     private var player: ExoPlayer? = null
     private lateinit var box: FrameLayout
     @Volatile private var shown = false
+    private var name = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val uri = intent.data ?: return finish()
-        val type = intent.type ?: contentResolver.getType(uri) ?: ""
+        // The type: the intent's, else the provider's (MediaStore answers getType), else from the name.
+        val type = intent.type?.takeIf { it != "*/*" } ?: runCatching { contentResolver.getType(uri) }.getOrNull() ?: ""
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xFF000000.toInt()) }
         box = FrameLayout(this)
-        val name = runCatching { contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null } }.getOrNull()
-            ?: uri.lastPathSegment?.substringAfterLast('/') ?: ""
+        val name = DdnUploads.displayName(this, uri, type)
         val info = TextView(this).apply { text = name; setTextColor(0xFFE8E8EC.toInt()); setPadding(dp(16), dp(8), dp(16), dp(4)); textSize = 13f }
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; setPadding(dp(8), 0, dp(8), dp(8)) }
         bar.addView(Button(this).apply { text = getString(R.string.ddn_open_send); setOnClickListener { send(uri) } })
@@ -48,7 +49,8 @@ class DdnOpenActivity : AppCompatActivity() {
         root.addView(bar)
         setContentView(root)
         Insets.apply(root)
-        if (type.startsWith("video/") || DdnSession.isVideo(name)) playVideo(uri) else showImage(uri)
+        if (type.startsWith("video/") || (!type.startsWith("image/") && DdnSession.isVideo(name))) playVideo(uri) else showImage(uri)
+        this.name = name
     }
 
     private fun showImage(uri: Uri) {
@@ -88,8 +90,19 @@ class DdnOpenActivity : AppCompatActivity() {
             startActivity(Intent(this, JoinActivity::class.java))
             return
         }
+        // Sent from here before (this session or earlier): ask, a second copy would be "name (2)".
+        if (DdnUploads.sentBefore(this, uri, name)) {
+            androidx.appcompat.app.AlertDialog.Builder(this).setMessage(getString(R.string.ddn_open_again, name))
+                .setPositiveButton(R.string.ddn_open_send) { _, _ -> queue(uri) }
+                .setNegativeButton(android.R.string.cancel, null).show()
+            return
+        }
+        queue(uri)
+    }
+
+    private fun queue(uri: Uri) {
         thread {
-            val r = runCatching { DdnUploads.queue(this, listOf(uri), null) }
+            val r = runCatching { DdnUploads.queue(this, listOf(uri), null).also { DdnUploads.markSent(this, uri, name) } }
             main.post {
                 r.onSuccess { Toast.makeText(this, resources.getQuantityString(R.plurals.ddn_up_queued, it, it), Toast.LENGTH_LONG).show() }
                     .onFailure { Toast.makeText(this, getString(R.string.ddn_error, it.message), Toast.LENGTH_LONG).show() }
@@ -111,4 +124,5 @@ class DdnOpenActivity : AppCompatActivity() {
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     internal fun shownForTest(): Boolean = shown
+    internal fun nameForTest(): String = name
 }
