@@ -58,7 +58,7 @@ interface DesktopBridge {
   updates: {
     check(): Promise<{ current: { version: string; build: string; commit: string | null }; available: { build: string; commit: string; publishedAt: string; htmlUrl: string } | null; kind: string }>;
     download(): Promise<{ path: string; hint: string; busy: boolean; inPlace?: boolean; command?: string }>;
-    settings(patch?: { checkUpdates?: boolean; autostart?: boolean; downloadsDir?: string }): Promise<{ checkUpdates: boolean; autostart: boolean; downloadsDir: string }>;
+    settings(patch?: { checkUpdates?: boolean; autostart?: boolean; downloadsDir?: string; keyring?: "ask" | "file" }): Promise<{ checkUpdates: boolean; autostart: boolean; downloadsDir: string; keyring?: "ask" | "file"; platform?: string }>;
     open(path: string): void;
     /** Install the downloaded update in place and restart (older app builds do not have it). */
     install?(): Promise<boolean>;
@@ -1057,6 +1057,13 @@ async function renderNow() {
     ui("lost-hint").textContent = t(blocked ? "lost.blocked.hint" : "lost.gone.hint");
     $("auth-lost-retry").hidden = !blocked;
     document.title = `${t(blocked ? "lost.blocked.h" : "lost.gone.h")} · ${t("app.title")}`;
+    return;
+  }
+  if (st.keysLocked && route.name !== "restore") {
+    showOnly("signed-out");
+    all<HTMLElement>("[data-auth]").forEach((el) => (el.hidden = el.dataset.auth !== "locked"));
+    $("keys-locked-why").textContent = st.keysLocked;
+    document.title = `${t("locked.h")} · ${t("app.title")}`;
     return;
   }
   if (!st.signedIn) {
@@ -2560,6 +2567,9 @@ async function renderDesktopApp() {
   $<HTMLInputElement>("app-autostart").checked = st.autostart;
   $("app-downloads").textContent = st.downloadsDir;
   $("app-keys-warn").hidden = caps.keyProtection !== "file";
+  // Linux: the keyring switch (off = the user refused it at the start; on = used from the next start).
+  $("app-keyring-row").hidden = st.platform !== "linux";
+  $<HTMLInputElement>("app-keyring").checked = st.keyring !== "file";
   await paintUpdate(false);
 }
 async function paintUpdate(manual: boolean) {
@@ -2607,6 +2617,8 @@ function wireDesktopApp() {
     });
   $<HTMLInputElement>("app-check-updates").onchange = (e) => void d.updates.settings({ checkUpdates: (e.currentTarget as HTMLInputElement).checked });
   $<HTMLInputElement>("app-autostart").onchange = (e) => void d.updates.settings({ autostart: (e.currentTarget as HTMLInputElement).checked });
+  $<HTMLInputElement>("app-keyring").onchange = (e) =>
+    void d.updates.settings({ keyring: (e.currentTarget as HTMLInputElement).checked ? "ask" : "file" }).then(() => toast(t("app.keyringNext"), "info"));
   $("app-downloads-pick").onclick = (e) =>
     void act(e.currentTarget as HTMLElement, async () => {
       const dir = await d.pickFolder();
@@ -3297,6 +3309,14 @@ async function main() {
   });
   ui("player-close").onclick = () => closePlayer();
   ui<HTMLDialogElement>("player-dialog").addEventListener("close", () => $<HTMLVideoElement>("player").pause());
+  $("keys-locked-retry").onclick = () =>
+    void act($("keys-locked-retry"), async () => {
+      // The keyring asks again (unlock dialog); opened: the account starts as usual.
+      const st = await core.status();
+      if (st.keysLocked) return toast(t("locked.still"), "err");
+      if (st.hasAccount) await core.open();
+      await render();
+    });
   if ((await core.status()).hasAccount) await act(null, () => core.open());
   await applyTransferLog();
   if ((await core.status()).signedIn) void paintUnfinished();

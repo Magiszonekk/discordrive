@@ -27,9 +27,11 @@ export interface DesktopSettings {
   checkUpdates: boolean;
   /** "This computer only": the terms were accepted (when). */
   localTermsAt: number | null;
+  /** Linux: use the system keyring for the device keys ("ask", default) or not ("file": the user refused it). */
+  keyring: "ask" | "file";
 }
 
-export const DEFAULTS: DesktopSettings = { v: 1, servers: [], active: -1, autostart: true, downloadsDir: null, checkUpdates: true, localTermsAt: null };
+export const DEFAULTS: DesktopSettings = { v: 1, servers: [], active: -1, autostart: true, downloadsDir: null, checkUpdates: true, localTermsAt: null, keyring: "ask" };
 
 export function settingsFile(dataDir: string): string {
   return join(dataDir, "desktop-settings.json");
@@ -42,6 +44,7 @@ export function loadSettings(dataDir: string): DesktopSettings {
     const j = JSON.parse(readFileSync(f, "utf8")) as Partial<DesktopSettings>;
     const s: DesktopSettings = { ...DEFAULTS, ...j, v: 1, servers: Array.isArray(j.servers) ? j.servers.filter(validServer) : [] };
     if (!Number.isInteger(s.active) || s.active >= s.servers.length) s.active = s.servers.length ? 0 : -1;
+    if (s.keyring !== "file") s.keyring = "ask";
     return s;
   } catch {
     return { ...DEFAULTS, servers: [] };

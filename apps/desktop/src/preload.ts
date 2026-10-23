@@ -40,7 +40,7 @@ contextBridge.exposeInMainWorld("ddnDesktop", {
   updates: {
     check: () => ipcRenderer.invoke("ddn:update-check"),
     download: () => ipcRenderer.invoke("ddn:update-download"),
-    settings: (patch?: { checkUpdates?: boolean; autostart?: boolean; downloadsDir?: string }) => ipcRenderer.invoke("ddn:app-settings", patch ?? {}),
+    settings: (patch?: { checkUpdates?: boolean; autostart?: boolean; downloadsDir?: string; keyring?: "ask" | "file" }) => ipcRenderer.invoke("ddn:app-settings", patch ?? {}),
     open: (path: string) => ipcRenderer.send("ddn:open-path", String(path)),
     /** Install the downloaded update and restart (Windows, AppImage); false: the user chose to wait. */
     install: () => ipcRenderer.invoke("ddn:update-install") as Promise<boolean>,

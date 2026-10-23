@@ -469,6 +469,36 @@ try {
   await gone(pid1);
   app = null;
 
+  step("keys sealed by a keyring that is not there now (QA B1): a screen with the reason, retry and the kit");
+  {
+    // The first app's data with keys.bin marked as sealed by the keyring (the CI runner has none: the app
+    // runs on the file store, as with a locked keyring whose unlock was cancelled).
+    const dataL = join(work, "data-locked");
+    const { cpSync } = await import("node:fs");
+    cpSync(data, dataL, { recursive: true });
+    const kb = join(dataL, "agent", "keys.bin");
+    const raw = readFileSync(kb);
+    writeFileSync(kb, Buffer.concat([Buffer.from("DDNKS"), raw.subarray(5)]));
+    const wl = await launch(dataL);
+    const errs: string[] = [];
+    wl.page.on("pageerror", (e) => errs.push(String(e)));
+    const shown = await wl.page.waitForSelector("[data-ddn=keys-locked]:not([hidden])", { timeout: 60_000 }).then(() => true).catch(() => false);
+    const why = (await wl.page.textContent("[data-ddn=keys-locked-why]").catch(() => "")) ?? "";
+    const retry = await wl.page.isVisible("[data-ddn=keys-locked-retry]");
+    const kit = await wl.page.isVisible("[data-ddn=keys-locked-kit]");
+    await wl.page.click("[data-ddn=keys-locked-retry]");
+    await wl.page.waitForTimeout(800);
+    const stillShown = await wl.page.isVisible("[data-ddn=keys-locked]");
+    await wl.page.click("[data-ddn=keys-locked-kit]");
+    const kitScreen = await wl.page.waitForSelector("[data-ddn=rescue-dialog]:not([hidden])", { timeout: 10_000 }).then(() => true).catch(() => false);
+    r.keysLocked = { shown, why, retry, kit, stillShown, kitScreen, errors: errs };
+    check("keysLockedScreen", shown && /key store/.test(why) && retry && kit && stillShown && kitScreen && errs.length === 0);
+    const pidL = wl.app.process().pid;
+    await wl.app.evaluate(({ app: a }) => a.exit(0)).catch(() => {});
+    await wl.app.close().catch(() => {});
+    await gone(pidL);
+  }
+
   step("second app, 'Connect to a server': a remote instance (invite only)");
   const srv = new DdnServer({ signup: "invite", rateLimits: false });
   const { url } = await srv.listen(0, "127.0.0.1");

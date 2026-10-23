@@ -20,6 +20,7 @@ import { autostartOn, setAutostart, HIDDEN_ARG, type AutostartEnv } from "./shel
 import { loadSettings, normaliseServerUrl, saveSettings, type DesktopSettings } from "./shell/settings.js";
 import type { AgentInit } from "./agent.js";
 import { appArmorCommand, appImageWithoutSandbox } from "./shell/sandbox.js";
+import { hasDefaultKeyring, keyringPlan, keysProtection } from "./shell/keyring.js";
 import { APP_USER_MODEL_ID } from "./shell/app-id.js";
 import { CHECK_EVERY_MS, assetFor, canInstallInPlace, debInstallCommand, debTerminalCommand, downloadVerified, findPkexec, installHint, installKind, isNewer, latestBuild, nsisUpdateCommand, replaceAppImage, sha256File, type AvailableBuild } from "./shell/updates.js";
 
@@ -442,8 +443,10 @@ function wireUpdates() {
   // Settings → Desktop app: update checks, autostart, downloads folder (a folder picked in the system dialog).
   ipcMain.handle("ddn:app-settings", (e, patch: unknown) => {
     fromApp(e);
-    const p = (patch && typeof patch === "object" ? patch : {}) as { checkUpdates?: unknown; autostart?: unknown; downloadsDir?: unknown };
+    const p = (patch && typeof patch === "object" ? patch : {}) as { checkUpdates?: unknown; autostart?: unknown; downloadsDir?: unknown; keyring?: unknown };
     if (typeof p.checkUpdates === "boolean") settings.checkUpdates = p.checkUpdates;
+    // Keyring on again (used from the next start: the keys move into it then) or off.
+    if (p.keyring === "ask" || p.keyring === "file") settings.keyring = p.keyring;
     if (typeof p.autostart === "boolean" && p.autostart !== settings.autostart) {
       settings.autostart = p.autostart;
       setAutostart(autostartEnv(), p.autostart);
@@ -454,7 +457,7 @@ function wireUpdates() {
       agent?.postMessage({ type: "downloads-dir", dir: p.downloadsDir });
     }
     saveSettings(DATA(), settings);
-    return { checkUpdates: settings.checkUpdates, autostart: settings.autostart, downloadsDir: downloadsDir() };
+    return { checkUpdates: settings.checkUpdates, autostart: settings.autostart, downloadsDir: downloadsDir(), keyring: settings.keyring, platform: process.platform };
   });
   ipcMain.on("ddn:open-path", (e, p: unknown) => {
     // Only the installer this app just downloaded and checked.
@@ -535,6 +538,52 @@ async function keyStoreKind(): Promise<"os" | "file"> {
   if (!ok) return "file";
   if (process.platform === "linux" && ["basic_text", "unknown"].includes(safeStorage.getSelectedStorageBackend())) return "file";
   return "os";
+}
+
+/**
+ * Linux: the keyring only when it makes sense. Keys sealed by it: always ask it (a locked one asks to unlock;
+ * Cancel shows "The keyring is locked" in the window). No keys sealed yet and no default keyring: gnome-keyring
+ * would open its own "create a keyring" window; the app explains first and remembers a "no" (keys in an
+ * owner-only file, Settings → App can turn the keyring on again). The user refused: no keyring, no window.
+ */
+async function chooseKeyStore(): Promise<"os" | "file"> {
+  if (process.platform !== "linux") return keyStoreKind();
+  const keys = keysProtection(join(DATA(), "agent", "keys.bin"));
+  const run = (cmd: string, args: string[]) =>
+    new Promise<string>((res, rej) => {
+      const p = spawn(cmd, args, { stdio: ["ignore", "pipe", "ignore"] });
+      let out = "";
+      p.stdout.on("data", (d) => (out += String(d)));
+      p.on("error", rej);
+      p.on("close", (c) => (c === 0 ? res(out) : rej(new Error(`exit ${c}`))));
+    });
+  const plan = keyringPlan({ platform: process.platform, choice: settings.keyring, keys, defaultKeyring: keys === "S" ? null : await hasDefaultKeyring(run) });
+  if (plan === "file") return "file";
+  if (plan === "explain" && !process.env.DDN_DESKTOP_SMOKE) {
+    const pl = app.getLocale().startsWith("pl");
+    const r = await dialog.showMessageBox({
+      type: "question",
+      buttons: pl ? ["Utwórz magazyn kluczy", "Nie, trzymaj klucze w pliku"] : ["Create a keyring", "No, keep the keys in a file"],
+      defaultId: 0,
+      cancelId: 1,
+      message: pl ? "discordrive chce zapisać klucze konta w systemowym magazynie kluczy" : "discordrive would like to keep the account's keys in the system keyring",
+      detail: pl
+        ? "Ten system nie ma jeszcze magazynu kluczy (keyring). Za chwilę system poprosi o hasło do nowego magazynu (okno \u201eChoose password for new keyring\u201d). Bez niego klucze leżą w pliku, który może odczytać tylko Twój użytkownik. Wybór zmienisz w Ustawieniach → Aplikacja."
+        : "This system has no keyring yet. The system will now ask for a password for a new one (the \u201cChoose password for new keyring\u201d window). Without it the keys stay in a file only your user can read. You can change this in Settings → App.",
+    });
+    if (r.response !== 0) {
+      settings.keyring = "file";
+      saveSettings(DATA(), settings);
+      return "file";
+    }
+  }
+  const k = await keyStoreKind();
+  // The create / unlock window was cancelled and there are no sealed keys: remember it, do not ask at every start.
+  if (k === "file" && keys !== "S" && plan === "explain") {
+    settings.keyring = "file";
+    saveSettings(DATA(), settings);
+  }
+  return k;
 }
 
 // ── first start / server choice ────────────────────────────────────────────────────────────────────
@@ -755,7 +804,7 @@ else {
     });
     wireSetupIpc();
     if (!process.env.DDN_DESKTOP_SMOKE) wireUpdates();
-    sealerKind = await keyStoreKind();
+    sealerKind = await chooseKeyStore();
     dbg(`key store: ${sealerKind}`);
     // First start: autostart on by default.
     if (!existsSync(join(DATA(), "desktop-settings.json"))) {

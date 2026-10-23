@@ -43,6 +43,11 @@ type StoredJson = Omit<StoredAccount, "devicePrivateKey"> & { devicePkcs8: strin
 /** keys.bin: "DDNK" + 1 byte how it is protected ("S": sealed by the OS key store, "P": plain) + body. */
 const KEY_MAGIC = "DDNK";
 
+/** The keys are on this computer but the system key store (keyring) is locked or missing now: code "keystore_locked". */
+export function keysLocked(why: string): Error {
+  return Object.assign(new Error(`${why} (unlock the keyring and try again, or use your rescue kit)`), { code: "keystore_locked" });
+}
+
 export function fileKeyStore(dir: string, sealer: Sealer, o: { serverUrl?: () => string | undefined } = {}): KeyStore {
   const file = join(dir, "keys.bin");
   const write = async (j: StoredJson) => {
@@ -58,8 +63,10 @@ export function fileKeyStore(dir: string, sealer: Sealer, o: { serverUrl?: () =>
       if (raw.subarray(0, 4).toString() !== KEY_MAGIC) throw new Error("keys.bin: unknown format");
       const how = String.fromCharCode(raw[4]!);
       const body = new Uint8Array(raw.subarray(5));
-      if (how === "S" && sealer.kind !== "os") throw new Error("the keys are protected by the system key store, which is not available now (unlock it and start the app again)");
-      const j = JSON.parse(new TextDecoder().decode(how === "S" ? await sealer.open(body) : body)) as StoredJson;
+      if (how === "S" && sealer.kind !== "os") throw keysLocked("the keys are protected by the system key store, which is not available now");
+      // A locked keyring asks to unlock it; Cancel (or a wrong password) ends here.
+      const plain = how === "S" ? await sealer.open(body).catch((e) => { throw keysLocked(`the system key store did not open the keys (${String((e as Error)?.message ?? e)})`); }) : body;
+      const j = JSON.parse(new TextDecoder().decode(plain)) as StoredJson;
       // The system key store became available: protect the keys with it from now on.
       if (how === "P" && sealer.kind === "os") await write(j);
       const { devicePkcs8, ...rest } = j;
