@@ -183,6 +183,13 @@ export const pl: Record<string, string> = {
 
   // ustawienia
   "set.h": "Ustawienia",
+  "set.tabs": "Sekcje ustawień",
+  "set.tab.channels": "Kanały",
+  "set.tab.account": "Konto i bezpieczeństwo",
+  "set.tab.storage": "Miejsce",
+  "set.tab.network": "Sieć i transfery",
+  "set.tab.appearance": "Wygląd",
+  "set.tab.app": "Aplikacja",
   "set.account": "Konto",
   "set.account.id": "Konto",
   "set.account.device": "To urządzenie",

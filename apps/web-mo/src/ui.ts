@@ -1,6 +1,6 @@
 // UI layer of the metadata-only browser client. Look: Cobalt (the theme of discordrive, cobalt/README.md);
 // layout: discordrive's app-shell (sidebar Files / Devices / Settings, AuthCard screens before sign-in).
-// Routing: History API (/, /folder/<id>, /devices, /settings, /welcome; signed out: /, /join, /restore;
+// Routing: History API (/, /folder/<id>, /devices, /settings/<tab>, /welcome; signed out: /, /join, /restore;
 // share links /s/<id>#<key>); the instance serves index.html for every path without an extension, so a
 // reload keeps the page. Texts: i18n.ts (en default, pl); static HTML via data-i18n hooks.
 // Every element the tests drive keeps its stable data-ddn attribute; purely visual hooks use data-ddn-ui.
@@ -298,7 +298,7 @@ type Route =
   | { name: "files"; folder: string }
   | { name: "trash" }
   | { name: "devices" }
-  | { name: "settings" }
+  | { name: "settings"; tab: SettingsTab | null }
   | { name: "admin" }
   | { name: "welcome" }
   | { name: "create" }
@@ -306,13 +306,25 @@ type Route =
   | { name: "restore" }
   | { name: "signin" };
 const SIGNED_OUT_ROUTES = new Set(["create", "join", "restore", "signin"]);
+/** Settings tabs, each an address (/settings/<tab>); the sections carry data-tab. */
+const SETTINGS_TABS = ["channels", "account", "storage", "network", "appearance", "app"] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number];
+const isSettingsTab = (x: string): x is SettingsTab => (SETTINGS_TABS as readonly string[]).includes(x);
+/** The old one-page anchors (/settings#network, …) and the section ids, mapped to their tab. */
+const SECTION_TAB: Record<string, SettingsTab> = {
+  channels: "channels", account: "account", rescue: "account", security: "account", sharing: "account",
+  storage: "storage", network: "network", appearance: "appearance", diagnostics: "app", "desktop-app": "app", browser: "app",
+};
+const SETTINGS_TAB_KEY = "ddn.settings.tab";
 function parseRoute(path = location.pathname): Route {
   const p = path.replace(/\/+$/, "") || "/";
   const f = /^\/folder\/([A-Za-z0-9_-]{1,64})$/.exec(p);
   if (f) return { name: "files", folder: f[1]! };
   if (p === "/trash") return { name: "trash" };
   if (p === "/devices") return { name: "devices" };
-  if (p === "/settings") return { name: "settings" };
+  if (p === "/settings") return { name: "settings", tab: null };
+  const st = /^\/settings\/([a-z-]{1,24})$/.exec(p);
+  if (st) return { name: "settings", tab: isSettingsTab(st[1]!) ? st[1]! : null };
   if (p === "/admin") return { name: "admin" };
   if (p === "/welcome") return { name: "welcome" };
   if (p === "/join") return { name: "join" };
@@ -321,16 +333,29 @@ function parseRoute(path = location.pathname): Route {
   return { name: "files", folder: "root" };
 }
 const hrefOf = (r: Route) =>
-  r.name === "files" ? (r.folder === "root" ? "/" : `/folder/${r.folder}`) : r.name === "create" ? "/" : `/${r.name}`;
+  r.name === "files" ? (r.folder === "root" ? "/" : `/folder/${r.folder}`) : r.name === "create" ? "/" : r.name === "settings" && r.tab ? `/settings/${r.tab}` : `/${r.name}`;
 let route: Route = parseRoute();
 let routeSeq = 0;
 /** Go to a page (pushState). `replace` for redirects, so Back does not bounce. */
 function navigate(href: string, replace = false) {
-  const u = new URL(href, location.origin);
+  const u = settingsAnchorToTab(new URL(href, location.origin));
   if (u.pathname + u.hash !== location.pathname + location.hash) history[replace ? "replaceState" : "pushState"](null, "", u.pathname + u.search + u.hash);
   void onRoute();
 }
+/** /settings#network (the one-page anchors) → /settings/network: links and bookmarks from before the tabs. */
+function settingsAnchorToTab(u: URL): URL {
+  const key = decodeURIComponent(u.hash.slice(1));
+  if (u.pathname.replace(/\/+$/, "") === "/settings" && SECTION_TAB[key]) {
+    u.pathname = `/settings/${SECTION_TAB[key]}`;
+    if (SECTION_TAB[key] === key) u.hash = "";
+  }
+  return u;
+}
 async function onRoute() {
+  {
+    const u = settingsAnchorToTab(new URL(location.href));
+    if (u.href !== location.href) history.replaceState(null, "", u.pathname + u.search + u.hash);
+  }
   const prev = route;
   route = parseRoute();
   const seq = ++routeSeq;
@@ -345,7 +370,7 @@ async function onRoute() {
   if (seq !== routeSeq) return;
   const anchor = location.hash.length > 1 && !location.hash.startsWith("#pair=") ? document.getElementById(decodeURIComponent(location.hash.slice(1))) : null;
   if (anchor) anchor.scrollIntoView({ block: "start" });
-  else if (prev.name !== route.name || (prev.name === "files" && route.name === "files" && prev.folder !== route.folder)) window.scrollTo(0, 0);
+  else if (prev.name !== route.name || (prev.name === "settings" && route.name === "settings" && prev.tab !== route.tab) || (prev.name === "files" && route.name === "files" && prev.folder !== route.folder)) window.scrollTo(0, 0);
 }
 function wireLinks() {
   document.addEventListener("click", (e) => {
@@ -1111,6 +1136,30 @@ async function renderNow() {
     return;
   }
   if (page === "settings") {
+    if (route.name === "settings" && !route.tab) {
+      // /settings: no channel yet → Channels (first run); otherwise the tab opened last on this device.
+      const last = (() => {
+        try {
+          return localStorage.getItem(SETTINGS_TAB_KEY);
+        } catch {
+          return null;
+        }
+      })();
+      const tab: SettingsTab = !wh.advice.ok && wh.webhooks.length === 0 ? "channels" : last && isSettingsTab(last) ? last : "channels";
+      return navigate(`/settings/${tab}${location.hash}`, true);
+    }
+    const tab = (route as { tab: SettingsTab }).tab;
+    try {
+      localStorage.setItem(SETTINGS_TAB_KEY, tab);
+    } catch {
+      /* private mode */
+    }
+    $("settings-sections").dataset.active = tab;
+    all<HTMLElement>("[data-page=settings] [data-tab]").forEach((el) => {
+      if (el.matches("a[data-ddn=settings-tab]")) el.dataset.tab === tab ? el.setAttribute("aria-current", "page") : el.removeAttribute("aria-current");
+      else el.classList.toggle("tab-off", el.dataset.tab !== tab);
+    });
+    document.title = `${t(`set.tab.${tab}`)} · ${t("page.settings")} · ${t("app.title")}`;
     ui("acc-id").textContent = st.accountId ?? "-";
     ui("acc-device").textContent = st.deviceName || short(st.deviceId);
     ui("acc-server").textContent = serverUrl;
@@ -2502,6 +2551,8 @@ function renderNetwork() {
 async function renderDesktopApp() {
   if (!desktop) return;
   $("app-section").hidden = false;
+  // "About this browser" (tab, local copy in the browser) is for the web app; the desktop app has its card.
+  $("browser-section").hidden = true;
   const [st, caps] = await Promise.all([desktop.updates.settings(), core.capabilities()]);
   $<HTMLInputElement>("app-check-updates").checked = st.checkUpdates;
   $<HTMLInputElement>("app-autostart").checked = st.autostart;

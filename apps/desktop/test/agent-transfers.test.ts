@@ -28,7 +28,8 @@ beforeAll(async () => {
   origin = await fake.listen({ tls: { key: readFileSync(join(tmp, "k")), cert: ca } });
   srv = new DdnServer({ rateLimits: false, signup: "open" });
   url = (await srv.listen(0)).url;
-});
+  // An RSA key and the server start: a few seconds, more on a slow Windows runner.
+}, 60_000);
 afterAll(async () => {
   await srv.close().catch(() => {});
   await fake.close();
