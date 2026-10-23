@@ -391,5 +391,10 @@
     <string name="ddn_to_trash">Przenieś do kosza</string>
     <string name="ddn_to_trash_ask">Przenieść „%1$s” do kosza? Przez 30 dni można go przywrócić.</string>
     <string name="ddn_moved_to_trash">Przeniesiono do kosza.</string>
+    <string name="ddn_clean_purged">usunięto na stałe %1$d (starsze niż 30 dni)</string>
+    <string name="ddn_clean_primary">nic — kosz czyści komputer lub przeglądarka</string>
+    <string name="ddn_clean_metered">pominięto — łącze taryfowe</string>
+    <string name="ddn_clean_nothing">nic do usunięcia</string>
+    <string name="ddn_clean_not_synced">pominięto — brak połączenia z kontem</string>
     <string name="ddn_open_send">Wyślij do discordrive</string>
 </resources>

@@ -51,6 +51,7 @@ class DdnSettingsActivity : AppCompatActivity() {
         root.addView(text(getString(R.string.ddn_set_version, name, code)).apply { tag = "ddn-version" })
         root.addView(SwitchCompat(this).apply {
             text = getString(R.string.ddn_set_check_updates); isChecked = DdnApp.checkUpdates(this@DdnSettingsActivity)
+            textSize = 15f; setTextColor(getColor(R.color.text)); setPadding(0, dp(4), 0, dp(4))
             setOnCheckedChangeListener { _, v -> DdnApp.setCheckUpdates(this@DdnSettingsActivity, v) }
         })
         updState = text("", dim = true)
@@ -64,7 +65,7 @@ class DdnSettingsActivity : AppCompatActivity() {
         root.addView(head(R.string.ddn_set_more))
         root.addView(button(R.string.ddn_backup) { startActivity(Intent(this, DdnBackupActivity::class.java)) })
         root.addView(button(R.string.ddn_trash) { DdnTrashActivity.open(this) })
-        root.addView(text(getString(R.string.ddn_set_trash_note) + (DdnApp.lastClean(this)?.let { "\n" + getString(R.string.ddn_set_trash_last, it.substringAfter(' ')) } ?: ""), dim = true))
+        root.addView(text(getString(R.string.ddn_set_trash_note) + (DdnApp.lastClean(this)?.let { "\n" + getString(R.string.ddn_set_trash_last, cleanText(it)) } ?: ""), dim = true))
 
         // Opening photos and videos from other apps (Files, a messenger): the system's "Open with" / default app.
         root.addView(head(R.string.ddn_set_open_with))
@@ -153,6 +154,20 @@ class DdnSettingsActivity : AppCompatActivity() {
                 finish()
             }
             .setNegativeButton(android.R.string.cancel, null).show()
+    }
+
+    /** "<time> purged N" / "<time> <reason>" (the background job's note) in words. */
+    private fun cleanText(note: String): String {
+        val at = note.substringBefore(' ').toLongOrNull()?.let { android.text.format.DateUtils.getRelativeTimeSpanString(it).toString() } ?: ""
+        val what = note.substringAfter(' ')
+        val words = when {
+            what.startsWith("purged ") -> getString(R.string.ddn_clean_purged, what.removePrefix("purged ").toIntOrNull() ?: 0)
+            what == "primary_cleans" -> getString(R.string.ddn_clean_primary)
+            what == "metered" -> getString(R.string.ddn_clean_metered)
+            what == "nothing_expired" -> getString(R.string.ddn_clean_nothing)
+            else -> getString(R.string.ddn_clean_not_synced)
+        }
+        return "$at — $words"
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
