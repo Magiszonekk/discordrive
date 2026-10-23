@@ -125,7 +125,7 @@ class BrowseUiTest {
         ActivityScenario.launch<DdnTrashActivity>(Intent(ctx, DdnTrashActivity::class.java)).use { t ->
             // K1: while it loads, an indicator (not an empty trash).
             var loadingFirst = false
-            t.onActivity { a -> loadingFirst = a.loadingShownForTest() }
+            t.onActivity { a -> loadingFirst = a.openedLoadingForTest() }
             r["trashShowsLoading"] = loadingFirst
             r["trashScreenLists"] = waitUntil { var n = 0; t.onActivity { a -> n = a.countForTest() }; n >= 3 }
             r["trashLoadingGone"] = waitUntil { var on = true; t.onActivity { a -> on = a.loadingShownForTest() }; !on }

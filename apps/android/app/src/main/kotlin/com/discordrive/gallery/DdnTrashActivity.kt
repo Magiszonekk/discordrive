@@ -37,6 +37,8 @@ class DdnTrashActivity : AppCompatActivity() {
     private lateinit var purge: Button
     private lateinit var loading: android.widget.ProgressBar
     @Volatile private var loaded = false
+    /** Tests: the screen opened in its loading state (a load may be done before a test can look). */
+    @Volatile private var loadingAtStart = false
     private var items: List<IndexReplica.Child> = emptyList()
     private val selected = LinkedHashSet<String>()
     private var serverNow = System.currentTimeMillis()
@@ -52,6 +54,7 @@ class DdnTrashActivity : AppCompatActivity() {
         loading = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true }
         root.addView(loading, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
         status.text = getString(R.string.ddn_trash_loading)
+        loadingAtStart = loading.visibility == android.view.View.VISIBLE
         list = RecyclerView(this).apply { layoutManager = LinearLayoutManager(this@DdnTrashActivity) }
         root.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END; setPadding(dp(8), dp(4), dp(8), dp(8)) }
@@ -152,6 +155,7 @@ class DdnTrashActivity : AppCompatActivity() {
     // ── for the instrumentation test ──
     internal fun countForTest(): Int = items.size
     internal fun loadingShownForTest(): Boolean = loading.visibility == android.view.View.VISIBLE
+    internal fun openedLoadingForTest(): Boolean = loadingAtStart && status.text.isNotEmpty()
     internal fun selectForTest(id: String) { selected += id; show() }
     internal fun actForTest(restore: Boolean) = act(restore)
 
