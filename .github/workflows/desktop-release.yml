@@ -60,7 +60,7 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: npm ci --no-audit --no-fund
 
-      - name: Version (0.1.<commits on main>: grows with every build, dpkg / App Center / NSIS compare it)
+      - name: "Version: 0.1.<commits on main> (grows with every build; dpkg, App Center and NSIS compare it)"
         run: echo "DDN_VERSION=0.1.$(git rev-list --count ${{ github.event.pull_request.head.sha || github.sha }})" >> "$GITHUB_ENV"
 
       - name: Build the app
