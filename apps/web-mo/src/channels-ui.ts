@@ -30,6 +30,7 @@ export interface ChannelsUiDeps {
   openKit: (forced: boolean) => Promise<void>;
 }
 
+/** Folded / open state of the channel section in older versions (removed at start). */
 const FOLD_KEY = "ddn.channels.open";
 export const SHOW_UNAVAILABLE_KEY = "ddn.show-unavailable";
 
@@ -60,37 +61,11 @@ export function createChannelsUi(d: ChannelsUiDeps) {
   let lastMove: MoveStatus | null = null;
   let kitAsked = false;
 
-  // ── folding ─────────────────────────────────────────────────────
-  const stored = (): boolean | null => {
-    try {
-      const v = localStorage.getItem(FOLD_KEY);
-      return v === null ? null : v === "1";
-    } catch {
-      return null;
-    }
-  };
-  function setOpen(open: boolean) {
-    $("channels-toggle").setAttribute("aria-expanded", String(open));
-    $("channels-body").hidden = !open;
-  }
-  function wireFold() {
-    $("channels-toggle").onclick = () => {
-      const open = $("channels-toggle").getAttribute("aria-expanded") !== "true";
-      setOpen(open);
-      try {
-        localStorage.setItem(FOLD_KEY, open ? "1" : "0");
-      } catch {
-        /* private mode */
-      }
-    };
-  }
-  /** Folded by default when there are channels, open when there are none (wizard needs the form). */
-  function paintFold(wh: ChannelsView, inWizard: boolean) {
-    const n = wh.webhooks.length + (wh.pool && wh.using !== "own" ? wh.pool.channels : 0);
-    const has = n > 0 || wh.advice.ok;
-    $("channels-toggle").hidden = inWizard;
-    if (inWizard || !has) return setOpen(true);
-    setOpen(stored() ?? false);
+  // The section is always open (it has its own tab); the folded state of older versions is dropped once.
+  try {
+    localStorage.removeItem(FOLD_KEY);
+  } catch {
+    /* private mode */
   }
 
   // ── list ────────────────────────────────────────────────────────
@@ -178,7 +153,6 @@ export function createChannelsUi(d: ChannelsUiDeps) {
   /** Called by ui.ts renderHooks after the generic part (advice, slots, pool row). */
   function paint(wh: ChannelsView, inWizard: boolean) {
     $("channels-summary").textContent = wh.advice.ok ? summary(wh) : "";
-    paintFold(wh, inWizard);
     const removable = !inWizard && (server ? typeof wh.using === "string" : true);
     const rows = wh.webhooks.map((w) => row(w, removable && (server || wh.webhooks.length > 0)));
     paintRemoved(wh);
@@ -295,7 +269,6 @@ export function createChannelsUi(d: ChannelsUiDeps) {
           toast(imp.files ? tn("ch.removedDone", imp.files) : t("hooks.removed"));
         } else {
           dlg.close();
-          setOpen(true);
           // metadata only: runs in this tab and resolves at the end (progress events meanwhile); e2ee/plain: returns at once.
           const s = core.moveWebhook(imp.webhookId);
           paintMove({ webhookId: imp.webhookId, label: imp.label, state: "running", critical: imp.critical, done: 0, total: imp.files, bytesDone: 0, bytesTotal: imp.moveBytes, startedAt: Date.now(), updatedAt: Date.now(), etaMs: imp.moveEtaMs });
@@ -350,7 +323,6 @@ export function createChannelsUi(d: ChannelsUiDeps) {
   }
 
   function wire() {
-    wireFold();
     wireDialog();
     wireStorage();
   }
