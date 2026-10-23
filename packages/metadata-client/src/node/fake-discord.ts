@@ -48,6 +48,8 @@ export class FakeDiscord {
   /** Benchmarks: extra time before a webhook post / a CDN read is answered (ms), like Discord's latency. */
   postDelayMs = 0;
   cdnDelayMs = 0;
+  /** Tests: the next this-many DELETEs of a message answer 429 (a delete burst meeting the channel's limit). */
+  deleteRejects = 0;
   /** Extra time before a GET of a message (a fresh link) is answered (ms). */
   getDelayMs = 0;
   /**
@@ -322,6 +324,10 @@ export class FakeDiscord {
       return this.send(res, 200, this.msgJson(mid!, msg), cors);
     }
     if (req.method === "DELETE") {
+      if (this.deleteRejects > 0) {
+        this.deleteRejects--;
+        return this.send(res, 429, { message: "You are being rate limited.", retry_after: 0.2, global: false }, { ...cors, "x-ratelimit-scope": "shared" });
+      }
       for (const a of msg.attachments) this.blobs.delete(a.id);
       this.messages.delete(mid!);
       res.writeHead(204, cors);

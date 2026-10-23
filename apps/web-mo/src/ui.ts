@@ -210,8 +210,8 @@ async function ed25519Supported(): Promise<boolean> {
 function showOldBrowser() {
   document.body.dataset.oldBrowser = "1";
   const tpl = ui<HTMLTemplateElement>("old-browser-tpl");
-  // Not on the "signed out by the server" card: it makes no keys.
-  for (const card of document.querySelectorAll<HTMLElement>("[data-ddn=signed-out] .auth-card:not([data-auth=lost])")) {
+  // Not on the "signed out by the server" and "keyring locked" cards: they make no keys.
+  for (const card of document.querySelectorAll<HTMLElement>("[data-ddn=signed-out] .auth-card:not([data-auth=lost]):not([data-auth=locked])")) {
     if (card.querySelector("[data-ddn=old-browser]")) continue;
     const note = tpl.content.firstElementChild!.cloneNode(true) as HTMLElement;
     applyStatic(note);
@@ -2612,9 +2612,7 @@ function speedResultText(r: SpeedTestResult): string {
     r.line ? `${t("sp.line")}: ${t("sp.lineV", { d: spf(r.line.down), u: spf(r.line.up) })}` : "",
     d.up != null ? `${t("sp.discordUp")}: ${spf(d.up)} MB/s${d.upShare != null ? ` (${t("sp.ofLine", { p: Math.round(d.upShare * 100) })})` : ""}` : "",
     d.down != null ? `${t("sp.discordDown")}: ${spf(d.down)} MB/s${d.downShare != null ? ` (${t("sp.ofLine", { p: Math.round(d.downShare * 100) })})` : ""}` : "",
-    `${t("sp.channels")}: ${d.channels} · ${d.fragments} × ${fmtSize(d.fragmentBytes)}`,
-    `${t("sp.conc")}: ${concText(r)}`,
-    `${t("sp.problems")}: ${d.rateLimited} / ${d.errors}`,
+    ...(d.fragments > 0 ? [`${t("sp.channels")}: ${d.channels} · ${d.fragments} × ${fmtSize(d.fragmentBytes)}`, `${t("sp.conc")}: ${concText(r)}`, `${t("sp.problems")}: ${d.rateLimited} / ${d.errors}`] : []),
     ...r.hints.map(hintText),
   ].filter(Boolean).join("\n");
 }
@@ -2657,15 +2655,25 @@ function paintSpeedResult(r: SpeedTestResult) {
     ...(r.line ? [row("sp.line", t("sp.lineV", { d: spf(r.line.down), u: spf(r.line.up) }), "line")] : []),
     ...(d.up != null ? [row("sp.discordUp", mbps(d.up), "up", ...share(d.upShare))] : []),
     ...(d.down != null ? [row("sp.discordDown", mbps(d.down), "down", ...share(d.downShare))] : []),
-    row("sp.channels", `${d.channels} · ${d.fragments} × ${fmtSize(d.fragmentBytes)}`, "channels"),
-    row("sp.conc", concText(r), "conc"),
-    row("sp.problems", `${d.rateLimited} / ${d.errors}`, "problems"),
+    // Only the line measured (e2ee / plain, or the Discord part could not run): no Discord rows of zeros.
+    ...(d.fragments > 0
+      ? [row("sp.channels", `${d.channels} · ${d.fragments} × ${fmtSize(d.fragmentBytes)}`, "channels"), row("sp.conc", concText(r), "conc"), row("sp.problems", `${d.rateLimited} / ${d.errors}`, "problems")]
+      : []),
     row("sp.build", `${r.build ?? "?"} · ${t(`sp.where.${r.platform === "desktop" ? "desktop" : "web"}`)} · ${fmtDateTime(r.at)}`, "build"),
   );
   $("speed-hints").replaceChildren(...r.hints.map((x) => h("li", { "data-ddn": "speed-hint", "data-k": x.k }, hintText(x))), ...(d.leftOver ? [h("li", {}, t("sp.leftover", { n: d.leftOver }))] : []));
   $("speed-card").hidden = false;
+  // The result where the user looks: the card scrolled into view (it opens below the fold in a usual window).
+  $("speed-card").scrollIntoView({ block: "nearest", behavior: "smooth" });
   $("speed-copy").onclick = () => void copy(speedResultText(r), t("sp.copied"));
 }
+// Tests (check.ts): the rows a result card would show, without running a test.
+(window as unknown as { ddnSpeedCardRows(r: SpeedTestResult): string[] }).ddnSpeedCardRows = (r) => {
+  paintSpeedResult(r);
+  const rows = [...document.querySelectorAll<HTMLElement>("[data-ddn=speed-result] > [data-ddn]")].map((e) => e.dataset.ddn!.replace(/^speed-/, ""));
+  $("speed-card").hidden = true;
+  return rows;
+};
 function paintSpeedHistory() {
   const hs = speedHistory();
   $("speed-history-box").hidden = hs.length === 0;
@@ -2687,6 +2695,8 @@ function wireSpeedTest() {
       $("speed-run").hidden = true;
       $("speed-cancel").hidden = false;
       $("speed-state").textContent = t("sp.running");
+      // The progress line in view (the button may sit low in a short window).
+      $("speed-live").scrollIntoView({ block: "nearest", behavior: "smooth" });
       $("speed-state").className = "chip chip--accent";
       $("speed-card").hidden = true;
       try {

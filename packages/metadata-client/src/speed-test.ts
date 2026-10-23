@@ -74,15 +74,39 @@ export type SpeedHint =
 const KEY_PREFIX = "st:";
 const MBPS = (b: number, ms: number) => (ms > 0 ? b / 1e6 / (ms / 1000) : 0);
 
-/** Delete what an earlier test left (cut short): returns how many messages were deleted. */
+/**
+ * Delete one test message, trying again: a 429 waits what Discord asks (at most a minute), another failure
+ * backs off (1, 2, 4, 8 s). True: deleted or already gone. Deletes are not paced like posts, so a burst of
+ * them right after a test meets the channel's limit; giving up at the first 429 left messages behind.
+ */
+export async function removeTestMessage(remove: (p: Placement) => Promise<unknown>, p: Placement, signal?: AbortSignal, tries = 5): Promise<boolean> {
+  for (let a = 0; a < tries; a++) {
+    try {
+      await remove(p);
+      return true;
+    } catch (e) {
+      if (/404|Unknown Message|gone/i.test(String((e as Error)?.message ?? e))) return true;
+      if (a === tries - 1 || signal?.aborted) return false;
+      const ms = e instanceof RateLimitedError ? Math.min(60_000, Math.max(250, e.retryAfterMs)) : 1000 * 2 ** a;
+      await new Promise((r) => setTimeout(r, ms));
+    }
+  }
+  return false;
+}
+
+/**
+ * Delete what an earlier test left (cut short, or deletes that failed then): returns how many messages were
+ * deleted. An entry leaves the list only when its message is gone; a failure keeps it for the next start.
+ */
 export async function cleanupLeftovers(client: Pick<DriveClient, "blobs">, store: ResumeStore): Promise<number> {
   const remove = (client.blobs as { remove?(p: Placement): Promise<unknown> }).remove?.bind(client.blobs);
   if (!remove) return 0;
   let n = 0;
   for (const [k, v] of await store.entries(KEY_PREFIX).catch(() => [] as [string, unknown][])) {
-    const p = v as Placement;
-    await remove(p).then(() => n++).catch(() => {});
-    await store.del(k).catch(() => {});
+    if (await removeTestMessage(remove, v as Placement)) {
+      n++;
+      await store.del(k).catch(() => {});
+    }
   }
   return n;
 }
@@ -252,12 +276,13 @@ export async function discordSpeed(
     if (remove) {
       const all = posted.map((p, i) => [p, i] as const).filter((x): x is readonly [Placement, number] => !!x[0]);
       let done = 0;
+      // Two at a time, each tried again after a 429 (a cancel does not stop the clean-up).
       await Promise.all(
-        Array.from({ length: 4 }, async () => {
+        Array.from({ length: 2 }, async () => {
           for (;;) {
             const x = all.shift();
             if (!x) return;
-            const ok = await remove(x[0]).then(() => true).catch(() => false);
+            const ok = await removeTestMessage(remove, x[0]);
             if (ok) {
               deleted++;
               await forget(x[1]);

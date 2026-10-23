@@ -389,11 +389,19 @@ try {
       await p.fill("[data-ddn=speed-count]", "6");
       await p.fill("[data-ddn=speed-size]", "1");
       await p.check("[data-ddn=speed-noline]");
+      // The deletes meet the channel's limit (429 for the first 4): they are tried again, none is left.
+      fake!.deleteRejects = 4;
       await p.click("[data-ddn=speed-run]");
       await p.waitForSelector("[data-ddn=speed-card]:not([hidden])", { timeout: 120_000 });
       st.up = await p.textContent("[data-ddn=speed-up]");
       st.down = await p.textContent("[data-ddn=speed-down]");
       st.channels = await p.textContent("[data-ddn=speed-channels]");
+      // The card is scrolled into view (a usual window: it opens below the fold).
+      st.cardInView = await p.evaluate(() => {
+        const b = document.querySelector("[data-ddn=speed-card]")!.getBoundingClientRect();
+        return b.top < innerHeight && b.bottom > 0;
+      });
+      st.deleteRejectsLeft = fake!.deleteRejects;
       if (shotDir) {
         await p.locator("[data-ddn=speed-card]").scrollIntoViewIfNeeded();
         await shot(p, "33a-speed-result");
@@ -413,7 +421,11 @@ try {
       st.cancelText = await p.textContent("[data-ddn=speed-live]");
       st.msgsAfterCancel = fake ? fake.messages.size - msgs0 : 0;
       await shot(p, "33-speed-test");
-    } else st.advHidden = await p.isHidden("[data-ddn=speed-adv]");
+    } else {
+      st.advHidden = await p.isHidden("[data-ddn=speed-adv]");
+      // Only the line here: the card of such a result has no Discord rows (no "0 × 10 MB", "up to 0").
+      st.lineOnlyRows = await p.evaluate(() => (window as unknown as { ddnSpeedCardRows?(r: unknown): string[] }).ddnSpeedCardRows?.({ at: Date.now(), build: "x", platform: "web", line: { down: 50, up: 20 }, discord: { up: null, down: null, upShare: null, downShare: null, channels: 1, fragments: 0, fragmentBytes: 10485760, concUp: { auto: true, start: 0, max: 0 }, concDown: { auto: true, start: 0, max: 0 }, rateLimited: 0, errors: 0, deleted: 0, leftOver: 0 }, hints: [] }) ?? null);
+    }
     st.files = (await p.evaluate(() => (window as unknown as { ddnCore: { list(): Promise<{ rows: unknown[] }> } }).ddnCore.list())).rows.length - files0;
     r.speedTest = st;
     await nav(p, "settings", "appearance");
@@ -1909,7 +1921,7 @@ try {
     await op.waitForSelector("body[data-ready='1']");
     await op.waitForSelector("[data-ddn=old-browser]");
     r.oldBrowser = await op.evaluate(() => {
-      const cards = [...document.querySelectorAll("[data-ddn=signed-out] .auth-card:not([data-auth=lost])")];
+      const cards = [...document.querySelectorAll("[data-ddn=signed-out] .auth-card:not([data-auth=lost]):not([data-auth=locked])")];
       const notes = cards.filter((c) => c.querySelector("[data-ddn=old-browser]"));
       const btns = cards.flatMap((c) => [...c.querySelectorAll<HTMLButtonElement>(".auth-body button")]);
       return { cards: notes.length, buttonsDisabled: btns.length > 0 && btns.every((b) => b.disabled), text: notes[0]?.textContent ?? "", noRawError: !/Unrecognized name/.test(document.body.innerText) };
@@ -2057,7 +2069,7 @@ try {
       const f = r.folderNav as Record<string, unknown> | undefined;
       return !!f && f.upHiddenAtRoot === true && f.rowCursor === "pointer" && f.rowClick === true && /^(Parent folder|Folder nadrzędny)$/.test(String(f.upLabel)) && f.upButton === true && f.enter === true && f.backspaceInField === true && f.backspace === true && f.backspaceAtRootStays === true;
     })(),
-    speedTest: ((x) => !!x && x.files === 0 && (SERVER_SIDE ? x.advHidden === true : /MB\/s/.test(String(x.up)) && /MB\/s/.test(String(x.down)) && /6 ×/.test(String(x.channels)) && /discordrive speed test/.test(String(x.copied)) && Number(x.history) >= 1 && x.msgsAfter === 0 && x.msgsAfterCancel === 0 && /Cancel|Anulow/.test(String(x.cancelText))))(r.speedTest as Record<string, unknown> | undefined),
+    speedTest: ((x) => !!x && x.files === 0 && (SERVER_SIDE ? x.advHidden === true && JSON.stringify(x.lineOnlyRows) === JSON.stringify(["line", "build"]) : /MB\/s/.test(String(x.up)) && /MB\/s/.test(String(x.down)) && /6 ×/.test(String(x.channels)) && x.cardInView === true && x.deleteRejectsLeft === 0 && /discordrive speed test/.test(String(x.copied)) && Number(x.history) >= 1 && x.msgsAfter === 0 && x.msgsAfterCancel === 0 && /Cancel|Anulow/.test(String(x.cancelText))))(r.speedTest as Record<string, unknown> | undefined),
     settingsLayoutStable: ((x) => !!x && x.moved.length === 0)(r.settingsLayout as { moved: string[] } | undefined),
     settingsTabs: ((x) => !!x && x.everySectionOnce && x.untabbed.length === 0 && x.oneChannelList && x.reloadApp && x.back && x.anchor && x.remembered === "/settings/network" &&
       x.tabs.channels!.join() === "channels" && x.tabs.account!.join() === "account,rescue,security,sharing" && x.tabs.storage!.join() === "storage" &&
