@@ -420,14 +420,20 @@
         <item quantity="many">%d plików bez kopii — zostaje</item>
         <item quantity="other">%d pliku bez kopii — zostaje</item>
     </plurals>
-    <string name="ddn_free_kept">%1$d zmienionych od wysłania albo usuniętych z konta — zostają</string>
+    <plurals name="ddn_free_kept">
+        <item quantity="one">%d zmieniony od wysłania albo usunięty z konta — zostaje</item>
+        <item quantity="few">%d zmienione od wysłania albo usunięte z konta — zostają</item>
+        <item quantity="many">%d zmienionych od wysłania albo usuniętych z konta — zostaje</item>
+        <item quantity="other">%d zmienionego od wysłania albo usuniętego z konta — zostaje</item>
+    </plurals>
+    <string name="ddn_free_none_more">Nic więcej do usunięcia.</string>
     <string name="ddn_free_old_android">Android 10 nie pozwala przenieść ich do kosza telefonu jednym potwierdzeniem; usuń je w galerii telefonu.</string>
     <string name="ddn_free_go">Usuń z telefonu</string>
     <plurals name="ddn_free_done">
-        <item quantity="one">Przeniesiono %d plik do kosza telefonu.</item>
-        <item quantity="few">Przeniesiono %d pliki do kosza telefonu.</item>
-        <item quantity="many">Przeniesiono %d plików do kosza telefonu.</item>
-        <item quantity="other">Przeniesiono %d pliku do kosza telefonu.</item>
+        <item quantity="one">Usunięto z telefonu %1$d plik (%2$s). Jest w koszu telefonu przez 30 dni.</item>
+        <item quantity="few">Usunięto z telefonu %1$d pliki (%2$s). Są w koszu telefonu przez 30 dni.</item>
+        <item quantity="many">Usunięto z telefonu %1$d plików (%2$s). Są w koszu telefonu przez 30 dni.</item>
+        <item quantity="other">Usunięto z telefonu %1$d pliku (%2$s). Jest w koszu telefonu przez 30 dni.</item>
     </plurals>
     <string name="ddn_open_send">Wyślij do discordrive</string>
 </resources>

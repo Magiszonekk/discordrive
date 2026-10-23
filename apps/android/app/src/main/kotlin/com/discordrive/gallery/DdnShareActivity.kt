@@ -42,7 +42,7 @@ class DdnShareActivity : AppCompatActivity() {
         thread {
             val n = runCatching { DdnUploads.queue(this, uris, folder) }.getOrElse { e -> runOnUiThread { Toast.makeText(this, getString(R.string.ddn_error, e.message), Toast.LENGTH_LONG).show(); finish() }; return@thread }
             runOnUiThread {
-                Toast.makeText(this, resources.getQuantityString(R.plurals.ddn_up_queued, n, n), Toast.LENGTH_LONG).show()
+                Toast.makeText(this, plq(R.plurals.ddn_up_queued, n, n), Toast.LENGTH_LONG).show()
                 finish()
             }
         }

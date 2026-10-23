@@ -97,7 +97,7 @@ class DdnTrashActivity : AppCompatActivity() {
                 val left = TrashPolicy.daysLeft(c.trashedAt ?: serverNow, serverNow)
                 val what = if (c.isFolder) getString(R.string.ddn_folder) else Formatter.formatShortFileSize(this@DdnTrashActivity, c.size ?: 0)
                 val whenTrashed = c.trashedAt?.let { DateUtils.getRelativeTimeSpanString(it, serverNow, DateUtils.MINUTE_IN_MILLIS) } ?: ""
-                (text.getChildAt(1) as TextView).text = getString(R.string.ddn_trash_row, what, whenTrashed, resources.getQuantityString(R.plurals.ddn_trash_days, left, left))
+                (text.getChildAt(1) as TextView).text = getString(R.string.ddn_trash_row, what, whenTrashed, plq(R.plurals.ddn_trash_days, left, left))
                 box.setOnCheckedChangeListener(null)
                 box.isChecked = c.id in selected
                 box.setOnCheckedChangeListener { _, on -> if (on) selected += c.id else selected -= c.id; restore.isEnabled = selected.isNotEmpty(); purge.isEnabled = selected.isNotEmpty() }
@@ -110,7 +110,7 @@ class DdnTrashActivity : AppCompatActivity() {
         val n = selected.size
         AlertDialog.Builder(this)
             .setTitle(R.string.ddn_trash_purge)
-            .setMessage(resources.getQuantityString(R.plurals.ddn_trash_purge_ask, n, n))
+            .setMessage(plq(R.plurals.ddn_trash_purge_ask, n, n))
             .setPositiveButton(R.string.ddn_trash_purge) { _, _ -> act(restore = false) }
             .setNegativeButton(android.R.string.cancel, null)
             .show()

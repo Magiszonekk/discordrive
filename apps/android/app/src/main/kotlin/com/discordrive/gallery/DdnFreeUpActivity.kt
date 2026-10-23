@@ -29,11 +29,14 @@ class DdnFreeUpActivity : AppCompatActivity() {
     private lateinit var progress: ProgressBar
     private lateinit var go: Button
     private var scan: DdnFreeUp.Scan? = null
+    /** After a removal: what went (shown above the next check, which finds nothing more to remove). */
+    private var removedNote: String? = null
 
     private val confirm = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
         val n = scan?.ready?.size ?: 0
         if (r.resultCode == Activity.RESULT_OK) {
-            Toast.makeText(this, resources.getQuantityString(R.plurals.ddn_free_done, n, n), Toast.LENGTH_LONG).show()
+            removedNote = plq(R.plurals.ddn_free_done, n, n, Formatter.formatShortFileSize(this, scan?.bytes ?: 0))
+            Toast.makeText(this, removedNote, Toast.LENGTH_LONG).show()
             removedForTest = true
         }
         check()
@@ -69,9 +72,10 @@ class DdnFreeUpActivity : AppCompatActivity() {
                 r.onSuccess { sc ->
                     scan = sc
                     state.text = buildString {
-                        append(if (sc.ready.isEmpty()) getString(R.string.ddn_free_none) else resources.getQuantityString(R.plurals.ddn_free_ready, sc.ready.size, sc.ready.size, Formatter.formatShortFileSize(this@DdnFreeUpActivity, sc.bytes)))
-                        if (sc.notCopied > 0) append("\n").append(resources.getQuantityString(R.plurals.ddn_free_not_copied, sc.notCopied, sc.notCopied))
-                        if (sc.changed + sc.gone > 0) append("\n").append(getString(R.string.ddn_free_kept, sc.changed + sc.gone))
+                        removedNote?.let { append(it).append("\n\n") }
+                        append(if (sc.ready.isEmpty()) getString(if (removedNote != null) R.string.ddn_free_none_more else R.string.ddn_free_none) else plq(R.plurals.ddn_free_ready, sc.ready.size, sc.ready.size, Formatter.formatShortFileSize(this@DdnFreeUpActivity, sc.bytes)))
+                        if (sc.notCopied > 0) append("\n").append(plq(R.plurals.ddn_free_not_copied, sc.notCopied, sc.notCopied))
+                        if (sc.changed + sc.gone > 0) append("\n").append(plq(R.plurals.ddn_free_kept, sc.changed + sc.gone, sc.changed + sc.gone))
                         if (Build.VERSION.SDK_INT < 30 && sc.ready.isNotEmpty()) append("\n").append(getString(R.string.ddn_free_old_android))
                     }
                     go.isEnabled = sc.ready.isNotEmpty() && Build.VERSION.SDK_INT >= 30

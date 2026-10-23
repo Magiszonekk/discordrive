@@ -78,7 +78,7 @@ class AlbumAdapter(
                 if (album.isFavorites && album.cover == null) View.VISIBLE else View.GONE
             holder.videoIcon.visibility = if (album.allVideo) View.VISIBLE else View.GONE
             holder.name.text = album.name
-            holder.count.text = ctx.resources.getQuantityString(R.plurals.album_count, album.count, album.count)
+            holder.count.text = ctx.plq(R.plurals.album_count, album.count, album.count)
         }
         holder.itemView.setOnClickListener { onClick(album) }
     }
