@@ -525,6 +525,62 @@ try {
   await gone(pid1);
   app = null;
 
+  step("keys sealed by a keyring that is not there now (QA B1): a screen with the reason, retry and the kit");
+  // Linux only: Windows and macOS always have their key store (DPAPI, Keychain), so there the case is a
+  // store that refuses, covered by keyring.test.ts.
+  if (process.platform === "linux") {
+    // The first app's data with keys.bin marked as sealed by the keyring (the CI runner has none: the app
+    // runs on the file store, as with a locked keyring whose unlock was cancelled).
+    const dataL = join(work, "data-locked");
+    const { cpSync } = await import("node:fs");
+    cpSync(data, dataL, { recursive: true });
+    const kb = join(dataL, "agent", "keys.bin");
+    const raw = readFileSync(kb);
+    writeFileSync(kb, Buffer.concat([Buffer.from("DDNKS"), raw.subarray(5)]));
+    // The test's "keyring": file until the user unlocks it (written to "os" below), with a sealer that
+    // opens what it sealed (the agent's sealing goes through the main process: plain Electron safeStorage
+    // with basic_text works on the runner).
+    const ksFile = join(work, "keystore-state");
+    writeFileSync(ksFile, "file");
+    process.env.DDN_DESKTOP_TEST_KEYSTORE_FILE = ksFile;
+    const wl = await launch(dataL);
+    const errs: string[] = [];
+    wl.page.on("pageerror", (e) => errs.push(String(e)));
+    const shown = await wl.page.waitForSelector("[data-ddn=keys-locked]:not([hidden])", { timeout: 60_000 }).then(() => true).catch(() => false);
+    const why = (await wl.page.textContent("[data-ddn=keys-locked-why]").catch(() => "")) ?? "";
+    const retry = await wl.page.isVisible("[data-ddn=keys-locked-retry]");
+    const kit = await wl.page.isVisible("[data-ddn=keys-locked-kit]");
+    await wl.page.click("[data-ddn=keys-locked-retry]");
+    await wl.page.waitForTimeout(800);
+    const stillShown = await wl.page.isVisible("[data-ddn=keys-locked]");
+    await wl.page.click("[data-ddn=keys-locked-kit]");
+    const kitScreen = await wl.page.waitForSelector("[data-ddn=rescue-dialog]:not([hidden])", { timeout: 10_000 }).then(() => true).catch(() => false);
+    // Back to the locked screen (the rescue kit is a way, not a must).
+    await wl.page.evaluate(() => {
+      history.pushState(null, "", "/");
+      dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await wl.page.waitForSelector("[data-ddn=keys-locked]:not([hidden])", { timeout: 10_000 }).catch(() => {});
+    // N1: the keyring unlocked after the start: Try again now opens the account, without a restart.
+    // (Sealed keys here: re-seal the copy with the keyring the app will use, so it can open them.)
+    // Sealed the way the test key store does (DDN_DESKTOP_TEST_KEYSTORE_FILE: a stand-in for a keyring).
+    const plainKeys = readFileSync(kb).subarray(5);
+    const sealed = Buffer.from(plainKeys.map((x) => x ^ 0x5a)).toString("base64");
+    const sealedOk = true;
+    if (sealed) writeFileSync(kb, Buffer.concat([Buffer.from("DDNKS"), Buffer.from(sealed, "base64")]));
+    writeFileSync(ksFile, "os");
+    await wl.page.click("[data-ddn=keys-locked-retry]");
+    const opened = await wl.page.waitForSelector("[data-page=files]:not([hidden])", { timeout: 60_000 }).then(() => true).catch(() => false);
+    writeFileSync(ksFile, "file");
+    r.keysLocked = { shown, why, retry, kit, stillShown, kitScreen, sealedOk, opened, errors: errs };
+    check("keysLockedScreen", shown && /key store/.test(why) && retry && kit && stillShown && kitScreen && errs.length === 0);
+    check("keysLockedRetryOpens", !sealedOk || opened);
+    const pidL = wl.app.process().pid;
+    await wl.app.evaluate(({ app: a }) => a.exit(0)).catch(() => {});
+    await wl.app.close().catch(() => {});
+    await gone(pidL);
+  }
+
   step("second app, 'Connect to a server': a remote instance (invite only)");
   const srv = new DdnServer({ signup: "invite", rateLimits: false });
   const { url } = await srv.listen(0, "127.0.0.1");

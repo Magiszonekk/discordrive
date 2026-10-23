@@ -434,8 +434,20 @@ export class AppCore {
   }
 
   async status() {
-    const a = this.acct ?? (await this.platform.keys.load()) ?? null;
+    // Keys on this device that cannot be opened now (desktop: a locked keyring, its unlock cancelled): the
+    // UI shows why and offers a retry or the rescue kit, instead of nothing (an exception here left the
+    // window empty).
+    let keysLocked: string | null = null;
+    const a =
+      this.acct ??
+      (await this.platform.keys.load().catch((e: unknown) => {
+        if ((e as { code?: string })?.code !== "keystore_locked") throw e;
+        keysLocked = String((e as Error).message);
+        return null;
+      })) ??
+      null;
     return {
+      keysLocked,
       /** Build-time mode of this app (the instance runs the same one). */
       mode: mode.mode,
       signedIn: !!this.client,

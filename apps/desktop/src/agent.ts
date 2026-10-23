@@ -50,7 +50,13 @@ const sealWait = new Map<number, { ok: (b: Uint8Array) => void; err: (e: Error) 
 function viaMain(type: "seal" | "unseal", data: Uint8Array): Promise<Uint8Array> {
   return new Promise((ok, err) => {
     const id = ++sealSeq;
-    sealWait.set(id, { ok, err });
+    // A key store that never answers (a keyring dialog left open, a stuck D-Bus): an error after 2 minutes,
+    // so the window says why instead of waiting for ever.
+    const t = setTimeout(() => {
+      sealWait.delete(id);
+      err(new Error("the system key store did not answer"));
+    }, 120_000);
+    sealWait.set(id, { ok: (b) => (clearTimeout(t), ok(b)), err: (e) => (clearTimeout(t), err(e)) });
     parent.postMessage({ type, id, data });
   });
 }
