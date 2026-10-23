@@ -377,6 +377,47 @@ try {
     r.settingsLayout = { moved, layout };
     await nav(p, "settings", "appearance");
   }
+  // Speed test (Network): through the fake Discord's channels (the line test skipped: CI does not measure
+  // Cloudflare); the result card, Copy, no node and no message left, a cancel deletes what it posted.
+  {
+    await nav(p, "settings", "network");
+    const files0 = (await p.evaluate(() => (window as unknown as { ddnCore: { list(): Promise<{ rows: unknown[] }> } }).ddnCore.list())).rows.length;
+    const msgs0 = fake ? fake.messages.size : 0;
+    const st: Record<string, unknown> = {};
+    if (!SERVER_SIDE) {
+      await p.click("[data-ddn=speed-adv] summary");
+      await p.fill("[data-ddn=speed-count]", "6");
+      await p.fill("[data-ddn=speed-size]", "1");
+      await p.check("[data-ddn=speed-noline]");
+      await p.click("[data-ddn=speed-run]");
+      await p.waitForSelector("[data-ddn=speed-card]:not([hidden])", { timeout: 120_000 });
+      st.up = await p.textContent("[data-ddn=speed-up]");
+      st.down = await p.textContent("[data-ddn=speed-down]");
+      st.channels = await p.textContent("[data-ddn=speed-channels]");
+      if (shotDir) {
+        await p.locator("[data-ddn=speed-card]").scrollIntoViewIfNeeded();
+        await shot(p, "33a-speed-result");
+      }
+      await p.click("[data-ddn=speed-copy]");
+      st.copied = await p.evaluate(() => navigator.clipboard.readText()).catch(() => "");
+      st.history = await p.locator("[data-ddn=speed-history-row]").count();
+      st.msgsAfter = fake ? fake.messages.size - msgs0 : 0;
+      // Cancel mid-way: what it posted goes too.
+      await p.fill("[data-ddn=speed-count]", "40");
+      fake!.postDelayMs = 200;
+      await p.click("[data-ddn=speed-run]");
+      await p.waitForFunction(() => /Discord/.test(document.querySelector("[data-ddn=speed-live]")?.textContent ?? ""), null, { timeout: 30_000 });
+      await p.click("[data-ddn=speed-cancel]");
+      await p.waitForSelector("[data-ddn=speed-run]:not([hidden])", { timeout: 60_000 });
+      fake!.postDelayMs = 0;
+      st.cancelText = await p.textContent("[data-ddn=speed-live]");
+      st.msgsAfterCancel = fake ? fake.messages.size - msgs0 : 0;
+      await shot(p, "33-speed-test");
+    } else st.advHidden = await p.isHidden("[data-ddn=speed-adv]");
+    st.files = (await p.evaluate(() => (window as unknown as { ddnCore: { list(): Promise<{ rows: unknown[] }> } }).ddnCore.list())).rows.length - files0;
+    r.speedTest = st;
+    await nav(p, "settings", "appearance");
+  }
   // Accent colour (Appearance): a preset recolours the main buttons, survives a reload, a custom colour too, Cobalt back.
   {
     const accentOf = () => p.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--color-accent").trim());
@@ -2016,10 +2057,11 @@ try {
       const f = r.folderNav as Record<string, unknown> | undefined;
       return !!f && f.upHiddenAtRoot === true && f.rowCursor === "pointer" && f.rowClick === true && /^(Parent folder|Folder nadrzędny)$/.test(String(f.upLabel)) && f.upButton === true && f.enter === true && f.backspaceInField === true && f.backspace === true && f.backspaceAtRootStays === true;
     })(),
+    speedTest: ((x) => !!x && x.files === 0 && (SERVER_SIDE ? x.advHidden === true : /MB\/s/.test(String(x.up)) && /MB\/s/.test(String(x.down)) && /6 ×/.test(String(x.channels)) && /discordrive speed test/.test(String(x.copied)) && Number(x.history) >= 1 && x.msgsAfter === 0 && x.msgsAfterCancel === 0 && /Cancel|Anulow/.test(String(x.cancelText))))(r.speedTest as Record<string, unknown> | undefined),
     settingsLayoutStable: ((x) => !!x && x.moved.length === 0)(r.settingsLayout as { moved: string[] } | undefined),
     settingsTabs: ((x) => !!x && x.everySectionOnce && x.untabbed.length === 0 && x.oneChannelList && x.reloadApp && x.back && x.anchor && x.remembered === "/settings/network" &&
       x.tabs.channels!.join() === "channels" && x.tabs.account!.join() === "account,rescue,security,sharing" && x.tabs.storage!.join() === "storage" &&
-      x.tabs.network!.join() === "network" && x.tabs.appearance!.join() === "appearance" && x.tabs.app!.join() === "diagnostics,browser")(
+      x.tabs.network!.join() === "network,speed" && x.tabs.appearance!.join() === "appearance" && x.tabs.app!.join() === "diagnostics,browser")(
       r.settingsTabs as { tabs: Record<string, string[]>; reloadApp: boolean; back: boolean; anchor: boolean; remembered: string; everySectionOnce: boolean; untabbed: string[]; oneChannelList: boolean } | undefined),
     layout: r.filesPageClean === true && r.settingsSurvivesReload === true && r.devicesSurvivesReload === true && (r.folderRoute as { path: boolean; crumb: string }).path && (r.folderRoute as { crumb: string }).crumb === "Wakacje",
     fonts: JSON.stringify(r.fontsLoaded) === JSON.stringify(["Inter", "JetBrains Mono", "Space Grotesk"]),

@@ -344,6 +344,11 @@ export class DriveClient {
     this.syncWindows();
   }
 
+  /** Plaintext bytes per fragment (uploads, the speed test). */
+  get fragmentSize(): number {
+    return this.chunkSize;
+  }
+
   get store(): IndexStore {
     return this.replica.store;
   }

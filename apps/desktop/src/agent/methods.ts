@@ -30,6 +30,8 @@ export const CORE_METHODS: Record<string, string[]> = {
   unfinishedUploads: [],
   forgetUnfinished: ["s"],
   setNetPrefs: ["o"],
+  speedTest: ["o?"],
+  speedTestCancel: [],
   netUseLane: ["n"],
   setOnline: ["b"],
   netStatus: [],

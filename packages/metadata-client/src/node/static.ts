@@ -32,13 +32,15 @@ export interface StaticOptions {
 }
 
 export const DISCORD_ORIGINS = ["https://discord.com", "https://cdn.discordapp.com", "https://media.discordapp.net"];
+/** Settings → Network → Speed test measures the line there (download and upload streams). */
+export const SPEEDTEST_ORIGIN = "https://speed.cloudflare.com";
 
 export function securityHeaders(connectSrc: string[]): Record<string, string> {
   const csp = [
     "default-src 'self'",
     "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
-    `connect-src 'self' ${connectSrc.join(" ")}`,
+    `connect-src 'self' ${[...connectSrc, SPEEDTEST_ORIGIN].join(" ")}`,
     "img-src 'self' blob: data:",
     "media-src 'self' blob:",
     // File preview (apps/web-mo/src/preview.ts): PDFs open in the browser's own viewer in an

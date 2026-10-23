@@ -11,6 +11,7 @@
 import { uploadResumeKey } from "./resume-idb.js";
 import { renderSVG } from "uqr";
 import type { CoreEvent, OpOutcome, TrashRow, UiNotice } from "./app-core.js";
+import type { SpeedTestProgress, SpeedTestResult } from "@ddv4/metadata-client";
 import { applyStatic, fmtDate, fmtDateTime, fmtNum, fmtSize, getLang, isLang, setLang, storeLang, storedLang, t, tn, type Lang } from "./i18n.js";
 import { connect } from "./rpc.js";
 import { createPreview, type PreviewRow } from "./preview.js";
@@ -108,6 +109,7 @@ function onCoreEvent(e: CoreEvent) {
   else if (e.type === "net-baseline") storeNet({ baseline: e.data });
   else if (e.type === "net-tune") storeNet({ tune: e.data });
   else if (e.type === "auth-lost") void render();
+  else if (e.type === "speed-progress") paintSpeedProgress(e.p);
 }
 export const core = connect(worker, onCoreEvent);
 (window as unknown as { ddnCore: typeof core }).ddnCore = core;
@@ -2565,6 +2567,149 @@ async function paintConcurrency() {
 function renderNetwork() {
   void paintConcurrency();
   void core.netStatus().then(paintNetSettings, () => null);
+  paintSpeedIntro();
+}
+
+// ── Speed test (Settings → Network & transfers) ──
+const SPEED_KEY = "ddn.speed.history";
+const speedHistory = (): SpeedTestResult[] => {
+  try {
+    return (JSON.parse(localStorage.getItem(SPEED_KEY) ?? "[]") as SpeedTestResult[]).slice(0, 5);
+  } catch {
+    return [];
+  }
+};
+function speedOpts() {
+  const n = (sel: string, lo: number, hi: number, d: number) => Math.max(lo, Math.min(hi, Math.round(Number($<HTMLInputElement>(sel).value) || d)));
+  return { count: n("speed-count", 4, 200, 32), sizeMb: n("speed-size", 1, 24, 10), noLine: $<HTMLInputElement>("speed-noline").checked, only: $<HTMLInputElement>("speed-uponly").checked ? ("up" as const) : undefined };
+}
+function paintSpeedIntro() {
+  const o = speedOpts();
+  const total = fmtSize(o.count * o.sizeMb * 1024 * 1024 * (o.only ? 1 : 2) + (o.noLine ? 0 : 400e6));
+  $("speed-lead").textContent = t("sp.lead", { n: o.count, mb: o.sizeMb, total });
+  // e2ee / plain: pieces go through the instance; only the line is measured (the Discord options do not apply).
+  $("speed-adv").hidden = __DDN_MODE__ !== "metadata-only";
+  void core.netStatus().then((st) => ($("speed-metered").hidden = !st?.leanWhy), () => null);
+  paintSpeedHistory();
+}
+const spf = (v: number | null | undefined) => (v == null ? "—" : fmtNum(Math.round(v * 10) / 10));
+function paintSpeedProgress(p: SpeedTestProgress) {
+  const stage = t(`sp.stage.${p.stage}`);
+  const mbps = spf(p.mbps);
+  $("speed-live").textContent =
+    p.stage === "cleanup"
+      ? `${stage}: ${p.bytes} / ${p.total}`
+      : p.total
+        ? t("sp.liveN", { stage, done: fmtSize(p.bytes), total: fmtSize(p.total), mbps, inflight: p.inFlight ?? 0 })
+        : t("sp.live", { stage, mbps });
+}
+/** The result as text (the Copy button; one line per value, no addresses or tokens). */
+function speedResultText(r: SpeedTestResult): string {
+  const d = r.discord;
+  return [
+    `discordrive speed test ${new Date(r.at).toISOString()} · ${t(`sp.where.${r.platform === "desktop" ? "desktop" : "web"}`)} · ${r.build ?? "?"}`,
+    r.line ? `${t("sp.line")}: ${t("sp.lineV", { d: spf(r.line.down), u: spf(r.line.up) })}` : "",
+    d.up != null ? `${t("sp.discordUp")}: ${spf(d.up)} MB/s${d.upShare != null ? ` (${t("sp.ofLine", { p: Math.round(d.upShare * 100) })})` : ""}` : "",
+    d.down != null ? `${t("sp.discordDown")}: ${spf(d.down)} MB/s${d.downShare != null ? ` (${t("sp.ofLine", { p: Math.round(d.downShare * 100) })})` : ""}` : "",
+    `${t("sp.channels")}: ${d.channels} · ${d.fragments} × ${fmtSize(d.fragmentBytes)}`,
+    `${t("sp.conc")}: ${concText(r)}`,
+    `${t("sp.problems")}: ${d.rateLimited} / ${d.errors}`,
+    ...r.hints.map(hintText),
+  ].filter(Boolean).join("\n");
+}
+function concText(r: SpeedTestResult): string {
+  const d = r.discord;
+  const how = (c: { auto: boolean; max: number }) => (c.auto ? t("sp.auto", { n: c.max }) : t("sp.fixed"));
+  return t("sp.concV", { up: d.concUp.start, upMode: how(d.concUp), down: d.concDown.start, downMode: how(d.concDown) });
+}
+function hintText(h: SpeedTestResult["hints"][number]): string {
+  switch (h.k) {
+    case "channels":
+      return t("sp.hint.channels", { per: spf(h.perChannel) });
+    case "browser-h3":
+      return t("sp.hint.browser-h3", { down: spf(h.down) });
+    case "line-full":
+      return t("sp.hint.line-full", { dir: t(`sp.dir.${h.dir}`), p: Math.round(h.share * 100) });
+    case "rate-limited":
+      return t("sp.hint.rate-limited", { n: h.n });
+    case "errors":
+      return t("sp.hint.errors", { n: h.n });
+    case "metered":
+      return t("sp.hint.metered");
+  }
+}
+function paintSpeedResult(r: SpeedTestResult) {
+  const d = r.discord;
+  const row = (k: string, v: string | (Node | string)[], dd?: string, ...more: Node[]) => h("div", { "data-ddn": `speed-${dd ?? k}` }, h("dt", { class: "label-mono" }, t(k)), h("dd", {}, h("span", { class: "val mono" }, ...(typeof v === "string" ? [v] : v)), ...more));
+  // A Discord speed: the number and its unit apart (the number is the big one; the unit's place comes from the locale).
+  const mbps = (v: number) => {
+    const [pre = "", post = ""] = t("sp.mbps", { v: "\u0000" }).split("\u0000");
+    return [pre, h("span", { class: "num" }, spf(v)), h("span", { class: "unit" }, post)] as (Node | string)[];
+  };
+  // The share of the line under it: words + a bar.
+  const share = (x: number | null) => {
+    if (x == null) return [];
+    const p = Math.round(x * 100);
+    return [h("span", { class: "share" }, t("sp.ofLine", { p })), h("span", { class: "share-bar", style: `--p:${Math.min(100, Math.max(0, p))}%`, "aria-hidden": "true" })];
+  };
+  $("speed-result").replaceChildren(
+    ...(r.line ? [row("sp.line", t("sp.lineV", { d: spf(r.line.down), u: spf(r.line.up) }), "line")] : []),
+    ...(d.up != null ? [row("sp.discordUp", mbps(d.up), "up", ...share(d.upShare))] : []),
+    ...(d.down != null ? [row("sp.discordDown", mbps(d.down), "down", ...share(d.downShare))] : []),
+    row("sp.channels", `${d.channels} · ${d.fragments} × ${fmtSize(d.fragmentBytes)}`, "channels"),
+    row("sp.conc", concText(r), "conc"),
+    row("sp.problems", `${d.rateLimited} / ${d.errors}`, "problems"),
+    row("sp.build", `${r.build ?? "?"} · ${t(`sp.where.${r.platform === "desktop" ? "desktop" : "web"}`)} · ${fmtDateTime(r.at)}`, "build"),
+  );
+  $("speed-hints").replaceChildren(...r.hints.map((x) => h("li", { "data-ddn": "speed-hint", "data-k": x.k }, hintText(x))), ...(d.leftOver ? [h("li", {}, t("sp.leftover", { n: d.leftOver }))] : []));
+  $("speed-card").hidden = false;
+  $("speed-copy").onclick = () => void copy(speedResultText(r), t("sp.copied"));
+}
+function paintSpeedHistory() {
+  const hs = speedHistory();
+  $("speed-history-box").hidden = hs.length === 0;
+  $("speed-history").replaceChildren(
+    ...hs.map((r) => h("li", { "data-ddn": "speed-history-row" }, h("span", { class: "dname mono" }, `${fmtDateTime(r.at)} · ↑ ${spf(r.discord.up)} ↓ ${spf(r.discord.down)} MB/s${r.line ? ` · ${t("sp.line")} ↓ ${spf(r.line.down)} ↑ ${spf(r.line.up)}` : ""}`), h("span", { class: "when" }, `${r.discord.channels} ch · ${r.build ?? ""}`))),
+  );
+}
+function wireSpeedTest() {
+  for (const k of ["speed-count", "speed-size", "speed-noline", "speed-uponly"]) $(k).addEventListener("change", paintSpeedIntro);
+  $("speed-cancel").onclick = () => void core.speedTestCancel();
+  $("speed-run").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      const o = speedOpts();
+      const st = await core.netStatus().catch(() => null);
+      if (st?.leanWhy) {
+        const total = fmtSize(o.count * o.sizeMb * 1024 * 1024 * (o.only ? 1 : 2) + (o.noLine ? 0 : 400e6));
+        if (!(await confirmDanger(t("sp.h"), t("sp.meteredAsk", { total }), t("sp.run")))) return;
+      }
+      $("speed-run").hidden = true;
+      $("speed-cancel").hidden = false;
+      $("speed-state").textContent = t("sp.running");
+      $("speed-state").className = "chip chip--accent";
+      $("speed-card").hidden = true;
+      try {
+        const r = await core.speedTest(o);
+        $("speed-live").textContent = "";
+        $("speed-state").textContent = t("sp.done");
+        $("speed-state").className = "chip chip--success";
+        paintSpeedResult(r);
+        try {
+          localStorage.setItem(SPEED_KEY, JSON.stringify([r, ...speedHistory()].slice(0, 5)));
+        } catch {
+          /* private mode */
+        }
+        paintSpeedHistory();
+      } catch (err) {
+        const aborted = /abort/i.test(String((err as Error)?.message ?? err));
+        $("speed-state").textContent = "";
+        $("speed-live").textContent = aborted ? t("sp.cancelled") : errText(err);
+        if (!aborted) throw err;
+      } finally {
+        $("speed-run").hidden = false;
+        $("speed-cancel").hidden = true;
+      }
+    });
 }
 /** Settings → Desktop app (only in the desktop app): version and updates, autostart, downloads folder, key storage. */
 async function renderDesktopApp() {
@@ -3295,6 +3440,7 @@ async function main() {
   wireStorage();
   wireDiagnostics();
   wireNet();
+  wireSpeedTest();
   wireSecurity();
   adminUi.wire();
   // Desktop: the agent uploads and downloads, also with the window closed (the browser notes speak of a tab).

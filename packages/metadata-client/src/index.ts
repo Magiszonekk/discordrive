@@ -245,3 +245,4 @@ export {
   type PendingPairing,
 } from "./pairing.js";
 export { handleStreamRequest, parseRange, guessType, STREAM_PREFIX, MAX_OPEN_RANGE } from "./stream.js";
+export { cleanupLeftovers, discordSpeed, lineSpeed, speedHints, type SpeedHint, type SpeedTestOptions, type SpeedTestProgress, type SpeedTestResult } from "./speed-test.js";
