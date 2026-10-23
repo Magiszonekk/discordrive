@@ -2607,7 +2607,7 @@ function wireDesktopApp() {
   if (!desktop) return;
   const d = desktop;
   $("app-check").onclick = (e) => void act(e.currentTarget as HTMLElement, () => paintUpdate(true));
-  // Download progress (QA N4: ~100 MB with no sign of life looked like a hang).
+  // Download progress (~100 MB with no sign of life looks like a hang).
   d.updates.onProgress?.((p) => {
     const hint = $("app-update-hint");
     hint.hidden = false;
