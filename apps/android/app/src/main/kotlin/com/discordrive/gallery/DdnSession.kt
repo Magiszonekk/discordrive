@@ -5,6 +5,8 @@ import android.util.Log
 import io.github.magiszonekk.discordrive.core.AccountState
 import io.github.magiszonekk.discordrive.core.AccountSync
 import io.github.magiszonekk.discordrive.core.Discord
+import io.github.magiszonekk.discordrive.core.DiscordWriter
+import io.github.magiszonekk.discordrive.core.FileWriter
 import io.github.magiszonekk.discordrive.core.FileFormat
 import io.github.magiszonekk.discordrive.core.FileReader
 import io.github.magiszonekk.discordrive.core.IndexReplica
@@ -33,6 +35,8 @@ class DdnSession private constructor(private val app: Context, val acct: Account
         private set
     val discord = Discord(apiOrigin = testDiscordOrigin)
     val files: FileReader = FileReader(discord, { id -> webhookUrl(id) })
+    /** Posts to the account's channels, paced per channel (30/min, as every client). */
+    val writer = DiscordWriter(apiOrigin = testDiscordOrigin)
     @Volatile var engineName: String = "?"
         private set
     @Volatile var headSeq: Long = 0
@@ -110,6 +114,17 @@ class DdnSession private constructor(private val app: Context, val acct: Account
         tmp.bufferedWriter().use { w -> for (s in replica.snapshotText()) w.write(s) }
         tmp.renameTo(localCopy)
     }
+
+    /**
+     * The uploader of this session: fragments go out on upload threads; the operations (upload_begin,
+     * upload_commit + create) run on the index thread, and the local copy is saved after each file.
+     */
+    fun uploader(parallel: Int = 3): FileWriter = FileWriter(writer, sync.api, { sync.writableWebhooks() }, { op ->
+        ix { _ -> sync.commit(op).also { headSeq = replica.headSeq; DdnAccount.setVaultRevision(app, sync.vaultRevision); saveCopy() } }
+    }, parallel = parallel)
+
+    /** The folder at `path` under the root (made where missing). Returns its ID. */
+    fun folderPath(path: List<String>): String = ix { _ -> path.fold("root") { parent, name -> sync.folder(name, parent) } }
 
     fun children(folderId: String): List<IndexReplica.Child> = ix { it.children(folderId) }
     fun media(limit: Int, after: Pair<Long, String>?): List<IndexReplica.Child> = ix { it.media(MEDIA_EXT, limit, after) }

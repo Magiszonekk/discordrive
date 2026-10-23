@@ -37,6 +37,12 @@ stored by the device that uploaded each file, the viewer (low-resolution preview
 play and seek, only the fragments needed are fetched), Download → the phone's Downloads. Metadata only.
 The index lives in the phone's JS engine and a local copy on disk (lists open without the network).
 
+**Uploads (from PR 4).**
+- "Share → discordrive" from any app, and the upload button in Files: the files go into a queue (copied into the app's storage) and then into the open folder, or into "Z telefonu" from the Gallery.
+- The automatic copy of photos and videos: off by default. Settings: the folders (Camera by default), Wi-Fi only, while charging only, "Copy now". Copies go to "Telefon – <device name>/<folder>"; each photo is copied once.
+- Both run in one background job (WorkManager, a dataSync foreground job with a notification). It starts on new media, every 6 hours, or when asked, in runs of at most 30 minutes.
+- The files use the web app's formats: 10 MiB fragments, the manifest with a WebP thumbnail and preview made on the phone, and one group operation. The web and desktop apps read them as their own.
+
 ## Account layer and compatibility
 
 `:core:ddn` implements the formats of `packages/metadata-client` in Kotlin. They are checked two ways:

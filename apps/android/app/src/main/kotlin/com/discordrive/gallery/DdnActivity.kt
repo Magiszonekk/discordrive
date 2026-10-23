@@ -61,7 +61,18 @@ open class DdnActivity : AppCompatActivity() {
             selectedItemId = if (gallery) 2 else 1
             setOnItemSelectedListener { gallery = it.itemId == 2; show(); true }
         }
-        root.addView(title)
+        val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        bar.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        // Upload a file into the open folder (Files) / the automatic copy settings.
+        bar.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_cloud_pending); setColorFilter(getColor(R.color.text)); contentDescription = getString(R.string.ddn_upload)
+            setPadding(dp(12), dp(12), dp(12), dp(12)); setOnClickListener { pick.launch(arrayOf("*/*")) }
+        })
+        bar.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_settings); setColorFilter(getColor(R.color.text)); contentDescription = getString(R.string.ddn_backup)
+            setPadding(dp(12), dp(12), dp(12), dp(12)); setOnClickListener { startActivity(Intent(this@DdnActivity, DdnBackupActivity::class.java)) }
+        })
+        root.addView(bar)
         root.addView(status)
         root.addView(swipe, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(nav)
@@ -87,7 +98,28 @@ open class DdnActivity : AppCompatActivity() {
                 session = s
                 show()
                 refresh()
+                DdnBackup.schedule(this)
             }
+        }
+    }
+
+    /** Files picked with "Upload": into the open folder (Files) or "Z telefonu" (Gallery). */
+    private val pick = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isEmpty()) return@registerForActivityResult
+        val folder = if (gallery) null else path.last().first
+        thread {
+            val r = runCatching { DdnUploads.queue(this, uris, folder) }
+            main.post {
+                r.onSuccess { android.widget.Toast.makeText(this, resources.getQuantityString(R.plurals.ddn_up_queued, it, it), android.widget.Toast.LENGTH_LONG).show(); watchUploads() }
+                    .onFailure { status.text = getString(R.string.ddn_error, it.message) }
+            }
+        }
+    }
+
+    /** When the upload job ends, the list shows the new files. */
+    private fun watchUploads() {
+        androidx.work.WorkManager.getInstance(this).getWorkInfosForUniqueWorkLiveData(DdnBackup.WORK_NOW).observe(this) { l ->
+            if (l.any { it.state.isFinished }) refresh()
         }
     }
 

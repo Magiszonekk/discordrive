@@ -20,6 +20,9 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import android.net.Uri
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
  * The app's browsing screens on a real account (apps/android/interop/harness.mts --app): pair through the
@@ -48,6 +51,58 @@ class BrowseUiTest {
         var n = -1
         s.onActivity { a -> n = a.findRecycler()?.adapter?.itemCount ?: -1 }
         return n
+    }
+
+    private fun uploads(sc: InteropScenario, r: LinkedHashMap<String, Boolean>) {
+        val cr = ctx.contentResolver
+        // A photo in DCIM/Camera (MediaStore, as the camera app writes it).
+        val bmp = Bitmap.createBitmap(1600, 1200, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.rgb(30, 120, 200)) }
+        val name = "PXL_test_${System.currentTimeMillis()}.jpg"
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "DCIM/Camera")
+        }
+        val uri = cr.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)!!
+        cr.openOutputStream(uri)!!.use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        val photoBytes = cr.openInputStream(uri)!!.use { it.readBytes() }
+        try {
+            // A shared file (a text file the app reads through a content URI of its own).
+            val shared = File(ctx.cacheDir, "notatka z telefonu.txt").apply { writeText("z telefonu " + "x".repeat(150_000)) }
+            val sharedUri = Uri.fromFile(shared)
+            DdnUploads.queue(ctx, listOf(sharedUri), null)
+            DdnBackup.set(ctx, on = true, wifi = false, charging = false, buckets = setOf("Camera"))
+            val wm = androidx.work.WorkManager.getInstance(ctx)
+            DdnBackup.runNow(ctx)
+            r["uploadJobDone"] = waitUntil(180_000) { wm.getWorkInfosForUniqueWork(DdnBackup.WORK_NOW).get().let { l -> l.isNotEmpty() && l.all { it.state.isFinished } } && DdnBackup.status(ctx)?.waiting == 0 }
+            val st = DdnBackup.status(ctx)
+            Log.i("ddn-ui", "upload status: $st")
+            val sess = DdnSession.get(ctx)!!
+            val phoneRoot = sess.children("root").firstOrNull { it.name == DdnBackup.rootName(sess.acct.deviceName) }
+            val cam = phoneRoot?.let { f -> sess.children(f.id).firstOrNull { it.name == "Camera" } }
+            val copy = cam?.let { f -> sess.children(f.id).firstOrNull { it.name == name } }
+            r["autoCopyInCameraFolder"] = copy != null && copy.size == photoBytes.size.toLong()
+            val z = sess.children("root").firstOrNull { it.name == DdnUploads.SHARED_FOLDER }
+            r["sharedInZTelefonu"] = z != null && sess.children(z.id).any { it.name == "notatka z telefonu.txt" && it.size == shared.length() }
+            if (copy != null) {
+                val v = sc.rpc("phoneUpload", buildJsonObject {
+                    put("folder", cam.id); put("name", name); put("sha", io.github.magiszonekk.discordrive.core.sha256Hex(photoBytes)); put("thumbSha", "")
+                }).jsonObject
+                r["webDownloadsAutoCopy"] = v.getValue("sha").jsonPrimitive.content == "true"
+                r["autoCopyHasThumbnail"] = v["thumbW"]?.jsonPrimitive?.content == "320"
+                Log.i("ddn-ui", "auto-copy picture: short side ${v["thumbW"]}; made here: ${runCatching { DdnPictures.make(ctx.contentResolver, uri).map { "${it.kind} ${it.width}x${it.height} ${it.data.size}" } }.getOrElse { it.toString() }}")
+            }
+            // A second run copies nothing again.
+            DdnBackup.runNow(ctx)
+            Thread.sleep(2000)
+            waitUntil(60_000) { wm.getWorkInfosForUniqueWork(DdnBackup.WORK_NOW).get().all { it.state.isFinished } }
+            sess.refresh()
+            r["copiedOnce"] = DdnBackup.status(ctx)?.copied == 0 && cam != null && sess.children(cam.id).count { it.name == name } == 1 &&
+                z != null && sess.children(z.id).count { it.name.startsWith("notatka z telefonu") } == 1
+        } finally {
+            DdnBackup.set(ctx, on = false)
+            cr.delete(uri, null, null)
+        }
     }
 
     @Test
@@ -95,6 +150,10 @@ class BrowseUiTest {
             r["viewerPicture"] = waitUntil { var ok = false; v.onActivity { a -> ok = a.hasPictureForTest() }; ok }
             shot("4-viewer")
         }
+        // Upload from the phone (PR 4): a file shared into the queue and a photo of the camera folder copied
+        // automatically, both through the background job (WorkManager, as in the app); the TS device downloads
+        // them and checks the bytes and the thumbnail made on the phone.
+        uploads(sc, r)
         Log.i("ddn-ui", "RESULT $r")
         sc.rpc("done", kotlinx.serialization.json.JsonObject(r.mapValues { JsonPrimitive(it.value) }))
         assertTrue("ui checks: $r", r.values.all { it })

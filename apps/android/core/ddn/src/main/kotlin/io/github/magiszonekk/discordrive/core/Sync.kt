@@ -196,6 +196,18 @@ class AccountSync(
         return mine ?: throw IllegalStateException("operation not in the log")
     }
 
+    /** The account's webhooks that take new pieces (not retired, not being drained). */
+    fun writableWebhooks(): List<Vault.Webhook> = Vault.webhooks(vault).filter { !it.retired }
+
+    /** A folder named `name` in `parentId` (outside the trash), made when there is none. Returns its ID. */
+    fun folder(name: String, parentId: String = "root"): String {
+        val nfc = Normalizer.normalize(name, Normalizer.Form.NFC)
+        replica.children(parentId).firstOrNull { it.isFolder && it.name == nfc }?.let { return it.id }
+        val r = mkdir(nfc, parentId)
+        if (r.strOrNull("outcome") != "applied") throw IllegalStateException("mkdir $nfc: ${r.strOrNull("outcome")}")
+        return replica.children(parentId).firstOrNull { it.isFolder && it.name == nfc }?.id ?: throw IllegalStateException("mkdir $nfc: not in the index")
+    }
+
     fun mkdir(name: String, parentId: String = "root"): JsonObject = commit(buildJsonObject {
         put("type", "create")
         put("kind", "folder")

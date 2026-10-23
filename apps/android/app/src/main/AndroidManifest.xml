@@ -11,6 +11,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
+    <!-- Android 14+: the user may give access to selected photos only (the automatic copy then sees those). -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <!-- Keeps the GPS position in the EXIF of copied photos (without it Android strips it). -->
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
 
     <!-- usesCleartextTraffic: dev setups talk to test APIs / self-hosted AI
          gateways over plain HTTP (VPN/LAN). Production servers use TLS. -->
@@ -46,6 +50,25 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Share → discordrive (one or more files from any app) -->
+        <activity
+            android:name=".DdnShareActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.Gallery"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".DdnBackupActivity" android:exported="false" android:label="@string/ddn_backup" />
         <activity android:name=".DdnViewerActivity" android:exported="false" android:theme="@style/Theme.Gallery.Viewer" />
 
         <!-- The phone's own photos (old gallery screen): kept for the next steps (auto backup), not in the launcher. -->
