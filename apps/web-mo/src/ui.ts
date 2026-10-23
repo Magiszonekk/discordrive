@@ -1159,6 +1159,8 @@ async function renderNow() {
       if (el.matches("a[data-ddn=settings-tab]")) el.dataset.tab === tab ? el.setAttribute("aria-current", "page") : el.removeAttribute("aria-current");
       else el.classList.toggle("tab-off", el.dataset.tab !== tab);
     });
+    // A phone shows the tab row scrolled sideways: keep the current tab in view (only the row scrolls).
+    document.querySelector<HTMLElement>("[data-ddn=settings-tab][aria-current=page]")?.scrollIntoView({ inline: "nearest", block: "nearest" });
     document.title = `${t(`set.tab.${tab}`)} · ${t("page.settings")} · ${t("app.title")}`;
     ui("acc-id").textContent = st.accountId ?? "-";
     ui("acc-device").textContent = st.deviceName || short(st.deviceId);
