@@ -220,11 +220,9 @@ async function nav(p: Page, name: "files" | "trash" | "devices" | "settings", ta
     }
   }
 }
-/** Settings → Channels is folded when there are channels: unfold it. */
+/** Settings → Channels: the section is always open (its own tab). */
 async function openChannels(p: Page) {
-  await p.waitForSelector("[data-ddn=channels-toggle]");
-  if ((await p.getAttribute("[data-ddn=channels-toggle]", "aria-expanded")) !== "true") await p.click("[data-ddn=channels-toggle]");
-  await p.waitForSelector("[data-ddn=channels-body]:not([hidden])");
+  await p.waitForSelector("[data-ddn=channels-sec] [data-ddn=webhook-url]", { state: "visible" });
 }
 const count = (p: Page, re: RegExp) => p.waitForFunction((src) => new RegExp(src).test(document.querySelector("[data-ddn=count]")?.textContent ?? ""), re.source, { timeout: 30_000 });
 
@@ -314,7 +312,7 @@ try {
   await nav(p, "settings", "channels");
   await p.reload();
   await p.waitForSelector("body[data-ready='1']");
-  r.settingsSurvivesReload = new URL(p.url()).pathname === "/settings/channels" && (await p.isVisible("[data-page=settings] [data-ddn=channels-toggle]"));
+  r.settingsSurvivesReload = new URL(p.url()).pathname === "/settings/channels" && (await p.isVisible("[data-page=settings] [data-ddn=channels-sec]"));
   // Tabs: every section has one tab and is reachable; one list of channels; the address, a reload, Back,
   // old anchors (/settings#network) and the remembered tab.
   {
@@ -345,6 +343,38 @@ try {
       untabbed: sections.filter((x) => !x.tab).map((x) => x.id),
       oneChannelList: (await p.locator("[data-ddn=st-channels]").count()) === 0,
     };
+    // The layout does not move with the tab: at each width the tab bar and the content column keep their
+    // place and size whichever tab is open (a short tab has no page scrollbar, a long one has).
+    const layout: Record<string, { tabs: string; content: string; sb: number }[]> = {};
+    const moved: string[] = [];
+    for (const w of [1024, 1090, 1100, 1110, 1280, 1440, 1920, 390]) {
+      await p.setViewportSize({ width: w, height: w === 390 ? 844 : 860 });
+      const rows: { tabs: string; content: string; sb: number }[] = [];
+      for (const tab of ["channels", "account", "storage", "network", "appearance", "app"] as Tab[]) {
+        await p.click(`[data-ddn=settings-tab][data-tab=${tab}]`);
+        await p.waitForSelector(`[data-ddn=settings-tab][data-tab=${tab}][aria-current=page]`);
+        await p.waitForTimeout(150);
+        rows.push(
+          await p.evaluate(() => {
+            window.scrollTo(0, 0);
+            const r = (e: Element | null) => {
+              const b = e!.getBoundingClientRect();
+              return `${Math.round(b.left)},${Math.round(b.top)},${Math.round(b.width)}x${Math.round(b.height)}`;
+            };
+            const first = [...document.querySelectorAll("[data-page=settings] .sections > section")].find((x) => (x as HTMLElement).offsetParent !== null) ?? null;
+            const c = first!.getBoundingClientRect();
+            return { tabs: r(document.querySelector("[data-ddn=settings-tabs]")), content: `${Math.round(c.left)},${Math.round(c.top)},${Math.round(c.width)}`, sb: window.innerWidth - document.documentElement.clientWidth };
+          }),
+        );
+      }
+      layout[w] = rows;
+      // Tab bar: same box (the rail's height may differ? no: same links) everywhere; content: same left edge, top and width.
+      const same = (k: "tabs" | "content") => rows.every((x) => x[k].split(/[,x]/).every((v, i) => Math.abs(Number(v) - Number(rows[0]![k].split(/[,x]/)[i])) <= 1));
+      if (!same("tabs") || !same("content")) moved.push(String(w));
+      if (shotDir && (w === 1090 || w === 1100)) await shot(p, `03c-settings-${w}`);
+    }
+    await p.setViewportSize({ width: 1280, height: 860 });
+    r.settingsLayout = { moved, layout };
     await nav(p, "settings", "appearance");
   }
   // Accent colour (Appearance): a preset recolours the main buttons, survives a reload, a custom colour too, Cobalt back.
@@ -446,7 +476,7 @@ try {
     await p.waitForTimeout(2500);
     (r.kitReminder as Record<string, unknown>).once = !(await p.isVisible("[data-ddn=kit-dialog][open]"));
     await nav(p, "settings", "channels");
-    await p.waitForSelector("[data-page=settings] [data-ddn=channels-toggle]");
+    await p.waitForSelector("[data-page=settings] [data-ddn=channels-sec]");
   }
   // Cobalt fonts are local files (CSP: 'self' only) and really load: Space Grotesk / Inter / JetBrains Mono.
   r.fontsLoaded = await p.evaluate(async () => (await document.fonts.ready, [...new Set([...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family.replace(/"/g, "")))].sort()));
@@ -1665,8 +1695,7 @@ try {
   r.queueCloses = qc;
 
 
-  // 10d. channels: the section folds (folded with channels, the
-  // choice kept), per-channel stats, the remove dialog (impact list, options), retire + undo, a critical
+  // 10d. channels: the section is open at once (no folding, an old folded state is dropped), per-channel stats, the remove dialog (impact list, options), retire + undo, a critical
   // channel offers only "move", remove anyway -> files unavailable: hidden by default, shown + explained
   // with the Settings switch, Storage totals count them; pasting the same webhook again brings them back;
   // move and remove (metadata only: in this tab; e2ee/plain: the instance job) -> files still download.
@@ -1674,21 +1703,16 @@ try {
   const ch: Record<string, unknown> = {};
   const extraHook = SERVER_SIDE ? hookUrls[0] : hookUrls[2];
   if (extraHook) {
-    // Forget the fold choice the earlier steps made (they opened the section), as on a first visit.
-    await p.evaluate(() => localStorage.removeItem("ddn.channels.open"));
+    // A folded state left by an older version (it folded the section) does not hide the list any more.
+    await p.evaluate(() => localStorage.setItem("ddn.channels.open", "0"));
     await nav(p, "settings", "channels");
     await p.reload();
     await p.waitForSelector("body[data-ready='1']");
-    await p.waitForSelector("[data-ddn=channels-toggle]");
-    // Folded by default when there are channels.
-    ch.foldedByDefault = (await p.getAttribute("[data-ddn=channels-toggle]", "aria-expanded")) === "false" && (await p.isHidden("[data-ddn=channels-body]"));
+    // Open = the list (own channels, or the instance pool in e2ee/plain) and the add field are shown.
+    ch.openAtOnce = await p.waitForSelector("[data-ddn=channels-sec] [data-ddn=webhook-url]", { state: "visible", timeout: 10_000 }).then(() => true).catch(() => false);
+    ch.noToggle = (await p.locator("[data-ddn=channels-toggle], [data-ddn=channels-sec] .sec-toggle").count()) === 0;
+    ch.oldStateDropped = (await p.evaluate(() => localStorage.getItem("ddn.channels.open"))) === null;
     ch.summary = await p.textContent("[data-ddn=channels-summary]");
-    await p.click("[data-ddn=channels-toggle]");
-    await p.waitForSelector("[data-ddn=channels-body]:not([hidden])");
-    await p.reload();
-    await p.waitForSelector("body[data-ready='1']");
-    await p.waitForSelector("[data-ddn=channels-toggle]");
-    ch.foldKept = (await p.getAttribute("[data-ddn=channels-toggle]", "aria-expanded")) === "true";
     // A new channel with one file on it only (the step's own folder).
     await pasteInto(p, "[data-ddn=webhook-url]", extraHook);
     await p.click("[data-ddn=add-webhook]");
@@ -1810,15 +1834,15 @@ try {
     await m.reload();
     await m.waitForSelector("body[data-ready='1']");
     await nav(m, "settings", "channels");
-    await m.waitForSelector("[data-ddn=channels-toggle]");
+    await m.waitForSelector("[data-ddn=channels-sec]");
     const noHScroll = () => m.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
-    const folded = (await m.getAttribute("[data-ddn=channels-toggle]", "aria-expanded")) === "false";
+    const open = await m.isVisible("[data-ddn=webhook-url]");
     const hs1 = await noHScroll();
     await m.locator("[data-ddn=settings-tab][data-tab=app]").scrollIntoViewIfNeeded();
     await m.click("[data-ddn=settings-tab][data-tab=app]");
     await m.waitForSelector("[data-ddn=settings-tab][data-tab=app][aria-current=page]");
     const lastTab = await m.waitForSelector("#diagnostics", { state: "visible", timeout: 10_000 }).then(() => true).catch(() => false);
-    ch.phone = { folded, noHScroll: hs1 && (await noHScroll()), lastTab };
+    ch.phone = { open, noHScroll: hs1 && (await noHScroll()), lastTab };
     await shot(m, "27b-phone-settings-app");
     await nav(m, "settings", "channels");
     await shot(m, "27-phone-settings-channels");
@@ -1867,8 +1891,10 @@ try {
     await typeInto(o, "[data-ddn=invite]", srv.invites.create(undefined, "check second").code);
     await o.click("[data-ddn=create]");
     await o.waitForURL((u) => u.pathname === "/welcome", { timeout: 30_000 });
-    await o.goto(base + "/settings");
+    await o.goto(base + "/settings/account");
     await o.waitForSelector("[data-page=settings]:not([hidden])", { timeout: 30_000 });
+    // /settings goes on to a tab (a second render): the account ID is there once that render is done.
+    await o.waitForFunction(() => /\S/.test(document.querySelector("[data-ddn-ui=acc-id]")?.textContent ?? "") && document.querySelector("[data-ddn-ui=acc-id]")!.textContent !== "-", null, { timeout: 15_000 });
     const otherId = (await o.textContent("[data-ddn-ui=acc-id]"))!.trim();
     adm.otherNoNav = await o.isHidden("[data-ddn=nav-admin]");
     // Typing /admin as a regular account: back to Files, and the server answers 403 anyway.
@@ -1986,6 +2012,7 @@ try {
       const f = r.folderNav as Record<string, unknown> | undefined;
       return !!f && f.upHiddenAtRoot === true && f.rowCursor === "pointer" && f.rowClick === true && /^(Parent folder|Folder nadrzędny)$/.test(String(f.upLabel)) && f.upButton === true && f.enter === true && f.backspaceInField === true && f.backspace === true && f.backspaceAtRootStays === true;
     })(),
+    settingsLayoutStable: ((x) => !!x && x.moved.length === 0)(r.settingsLayout as { moved: string[] } | undefined),
     settingsTabs: ((x) => !!x && x.everySectionOnce && x.untabbed.length === 0 && x.oneChannelList && x.reloadApp && x.back && x.anchor && x.remembered === "/settings/network" &&
       x.tabs.channels!.join() === "channels" && x.tabs.account!.join() === "account,rescue,security,sharing" && x.tabs.storage!.join() === "storage" &&
       x.tabs.network!.join() === "network" && x.tabs.appearance!.join() === "appearance" && x.tabs.app!.join() === "diagnostics,browser")(
@@ -2068,13 +2095,13 @@ try {
       const imp = c.impact as { text: string; files: string[]; retireDefault: boolean };
       const sh = c.shown as { chip: string; why: string; whyVisible: boolean; noDownload: boolean; deleteBtn: boolean };
       return (
-        c.foldedByDefault === true && c.foldKept === true && /\d/.test(String(c.summary)) &&
+        c.openAtOnce === true && c.noToggle === true && c.oldStateDropped === true && /\d/.test(String(c.summary)) &&
         /1 (file|plik)/.test(String(c.stats)) && /\d/.test(String((c.totals as { all: string }).all)) &&
         JSON.stringify(imp.files) === JSON.stringify(["kanal.txt"]) && imp.retireDefault && c.retired === true && c.unretired === true &&
         (typeof crit === "string" ? (SERVER_SIDE && crit === "none-own") : crit.retire && crit.remove && crit.move) &&
         c.ackNeeded === true && JSON.stringify((c.removeList as { shown: string[] }).shown) === JSON.stringify(["kanal.txt"]) && (c.removeList as { file: boolean }).file && /1/.test(String(c.unavailTotal)) && c.hiddenByDefault === true && /Unavailable|Niedostępny/.test(sh.chip) && /\(#…\d{6}\)/.test(sh.why) && sh.whyVisible && sh.noDownload && sh.deleteBtn &&
         c.backAfterPaste === true && /moved|przeniesiony/i.test(String(c.moveDone)) && c.goneAfterMove === true && c.downloadAfterMove === true &&
-        (c.phone as { folded: boolean; noHScroll: boolean }).folded && (c.phone as { noHScroll: boolean }).noHScroll && (c.phone as { lastTab: boolean }).lastTab
+        (c.phone as { open: boolean; noHScroll: boolean }).open && (c.phone as { noHScroll: boolean }).noHScroll && (c.phone as { lastTab: boolean }).lastTab
       );
     })(),
     preview: (() => {

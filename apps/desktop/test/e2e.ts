@@ -203,6 +203,28 @@ try {
     await p.evaluate(() => window.dispatchEvent(new MouseEvent("mouseup", { button: 3, bubbles: true })));
     const back = await p.waitForFunction(() => location.pathname === "/settings/app", null, { timeout: 5000 }).then(() => true).catch(() => false);
     await p.waitForTimeout(450);
+    // The layout does not move with the tab (the app window: 1200 px wide by default, around the rail breakpoint).
+    const boxes: string[] = [];
+    for (const tab of ["channels", "account", "storage", "network", "appearance", "app"]) {
+      await p.click(`[data-ddn=settings-tab][data-tab=${tab}]`);
+      await p.waitForSelector(`[data-ddn=settings-tab][data-tab=${tab}][aria-current=page]`);
+      await p.waitForTimeout(150);
+      boxes.push(
+        await p.evaluate(() => {
+          window.scrollTo(0, 0);
+          const t = document.querySelector("[data-ddn=settings-tabs]")!.getBoundingClientRect();
+          const first = [...document.querySelectorAll("[data-page=settings] .sections > section")].find((x) => (x as HTMLElement).offsetParent !== null)!.getBoundingClientRect();
+          return [t.left, t.top, t.width, t.height, first.left, first.top, first.width].map(Math.round).join(",");
+        }),
+      );
+    }
+    const layoutStable = boxes.every((b) => b.split(",").every((v, i) => Math.abs(Number(v) - Number(boxes[0]!.split(",")[i])) <= 1));
+    check("settingsLayoutStable", layoutStable);
+    await p.click("[data-ddn=settings-tab][data-tab=app]");
+    await p.waitForSelector("[data-ddn=settings-tab][data-tab=app][aria-current=page]");
+    await p.click("[data-ddn=settings-tab][data-tab=channels]");
+    await p.waitForSelector("[data-ddn=settings-tab][data-tab=channels][aria-current=page]");
+    r.settingsLayout = { boxes, width: await p.evaluate(() => window.innerWidth) };
     r.settingsTabsDetail = { app, browserHidden, channelsHidden, channels, back, path: await p.evaluate(() => location.pathname) };
     check("settingsTabs", app && browserHidden && channelsHidden && channels && back);
     await p.evaluate(() => {
