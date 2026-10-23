@@ -391,6 +391,7 @@ export const pl: Record<string, string> = {
   "dl.done": "Pobrano",
   "dl.doneErr": "Pobrano z błędami ({n})",
   "queue.noteDesktop": "Aplikacja wysyła w tle: zamknięcie okna nie zatrzymuje kolejki (aplikacja działa dalej w zasobniku).",
+  "dl.noteDesktop@plain": "Aplikacja pobiera, sprawdza i zapisuje pliki prosto do folderu pobranych, także przy zamkniętym oknie.",
   "dl.noteDesktop": "Aplikacja pobiera, odszyfrowuje i zapisuje pliki prosto do folderu pobranych, także przy zamkniętym oknie.",
   "status.uploadingDesktop.t": "Wysyłanie trwa w tle, dopóki aplikacja działa (także w zasobniku).",
   "diag.version2Desktop": "Wersja: {app} (to okno) · {server} (instancja; aktualizacja aplikacji wyrówna okno)",
