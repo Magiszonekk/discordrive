@@ -400,5 +400,8 @@
     <string name="ddn_clean_metered">pominięto — łącze taryfowe</string>
     <string name="ddn_clean_nothing">nic do usunięcia</string>
     <string name="ddn_clean_not_synced">pominięto — brak połączenia z kontem</string>
+    <string name="ddn_trash_loading">Wczytywanie kosza…</string>
+    <string name="ddn_upd_play_protect">Aplikacja nie pochodzi ze Sklepu Play, więc po instalacji Play Protect może zaproponować „Skanuj aplikację” albo pokazać „Nie instaluj”. To standardowe ostrzeżenie dla aplikacji spoza Sklepu: plik jest podpisany tym samym kluczem co zainstalowana wersja i sprawdzony (SHA-256) przed instalacją. Możesz go zeskanować — instalacja się powiedzie.</string>
+    <string name="ddn_open_again">„%1$s” był już wysłany z tego telefonu. Wysłać jeszcze raz? Na koncie powstanie druga kopia z „(2)” w nazwie.</string>
     <string name="ddn_open_send">Wyślij do discordrive</string>
 </resources>

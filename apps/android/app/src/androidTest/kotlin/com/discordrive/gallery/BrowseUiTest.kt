@@ -118,14 +118,26 @@ class BrowseUiTest {
         val video = folder.first { it.name == "film.webm" }
         val big = folder.first { it.name == "duży.bin" }
         r["toTrash"] = s.moveToTrash(listOf(video.id)) == "applied" && s.moveToTrash(listOf(big.id)) == "applied" && s.children("fold-0000000001").none { it.id == video.id || it.id == big.id }
+        // K2: Files open on the folder while the trash restores (the list shows it again when back).
+        val files = ActivityScenario.launch<DdnActivity>(Intent(ctx, DdnActivity::class.java))
+        files.onActivity { a -> a.openFolderForTest("fold-0000000001", "Zdjęcia 1") }
+        waitUntil { var ok = false; files.onActivity { a -> ok = a.findRecycler()?.adapter?.itemCount == 1 }; ok }
         ActivityScenario.launch<DdnTrashActivity>(Intent(ctx, DdnTrashActivity::class.java)).use { t ->
+            // K1: while it loads, an indicator (not an empty trash).
+            var loadingFirst = false
+            t.onActivity { a -> loadingFirst = a.loadingShownForTest() }
+            r["trashShowsLoading"] = loadingFirst
             r["trashScreenLists"] = waitUntil { var n = 0; t.onActivity { a -> n = a.countForTest() }; n >= 3 }
+            r["trashLoadingGone"] = waitUntil { var on = true; t.onActivity { a -> on = a.loadingShownForTest() }; !on }
             shot("5-trash")
             t.onActivity { a -> a.selectForTest(video.id); a.actForTest(restore = true) }
             r["restoredFromScreen"] = waitUntil { DdnSession.get(ctx)!!.children("fold-0000000001").any { it.id == video.id } }
             t.onActivity { a -> a.selectForTest(big.id); a.actForTest(restore = false) }
             r["purgedFromScreen"] = waitUntil { DdnSession.get(ctx)!!.node(big.id) == null }
         }
+        // Back to Files: the restored video is in the list without a refresh by hand.
+        r["filesShowRestored"] = waitUntil { var n = -1; files.onActivity { a -> n = a.findRecycler()?.adapter?.itemCount ?: -1 }; n == 2 }
+        files.close()
         // The TS device: the same tree (sha of the canonical state after its pull).
         val want = sc.rpc("expect").jsonObject
         s.refresh()
@@ -162,6 +174,30 @@ class BrowseUiTest {
         ActivityScenario.launch<DdnOpenActivity>(view.setClass(ctx, DdnOpenActivity::class.java)).use { o ->
             r["viewShowsPhoto"] = waitUntil(15_000) { var ok = false; o.onActivity { a -> ok = a.shownForTest() }; ok }
             shot("8-open-with")
+        }
+        // K4: a MediaStore URI (as the system gallery passes it): its name and type from MediaStore.
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "z galerii systemu.jpg")
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Pictures")
+        }
+        val ms = ctx.contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)!!
+        try {
+            ctx.contentResolver.openOutputStream(ms)!!.use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+            ActivityScenario.launch<DdnOpenActivity>(Intent(Intent.ACTION_VIEW).setDataAndType(ms, "*/*").setClass(ctx, DdnOpenActivity::class.java)).use { o ->
+                r["mediaStoreViewShows"] = waitUntil(15_000) { var ok = false; o.onActivity { a -> ok = a.shownForTest() }; ok }
+                var nm = ""
+                o.onActivity { a -> nm = a.nameForTest() }
+                r["mediaStoreName"] = nm == "z galerii systemu.jpg"
+                Log.i("ddn-ui", "MediaStore view: name '$nm'")
+                shot("9-open-with-mediastore")
+            }
+            // K5: the same file sent before is recognised (the screen asks instead of making "(2)").
+            r["sentBeforeAsks"] = !DdnUploads.sentBefore(ctx, ms, "z galerii systemu.jpg") &&
+                DdnUploads.markSent(ctx, ms, "z galerii systemu.jpg").let { DdnUploads.sentBefore(ctx, ms, "z galerii systemu.jpg") }
+        } finally {
+            ctx.contentResolver.delete(ms, null, null)
+            ctx.getSharedPreferences("ddn-sent", android.content.Context.MODE_PRIVATE).edit().clear().apply()
         }
     }
 

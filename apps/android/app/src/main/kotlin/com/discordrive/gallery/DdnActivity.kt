@@ -104,6 +104,13 @@ open class DdnActivity : AppCompatActivity() {
         }
     }
 
+    /** Back from another screen (the trash restored something, a file was sent): the list from the index again. */
+    private var started = false
+    override fun onStart() {
+        super.onStart()
+        if (started) show() else started = true
+    }
+
     /** Files picked with "Upload": into the open folder (Files) or "Z telefonu" (Gallery). */
     private val pick = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@registerForActivityResult
