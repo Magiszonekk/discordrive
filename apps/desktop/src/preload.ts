@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld("ddnDesktop", {
   openFile: (path: string) => ipcRenderer.send("ddn:open-file", String(path)),
   pickFolder: () => ipcRenderer.invoke("ddn:pick-folder") as Promise<string | null>,
   firstAccountMade: () => ipcRenderer.invoke("ddn:first-account-made"),
+  /** Keys sealed by the keyring that it did not open at the start: ask it again (true: the app reloads with it). */
+  keystoreRetry: () => ipcRenderer.invoke("ddn:keystore-retry") as Promise<boolean>,
   /** Copy a text to the system clipboard (the window has no clipboard permission; the main process writes it). */
   copyText: (text: string) => ipcRenderer.invoke("ddn:copy-text", String(text)) as Promise<boolean>,
   /** Back / forward of the window (the mouse's side buttons on Windows arrive as app commands). */

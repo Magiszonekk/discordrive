@@ -39,6 +39,17 @@ protocol.registerSchemesAsPrivileged([{ scheme: SCHEME, privileges: { standard: 
 /** Test runs (CI) put the data folder elsewhere and may hide the window. */
 if (process.env.DDN_DESKTOP_DATA) app.setPath("userData", process.env.DDN_DESKTOP_DATA);
 const DATA = () => app.getPath("userData");
+// Linux, the user said no to the keyring and no keys are sealed by it: Chromium itself would still touch the
+// secret service at start (gnome-keyring's "create a keyring" window once a session). Its own store is not
+// used by the app (cookies of app:// only), so it stays off the keyring too.
+if (process.platform === "linux" && !process.env.DDN_DESKTOP_TEST_KEYSTORE_FILE) {
+  try {
+    const st = JSON.parse(readFileSync(join(DATA(), "desktop-settings.json"), "utf8")) as { keyring?: string };
+    if (st.keyring === "file" && keysProtection(join(DATA(), "agent", "keys.bin")) !== "S") app.commandLine.appendSwitch("password-store", "basic");
+  } catch {
+    /* no settings yet */
+  }
+}
 
 let win: BrowserWindow | null = null;
 let agent: UtilityProcess | null = null;
@@ -112,7 +123,10 @@ function startAgent(): UtilityProcess {
 async function onAgentMessage(a: UtilityProcess, m: { type?: string; id?: number; data?: Uint8Array; busy?: boolean; kind?: string; name?: string; bytes?: number } & Record<string, unknown>) {
   if (m.type === "seal" || m.type === "unseal") {
     try {
-      const data = m.type === "seal" ? await safeStorage.encryptStringAsync(Buffer.from(m.data!).toString("base64")) : Buffer.from((await safeStorage.decryptStringAsync(Buffer.from(m.data!))).result, "base64");
+      // Tests (DDN_DESKTOP_TEST_KEYSTORE_FILE): a stand-in key store that opens what it sealed (no real keyring
+      // on a CI runner). Never in a normal run.
+      const testStore = process.env.DDN_DESKTOP_TEST_KEYSTORE_FILE ? (b: Uint8Array) => Buffer.from(b.map((x) => x ^ 0x5a)) : null;
+      const data = testStore ? testStore(m.data!) : m.type === "seal" ? await safeStorage.encryptStringAsync(Buffer.from(m.data!).toString("base64")) : Buffer.from((await safeStorage.decryptStringAsync(Buffer.from(m.data!))).result, "base64");
       a.postMessage({ type: "sealed", id: m.id, ok: true, data: new Uint8Array(data) });
     } catch (e) {
       a.postMessage({ type: "sealed", id: m.id, ok: false, error: String((e as Error)?.message ?? e) });
@@ -533,8 +547,11 @@ function autostartEnv(): AutostartEnv {
  * service (GNOME Keyring / KWallet), not with Electron's "basic_text" fallback (a fixed, public key). The
  * check gets a few seconds: a session without a key store can leave it waiting on D-Bus.
  */
-async function keyStoreKind(): Promise<"os" | "file"> {
-  const ok = await Promise.race([safeStorage.isAsyncEncryptionAvailable().catch(() => false), new Promise<boolean>((r) => setTimeout(() => r(false), 5000))]);
+async function keyStoreKind(waitMs = 5000): Promise<"os" | "file"> {
+  // Tests: DDN_DESKTOP_TEST_KEYSTORE=file|os decides without a real keyring (a keyring that appears later).
+  const forced = process.env.DDN_DESKTOP_TEST_KEYSTORE_FILE;
+  if (forced && existsSync(forced)) return readFileSync(forced, "utf8").trim() === "os" ? "os" : "file";
+  const ok = await Promise.race([safeStorage.isAsyncEncryptionAvailable().catch(() => false), new Promise<boolean>((r) => setTimeout(() => r(false), waitMs))]);
   if (!ok) return "file";
   if (process.platform === "linux" && ["basic_text", "unknown"].includes(safeStorage.getSelectedStorageBackend())) return "file";
   return "os";
@@ -633,6 +650,20 @@ function wireSetupIpc() {
     localInvite = r.invite;
     await useServer({ url: r.url, mode: "metadata-only", kind: "local" });
     void win?.loadURL(`${ORIGIN}/`);
+    return true;
+  });
+  // "Unlock and try again" (keys sealed, the keyring did not open them): ask the keyring again now. It works
+  // now (unlocked meanwhile, or its answer came after the start's 5 s): the agent starts again with it and the
+  // window reloads (true). Still not: false (the window says so). A locked keyring asks to unlock here.
+  ipcMain.handle("ddn:keystore-retry", async (e) => {
+    if (!e.senderFrame || !isAppUrl(e.senderFrame.url)) throw new Error("not allowed");
+    const k = await keyStoreKind(process.env.DDN_DESKTOP_TEST_KEYSTORE_WAIT ? Number(process.env.DDN_DESKTOP_TEST_KEYSTORE_WAIT) : 30_000);
+    if (k !== "os") return false;
+    sealerKind = "os";
+    agent?.postMessage({ type: "quit" });
+    agent = startAgent();
+    await agentReady;
+    setTimeout(() => win?.webContents.reload(), 300);
     return true;
   });
   ipcMain.handle("ddn:first-account-made", (e) => {

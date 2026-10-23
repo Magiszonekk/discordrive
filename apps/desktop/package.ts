@@ -86,8 +86,9 @@ const config = {
   deb: {
     packageCategory: "utils",
     // electron-builder's defaults miss the sound library Chromium links against (a desktop has it anyway,
-    // a minimal install does not); its name changed in Ubuntu 24.04 (t64).
-    depends: ["libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6", "xdg-utils", "libatspi2.0-0", "libuuid1", "libsecret-1-0", "libasound2t64 | libasound2", "libgbm1"],
+    // a minimal install does not); its name changed in Ubuntu 24.04 (t64). libglib2.0-bin: gdbus, which tells
+    // the app whether the session has a default keyring (before asking it, so no surprise "create" window).
+    depends: ["libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6", "xdg-utils", "libatspi2.0-0", "libuuid1", "libsecret-1-0", "libasound2t64 | libasound2", "libgbm1", "libglib2.0-bin"],
   },
   mac: { target: [{ target: "zip", arch: ["x64", "arm64"] }], identity: null },
 };

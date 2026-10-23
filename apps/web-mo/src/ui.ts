@@ -49,6 +49,7 @@ interface DesktopBridge {
   pickFolder(): Promise<string | null>;
   /** The built-in instance got its first account (it closes sign-up). */
   firstAccountMade(): Promise<boolean>;
+  keystoreRetry?(): Promise<boolean>;
   /** Open a file the app downloaded in the system's default app (older app builds lack it). */
   openFile?(path: string): void;
   /** Copy a text to the system clipboard (the window has no clipboard permission). Older app builds lack it. */
@@ -3311,7 +3312,12 @@ async function main() {
   ui<HTMLDialogElement>("player-dialog").addEventListener("close", () => $<HTMLVideoElement>("player").pause());
   $("keys-locked-retry").onclick = () =>
     void act($("keys-locked-retry"), async () => {
-      // The keyring asks again (unlock dialog); opened: the account starts as usual.
+      // The keyring asks again (unlock dialog). Desktop: the app asks the keyring itself; when it works now the
+      // agent starts again with it and the window reloads.
+      if (desktop?.keystoreRetry) {
+        if (!(await desktop.keystoreRetry())) toast(t("locked.still"), "err");
+        return;
+      }
       const st = await core.status();
       if (st.keysLocked) return toast(t("locked.still"), "err");
       if (st.hasAccount) await core.open();
