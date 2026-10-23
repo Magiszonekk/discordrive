@@ -597,7 +597,7 @@ async function chooseKeyStore(): Promise<"os" | "file"> {
   if (plan === "file") return "file";
   if (plan === "explain" && !process.env.DDN_DESKTOP_SMOKE) {
     const pl = app.getLocale().startsWith("pl");
-    const r = await dialog.showMessageBox({
+    const r = process.env.DDN_DESKTOP_TEST_KEYRING_ANSWER ? { response: process.env.DDN_DESKTOP_TEST_KEYRING_ANSWER === "no" ? 1 : 0 } : await dialog.showMessageBox({
       type: "question",
       buttons: pl ? ["Utwórz magazyn kluczy", "Nie, trzymaj klucze w pliku"] : ["Create a keyring", "No, keep the keys in a file"],
       defaultId: 0,

@@ -84,10 +84,26 @@ export async function latestBuild(f: Fetch, apiBase = "https://api.github.com"):
   return { commit, build, publishedAt: j.published_at ?? "", notes: j.body ?? "", htmlUrl: j.html_url ?? "", assets };
 }
 
-/** Is that build another one than this copy (different commit)? A dev run never is. */
-export function isNewer(own: { commit: string | null }, b: AvailableBuild | null): boolean {
+/** "0.1.313+abc.gdef" / "0.1.313" → [0, 1, 313]; null when it has no x.y.z. */
+export function buildNumber(build: string | null | undefined): number[] | null {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(build ?? "");
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/**
+ * Is that build a newer one than this copy? A dev run never is. Both have a version (x.y.z: the commit count):
+ * newer only when its version is higher; a lower one is an older build (a copy built from a branch ahead of
+ * the release), never offered. The same version or none on one side: newer when the commit differs.
+ */
+export function isNewer(own: { commit: string | null; build?: string | null; version?: string | null }, b: AvailableBuild | null): boolean {
   if (!b || !own.commit) return false;
-  return !b.commit.startsWith(own.commit.slice(0, 7)) && !own.commit.startsWith(b.commit.slice(0, 7));
+  if (b.commit.startsWith(own.commit.slice(0, 7)) || own.commit.startsWith(b.commit.slice(0, 7))) return false;
+  const mine = buildNumber(own.build) ?? buildNumber(own.version);
+  const theirs = buildNumber(b.build);
+  if (mine && theirs) {
+    for (let i = 0; i < 3; i++) if (theirs[i] !== mine[i]) return theirs[i]! > mine[i]!;
+  }
+  return true;
 }
 
 /** SHA256SUMS lines → { file name: hex }. */

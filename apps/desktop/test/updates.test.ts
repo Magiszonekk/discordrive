@@ -6,7 +6,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { assetFor, canInstallInPlace, debInstallCommand, debTerminalCommand, findPkexec, downloadVerified, installHint, installKind, isNewer, latestBuild, nsisUpdateCommand, parseSums, replaceAppImage, sha256File, CHANNEL_TAG, REPO } from "../src/shell/updates.js";
+import { assetFor, canInstallInPlace, debInstallCommand, debTerminalCommand, findPkexec, downloadVerified, installHint, installKind, isNewer, buildNumber, latestBuild, nsisUpdateCommand, parseSums, replaceAppImage, sha256File, CHANNEL_TAG, REPO } from "../src/shell/updates.js";
 
 const deb = Buffer.from("fake deb package ".repeat(1000));
 const exe = Buffer.from("fake windows installer ".repeat(1000));
@@ -55,6 +55,20 @@ describe("update check", () => {
     expect(isNewer({ commit: "fedcba9" }, b)).toBe(true);
     expect(isNewer({ commit: "0123456" }, b)).toBe(false);
     expect(isNewer({ commit: null }, b)).toBe(false);
+  });
+  it("compares the build numbers: only a higher one is offered, a branch build ahead of the release gets nothing", () => {
+    const rel = { commit: "aaaaaaa1111", build: "0.1.313+0123abcd.gaaaaaaa", publishedAt: "", notes: "", htmlUrl: "", assets: [] };
+    expect(isNewer({ commit: "bbbbbbb", build: "0.1.315+4e402ca8.gbbbbbbb" }, rel)).toBe(false);
+    expect(isNewer({ commit: "bbbbbbb", build: "0.1.312+4e402ca8.gbbbbbbb" }, rel)).toBe(true);
+    expect(isNewer({ commit: "bbbbbbb", build: "0.1.313+4e402ca8.gbbbbbbb" }, rel)).toBe(true);
+    expect(isNewer({ commit: "aaaaaaa", build: "0.1.312" }, rel)).toBe(false);
+    // No number on one side (an older release or a local build): another commit is newer, as before.
+    expect(isNewer({ commit: "bbbbbbb", build: "dev" }, rel)).toBe(true);
+    expect(isNewer({ commit: "bbbbbbb", build: "0.1.400" }, { ...rel, build: "" })).toBe(true);
+    expect(isNewer({ commit: "bbbbbbb", build: "0.1.400", version: "0.1.400" }, rel)).toBe(false);
+    expect(isNewer({ commit: "bbbbbbb", build: "x", version: "0.1.2" }, rel)).toBe(true);
+    expect(buildNumber("0.2.1+x")).toEqual([0, 2, 1]);
+    expect(buildNumber("dev")).toBeNull();
   });
   it("no release / rate limited: nothing offered", async () => {
     releaseStatus = 403;
