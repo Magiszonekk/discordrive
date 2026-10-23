@@ -61,7 +61,7 @@ open class DdnActivity : AppCompatActivity() {
         nav = BottomNavigationView(this).apply {
             menu.add(0, 1, 0, R.string.ddn_files).setIcon(R.drawable.ic_cloud_done)
             menu.add(0, 2, 1, R.string.ddn_gallery).setIcon(R.drawable.ic_photo)
-            menu.add(0, 3, 2, R.string.ddn_albums).setIcon(R.drawable.ic_lock)
+            menu.add(0, 3, 2, R.string.ddn_albums).setIcon(R.drawable.ic_albums)
             selectedItemId = if (gallery) 2 else 1
             setOnItemSelectedListener { gallery = it.itemId == 2; albumsTab = it.itemId == 3; album = null; show(); true }
         }
