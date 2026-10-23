@@ -533,6 +533,37 @@
           </div>
         </section>
 
+        <!-- Speed test: the line and Discord through the account's channels; nothing stays in the account. -->
+        <section id="speed" aria-labelledby="speed-h" data-ddn="speed-sec" data-tab="network">
+          <h2 class="sec-h"><span id="speed-h" data-i18n="sp.h">Speed test</span><span class="chip" data-ddn="speed-state"></span></h2>
+          <p class="sec-lead" data-ddn="speed-lead"></p>
+          <div class="sec-body">
+            <div class="row-btns"><button class="btn primary" type="button" data-ddn="speed-run" data-i18n="sp.run">Run the test</button><button class="btn" type="button" data-ddn="speed-cancel" data-i18n="sp.cancel" hidden>Cancel</button></div>
+            <div class="note warn" data-ddn="speed-metered" hidden><svg class="i"><use href="#i-info"/></svg><p data-i18n="sp.metered"></p></div>
+            <p class="result" data-ddn="speed-live" role="status" aria-live="polite"></p>
+            <details class="howto" data-ddn="speed-adv">
+              <summary><svg class="i"><use href="#i-right"/></svg><span data-i18n="sp.adv">Advanced</span></summary>
+              <div class="stack">
+                <div class="inline">
+                  <label class="field"><span class="lab" data-i18n="sp.count">Test pieces</span><input class="input" type="number" min="4" max="200" step="1" value="32" data-ddn="speed-count"></label>
+                  <label class="field"><span class="lab" data-i18n="sp.size">Piece size (MiB)</span><input class="input" type="number" min="1" max="24" step="1" value="10" data-ddn="speed-size"></label>
+                </div>
+                <label class="ack"><input type="checkbox" data-ddn="speed-noline"><span data-i18n="sp.noLine">Skip the line test</span></label>
+                <label class="ack"><input type="checkbox" data-ddn="speed-uponly"><span data-i18n="sp.upOnly">Upload only</span></label>
+              </div>
+            </details>
+            <div class="speed-card" data-ddn="speed-card" hidden>
+              <dl class="about" data-ddn="speed-result"></dl>
+              <ul class="limits" data-ddn="speed-hints"></ul>
+              <div class="row-btns"><button class="btn" type="button" data-ddn="speed-copy"><svg class="i"><use href="#i-check"/></svg><span data-i18n="sp.copy">Copy the result</span></button></div>
+            </div>
+            <details class="howto" data-ddn="speed-history-box" hidden>
+              <summary><svg class="i"><use href="#i-right"/></svg><span data-i18n="sp.history">Earlier results on this device</span></summary>
+              <ul class="list" data-ddn="speed-history"></ul>
+            </details>
+          </div>
+        </section>
+
         <section id="diagnostics" aria-labelledby="diag-h" data-tab="app">
           <h2 class="sec-h"><span id="diag-h" data-i18n="diag.h">Diagnostics</span><span class="chip" data-ddn="diag-state"></span></h2>
           <p class="sec-lead" data-i18n="diag.lead"></p>

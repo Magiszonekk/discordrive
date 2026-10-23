@@ -186,6 +186,37 @@ try {
   check("listed", rows.some((x) => x.name === "movie.bin") && rows.some((x) => x.name === "photos" && x.kind === "folder"));
   const movie = rows.find((x) => x.name === "movie.bin")!;
 
+  step("speed test through the agent: the result card, Copy, nothing left in the account or on Discord");
+  {
+    const files0 = (await p.evaluate(() => (window as unknown as { ddnCore: { list(): Promise<{ rows: unknown[] }> } }).ddnCore.list())).rows.length;
+    const msgs0 = fake.messages.size;
+    await p.evaluate(() => {
+      history.pushState(null, "", "/settings/network");
+      dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await p.waitForSelector("[data-ddn=speed-run]", { state: "visible", timeout: 15_000 });
+    await p.click("[data-ddn=speed-adv] summary");
+    await p.fill("[data-ddn=speed-count]", "6");
+    await p.fill("[data-ddn=speed-size]", "1");
+    await p.check("[data-ddn=speed-noline]");
+    await p.click("[data-ddn=speed-run]");
+    const card = await p.waitForSelector("[data-ddn=speed-card]:not([hidden])", { timeout: 120_000 }).then(() => true).catch(() => false);
+    const up = (await p.textContent("[data-ddn=speed-up]").catch(() => "")) ?? "";
+    const where = (await p.textContent("[data-ddn=speed-build]").catch(() => "")) ?? "";
+    await app.evaluate(({ clipboard }) => clipboard.writeText("before"));
+    await p.click("[data-ddn=speed-copy]");
+    await p.waitForTimeout(500);
+    const copied = await app.evaluate(({ clipboard }) => clipboard.readText());
+    const files = (await p.evaluate(() => (window as unknown as { ddnCore: { list(): Promise<{ rows: unknown[] }> } }).ddnCore.list())).rows.length - files0;
+    r.speedTest = { card, up, where, copied: copied.slice(0, 40), files, msgs: fake.messages.size - msgs0 };
+    check("speedTest", card && /MB\/s/.test(up) && /desktop/i.test(where) && /discordrive speed test/.test(copied) && files === 0 && fake.messages.size === msgs0);
+    await p.evaluate(() => {
+      history.pushState(null, "", "/");
+      dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await p.waitForSelector("[data-page=files]:not([hidden])");
+  }
+
   step("desktop texts (QA B5, B7) and Show in folder (B6)");
   {
     const t = await p.evaluate(() => ({

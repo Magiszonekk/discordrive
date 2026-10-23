@@ -63,7 +63,7 @@ import {
   type PreviewImage,
   type PreviewKind,
 } from "@ddv4/metadata-client";
-import { NetControl, type BaselineData, type LaneFetch, type NetUiState } from "@ddv4/metadata-client";
+import { NetControl, cleanupLeftovers, discordSpeed, lineSpeed, speedHints, type BaselineData, type LaneFetch, type NetUiState, type SpeedTestProgress, type SpeedTestResult } from "@ddv4/metadata-client";
 import { fromBase64, toBase64 } from "@ddv4/processing";
 // Resolved at build time to ONE mode (build.ts): the other modes are not in the bundle.
 import { mode } from "ddn:mode";
@@ -132,7 +132,9 @@ export type CoreEvent =
   /** Rule notices about changes of OTHER devices addressed to this one (Q1: your file went to the trash with a folder). */
   | { type: "notices"; notices: UiNotice[] }
   /** The server no longer accepts this device: the account was blocked or deleted, or the device revoked. */
-  | { type: "auth-lost"; code: AuthLost };
+  | { type: "auth-lost"; code: AuthLost }
+  /** Settings → Network → Speed test: the stage and its speed while it runs. */
+  | { type: "speed-progress"; p: SpeedTestProgress };
 
 /** Thumbnails for files uploaded without them: progress (kept across restarts by `after`). */
 export interface BackfillState {
@@ -521,6 +523,8 @@ export class AppCore {
       throw e;
     }
     this.version++;
+    // A speed test cut short last time (window closed, app quit): its test messages go now.
+    if (mode.clientSnapshots && this.resume) void cleanupLeftovers(this.client!, this.resume).catch(() => 0);
     this.sub = this.http.subscribe(
       () =>
         void this.client!.pull().then((rs) => {
@@ -1433,6 +1437,65 @@ export class AppCore {
     const ac = this.downloads.get(token);
     ac?.abort();
     return !!ac;
+  }
+
+  // ── speed test (Settings → Network) ──
+
+  private speedAbort: AbortController | null = null;
+
+  /**
+   * The line (speed.cloudflare.com) and Discord through this account's channels: `count` test fragments up
+   * and back, then deleted; nothing in the account changes (no operation, no node). Metadata only (e2ee/plain:
+   * the pieces would go through the instance; only the line test runs there). One test at a time.
+   */
+  async speedTest(o: { count?: number; sizeMb?: number; noLine?: boolean; only?: "up" | "down" } = {}): Promise<SpeedTestResult> {
+    if (this.speedAbort) throw new Error("a speed test is running");
+    const ac = (this.speedAbort = new AbortController());
+    const onProgress = (p: SpeedTestProgress) => this.onEvent({ type: "speed-progress", p });
+    try {
+      const f = globalThis.fetch.bind(globalThis);
+      const line = o.noLine ? null : await lineSpeed(f, 8, ac.signal, onProgress).catch(() => null);
+      if (ac.signal.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      const c = this.client;
+      const discordOk = !!c && mode.clientSnapshots;
+      const size = o.sizeMb ? Math.round(o.sizeMb * 1024 * 1024) - 28 : undefined;
+      const d = discordOk ? await discordSpeed(c!, this.resume, { count: o.count, size, only: o.only, signal: ac.signal, onProgress }) : null;
+      const channels = c?.blobs.lanes?.() ?? 0;
+      const r: SpeedTestResult = {
+        at: Date.now(),
+        build: BUILD,
+        platform: this.platform.kind,
+        line,
+        discord: {
+          up: d?.up ?? null,
+          down: d?.down ?? null,
+          upShare: d?.up != null && line?.up ? d.up / line.up : null,
+          downShare: d?.down != null && line?.down ? d.down / line.down : null,
+          channels,
+          fragments: d?.posted.length ?? 0,
+          fragmentBytes: size ?? c?.fragmentSize ?? 0,
+          concUp: { auto: c?.autoConcurrency.upload ?? true, start: d?.startUp ?? 0, max: d?.maxUp ?? 0 },
+          concDown: { auto: c?.autoConcurrency.download ?? true, start: d?.startDown ?? 0, max: d?.maxDown ?? 0 },
+          rateLimited: d?.rateLimited ?? 0,
+          errors: d?.errors ?? 0,
+          deleted: d?.deleted ?? 0,
+          leftOver: d?.leftOver ?? 0,
+        },
+        hints: speedHints({ line, up: d?.up ?? null, down: d?.down ?? null, channels, rateLimited: d?.rateLimited ?? 0, errors: d?.errors ?? 0, browser: this.platform.kind !== "desktop", metered: this.net.metered() }),
+      };
+      // The transfer log (when on) records it, marked as a test (transfer-report tells it from transfers).
+      this.tlog?.emit("speedtest", { test: true, line, up: r.discord.up, down: r.discord.down, channels, n: r.discord.fragments, b: r.discord.fragmentBytes, concUp: r.discord.concUp, concDown: r.discord.concDown, r429: r.discord.rateLimited, errs: r.discord.errors });
+      return r;
+    } finally {
+      this.speedAbort = null;
+    }
+  }
+
+  /** Stop the running speed test (its messages are deleted). */
+  speedTestCancel(): boolean {
+    if (!this.speedAbort) return false;
+    this.speedAbort.abort();
+    return true;
   }
 
   // ── transfer logs (Settings → Diagnostics) ──
