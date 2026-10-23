@@ -90,6 +90,7 @@ class BrowseUiTest {
                 }).jsonObject
                 r["webDownloadsAutoCopy"] = v.getValue("sha").jsonPrimitive.content == "true"
                 r["autoCopyHasThumbnail"] = v["thumbW"]?.jsonPrimitive?.content == "320"
+                Log.i("ddn-ui", "auto-copy picture: short side ${v["thumbW"]}; made here: ${runCatching { DdnPictures.make(ctx.contentResolver, uri).map { "${it.kind} ${it.width}x${it.height} ${it.data.size}" } }.getOrElse { it.toString() }}")
             }
             // A second run copies nothing again.
             DdnBackup.runNow(ctx)
