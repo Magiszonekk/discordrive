@@ -118,7 +118,7 @@ open class DdnActivity : AppCompatActivity() {
         thread {
             val r = runCatching { DdnUploads.queue(this, uris, folder) }
             main.post {
-                r.onSuccess { android.widget.Toast.makeText(this, resources.getQuantityString(R.plurals.ddn_up_queued, it, it), android.widget.Toast.LENGTH_LONG).show(); watchUploads() }
+                r.onSuccess { android.widget.Toast.makeText(this, plq(R.plurals.ddn_up_queued, it, it), android.widget.Toast.LENGTH_LONG).show(); watchUploads() }
                     .onFailure { status.text = getString(R.string.ddn_error, it.message) }
             }
         }

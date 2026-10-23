@@ -139,6 +139,11 @@ object DdnBackup {
                 put("media", media); put("size", size); put("modified", modified); put("account", account); put("node", node); put("at", System.currentTimeMillis())
             }, SQLiteDatabase.CONFLICT_REPLACE)
         }
+        data class CopiedRow(val size: Long, val modified: Long, val node: String)
+        /** Every copied media of the account: MediaStore ID → what was copied. */
+        fun copiedRows(account: String): Map<Long, CopiedRow> = readableDatabase.rawQuery("SELECT media, size, modified, node FROM copied WHERE account=?", arrayOf(account)).use { c ->
+            buildMap { while (c.moveToNext()) put(c.getLong(0), CopiedRow(c.getLong(1), c.getLong(2), c.getString(3))) }
+        }
         fun copiedCount(account: String): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM copied WHERE account=?", arrayOf(account)).use { it.moveToFirst(); it.getInt(0) }
 
         data class Queued(val id: Long, val uri: String?, val local: String?, val name: String, val size: Long, val folder: String, val error: String?)

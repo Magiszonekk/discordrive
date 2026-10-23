@@ -76,6 +76,7 @@ class DdnSettingsActivity : AppCompatActivity() {
         root.addView(head(R.string.ddn_set_more))
         root.addView(button(R.string.ddn_backup) { startActivity(Intent(this, DdnBackupActivity::class.java)) })
         root.addView(button(R.string.ddn_trash) { DdnTrashActivity.open(this) })
+        root.addView(button(R.string.ddn_free) { startActivity(Intent(this, DdnFreeUpActivity::class.java)) })
         root.addView(text(getString(R.string.ddn_set_trash_note) + (DdnApp.lastClean(this)?.let { "\n" + getString(R.string.ddn_set_trash_last, cleanText(it)) } ?: ""), dim = true))
 
         // Opening photos and videos from other apps (Files, a messenger): the system's "Open with" / default app.
