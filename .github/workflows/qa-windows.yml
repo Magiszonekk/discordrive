@@ -69,7 +69,10 @@ jobs:
           Write-Host "installed in $dir"
 
       - name: Scenarios S1–S8 with screenshots
-        run: npx tsx apps/desktop/test/qa-windows.ts "$QA_EXE" "$RUNNER_TEMP/qa-shots" || echo "the run ended with an error (see report.json)"
+        # A step that is not ok is in the report (the run stays green); no report at all = the run failed.
+        run: |
+          npx tsx apps/desktop/test/qa-windows.ts "$QA_EXE" "$RUNNER_TEMP/qa-shots" || true
+          test -s "$RUNNER_TEMP/qa-shots/report.json" || { echo "::error::no report.json: the app could not be driven"; exit 1; }
 
       - name: Screenshots and report
         if: always()

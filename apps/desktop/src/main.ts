@@ -346,8 +346,27 @@ async function downloadUpdate(): Promise<{ path: string; hint: string; busy: boo
   if (!update) throw new Error("no new version");
   const a = assetFor(kind(), update.assets);
   if (!a) throw new Error("no installer for this system in the release");
-  const path = await downloadVerified((u, i) => net.fetch(u, i), update, a, app.getPath("downloads"));
+  // Already downloaded and checked before (an earlier run): the same file, if it still matches the release's sum.
+  const known = (() => {
+    try {
+      return JSON.parse(readFileSync(join(DATA(), "update-downloaded.json"), "utf8")) as { path: string; sha256: string; commit: string };
+    } catch {
+      return null;
+    }
+  })();
+  let path: string;
+  if (known && known.commit === update.commit && existsSync(known.path) && (await sha256File(known.path).catch(() => "")) === known.sha256) path = known.path;
+  else {
+    // Progress to the window (Settings → App): bytes so far, at most every 250 ms.
+    let last = 0;
+    path = await downloadVerified((u, i) => net.fetch(u, i), update, a, app.getPath("downloads"), (done, total) => {
+      if (Date.now() - last < 250 && done < total) return;
+      last = Date.now();
+      for (const w of BrowserWindow.getAllWindows()) w.webContents.send("ddn:update-progress", { done, total });
+    });
+  }
   downloaded = { path, sha256: await sha256File(path) };
+  writeFileSync(join(DATA(), "update-downloaded.json"), JSON.stringify({ ...downloaded, commit: update.commit }) + "\n");
   const inPlace = canInstallInPlace(kind(), process.env.APPIMAGE, debElevate());
   // Transfers running: say so, do not stop them (the user installs when it suits).
   return { path, hint: installHint(kind(), path, inPlace), busy: busy.busy, inPlace, ...(kind() === "deb" && !inPlace ? { command: debTerminalCommand(path) } : {}) };

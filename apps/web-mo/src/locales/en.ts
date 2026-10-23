@@ -411,6 +411,7 @@ export const en: Record<string, string> = {
   "app.copied": "Copied: paste it in a terminal.",
   "app.keyring": "Keep the keys in the system keyring",
   "app.keyringNext": "From the next start of the app.",
+  "app.downloading": "Downloading: {done} of {total} ({p}%)",
   "app.install": "Install and restart",
   "app.checkUpdates": "Check for new versions",
   "app.autostart": "Start with the system (in the tray)",

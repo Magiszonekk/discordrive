@@ -463,6 +463,7 @@ export const pl: Record<string, string> = {
   "app.copied": "Skopiowano: wklej w terminalu.",
   "app.keyring": "Trzymaj klucze w systemowym magazynie kluczy",
   "app.keyringNext": "Od następnego uruchomienia aplikacji.",
+  "app.downloading": "Pobieranie: {done} z {total} ({p}%)",
   "app.install": "Zainstaluj i uruchom ponownie",
   "app.checkUpdates": "Sprawdzaj nowe wersje",
   "app.autostart": "Uruchamiaj razem z systemem (w zasobniku)",
