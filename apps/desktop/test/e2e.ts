@@ -470,7 +470,9 @@ try {
   app = null;
 
   step("keys sealed by a keyring that is not there now (QA B1): a screen with the reason, retry and the kit");
-  {
+  // Linux only: Windows and macOS always have their key store (DPAPI, Keychain), so there the case is a
+  // store that refuses, covered by keyring.test.ts.
+  if (process.platform === "linux") {
     // The first app's data with keys.bin marked as sealed by the keyring (the CI runner has none: the app
     // runs on the file store, as with a locked keyring whose unlock was cancelled).
     const dataL = join(work, "data-locked");
