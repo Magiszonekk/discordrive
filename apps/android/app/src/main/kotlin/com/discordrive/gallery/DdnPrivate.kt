@@ -27,6 +27,9 @@ object DdnPrivate {
         prefs(c).edit().putStringSet(acct, cur).apply()
     }
 
+    /** Unlock every private album of this phone (the PIN is removed: nothing stays locked without it). */
+    fun clear(c: Context) { prefs(c).edit().clear().apply() }
+
     /** A node is hidden when it is inside a locked folder (any depth; `parentOf` walks up). */
     fun hidden(locked: Set<String>, startParent: String?, parentOf: (String) -> String?): Boolean {
         if (locked.isEmpty()) return false

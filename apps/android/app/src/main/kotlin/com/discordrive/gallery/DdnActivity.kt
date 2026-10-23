@@ -234,7 +234,7 @@ open class DdnActivity : AppCompatActivity() {
                 f.setOnLongClickListener { askTrash(c); true }
             }
         }
-        if (items.isEmpty()) status.append(" · " + getString(R.string.ddn_gallery_empty))
+        if (items.isEmpty()) status.append(" · " + getString(if (gallery && DdnPrivate.all(this).isNotEmpty()) R.string.ddn_gallery_empty_private else R.string.ddn_gallery_empty))
     }
 
     /**
@@ -289,7 +289,7 @@ open class DdnActivity : AppCompatActivity() {
         }
         if (!PrivateAlbums.hasPin(this)) {
             androidx.appcompat.app.AlertDialog.Builder(this).setMessage(R.string.private_need_pin_msg)
-                .setPositiveButton(R.string.private_set_pin) { _, _ -> startActivity(Intent(this, SettingsActivity::class.java)) }
+                .setPositiveButton(R.string.private_set_pin) { _, _ -> startActivity(Intent(this, DdnSettingsActivity::class.java)) }
                 .setNegativeButton(android.R.string.cancel, null).show()
             return
         }
