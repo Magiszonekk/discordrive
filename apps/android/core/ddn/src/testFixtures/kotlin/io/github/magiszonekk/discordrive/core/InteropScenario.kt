@@ -208,6 +208,21 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
         // The device list names both devices (names opened on the phone).
         results["phoneListsDevices"] = sync.devices().any { it.second == deviceName }
 
+        // A new device of an account whose snapshot channel was removed on Discord: the whole log instead.
+        val ptrHook = Vault.pointer(sync.vault)?.first
+        if (ptrHook != null && rpc("hooksOff", JsonArray(listOf(JsonPrimitive(ptrHook)))).jsonPrimitive.int >= 0) {
+            try {
+                val fresh = AccountSync(acct, api, Discord(apiOrigin = discordOrigin.takeUnless { it.isEmpty() || it == "none" }), newReplica())
+                val jj = fresh.join()
+                log("join without the snapshot channel: $jj")
+                val now = rpc("expect").jsonObject
+                results["joinWithoutSnapshotChannel"] = jj.snapshotSkipped != null && jj.baseHeadSeq == 0L &&
+                    fresh.replica.stateSha256() == now.str("sha") && fresh.replica.headSeq == now.getValue("head").jsonPrimitive.long
+            } finally {
+                rpc("hooksOn")
+            }
+        }
+
         rpc("done", JsonObject(results.mapValues { JsonPrimitive(it.value) }))
         log("interop: $results")
         return results

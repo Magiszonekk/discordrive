@@ -156,7 +156,11 @@ class AccountSync(
         return discord.fetch(hookUrl(r.webhookId), r.messageId, r.attachmentId)
     }
 
-    data class JoinReport(val pointerToSeq: Long, val baseHeadSeq: Long, val tailEntries: Int, val headSeq: Long, val ms: Long)
+    /**
+     * `snapshotSkipped`: why the snapshot could not be read (its channel removed on Discord, …); the index then
+     * comes from the whole log on the instance (slower, the same state).
+     */
+    data class JoinReport(val pointerToSeq: Long, val baseHeadSeq: Long, val tailEntries: Int, val headSeq: Long, val ms: Long, val snapshotSkipped: String? = null)
 
     /** Fresh index: the newest base from the pointer (if any), then the log after it. */
     fun join(): JoinReport {
@@ -171,17 +175,27 @@ class AccountSync(
         }
         var toSeq = 0L
         var baseHead = 0L
+        var skipped: String? = null
         Vault.pointer(vault)?.let { (hook, msg) ->
-            val p = Snapshots.openPointer(key, acct.accountId, discord.fetch(hookUrl(hook), msg))
-            toSeq = p.toSeq
-            p.base?.let { b ->
-                val head = replica.loadSnapshotText(Snapshots.baseSlices(key, acct.accountId, b, ::fetchRef))
-                if (head != b.headSeq) throw IllegalStateException("base headSeq mismatch ($head, pointer says ${b.headSeq})")
-                baseHead = b.headSeq
+            try {
+                val p = Snapshots.openPointer(key, acct.accountId, discord.fetch(hookUrl(hook), msg))
+                toSeq = p.toSeq
+                p.base?.let { b ->
+                    val head = replica.loadSnapshotText(Snapshots.baseSlices(key, acct.accountId, b, ::fetchRef))
+                    if (head != b.headSeq) throw IllegalStateException("base headSeq mismatch ($head, pointer says ${b.headSeq})")
+                    baseHead = b.headSeq
+                }
+            } catch (e: Exception) {
+                // The snapshot is only a shortcut: the log on the instance holds every operation. A pointer or
+                // base that cannot be read (e.g. its webhook removed on Discord) must not leave the device empty.
+                if (e is VaultRollbackException) throw e
+                skipped = e.message ?: e.javaClass.simpleName
+                toSeq = 0; baseHead = 0
+                replica.reset()
             }
         }
         val n = pull()
-        return JoinReport(toSeq, baseHead, n, replica.headSeq, now() - t0)
+        return JoinReport(toSeq, baseHead, n, replica.headSeq, now() - t0, skipped)
     }
 
     /** Everything new from the instance, decrypted here, applied in the engine. Returns the number of entries. */
