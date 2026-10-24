@@ -109,6 +109,7 @@ object DdnUploads {
 class DdnBackupActivity : AppCompatActivity() {
     private lateinit var state: TextView
     private lateinit var folders: LinearLayout
+    private lateinit var failedBox: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -131,7 +132,8 @@ class DdnBackupActivity : AppCompatActivity() {
         charging.setOnCheckedChangeListener { _, v -> DdnBackup.set(this, charging = v) }
         now.setOnClickListener { if (!hasMedia()) askMedia() else { DdnBackup.runNow(this); Toast.makeText(this, R.string.ddn_backup_started, Toast.LENGTH_SHORT).show() } }
 
-        for (v in listOf(on, where, wifi, charging, text(getString(R.string.ddn_backup_folders), 15f), folders, now, state, partial)) root.addView(v)
+        failedBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        for (v in listOf(failedBox, on, where, wifi, charging, text(getString(R.string.ddn_backup_folders), 15f), folders, now, state, partial)) root.addView(v)
         setContentView(ScrollView(this).apply { addView(root) })
         Insets.apply(root)
         WorkManager.getInstance(this).getWorkInfosForUniqueWorkLiveData(DdnBackup.WORK_NOW).observe(this) { paintState(it) }
@@ -169,7 +171,28 @@ class DdnBackupActivity : AppCompatActivity() {
         }
     }
 
+    /** Files that could not be sent (for good, not a network failure): cause, Retry, Remove. Shown first. */
+    internal fun paintFailed() {
+        val items = DdnBackup.failed(this)
+        failedBox.removeAllViews()
+        if (items.isEmpty()) return
+        val pad = (8 * resources.displayMetrics.density).toInt()
+        failedBox.addView(TextView(this).apply { text = plq(R.plurals.ddn_fail_title, items.size, items.size); textSize = 16f; setTextColor(getColor(R.color.danger)); setPadding(0, pad, 0, pad / 2) })
+        for (q in items) {
+            failedBox.addView(TextView(this).apply { text = "${q.name}\n${DdnBackup.reason(this@DdnBackupActivity, q.error!!)}"; textSize = 13f; setTextColor(getColor(R.color.text)) })
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            row.addView(Button(this).apply { text = getString(R.string.ddn_fail_retry); setOnClickListener {
+                thread { DdnBackup.Db(this@DdnBackupActivity).retry(q.id); runOnUiThread { DdnBackup.runNow(this@DdnBackupActivity, autoCopy = false); paintFailed() } }
+            } })
+            row.addView(Button(this).apply { text = getString(R.string.ddn_fail_remove); setOnClickListener {
+                thread { DdnBackup.Db(this@DdnBackupActivity).drop(q.id); runOnUiThread { DdnBackup.notifyFailed(this@DdnBackupActivity, DdnBackup.failed(this@DdnBackupActivity).size); paintFailed() } }
+            } })
+            failedBox.addView(row)
+        }
+    }
+
     private fun paintState(infos: List<WorkInfo>) {
+        paintFailed()
         val run = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
         val st = DdnBackup.status(this)
         state.text = buildString {

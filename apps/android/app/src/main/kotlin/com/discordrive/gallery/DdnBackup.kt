@@ -51,6 +51,8 @@ object DdnBackup {
     const val WORK_NOW = "ddn-upload-now"
     const val NOTIF_CHANNEL = "ddn-upload"
     const val NOTIF_ID = 4711
+    const val NOTIF_FAILED = 4712
+    const val NOTIF_CHANNEL_FAILED = "ddn-upload-failed"
     /** Folders offered by default: the camera's. */
     val DEFAULT_BUCKETS = setOf("Camera")
 
@@ -156,6 +158,13 @@ object DdnBackup {
         }
         fun done(id: Long) = writableDatabase.delete("queue", "id=?", arrayOf("$id"))
         fun failed(id: Long, error: String) = writableDatabase.update("queue", ContentValues().apply { put("error", error) }, "id=?", arrayOf("$id"))
+        /** Try a failed item again (its error cleared). */
+        fun retry(id: Long) = writableDatabase.update("queue", ContentValues().apply { putNull("error") }, "id=?", arrayOf("$id"))
+        /** Drop a failed item from the queue (its copy in the app's storage too). */
+        fun drop(id: Long) {
+            readableDatabase.rawQuery("SELECT local FROM queue WHERE id=?", arrayOf("$id")).use { if (it.moveToFirst()) it.getString(0)?.let { p -> java.io.File(p).delete() } }
+            writableDatabase.delete("queue", "id=?", arrayOf("$id"))
+        }
     }
 
     /** Media of the chosen camera folders, oldest first (what an automatic copy takes). */
@@ -187,6 +196,34 @@ object DdnBackup {
             }
         }
         return m
+    }
+
+    /** Items of the queue that failed for good (not a network failure): shown with their cause, Retry / Remove. */
+    internal fun failed(c: Context): List<Db.Queued> {
+        val acct = DdnAccount.load(c)?.accountId ?: return emptyList()
+        return Db(c).queued(acct).filter { it.error != null }
+    }
+
+    /** A failure in words (the server's or Discord's code stays in the log). */
+    fun reason(c: Context, error: String): String = when {
+        Regex("HTTP 404").containsMatchIn(error) && error.contains("discord", true) -> c.getString(R.string.ddn_fail_channel_gone)
+        Regex("HTTP 40[13]").containsMatchIn(error) && error.contains("discord", true) -> c.getString(R.string.ddn_fail_channel_denied)
+        error.startsWith("need_channel") || error.contains("no channel", true) -> c.getString(R.string.ddn_fail_no_channel)
+        error.contains("No such file", true) || error.contains("FileNotFound", true) || error.contains("ENOENT") -> c.getString(R.string.ddn_fail_source_gone)
+        error.contains("too large", true) || error.contains("413") -> c.getString(R.string.ddn_fail_too_large)
+        else -> c.getString(R.string.ddn_fail_other)
+    }
+
+    /** One notification after a run that left failed items (tap: the automatic copy screen with the list). */
+    internal fun notifyFailed(c: Context, n: Int) {
+        val mgr = c.getSystemService(android.app.NotificationManager::class.java)
+        if (n == 0) { mgr.cancel(NOTIF_FAILED); return }
+        if (Build.VERSION.SDK_INT >= 33 && c.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        if (mgr.getNotificationChannel(NOTIF_CHANNEL_FAILED) == null) mgr.createNotificationChannel(android.app.NotificationChannel(NOTIF_CHANNEL_FAILED, c.getString(R.string.ddn_fail_channel), android.app.NotificationManager.IMPORTANCE_DEFAULT))
+        val open = android.app.PendingIntent.getActivity(c, 11, android.content.Intent(c, DdnBackupActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK), android.app.PendingIntent.FLAG_IMMUTABLE)
+        mgr.notify(NOTIF_FAILED, NotificationCompat.Builder(c, NOTIF_CHANNEL_FAILED).setSmallIcon(R.drawable.ic_cloud_pending)
+            .setContentTitle(c.plq(R.plurals.ddn_fail_title, n, n)).setContentText(c.getString(R.string.ddn_fail_tap))
+            .setContentIntent(open).setAutoCancel(true).build())
     }
 
     /** Queue files the user sent: kept in the app's storage until uploaded (a share grant ends with the share). */
@@ -312,6 +349,7 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             DdnBackup.log("run failed: ${e.message}")
         } finally {
             DdnBackup.setStatus(c, DdnBackup.Status(System.currentTimeMillis(), copied, waiting, err))
+            runCatching { DdnBackup.notifyFailed(c, DdnBackup.failed(c).size) }
             if (inputData.getBoolean("trigger", false)) DdnBackup.armTrigger(c)
         }
         // More left (the run's time budget, a network failure): the next run right away, as a new job.
