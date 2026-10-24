@@ -118,9 +118,9 @@ class DdnBackupActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad, pad, pad) }
         fun text(s: CharSequence, size: Float = 14f) = TextView(this).apply { text = s; textSize = size; setTextColor(getColor(R.color.text)); setPadding(0, pad / 2, 0, pad / 2) }
 
-        val on = SwitchCompat(this).apply { text = getString(R.string.ddn_backup_on); isChecked = DdnBackup.enabled(this@DdnBackupActivity); textSize = 16f }
-        val wifi = CheckBox(this).apply { text = getString(R.string.ddn_backup_wifi); isChecked = DdnBackup.wifiOnly(this@DdnBackupActivity) }
-        val charging = CheckBox(this).apply { text = getString(R.string.ddn_backup_charging); isChecked = DdnBackup.chargingOnly(this@DdnBackupActivity) }
+        val on = SwitchCompat(this).apply { text = getString(R.string.ddn_backup_on); isChecked = DdnBackup.enabled(this@DdnBackupActivity); textSize = 16f; setTextColor(getColor(R.color.text)) }
+        val wifi = CheckBox(this).apply { text = getString(R.string.ddn_backup_wifi); isChecked = DdnBackup.wifiOnly(this@DdnBackupActivity); setTextColor(getColor(R.color.text)) }
+        val charging = CheckBox(this).apply { text = getString(R.string.ddn_backup_charging); isChecked = DdnBackup.chargingOnly(this@DdnBackupActivity); setTextColor(getColor(R.color.text)) }
         val where = text(getString(R.string.ddn_backup_where, DdnBackup.rootName(DdnAccount.load(this)?.deviceName ?: "?")), 13f).apply { setTextColor(getColor(R.color.text_dim)) }
         folders = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val now = Button(this).apply { text = getString(R.string.ddn_backup_now) }
@@ -163,6 +163,7 @@ class DdnBackupActivity : AppCompatActivity() {
                 folders.removeAllViews()
                 val chosen = DdnBackup.buckets(this).toMutableSet()
                 for ((b, n) in all) folders.addView(CheckBox(this).apply {
+                    setTextColor(getColor(R.color.text))
                     text = "$b ($n)"; isChecked = b in chosen
                     setOnCheckedChangeListener { _, v -> if (v) chosen += b else chosen -= b; DdnBackup.set(this@DdnBackupActivity, buckets = chosen.toSet()) }
                 }, ViewGroup.LayoutParams(-1, -2))
