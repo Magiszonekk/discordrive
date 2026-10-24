@@ -1691,6 +1691,41 @@ export class AppCore {
     const n = this.c().store.getNode(nodeId)!;
     return { ...r, name: n.name };
   }
+  // ── the disk in the system (desktop, Linux FUSE: apps/desktop/src/vdisk.ts) ──
+
+  private vdiskEntry(n: { id: string; name: string; kind: string; content: { sizeBytes: number; createdAt: number; manifestRef: string } | null }) {
+    const s = this.store;
+    // When the content was made (manifest takenAt, known in the index) else when it was written.
+    const taken = s instanceof SqlIndexStore && n.content ? s.descInfo(n.content.manifestRef)?.taken : null;
+    return { id: n.id, name: n.name, kind: n.kind === "folder" ? ("folder" as const) : ("file" as const), size: n.content?.sizeBytes ?? 0, mtime: taken || n.content?.createdAt || 0 };
+  }
+  /** A folder's children for the disk (not in the trash; unavailable files hidden as in the lists). */
+  vdiskList(id: string) {
+    const tree = this.c().store;
+    const folder = id === "root" ? tree.getNode(ROOT_ID) : tree.getNode(id);
+    if (!folder || folder.kind !== "folder") return null;
+    const out = [];
+    for (const cid of tree.childIds(folder.id)) {
+      const n = tree.getNode(cid);
+      if (!n || n.trashed) continue;
+      if (n.kind === "file" && !this.showUnavailable && this.unavailableInfo(n.id)) continue;
+      out.push(this.vdiskEntry(n as never));
+    }
+    return out;
+  }
+  vdiskStat(id: string) {
+    const n = this.c().store.getNode(id === "root" ? ROOT_ID : id);
+    return n && !n.trashed ? this.vdiskEntry(n as never) : null;
+  }
+  /** Bytes [off, off+len) of a file, its fragments through `cache` (the disk's own, bounded). */
+  async vdiskRead(id: string, off: number, len: number, cache: Map<string, Uint8Array>): Promise<Uint8Array> {
+    const n = this.c().store.getNode(id);
+    if (!n || n.kind !== "file" || !n.content) throw new Error("not a file");
+    if (len === 0 || off >= n.content.sizeBytes) return new Uint8Array(0);
+    const r = await this.c().readRange(id, off, Math.min(n.content.sizeBytes - 1, off + len - 1), cache);
+    return r.data;
+  }
+
   /**
    * Decrypted fragments of the last ranges (players read windows that overlap, seeking goes back): a few,
    * never the whole file (a 1 GB video streamed would otherwise stay in memory fragment by fragment).

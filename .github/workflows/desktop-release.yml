@@ -69,6 +69,11 @@ jobs:
           DDN_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: npm run build -w @ddv4/desktop
 
+      - name: "Linux: the disk helper (ddn-fuse) packed with the app"
+        if: runner.os == 'Linux'
+        timeout-minutes: 8
+        run: cargo build --release --manifest-path apps/desktop/native/fuse/Cargo.toml
+
       - name: Installers
         run: npx tsx apps/desktop/package.ts ${{ matrix.target }}
 

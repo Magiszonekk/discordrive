@@ -69,6 +69,16 @@ jobs:
       - name: ffmpeg version
         run: ffmpeg -version | head -n1
 
+      # The disk in the system (Linux): the FUSE helper in Rust (no libfuse; mounts through fusermount3).
+      - name: "Linux: build the disk helper (ddn-fuse) and make FUSE usable"
+        if: runner.os == 'Linux'
+        timeout-minutes: 8
+        run: |
+          (command -v fusermount3 && test -e /dev/fuse) || sudo apt-get install -y -qq fuse3
+          ls -l /dev/fuse
+          cargo build --release --manifest-path apps/desktop/native/fuse/Cargo.toml
+          ls -l apps/desktop/native/fuse/target/release/ddn-fuse
+
       - name: Typecheck
         run: npm run typecheck -w @ddv4/desktop
 

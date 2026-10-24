@@ -19,6 +19,9 @@ const pkg = JSON.parse(readFileSync(join(here, "package.json"), "utf8")) as { ve
 const electronVersion = pkg.devDependencies.electron!.replace(/^[^\d]*/, "");
 const BUILDER = "electron-builder@26.15.3";
 const stage = join(here, ".stage");
+function targetsLinux() {
+  return process.argv.includes("--linux") || (process.platform === "linux" && !process.argv.some((a) => a === "--win" || a === "--mac"));
+}
 const out = join(here, "release");
 if (!existsSync(join(here, "dist", "main.cjs"))) throw new Error("run the build first (npm run build -w @ddv4/desktop)");
 
@@ -53,6 +56,11 @@ const config = {
   electronVersion,
   directories: { output: out, buildResources: join(here, "build-res") },
   files: ["dist/**/*", "package.json"],
+  // Linux: the disk-in-the-system helper (native/fuse, built before packaging) next to the app, outside the
+  // asar (it is a program the agent starts). Missing (Windows, macOS, a build without cargo): no disk option.
+  ...(existsSync(join(here, "native", "fuse", "target", "release", "ddn-fuse")) && targetsLinux()
+    ? { extraResources: [{ from: join(here, "native", "fuse", "target", "release", "ddn-fuse"), to: "ddn-fuse" }] }
+    : {}),
   asar: true,
   // Electron fuses (security checklist #18): no ELECTRON_RUN_AS_NODE, NODE_OPTIONS or --inspect for the
   // packaged app, app code only from the (integrity-checked where supported) asar, no extra file:// rights.
@@ -88,6 +96,8 @@ const config = {
     // electron-builder's defaults miss the sound library Chromium links against (a desktop has it anyway,
     // a minimal install does not); its name changed in Ubuntu 24.04 (t64). libglib2.0-bin: gdbus, which tells
     // the app whether the session has a default keyring (before asking it, so no surprise "create" window).
+    // The disk in the system needs fusermount3 (pakiet fuse3); the app works without it (the option is off).
+    recommends: ["fuse3"],
     depends: ["libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6", "xdg-utils", "libatspi2.0-0", "libuuid1", "libsecret-1-0", "libasound2t64 | libasound2", "libgbm1", "libglib2.0-bin"],
   },
   mac: { target: [{ target: "zip", arch: ["x64", "arm64"] }], identity: null },

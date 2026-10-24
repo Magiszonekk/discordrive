@@ -29,6 +29,10 @@ export interface DesktopSettings {
   localTermsAt: number | null;
   /** Linux: use the system keyring for the device keys ("ask", default) or not ("file": the user refused it). */
   keyring: "ask" | "file";
+  /** Linux: the account as a disk in the system (~/discordrive, FUSE). Off by default. */
+  vdisk?: boolean;
+  /** The disk's cache of file pieces on this computer, bytes (default 10 GB). */
+  vdiskCacheBytes?: number;
 }
 
 export const DEFAULTS: DesktopSettings = { v: 1, servers: [], active: -1, autostart: true, downloadsDir: null, checkUpdates: true, localTermsAt: null, keyring: "ask" };
