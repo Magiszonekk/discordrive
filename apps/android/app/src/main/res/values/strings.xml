@@ -341,6 +341,12 @@
     <string name="ddn_search_loading">Wczytywanie…</string>
     <string name="ddn_search_ready">%1$d plików, %2$d z opisem AI. Prywatne albumy są pomijane.</string>
     <string name="ddn_search_found">Znaleziono: %1$d</string>
+    <plurals name="ddn_ai_gone">
+        <item quantity="one">%1$d plik niedostępny (kanał usunięty na Discordzie)</item>
+        <item quantity="few">%1$d pliki niedostępne (kanał usunięty na Discordzie)</item>
+        <item quantity="many">%1$d plików niedostępnych (kanał usunięty na Discordzie)</item>
+        <item quantity="other">%1$d pliku niedostępnego (kanał usunięty na Discordzie)</item>
+    </plurals>
     <string name="ddn_ai_title">Wyszukiwanie AI</string>
     <string name="ddn_ai_privacy">Zdjęcia (pomniejszone) są wysyłane pod ten adres. Opisy zapisujemy zaszyfrowane w koncie. Domyślnie wyłączone.</string>
     <string name="ddn_ai_plain_note">To konto jest w trybie jawnym: opis jest zaszyfrowany tak jak plik.</string>

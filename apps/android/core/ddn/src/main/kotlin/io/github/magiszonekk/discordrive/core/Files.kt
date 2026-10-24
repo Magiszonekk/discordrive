@@ -47,7 +47,8 @@ object FileFormat {
     fun contentKey(fileKey: ByteArray): ByteArray = Hkdf.derive(fileKey, "ddv4-file-content-v1")
 
     data class Chunk(val index: Int, val size: Long, val sha256: String?, val webhookId: String, val messageId: String, val attachmentId: String, val channelId: String = "")
-    data class Manifest(val chunkSize: Long, val chunks: List<Chunk>)
+    /** `takenAt`: when the content was made (a photo's date, a file's mtime), if the uploader stored it. */
+    data class Manifest(val chunkSize: Long, val chunks: List<Chunk>, val takenAt: Long? = null)
 
     fun openManifest(fileKey: ByteArray, sealed: ByteArray): Manifest {
         val m = json.parseToJsonElement(Aes.decrypt(contentKey(fileKey), sealed, null, "manifest").toString(Charsets.UTF_8)).jsonObject
@@ -57,7 +58,7 @@ object FileFormat {
             if (p.strOrNull("provider") != Discord.PROVIDER) throw IllegalStateException("storage backend ${p.strOrNull("provider")} not supported on the phone yet")
             Chunk(o.getValue("index").jsonPrimitive.content.toInt(), o.getValue("ciphertextSizeBytes").jsonPrimitive.long, o.strOrNull("ciphertextHash"), p.str("locationId"), p.str("messageId"), p.str("attachmentId"), p.strOrNull("channelId") ?: "")
         }.sortedBy { it.index }
-        return Manifest(m.getValue("chunkSizeBytes").jsonPrimitive.long, chunks)
+        return Manifest(m.getValue("chunkSizeBytes").jsonPrimitive.long, chunks, m.longOrNull("takenAt")?.takeIf { it > 0 })
     }
 
     fun openFragment(contentKey: ByteArray, sealed: ByteArray): ByteArray = Aes.decrypt(contentKey, sealed, null, "fragment")

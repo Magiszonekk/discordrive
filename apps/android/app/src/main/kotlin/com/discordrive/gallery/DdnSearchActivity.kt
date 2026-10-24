@@ -72,13 +72,17 @@ class DdnSearchActivity : AppCompatActivity() {
             val files = s.allFiles(DdnPrivate.all(this))
             val recs = DdnAi.Db(this).records(s.acct.accountId)
             fun build(r: Map<String, io.github.magiszonekk.discordrive.core.Describe.Record>) {
-                items = files.map { it to Search.Item(it.id, it.name, it.createdAt, it.manifestRef?.let(r::get)) }
+                // The date a search matches: when the content was made (manifest), else when it was uploaded.
+                val taken = DdnAi.Db(this).taken(s.acct.accountId)
+                items = files.map { it to Search.Item(it.id, it.name, it.manifestRef?.let(taken::get) ?: it.createdAt, it.manifestRef?.let(r::get)) }
                 val described = items!!.count { it.second.record != null }
                 main.post { info.text = getString(R.string.ddn_search_ready, files.size, described); search() }
             }
             build(recs)
             // Descriptions other devices stored (not in this phone's table yet): a few reads, then the list again.
-            if (runCatching { DdnAi.syncDescriptions(this, s, budget = 60) }.getOrDefault(0) > 0) build(DdnAi.Db(this).records(s.acct.accountId))
+            val before = DdnAi.Db(this).taken(s.acct.accountId).size
+            val n = runCatching { DdnAi.syncDescriptions(this, s, budget = 60) }.getOrDefault(0)
+            if (n > 0 || DdnAi.Db(this).taken(s.acct.accountId).size != before) build(DdnAi.Db(this).records(s.acct.accountId))
         }
     }
 

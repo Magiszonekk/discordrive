@@ -117,6 +117,8 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
             if (!part.contentEquals(out.toByteArray().copyOfRange(mid.toInt(), mid.toInt() + 100))) { filesOk = false; log("file $name: range differs") }
         }
         results["filesDownloadAndRange"] = filesOk
+        // The web client stored when the photo was taken; the phone reads it from the manifest.
+        inFolder["Wakacje \u017B.jpg"]?.manifestRef?.let { results["takenAtFromWeb"] = reader.manifest(it).second.takenAt == 1715940000000L }
         val photo = inFolder["Wakacje \u017B.jpg"]
         val t = f["thumbSha"]?.jsonPrimitive?.contentOrNull
         if (t != null) {
