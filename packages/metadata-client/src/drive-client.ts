@@ -10,6 +10,7 @@
 //   fragments (lease renewed while they go) -> manifest blob ->
 //   blobs.finalize(U) -> group[upload_commit U, create(content)] [guard U] -> releaseLease(U).
 
+import { DESCRIPTION_MAX_BYTES, descriptionNameOf, openDescription, type DescriptionRecord } from "./describe.js";
 import { NetControl } from "./net.js";
 import { createSHA256 } from "hash-wasm";
 import {
@@ -720,6 +721,26 @@ export class DriveClient {
       while (this.previewIndex.size > 5000) this.previewIndex.delete(this.previewIndex.keys().next().value!);
     }
     return p;
+  }
+
+  /**
+   * The AI description stored with a version (describe.ts), null when it has none. Uses the same look at
+   * the manifest's message as the previews when it is fresh (no extra read).
+   */
+  async readDescription(manifestRef: string, signal?: AbortSignal): Promise<DescriptionRecord | null> {
+    const dn = await descriptionNameOf(manifestRef);
+    if (!dn || !this.blobs.extrasOf) return null;
+    const loc = decodeManifestRef(manifestRef);
+    const ex = (await this.blobs.extrasOf(loc.at, signal)).find((x) => x.name.replace(/\.[^.]*$/, "") === dn.name);
+    if (!ex) return null;
+    if (ex.size > DESCRIPTION_MAX_BYTES) return null;
+    return openDescription(dn.k, await this.blobs.get(ex.placement, signal));
+  }
+
+  /** When the content of a version was made, if its uploader stored it (manifest takenAt). */
+  async takenAt(manifestRef: string): Promise<number | null> {
+    const t = (await this.loadManifest(manifestRef)).manifest.takenAt;
+    return typeof t === "number" && t > 0 ? t : null;
   }
 
   /** One picture of a version, decrypted; null when the version has none of that kind. */

@@ -1,6 +1,7 @@
 // @ddv4/metadata-client: discordrive-next stage 2, metadata-only mode.
 
 export * from "./types.js";
+export { DESCRIPTION_FORMAT, descriptionName, foldText, openDescription, sealDescription, searchItems, type DescriptionRecord, type SearchItem } from "./describe.js";
 export { MemoryTransport } from "./memory-transport.js";
 export { DiscordWebhookTransport, DiscordHttpError, RateLimitedError, parseWebhookUrl, redactWebhookUrl, isCloudflareBlock, webhookMultipart, type PartsFetch } from "./discord-transport.js";
 export { ChannelPacer, type PacerOptions } from "./rate-limit.js";

@@ -17,7 +17,7 @@
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -126,6 +126,8 @@ const mp4 = join(dir, "telefon.mp4");
 execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=8", "-c:v", "libx264", "-preset", "ultrafast", "-b:v", "6M", "-pix_fmt", "yuv420p", mp4]);
 const doc = join(dir, "notatki.txt");
 writeFileSync(doc, "Zażółć gęślą jaźń\n".repeat(1000));
+// Made long ago: search by the content's date (File.lastModified goes into the manifest).
+utimesSync(doc, new Date("2024-05-17T10:00:00Z"), new Date("2024-05-17T10:00:00Z"));
 // Bigger than one fragment (10 MiB) so the progress has several steps.
 const big = join(dir, "duzy.bin");
 writeFileSync(big, (await import("node:crypto")).randomBytes(12 * 1024 * 1024));
@@ -589,6 +591,20 @@ try {
   r.progressBigFile = bigSteps;
   // Live speed: the file's line ends with the average and the time ("avg 3.1 MB/s · 4 s"), the batch line too.
   r.uploadSpeed = { file: progress.filter((x) => x.startsWith("duzy.bin:speed")).at(-1) ?? null, meta: progress.filter((x) => x.startsWith("meta:") && /MB\/s/.test(x)).at(-1) ?? null };
+  // Search in every mode (local index): by the content's date and by name without diacritics.
+  {
+    const rowsOf = () => p.$$eval("[data-ddn=row]", (e) => e.map((x) => x.querySelector("[title]")?.getAttribute("title")));
+    const want = async (q: string, names: string[]) => {
+      await typeInto(p, "[data-ddn=search]", q);
+      await p.waitForFunction((n) => JSON.stringify([...document.querySelectorAll("[data-ddn=row]")].map((x) => x.querySelector("[title]")?.getAttribute("title")).sort()) === JSON.stringify(n), [...names].sort(), { timeout: 20_000 }).catch(() => {});
+      return JSON.stringify((await rowsOf()).sort()) === JSON.stringify([...names].sort());
+    };
+    r.localSearch = { byTakenDate: await want("2024-05", ["notatki.txt"]), byNameNoDiacritics: await want("DUZY", ["duzy.bin"]), allWords: await want("klip 2024", []) };
+    await shot(p, "04c-local-search");
+    await typeInto(p, "[data-ddn=search]", "");
+    await p.keyboard.press("Enter");
+    await count(p, L.four);
+  }
   if (MODE === "plain") {
     // Thumbnail of the video (made on the server in the background) replaces the type badge.
     // Without a reload: the list asks again until the server has made it.
@@ -2071,6 +2087,7 @@ try {
     })(),
     speedTest: ((x) => !!x && x.files === 0 && (SERVER_SIDE ? x.advHidden === true && JSON.stringify(x.lineOnlyRows) === JSON.stringify(["line", "build"]) : /MB\/s/.test(String(x.up)) && /MB\/s/.test(String(x.down)) && /6 ×/.test(String(x.channels)) && x.cardInView === true && x.deleteRejectsLeft === 0 && /discordrive speed test/.test(String(x.copied)) && Number(x.history) >= 1 && x.msgsAfter === 0 && x.msgsAfterCancel === 0 && /Cancel|Anulow/.test(String(x.cancelText))))(r.speedTest as Record<string, unknown> | undefined),
     settingsLayoutStable: ((x) => !!x && x.moved.length === 0)(r.settingsLayout as { moved: string[] } | undefined),
+    localSearch: ((x) => !!x && x.byTakenDate && x.byNameNoDiacritics && x.allWords)(r.localSearch as { byTakenDate: boolean; byNameNoDiacritics: boolean; allWords: boolean } | undefined),
     settingsTabs: ((x) => !!x && x.everySectionOnce && x.untabbed.length === 0 && x.oneChannelList && x.reloadApp && x.back && x.anchor && x.remembered === "/settings/network" &&
       x.tabs.channels!.join() === "channels" && x.tabs.account!.join() === "account,rescue,security,sharing" && x.tabs.storage!.join() === "storage" &&
       x.tabs.network!.join() === "network,speed" && x.tabs.appearance!.join() === "appearance" && x.tabs.app!.join() === "diagnostics,browser")(
