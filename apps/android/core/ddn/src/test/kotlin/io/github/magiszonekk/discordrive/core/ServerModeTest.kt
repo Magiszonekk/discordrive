@@ -94,6 +94,14 @@ class ServerModeTest {
         r["instanceHasRelease"] = sc.rpc("uploadState", JsonPrimitive(up.uploadId)).jsonPrimitive.content == "released"
         r["sameStateAfter"] = sync.replica.stateSha256() == sc.rpc("expect").jsonObject.getValue("sha").jsonPrimitive.content
 
+        // The account's settings in this mode too: the phone stores the AI endpoint, the TS device reads it;
+        // the TS device changes the model, the phone reads that.
+        val settings = AccountSettings(api, AccountKey.fromB64(acct.accountKey), acct.accountId)
+        settings.update { v -> Describe.withConfig(v, Describe.AiConfig("http://localhost:8080/v1", "k1", "m1")) }
+        val roundTrip = sc.rpc("settingsRoundTrip").jsonObject
+        r["settingsReadByWeb"] = roundTrip["model"]?.jsonPrimitive?.content == "m1"
+        r["settingsFromWeb"] = Describe.configOf(settings.load())?.model == "m2"
+
         // A rescue kit of an e2ee / plain instance opens.
         r["kit2Parses"] = RescueKit.parse("ddn-kit2:" + B64.encUrl("""{"v":2,"accountId":"${acct.accountId}","key":"${acct.accountKey}","server":"$server"}""".toByteArray())).accountId == acct.accountId
 

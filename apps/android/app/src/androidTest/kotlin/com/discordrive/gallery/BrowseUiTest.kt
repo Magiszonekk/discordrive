@@ -324,6 +324,27 @@ class BrowseUiTest {
         val s = DdnSession.get(ctx)!!
         s.refresh()
         DdnAi.Db(ctx).clear(s.acct.accountId)
+        // An endpoint stored by an older app in the vault ("ai") moves to the account's settings when read.
+        s.sync.updateVault { v -> io.github.magiszonekk.discordrive.core.Describe.withConfig(v, io.github.magiszonekk.discordrive.core.Describe.AiConfig(aiApi, "old-key", "old-model")) }
+        DdnAi.reloadConfig()
+        r["aiConfigMigrated"] = DdnAi.config(ctx, s)?.model == "old-model" && sc.rpc("aiSettings").toString().contains("old-model") &&
+            io.github.magiszonekk.discordrive.core.Describe.configOf(s.sync.vault) == null
+        DdnAi.saveConfig(ctx, s, null)
+        // An older instance without account settings (404): the endpoint is read from and saved to the vault
+        // as before; the account's settings take it over once the server has them.
+        sc.rpc("settingsOff", JsonPrimitive(true))
+        try {
+            s.sync.updateVault { v -> io.github.magiszonekk.discordrive.core.Describe.withConfig(v, io.github.magiszonekk.discordrive.core.Describe.AiConfig(aiApi, "vault-key", "vault-model")) }
+            DdnAi.reloadConfig()
+            val fromVault = DdnAi.config(ctx, s)?.model == "vault-model"
+            DdnAi.saveConfig(ctx, s, io.github.magiszonekk.discordrive.core.Describe.AiConfig(aiApi, "vault-key", "vault-model-2"))
+            r["aiOldServerUsesVault"] = fromVault && io.github.magiszonekk.discordrive.core.Describe.configOf(s.sync.loadVault())?.model == "vault-model-2"
+        } finally {
+            sc.rpc("settingsOff", JsonPrimitive(false))
+        }
+        DdnAi.reloadConfig()
+        r["aiMovesWhenServerHasSettings"] = DdnAi.config(ctx, s)?.model == "vault-model-2" && sc.rpc("aiSettings").toString().contains("vault-model-2")
+        DdnAi.saveConfig(ctx, s, null)
         // A private album is left out: the folder of one photo locked, the candidates without it.
         val every = DdnAi.candidates(ctx, s)
         val lockedFolder = every.lastOrNull()?.parentId
@@ -340,7 +361,9 @@ class BrowseUiTest {
                 r["aiCheckDescribes"] = waitUntil { var t = ""; a.onActivity { x -> t = x.resultForTest() }; t.contains("DISCORDRIVE 42") }
                 shot("14-ai-settings")
             }
-            r["aiConfigInVault"] = io.github.magiszonekk.discordrive.core.Describe.configOf(s.sync.vault)?.model == "fake-vision"
+            // In the account's settings (every mode), read by the web client; the vault has no "ai".
+            r["aiConfigInAccountSettings"] = sc.rpc("aiSettings").let { it is kotlinx.serialization.json.JsonObject && it["model"]?.toString() == "\"fake-vision\"" } &&
+                io.github.magiszonekk.discordrive.core.Describe.configOf(s.sync.vault) == null
             val photos = DdnAi.candidates(ctx, s)
             // "Describe now" works with the background describing off.
             DdnAi.set(ctx, on = false, wifi = false, charging = false)

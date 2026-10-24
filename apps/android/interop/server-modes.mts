@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalState, applyEntry, expiredTrash, initIndex, inTrash, loadSnapshot, MemoryIndexStore, uploadsTouched, RULES_VERSION, ROOT_ID, type IndexSnapshot, type LogEntry, type NodeRecord } from "@ddv4/sync-core";
-import { DiscordWebhookTransport, DriveClient, EncryptedArbiter, HttpApi, OpCodec, acceptPairing, createAccountHttp, generateDeviceKey, memorySource, newAccountKey } from "@ddv4/metadata-client";
+import { AccountSettingsStore, DiscordWebhookTransport, DriveClient, EncryptedArbiter, HttpApi, OpCodec, acceptPairing, createAccountHttp, generateDeviceKey, memorySource, newAccountKey } from "@ddv4/metadata-client";
 import { PlainArbiter, PlainOpCodec } from "@ddv4/metadata-client/plain-ops";
 import { ServerBlobStore } from "@ddv4/metadata-client/server-blobs";
 import { DdnServer, FakeDiscord } from "@ddv4/metadata-client/node";
@@ -117,6 +117,13 @@ async function handle(q: Req): Promise<unknown> {
   if (q.m === "uploadState") {
     const row = srv.db.prepare("SELECT state FROM s_uploads WHERE account_id = ? AND upload_id = ?").get(r0.accountId, q.a as string) as { state: string } | undefined;
     return row?.state ?? null;
+  }
+  // The account's settings (every mode): read what the phone stored, then change the model.
+  if (q.m === "settingsRoundTrip") {
+    const st = new AccountSettingsStore(api, key, r0.accountId);
+    const v = await st.load();
+    await st.update((x) => ({ ...x, ai: { ...x.ai!, model: "m2" } }));
+    return { model: v.ai?.model ?? null };
   }
   if (q.m === "secrets") return pool.map((h) => h.url.split("/").pop()!);
   if (q.m === "done") return (Object.assign(checks, q.a as Record<string, boolean>), null);

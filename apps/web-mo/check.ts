@@ -1106,6 +1106,46 @@ try {
   await p.locator("#storage").scrollIntoViewIfNeeded();
   await shot(p, "18-settings-storage");
   await nav(p, "settings", "account");
+  // Settings → Account → AI search (every mode): stored in the account's settings, the key not shown back.
+  {
+    const st0 = await p.textContent("[data-ddn=ai-state]");
+    await typeInto(p, "[data-ddn=ai-url]", "http://localhost:8080/v1");
+    await typeInto(p, "[data-ddn=ai-key]", "sekret-123");
+    await typeInto(p, "[data-ddn=ai-model]", "vision-1");
+    await p.click("[data-ddn=ai-save]");
+    await p.waitForFunction(() => /^(Set|Ustawione)$/.test(document.querySelector("[data-ddn=ai-state]")?.textContent ?? ""), null, { timeout: 15_000 }).catch(() => {});
+    const keyEmpty = (await p.inputValue("[data-ddn=ai-key]")) === "";
+    const kept = /stored|zapisany/.test((await p.textContent("[data-ddn=ai-key-hint]")) ?? "");
+    // Change only the model: the key stays (empty field = unchanged); after a reload the values come back.
+    await typeInto(p, "[data-ddn=ai-model]", "vision-2");
+    await p.click("[data-ddn=ai-save]");
+    await p.waitForTimeout(800);
+    await p.reload();
+    await nav(p, "settings", "account");
+    await p.waitForFunction(() => (document.querySelector<HTMLInputElement>("[data-ddn=ai-model]")?.value ?? "") === "vision-2", null, { timeout: 20_000 }).catch(() => {});
+    ops.aiSettings = {
+      offFirst: /Not set|Nie ustawione/.test(st0 ?? ""),
+      keyEmpty,
+      kept,
+      afterReload: { url: await p.inputValue("[data-ddn=ai-url]"), model: await p.inputValue("[data-ddn=ai-model]"), kept: /stored|zapisany/.test((await p.textContent("[data-ddn=ai-key-hint]")) ?? "") },
+      notInPage: !(await p.content()).includes("sekret-123"),
+    };
+    await p.locator("#ai").scrollIntoViewIfNeeded();
+    await shot(p, "18b-settings-ai");
+    await p.click("[data-ddn=ai-off]");
+    await p.waitForFunction(() => /^(Not set|Nie ustawione)$/.test(document.querySelector("[data-ddn=ai-state]")?.textContent ?? ""), null, { timeout: 15_000 }).catch(() => {});
+    (ops.aiSettings as Record<string, unknown>).removed = /Not set|Nie ustawione/.test((await p.textContent("[data-ddn=ai-state]")) ?? "");
+    // An older instance without account settings (404 on /v1/settings): the section says so, nothing fails.
+    // Without a reload (a reload here made the next tab a secondary one for a while: later steps differ).
+    await p.route("**/v1/settings", (rt) => rt.fulfill({ status: 404, contentType: "application/json", body: '{"error":"not_found"}' }));
+    await nav(p, "files");
+    await nav(p, "settings", "account");
+    await p.waitForFunction(() => !document.querySelector<HTMLElement>("[data-ddn=ai-unsupported]")?.hidden, null, { timeout: 15_000 }).catch(() => {});
+    (ops.aiSettings as Record<string, unknown>).oldServer = !(await p.locator("[data-ddn=ai-unsupported]").isHidden()) && (await p.locator("[data-ddn-ui=ai-form]").isHidden());
+    await p.unroute("**/v1/settings");
+    await nav(p, "files");
+    await nav(p, "settings", "account");
+  }
   // Settings → Security: password sign-in (off by default), then a fresh browser signs in with it.
   const pwLogin = `check.${Date.now().toString(36)}`;
   const pwPass = "check run passphrase 2026 long";
@@ -2089,7 +2129,7 @@ try {
     settingsLayoutStable: ((x) => !!x && x.moved.length === 0)(r.settingsLayout as { moved: string[] } | undefined),
     localSearch: ((x) => !!x && x.byTakenDate && x.byNameNoDiacritics && x.allWords)(r.localSearch as { byTakenDate: boolean; byNameNoDiacritics: boolean; allWords: boolean } | undefined),
     settingsTabs: ((x) => !!x && x.everySectionOnce && x.untabbed.length === 0 && x.oneChannelList && x.reloadApp && x.back && x.anchor && x.remembered === "/settings/network" &&
-      x.tabs.channels!.join() === "channels" && x.tabs.account!.join() === "account,rescue,security,sharing" && x.tabs.storage!.join() === "storage" &&
+      x.tabs.channels!.join() === "channels" && x.tabs.account!.join() === "account,rescue,security,ai,sharing" && x.tabs.storage!.join() === "storage" &&
       x.tabs.network!.join() === "network,speed" && x.tabs.appearance!.join() === "appearance" && x.tabs.app!.join() === "diagnostics,browser")(
       r.settingsTabs as { tabs: Record<string, string[]>; reloadApp: boolean; back: boolean; anchor: boolean; remembered: string; everySectionOnce: boolean; untabbed: string[]; oneChannelList: boolean } | undefined),
     layout: r.filesPageClean === true && r.settingsSurvivesReload === true && r.devicesSurvivesReload === true && (r.folderRoute as { path: boolean; crumb: string }).path && (r.folderRoute as { crumb: string }).crumb === "Wakacje",
@@ -2151,6 +2191,9 @@ try {
       // e2ee/plain: "last cleanup" is the instance's background pass (every 30 s on a live server), so it may be set already.
       return by.test(o.before.by) && (SERVER_SIDE || /not yet|jeszcze nie/.test(o.before.last)) && !/not yet|jeszcze nie/.test(o.after.last) && /\d/.test(o.after.result) && /^2 /.test(o.after.waiting);
     })(),
+    aiSettings: ((x) => !!x && x.offFirst && x.keyEmpty && x.kept && x.afterReload.url === "http://localhost:8080/v1" && x.afterReload.model === "vision-2" && x.afterReload.kept && x.notInPage && x.removed && x.oldServer)(
+      (r.ops as { aiSettings?: { offFirst: boolean; keyEmpty: boolean; kept: boolean; afterReload: { url: string; model: string; kept: boolean }; notInPage: boolean; removed: boolean; oldServer: boolean } } | undefined)?.aiSettings,
+    ),
     passwordSignIn: (() => {
       const o = r.ops as Record<string, unknown> | undefined;
       return !!o && o.pwDefaultOff === true && /good|strong|dobre|mocne/.test(String(o.pwStrength)) && o.pwNeedsAck === true && /Wrong login or password|Zły login albo hasło/.test(String(o.pwWrong)) && o.pwSignedIn === true && o.pwOff === true;

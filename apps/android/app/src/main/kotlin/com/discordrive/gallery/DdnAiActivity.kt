@@ -28,6 +28,7 @@ class DdnAiActivity : AppCompatActivity() {
     private lateinit var result: TextView
     private lateinit var progress: TextView
     private lateinit var on: SwitchCompat
+    @Volatile private var loaded = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,13 +41,25 @@ class DdnAiActivity : AppCompatActivity() {
         fun check(s: Int, v: Boolean, f: (Boolean) -> Unit) = CheckBox(this).apply { text = getString(s); isChecked = v; setTextColor(getColor(R.color.text)); setOnCheckedChangeListener { _, x -> f(x) } }
 
         val s = DdnSession.get(this)
-        val cfg = DdnAi.config(this, s)
+        DdnAi.reloadConfig()
         root.addView(text(getString(R.string.ddn_ai_privacy), dim = true))
         if (s?.acct?.mode == io.github.magiszonekk.discordrive.core.AccountState.MODE_PLAIN) root.addView(text(getString(R.string.ddn_ai_plain_note), dim = true))
-        root.addView(text(getString(if (s != null && !s.acct.serverBlobs) R.string.ddn_ai_where_vault else R.string.ddn_ai_where_phone), dim = true))
-        url = field(R.string.ddn_ai_url, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI).apply { setText(cfg?.url ?: "") }
-        key = field(R.string.ddn_ai_key, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD).apply { setText(cfg?.key ?: "") }
-        model = field(R.string.ddn_ai_model, InputType.TYPE_CLASS_TEXT).apply { setText(cfg?.model ?: "") }
+        root.addView(text(getString(R.string.ddn_ai_where_vault), dim = true))
+        url = field(R.string.ddn_ai_url, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
+        key = field(R.string.ddn_ai_key, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
+        model = field(R.string.ddn_ai_model, InputType.TYPE_CLASS_TEXT)
+        // The account's settings come from the server (off the main thread); fields the user typed meanwhile stay.
+        thread {
+            val cfg = runCatching { DdnAi.config(this, s) }.getOrNull()
+            runOnUiThread {
+                if (cfg != null) {
+                    if (url.text.isEmpty()) url.setText(cfg.url)
+                    if (key.text.isEmpty()) key.setText(cfg.key)
+                    if (model.text.isEmpty()) model.setText(cfg.model)
+                }
+                loaded = true
+            }
+        }
         root.addView(url); root.addView(key)
         root.addView(CheckBox(this).apply {
             text = getString(R.string.ddn_ai_show_key); setTextColor(getColor(R.color.text))
@@ -64,7 +77,7 @@ class DdnAiActivity : AppCompatActivity() {
         on = SwitchCompat(this).apply {
             text = getString(R.string.ddn_ai_on); isChecked = DdnAi.enabled(this@DdnAiActivity); textSize = 16f; setTextColor(getColor(R.color.text))
             setOnCheckedChangeListener { v, x ->
-                if (x && DdnAi.config(this@DdnAiActivity, DdnSession.get(this@DdnAiActivity)) == null) { v.isChecked = false; result.text = getString(R.string.ddn_ai_need_config); return@setOnCheckedChangeListener }
+                if (x && current().let { it.url.isEmpty() || it.model.isEmpty() }) { v.isChecked = false; result.text = getString(R.string.ddn_ai_need_config); return@setOnCheckedChangeListener }
                 DdnAi.set(this@DdnAiActivity, on = x)
                 if (x) DdnAi.runNow(this@DdnAiActivity)
             }
@@ -76,7 +89,7 @@ class DdnAiActivity : AppCompatActivity() {
         root.addView(Button(this).apply {
             text = getString(R.string.ddn_ai_now)
             setOnClickListener {
-                if (DdnAi.config(this@DdnAiActivity, DdnSession.get(this@DdnAiActivity)) == null) result.text = getString(R.string.ddn_ai_need_config)
+                if (current().let { it.url.isEmpty() || it.model.isEmpty() }) result.text = getString(R.string.ddn_ai_need_config)
                 else { DdnAi.runNow(this@DdnAiActivity); result.text = getString(R.string.ddn_ai_started) }
             }
         })
@@ -167,6 +180,8 @@ class DdnAiActivity : AppCompatActivity() {
     }
 
     internal fun resultForTest(): String = result.text.toString()
+    internal fun loadedForTest(): Boolean = loaded
+    internal fun fieldsForTest(): Triple<String, String, String> = Triple(url.text.toString(), key.text.toString(), model.text.toString())
     internal fun progressForTest(): String = progress.text.toString()
     internal fun fillForTest(u: String, k: String, m: String) { url.setText(u); key.setText(k); model.setText(m) }
     internal fun checkForTest() = saveAndCheck()

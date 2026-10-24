@@ -36,6 +36,7 @@ import {
   createPointerMessage,
   decodeManifestRef,
   searchItems,
+  AccountSettingsStore,
   generateDeviceKey,
   inspectForVault,
   newAccountKey,
@@ -59,7 +60,9 @@ if (realHooks && realHooks.length < 3) throw new Error("--discord-hooks: 3 webho
 const fake = new FakeDiscord();
 // Real Discord: no origin mapping (an empty origin tells the phone to use discord.com itself).
 const discordOrigin = realHooks ? "" : await fake.listen();
-const srv = new DdnServer({ rateLimits: false });
+// "settingsOff": the instance answers as one without account settings (an older server: 404).
+let settingsOff = false;
+const srv = new DdnServer({ rateLimits: false, extensions: [{ name: "old-server", route: async (r) => (settingsOff && r.path === "/v1/settings" ? (r.send(404, { error: "not_found" }), true) : false) }] });
 const { url } = await srv.listen(0, "127.0.0.1");
 const transport = new DiscordWebhookTransport(realHooks ? {} : { apiOrigin: discordOrigin });
 const hookUrl = (i: number, ch: string) => (realHooks ? { url: realHooks[i]!, id: realHooks[i]!.split("/").at(-2)!, channelId: "" } : fake.addWebhook(ch));
@@ -227,6 +230,12 @@ async function handle(q: Req): Promise<unknown> {
   // The web client opens a file's thumbnail (after the phone edited its message): its SHA-256.
   // The web client reads the AI description the phone stored with a file (the same name and key derivation).
   if (q.m === "aiCalls") return aiCalls;
+  if (q.m === "settingsOff") return (settingsOff = q.a === true);
+  // The web client reads the account's settings the phone stored (the AI endpoint, without the key).
+  if (q.m === "aiSettings") {
+    const st = await new AccountSettingsStore(api, key, r0.accountId).load();
+    return st.ai ? { url: st.ai.url, model: st.ai.model, hasKey: !!st.ai.key } : null;
+  }
   // The manifest of a file the phone uploaded, as the web client reads it: its takenAt.
   if (q.m === "takenOf") {
     const t2 = await mk();
