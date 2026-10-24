@@ -67,6 +67,10 @@ open class DdnActivity : AppCompatActivity() {
         }
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         bar.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        bar.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_search); setColorFilter(getColor(R.color.text)); contentDescription = getString(R.string.ddn_search)
+            setPadding(dp(12), dp(12), dp(12), dp(12)); setOnClickListener { startActivity(Intent(this@DdnActivity, DdnSearchActivity::class.java)) }
+        })
         // Upload a file into the open folder (Files) / the automatic copy settings.
         bar.addView(ImageView(this).apply {
             setImageResource(R.drawable.ic_cloud_pending); setColorFilter(getColor(R.color.text)); contentDescription = getString(R.string.ddn_upload)

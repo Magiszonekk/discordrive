@@ -262,11 +262,44 @@ class BrowseUiTest {
     }
 
     /**
-     * PR 5: the trash (a file to the trash from the list's long press path, the trash screen lists it, restore,
-     * delete for good; the TS device sees the same state), Settings (version, a newer build found in the fake
-     * releases API, downloaded with its SHA-256 checked, handed to the system installer), Open with (VIEW) of
-     * a photo of another app.
+     * Search (after aiDescriptions described the photos): by a word of the description, by the text on the
+     * picture, by name; a private album's photos are not found; descriptions stored by another device reach
+     * this phone's table (the local table cleared, syncDescriptions reads them from the account).
      */
+    private fun search(r: LinkedHashMap<String, Boolean>) {
+        val s = DdnSession.get(ctx)!!
+        val db = DdnAi.Db(ctx)
+        val acct = s.acct.accountId
+        val described = db.records(acct)
+        if (described.isEmpty()) { r["searchHasDescriptions"] = false; return }
+        // As a new phone of the account: nothing in the table, the descriptions come from the stored files.
+        db.clear(acct)
+        val found = DdnAi.syncDescriptions(ctx, s)
+        r["searchSyncsOtherDevices"] = found == described.size && db.records(acct).keys == described.keys
+        val anyPhoto = s.media(100, null).first { it.manifestRef in described.keys }
+        fun results(q: String): List<String> {
+            var out: List<String> = emptyList()
+            ActivityScenario.launch<DdnSearchActivity>(Intent(ctx, DdnSearchActivity::class.java).putExtra(DdnSearchActivity.QUERY, q)).use { a ->
+                waitUntil { var ok = false; a.onActivity { x -> ok = x.readyForTest() }; ok }
+                waitUntil(10_000) { a.onActivity { x -> out = x.resultsForTest() }; out.isNotEmpty() }
+                Thread.sleep(800)
+                a.onActivity { x -> out = x.resultsForTest() }
+                if (q == "obraz testowy") shot("15-search")
+            }
+            return out
+        }
+        val all = s.media(100, null).filter { it.manifestRef in described.keys }.map { it.name }.toSet()
+        r["searchByDescription"] = results("obraz testowy").toSet() == all
+        r["searchByPictureText"] = results("discordrive 42").toSet() == all
+        r["searchByName"] = s.children("fold-0000000001").none { it.name == "Wakacje \u017B.jpg" } || results("wakacje").isNotEmpty()
+        DdnPrivate.set(ctx, anyPhoto.parentId!!, true)
+        try {
+            r["searchPrivateLeftOut"] = anyPhoto.name !in results("obraz testowy")
+        } finally {
+            DdnPrivate.set(ctx, anyPhoto.parentId!!, false)
+        }
+    }
+
     /**
      * AI descriptions (Settings → AI search) against the harness's fake endpoint: a wrong key is a readable
      * error, the check describes the test picture, the background run describes the account's photos (a 429
@@ -333,6 +366,12 @@ class BrowseUiTest {
         }
     }
 
+    /**
+     * PR 5: the trash (a file to the trash from the list's long press path, the trash screen lists it, restore,
+     * delete for good; the TS device sees the same state), Settings (version, a newer build found in the fake
+     * releases API, downloaded with its SHA-256 checked, handed to the system installer), Open with (VIEW) of
+     * a photo of another app.
+     */
     private fun trashAndSettings(sc: InteropScenario, r: LinkedHashMap<String, Boolean>, updatesApi: String?) {
         val s = DdnSession.get(ctx)!!
         s.refresh()
@@ -480,6 +519,7 @@ class BrowseUiTest {
         editAndPicker(sc, r)
         failedUpload(sc, r)
         aiDescriptions(sc, r, args.getString("ddnAi"))
+        if (args.getString("ddnAi") != null) search(r)
         Log.i("ddn-ui", "RESULT $r")
         sc.rpc("done", kotlinx.serialization.json.JsonObject(r.mapValues { JsonPrimitive(it.value) }))
         assertTrue("ui checks: $r", r.values.all { it })

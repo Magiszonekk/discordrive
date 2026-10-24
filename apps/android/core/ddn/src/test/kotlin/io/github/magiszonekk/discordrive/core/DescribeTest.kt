@@ -135,3 +135,33 @@ class AiDescriberTest {
         }
     }
 }
+
+class SearchTest {
+    private val utc = java.time.ZoneId.of("UTC")
+    private fun at(s: String) = java.time.Instant.parse(s + "T12:00:00Z").toEpochMilli()
+    private val items = listOf(
+        Search.Item("1", "IMG_0001.jpg", at("2024-05-17"), Describe.Record("Paragon ze sklepu spożywczego", listOf("paragon", "zakupy"), text = "RAZEM 42,50 PLN", model = "m", at = 0)),
+        Search.Item("2", "kot.jpg", at("2023-01-02"), Describe.Record("Żółty kot na kanapie", listOf("kot", "kanapa"), model = "m", at = 0)),
+        Search.Item("3", "wakacje paragon.pdf", at("2024-07-01"), null),
+        Search.Item("4", "film.mp4", at("2024-05-20"), Describe.Record("Dzieci na plaży", listOf("plaża"), transcript = "patrz jaka fala", model = "m", at = 0)),
+    )
+
+    @Test
+    fun findsByEveryField() {
+        assertEquals(listOf("3", "1"), Search.run(items, "paragon", utc).map { it.id }) // name scores above a tag
+        assertEquals(listOf("1"), Search.run(items, "42,50", utc).map { it.id })          // text on the picture
+        assertEquals(listOf("4"), Search.run(items, "fala", utc).map { it.id })           // transcript
+        assertEquals(listOf("2"), Search.run(items, "zolty KOT", utc).map { it.id })      // diacritics, case, two words
+        assertEquals(listOf("2"), Search.run(items, "żółty", utc).map { it.id })
+        assertEquals(listOf("2"), Search.run(items, "kot.jpg", utc).map { it.id })
+    }
+
+    @Test
+    fun datesAndEveryWord() {
+        assertEquals(listOf("4", "1"), Search.run(items, "2024-05", utc).map { it.id })
+        assertEquals(listOf("1"), Search.run(items, "2024-05-17", utc).map { it.id })
+        assertEquals(listOf("1"), Search.run(items, "paragon 2024-05", utc).map { it.id })
+        assertTrue(Search.run(items, "kot plaża", utc).isEmpty())
+        assertTrue(Search.run(items, "   ", utc).isEmpty())
+    }
+}
