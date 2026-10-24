@@ -58,6 +58,8 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
         override fun media(extensions: List<String>, limit: Int, after: Pair<Long, String>?): List<IndexReplica.Child> =
             rows(rpc("media", JsonArray(extensions.map { JsonPrimitive(it) })))
         override fun trash(): List<IndexReplica.Child> = rows(rpc("trash"))
+        override fun node(id: String): IndexReplica.Child? = runCatching { rows(rpc("node", JsonPrimitive(id))).firstOrNull() }.getOrNull()
+        override fun released(afterSeq: Long): List<Triple<String, Long, Long>> = rpc("released", JsonPrimitive(afterSeq)).jsonArray.map { val x = it.jsonArray; Triple(x[0].jsonPrimitive.content, x[1].jsonPrimitive.long, x[2].jsonPrimitive.long) }
         override fun albums(extensions: List<String>): List<IndexReplica.Album> = rpc("albums", JsonArray(extensions.map { JsonPrimitive(it) })).jsonArray.map {
             val o = it.jsonObject
             IndexReplica.Album(o.str("id"), o.str("name"), o.getValue("count").jsonPrimitive.int, rows(JsonArray(listOf(o.getValue("cover")))).first())

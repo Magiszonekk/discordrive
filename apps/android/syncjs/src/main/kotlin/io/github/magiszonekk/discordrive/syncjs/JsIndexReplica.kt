@@ -13,6 +13,7 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 
 /**
  * The account's index kept inside the JS engine (the sync core's MemoryIndexStore): log entries and
@@ -89,6 +90,9 @@ class JsIndexReplica(private val engine: JsEngine) : IndexReplica {
             IndexReplica.Album(o.getValue("id").jsonPrimitive.content, o.getValue("name").jsonPrimitive.content, o.getValue("count").jsonPrimitive.int, rows("[" + o.getValue("cover").toString() + "]").first())
         }
     }
+
+    override fun released(afterSeq: Long): List<Triple<String, Long, Long>> =
+        json.parseToJsonElement(call("__ddnIx.released($afterSeq)")).jsonArray.map { val x = it.jsonArray; Triple(x[0].jsonPrimitive.content, x[1].jsonPrimitive.long, x[2].jsonPrimitive.long) }
 
     override fun expiredTrash(nowServerMs: Long): List<String> =
         json.parseToJsonElement(call("__ddnIx.expired($nowServerMs)")).jsonArray.map { it.jsonPrimitive.content }
@@ -203,6 +207,12 @@ globalThis.__ddnIx = (function () {
       return JSON.stringify(out);
     },
     expired: function (now) { return JSON.stringify(S.expiredTrash(st, now)); },
+    released: function (after) {
+      var out = [];
+      for (var u of st.allUploads()) if (u.status === "released" && u.ended && u.ended.seq > after) out.push([u.id, u.ended.at, u.ended.seq]);
+      out.sort(function (a, b) { return a[2] - b[2]; });
+      return JSON.stringify(out);
+    },
     // The Gallery: media files outside the trash, newest first. Built once per head and kept (sorted).
     media: function (exts, limit, after) {
       var head = st.getMeta().headSeq;

@@ -23,7 +23,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Writing files of a metadata-only account from the phone, in the formats of packages/metadata-client
+ * Writing files from the phone (metadata only: own webhooks; e2ee / plain: through the instance), in the formats of packages/metadata-client
  * (MetadataClient.upload): the file is cut into fragments of [FileWriter.CHUNK] bytes, each sealed with the
  * file's content key and posted to one of the account's channels (round-robin, paced per channel); the
  * manifest (the fragment list) is sealed the same way and posted with the thumbnail and preview as extra
@@ -184,8 +184,29 @@ class FileWriter(
     private val parallel: Int = 4,
     private val chunkSize: Int = FileWrite.CHUNK,
     private val now: () -> Long = System::currentTimeMillis,
+    /**
+     * e2ee / plain: blobs go to the instance (PUT /v1/uploads/<U>/blobs/<i>), which posts them on its own
+     * webhooks; `writer` and `writable` are not used then. Null: the account's own webhooks (metadata only).
+     */
+    private val viaInstance: Boolean = false,
 ) {
     data class Result(val nodeId: String, val uploadId: String, val manifestRef: String, val sha256: String, val size: Long, val name: String, val chunks: Int, val outcome: String)
+
+    /** Where one blob went: the placement (JSON as in the manifest) and how to delete it on a failure. */
+    private class Stored(val placement: JsonObject, val webhookId: String, val channelId: String, val messageId: String, val attachmentId: String, val drop: () -> Unit)
+
+    /** A fragment (`index`) or the manifest ("m", with its extras) on the account's storage. */
+    private fun store(uploadId: String, index: String, filename: String, data: ByteArray, sha: String, extras: List<Pair<String, ByteArray>> = emptyList()): Stored {
+        if (viaInstance) {
+            val p = api.putBlob(uploadId, index, data, sha)
+            // Extras as blobs "x<name>" of the same upload (the instance keeps and deletes them with it); optional.
+            for ((name, d) in extras) runCatching { api.putBlob(uploadId, "x" + FileFormat.stripExt(name), d, sha256Hex(d)) }
+            // The instance deletes what an aborted upload stored (abortUpload).
+            return Stored(p, p.str("locationId"), p.strOrNull("channelId") ?: "", p.str("messageId"), p.str("attachmentId")) {}
+        }
+        val (hook, pp) = postAny(filename, data, extras)
+        return Stored(placement(pp), pp.webhookId, pp.channelId, pp.messageId, pp.attachmentId) { writer.delete(hook, pp.messageId) }
+    }
 
     companion object {
         /** Webhook IDs that answered 401 / 404 in this process (removed on Discord). */
@@ -243,8 +264,8 @@ class FileWriter(
         val uploadId = OpCodec.newId()
         val nodeId = OpCodec.newId()
         if (!api.renewLease(uploadId)) throw IllegalStateException("lease refused")
-        // Messages posted for this upload: deleted again when it fails before the commit (nothing refers to them).
-        val posted = java.util.Collections.synchronizedList(ArrayList<Pair<Vault.Webhook, String>>())
+        // What was stored for this upload: deleted again when it fails before the commit (nothing refers to it).
+        val posted = java.util.Collections.synchronizedList(ArrayList<Stored>())
         var committed = false
         var lastRenew = now()
         val renew = {
@@ -285,11 +306,11 @@ class FileWriter(
                             val ct = Aes.encrypt(ck, plain)
                             val hash = sha256Hex(ct)
                             val blobId = OpCodec.newId()
-                            val (hook, p) = postAny(blobId + FileWrite.BLOB_EXT, ct)
-                            posted += hook to p.messageId
+                            val st = store(uploadId, i.toString(), blobId + FileWrite.BLOB_EXT, ct, hash)
+                            posted += st
                             chunks[i] = buildJsonObject {
                                 put("index", i); put("blobId", blobId); put("ciphertextSizeBytes", ct.size); put("ciphertextHash", hash)
-                                put("placements", buildJsonArray { add(placement(p)) })
+                                put("placements", buildJsonArray { add(st.placement) })
                             }
                             progress(sent.addAndGet(n.toLong()), size)
                         }
@@ -315,8 +336,8 @@ class FileWriter(
             val keys = FileFormat.PreviewKeys(fileKey)
             val extras = pictures.filter(FileWrite::pictureOk).distinctBy { it.kind }.map { p -> FileWrite.sealPicture(keys, p).let { (n, d) -> n + FileWrite.BLOB_EXT to d } }
             renew()
-            val (mhook, mp) = postAny(OpCodec.newId() + FileWrite.BLOB_EXT, mct, extras)
-            posted += mhook to mp.messageId
+            val mp = store(uploadId, "m", OpCodec.newId() + FileWrite.BLOB_EXT, mct, sha256Hex(mct), extras)
+            posted += mp
             val ref = FileWrite.encodeManifestRef(fileKey, mp.webhookId, mp.channelId, mp.messageId, mp.attachmentId)
             // Rules v3: pieces per location (fragments + the manifest), sorted by location.
             val per = sortedMapOf<String, Pair<Int, Long>>()
@@ -332,6 +353,7 @@ class FileWriter(
                 put("pieces", buildJsonArray { per.forEach { (loc, x) -> add(buildJsonObject { put("loc", loc); put("n", x.first); put("bytes", x.second) }) } })
             }
             renew()
+            if (viaInstance) api.finalizeUpload(uploadId)
             committed = true
             val r = commit(buildJsonObject {
                 put("type", "group")
@@ -344,7 +366,10 @@ class FileWriter(
             if (outcome != "applied") throw IllegalStateException("upload_commit+create: $outcome")
             return Result(nodeId, uploadId, ref, sha, size, nfc, count, outcome)
         } catch (e: Exception) {
-            if (!committed) for ((h, m) in posted.toList()) runCatching { writer.delete(h, m) }
+            if (!committed) {
+                if (viaInstance) runCatching { api.abortUpload(uploadId) }
+                for (st in posted.toList()) runCatching { st.drop() }
+            }
             throw e
         } finally {
             runCatching { api.releaseLease(uploadId) }

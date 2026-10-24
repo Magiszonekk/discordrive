@@ -20,13 +20,75 @@ import kotlinx.serialization.json.put
  *
  * Envelopes and entries are JSON objects (the wire format; the sync core reads them as they are).
  */
-class OpCodec(private val key: AccountKey, val accountId: String) {
+/** Envelope ↔ what the instance stores: encrypted (metadata only, e2ee) or plain (plain mode). */
+interface LogCodec {
+    fun encrypt(env: JsonObject): JsonObject
+    fun decrypt(e: JsonObject): JsonObject
+}
+
+/**
+ * The plain mode's codec (as plain-ops.ts): the same envelope, the payload is plain JSON in base64 bound to
+ * its envelope ("plain1:|account|opId|rulesVersion|baseSeq|leaseGuard"); the server reads it (names, tree,
+ * file keys) for thumbnails, streaming and search. An entry that does not decode is the same deterministic
+ * "undecryptable" op on every replica.
+ */
+class PlainCodec(val accountId: String) : LogCodec {
+    private fun bind(opId: String, rv: Long, base: Long, lg: List<String>?) =
+        listOf("plain1:", accountId, opId, rv.toString(), base.toString(), (lg ?: emptyList()).joinToString(",")).joinToString("|")
+
+    override fun encrypt(env: JsonObject): JsonObject {
+        val opId = env.str("opId")
+        val rv = env.getValue("rulesVersion").jsonPrimitive.long
+        val base = env.getValue("baseSeq").jsonPrimitive.long
+        val lg = (env["leaseGuard"] as? JsonArray)?.map { it.jsonPrimitive.content }
+        val payload = buildJsonObject {
+            put("bind", bind(opId, rv, base, lg))
+            put("device", env.getValue("device"))
+            put("createdAt", env.getValue("createdAt"))
+            env["tzOffsetMin"]?.let { put("tzOffsetMin", it) }
+            put("op", env.getValue("op"))
+        }
+        return buildJsonObject {
+            put("opId", opId); put("rulesVersion", rv); put("baseSeq", base)
+            if (lg != null) put("leaseGuard", JsonArray(lg.map { JsonPrimitive(it) }))
+            put("payload", B64.enc(json.encodeToString(JsonObject.serializer(), payload).toByteArray(Charsets.UTF_8)))
+        }
+    }
+
+    override fun decrypt(e: JsonObject): JsonObject {
+        val opId = e.str("opId")
+        val rv = e.getValue("rulesVersion").jsonPrimitive.long
+        val base = e.getValue("baseSeq").jsonPrimitive.long
+        val lgEl = e["leaseGuard"]
+        val lg = (lgEl as? JsonArray)?.map { it.jsonPrimitive.content }
+        val head = buildJsonObject {
+            put("opId", opId); put("rulesVersion", rv); put("baseSeq", base)
+            put("seq", e.getValue("seq")); put("serverTime", e.getValue("serverTime"))
+            if (lgEl != null && lgEl !is JsonNull) put("leaseGuard", lgEl)
+        }
+        val p = runCatching { json.parseToJsonElement(B64.dec(e.str("payload")).toString(Charsets.UTF_8)) as? JsonObject }.getOrNull()
+            ?.takeIf { it.strOrNull("bind") == bind(opId, rv, base, lg) }
+        return JsonObject(
+            head + if (p != null) buildMap {
+                put("device", p.getValue("device")); put("createdAt", p.getValue("createdAt"))
+                p["tzOffsetMin"]?.let { put("tzOffsetMin", it) }
+                put("op", p.getValue("op"))
+            } else mapOf(
+                "device" to buildJsonObject { put("id", "undecryptable"); put("name", "?") },
+                "createdAt" to JsonPrimitive(0),
+                "op" to buildJsonObject { put("type", "undecryptable") },
+            ),
+        )
+    }
+}
+
+class OpCodec(private val key: AccountKey, val accountId: String) : LogCodec {
 
     private fun aad(opId: String, rulesVersion: Long, baseSeq: Long, leaseGuard: List<String>?) =
         listOf("ddn-op-v1", accountId, opId, rulesVersion.toString(), baseSeq.toString(), (leaseGuard ?: emptyList()).joinToString(",")).joinToString("|")
 
     /** An envelope (opId, rulesVersion, baseSeq, device, createdAt, tzOffsetMin?, leaseGuard?, op) → what the server stores. */
-    fun encrypt(env: JsonObject): JsonObject {
+    override fun encrypt(env: JsonObject): JsonObject {
         val opId = env.str("opId")
         val rv = env.getValue("rulesVersion").jsonPrimitive.long
         val base = env.getValue("baseSeq").jsonPrimitive.long
@@ -48,7 +110,7 @@ class OpCodec(private val key: AccountKey, val accountId: String) {
     }
 
     /** A sequenced encrypted entry (… seq, serverTime, payload) → a log entry for the sync core. */
-    fun decrypt(e: JsonObject): JsonObject {
+    override fun decrypt(e: JsonObject): JsonObject {
         val opId = e.str("opId")
         val rv = e.getValue("rulesVersion").jsonPrimitive.long
         val base = e.getValue("baseSeq").jsonPrimitive.long

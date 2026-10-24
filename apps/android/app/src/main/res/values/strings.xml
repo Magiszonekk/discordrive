@@ -468,6 +468,7 @@
     <string name="ddn_fail_remove">Usuń z kolejki</string>
     <string name="ddn_fail_channel_gone">Kanał (webhook) tego konta został usunięty na Discordzie. Dodaj nowy kanał i usuń stary w ustawieniach konta (w przeglądarce lub na komputerze), potem Ponów.</string>
     <string name="ddn_fail_all_channels_gone">Wszystkie kanały konta zostały usunięte na Discordzie. Dodaj nowy kanał i usuń stare w ustawieniach konta (w przeglądarce lub na komputerze), potem Ponów.</string>
+    <string name="ddn_fail_instance_busy">Serwer jest teraz zajęty. Spróbuj Ponów za chwilę.</string>
     <string name="ddn_fail_channel_denied">Discord odmówił zapisu na kanale (webhook bez uprawnień). Sprawdź kanał i ponów.</string>
     <string name="ddn_fail_no_channel">Konto nie ma kanału do zapisu. Dodaj kanał (w przeglądarce lub na komputerze) i ponów.</string>
     <string name="ddn_fail_source_gone">Pliku nie ma już na telefonie.</string>

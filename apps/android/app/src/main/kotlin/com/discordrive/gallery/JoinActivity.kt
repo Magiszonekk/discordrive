@@ -28,7 +28,7 @@ import io.github.magiszonekk.discordrive.syncjs.JsIndexReplica
 import kotlin.concurrent.thread
 
 /**
- * Join this phone to a discordrive account (metadata only), as in the web app's "Join this device":
+ * Join this phone to a discordrive account (any storage mode: metadata only, e2ee, plain), as in the web app's "Join this device":
  * the phone shows a QR code (and the text); on a signed-in device: Devices → scan / paste → Pair; both show
  * a 6-digit code; the user confirms they match. Or: paste a rescue kit. Then the phone joins (vault,
  * snapshot, log tail) and shows the account's top folders.

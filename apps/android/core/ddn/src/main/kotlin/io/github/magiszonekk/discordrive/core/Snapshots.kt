@@ -107,9 +107,10 @@ data class RescueKit(val accountId: String, val key: String, val pointerWebhookI
         fun parse(text: String): RescueKit {
             val t = text.trim()
             val v = Regex("^ddn-kit(\\d+):").find(t)?.groupValues?.get(1) ?: throw IllegalArgumentException("not a rescue kit")
-            require(v != "2") { "kit of an e2ee/plain instance" }
             val o = json.parseToJsonElement(B64.decUrl(t.substring(9)).toString(Charsets.UTF_8)).jsonObject
             return when (v) {
+                // e2ee / plain: the account key and the instance (the instance holds the webhooks and the chain).
+                "2" -> RescueKit(o.str("accountId"), o.str("key"), "", "", emptyList())
                 "1" -> {
                     val url = o.str("webhookUrl")
                     val id = Discord.webhookId(url)

@@ -105,7 +105,11 @@ data class AccountState(
     val deviceName: String,
     val accountKey: String,
     val deviceSeed: String,
+    /** The instance's storage mode: "metadata-only" (own webhooks), "e2ee" or "plain" (blobs through the instance). */
+    val mode: String = MODE_METADATA,
 ) {
+    /** Blobs go through the instance (e2ee / plain): no vault of webhooks, no client snapshots. */
+    val serverBlobs: Boolean get() = mode == MODE_E2EE || mode == MODE_PLAIN
     fun toJson(): JsonObject = buildJsonObject {
         put("v", 1)
         put("serverUrl", serverUrl)
@@ -115,6 +119,7 @@ data class AccountState(
         put("deviceName", deviceName)
         put("accountKey", accountKey)
         put("deviceSeed", deviceSeed)
+        put("mode", mode)
     }
 
     val key: AccountKey get() = AccountKey.fromB64(accountKey)
@@ -129,7 +134,11 @@ data class AccountState(
             deviceName = o.str("deviceName"),
             accountKey = o.str("accountKey"),
             deviceSeed = o.str("deviceSeed"),
+            mode = o.strOrNull("mode") ?: MODE_METADATA,
         )
+        const val MODE_METADATA = "metadata-only"
+        const val MODE_E2EE = "e2ee"
+        const val MODE_PLAIN = "plain"
     }
 }
 
