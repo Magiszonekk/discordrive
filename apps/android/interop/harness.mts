@@ -20,7 +20,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
+import { createDecipheriv, createHash, createHmac, hkdfSync } from "node:crypto";
 import { canonicalState, ROOT_ID, applyEntry, expiredTrash, initIndex, inTrash, loadSnapshot, MemoryIndexStore, uploadsTouched, RULES_VERSION, type IndexSnapshot, type LogEntry, type NodeRecord } from "@ddv4/sync-core";
 import {
   ChannelPacer,
@@ -34,6 +34,7 @@ import {
   clientBlobIO,
   createAccountHttp,
   createPointerMessage,
+  decodeManifestRef,
   generateDeviceKey,
   inspectForVault,
   newAccountKey,
@@ -123,7 +124,7 @@ for (const [name, data, pv] of [
 await ts.commitOp({ type: "rename", nodeId: "fold-0000000003", name: "Dokumenty" }, "rename");
 await ts.commitOp({ type: "trash", nodeId: "fold-0000000004" }, "trash");
 
-const row = (n: NodeRecord) => ({ id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: n.content?.sizeBytes ?? null, ref: n.content?.manifestRef ?? null, sha: n.content?.plaintextSha256 ?? null, at: n.content?.createdAt ?? 0 });
+const row = (n: NodeRecord) => ({ id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: n.content?.sizeBytes ?? null, ref: n.content?.manifestRef ?? null, sha: n.content?.plaintextSha256 ?? null, at: n.content?.createdAt ?? 0, up: n.content?.uploadId ?? null });
 // The phone's sync core over the RPC (InteropTest.RpcReplica implements IndexReplica with it).
 type Req = { id: number; m: string; a?: unknown };
 let store = initIndex(new MemoryIndexStore());
@@ -220,6 +221,32 @@ async function handle(q: Req): Promise<unknown> {
     const pv = await t2.readPreview((t2.store.getNode(node.id)!.content as { manifestRef: string }).manifestRef, "t");
     return { sha: h.digest("hex") === a.sha, thumb: !!pv && shaHex(pv.data) === a.thumbSha && pv.width === 320, thumbW: pv ? Math.min(pv.width, pv.height) : 0 };
   }
+  // The web client opens a file's thumbnail (after the phone edited its message): its SHA-256.
+  // The web client reads the AI description the phone stored with a file (the same name and key derivation).
+  if (q.m === "aiCalls") return aiCalls;
+  if (q.m === "aiPolish") return aiPolish;
+  if (q.m === "descriptionOf") {
+    const t2 = await mk();
+    await t2.pull();
+    const ref = (t2.store.getNode(q.a as string)!.content as { manifestRef: string }).manifestRef;
+    const loc = decodeManifestRef(ref);
+    const fk = Buffer.from(loc.k, "base64");
+    const hk = (info: string) => new Uint8Array(hkdfSync("sha256", fk, new Uint8Array(), info, 32));
+    const name = createHmac("sha256", hk("ddv4-file-preview-name-v1")).update("ddn-description:1").digest("base64url").slice(0, 22);
+    const ex = (await t2.blobs.extrasOf!(loc.at)).find((x) => x.name.replace(/\.[^.]*$/, "") === name);
+    if (!ex) return null;
+    const d = await t2.blobs.get(ex.placement);
+    const dc = createDecipheriv("aes-256-gcm", hk("ddv4-file-description-v1"), d.subarray(0, 12));
+    dc.setAAD(Buffer.from("ddn-description-v1"));
+    dc.setAuthTag(d.subarray(d.byteLength - 16));
+    return JSON.parse(Buffer.concat([dc.update(d.subarray(12, d.byteLength - 16)), dc.final()]).toString("utf8"));
+  }
+  if (q.m === "thumbOf") {
+    const t2 = await mk();
+    await t2.pull();
+    const pv = await t2.readPreview((t2.store.getNode(q.a as string)!.content as { manifestRef: string }).manifestRef, "t");
+    return pv ? shaHex(pv.data) : "";
+  }
   if (q.m === "files") return { folder: "fold-0000000001", files: ups, thumbSha: thumb ? shaHex(thumb) : null };
   // The webhooks of the account removed on Discord and back (the phone's failed upload, then Retry).
   if (q.m === "hooksOff" || q.m === "hooksOn") {
@@ -280,6 +307,34 @@ if (ua >= 0) {
   step(`fake releases API for the update check: versionCode ${code}, ${apk.length} B`);
 }
 
+// A fake AI endpoint in the OpenAI format for the app's AI descriptions: /v1/models, /v1/chat/completions
+// (an answer per picture; the key "bad" is refused; the first call of a run answers 429 once).
+let aiApi = "";
+let aiCalls = 0;
+let aiPolish = 0;
+{
+  let first429 = true;
+  const ai = createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      if (req.headers.authorization !== "Bearer good-key") return res.writeHead(401, { "content-type": "application/json" }).end('{"error":"bad key"}');
+      if (req.url === "/v1/models") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: [{ id: "fake-vision" }, { id: "fake-text" }] }));
+      if (req.url === "/v1/chat/completions") {
+        if (first429 && aiCalls > 0) { first429 = false; return res.writeHead(429, { "retry-after": "1" }).end("{}"); }
+        aiCalls++;
+        if (body.includes("po polsku")) aiPolish++;
+        const hasImage = body.includes("data:image/jpeg;base64,");
+        const content = hasImage ? JSON.stringify({ description: `Obraz testowy numer ${aiCalls}`, tags: ["test", "pasy"], text: "DISCORDRIVE 42" }) : "no image";
+        return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ choices: [{ message: { content } }] }));
+      }
+      res.writeHead(404).end();
+    });
+  });
+  await new Promise<void>((r) => ai.listen(0, "127.0.0.1", r));
+  aiApi = `http://127.0.0.1:${(ai.address() as { port: number }).port}`;
+}
+
 const appUi = process.argv.includes("--app");
 const onDevice = process.argv.includes("--device") || appUi;
 const ei = process.argv.indexOf("--engine");
@@ -288,9 +343,9 @@ let child;
 if (onDevice) {
   step("phone: InteropDeviceTest on the device (adb reverse to the servers here)");
   const port = (u: string) => new URL(u).port;
-  for (const u of [url, discordOrigin, rpcUrl, updatesApi].filter(Boolean)) spawnSync("adb", ["reverse", `tcp:${port(u)}`, `tcp:${port(u)}`], { stdio: "inherit" });
+  for (const u of [url, discordOrigin, rpcUrl, updatesApi, aiApi].filter(Boolean)) spawnSync("adb", ["reverse", `tcp:${port(u)}`, `tcp:${port(u)}`], { stdio: "inherit" });
   const target = appUi ? ["com.discordrive.gallery.BrowseUiTest", "io.github.magiszonekk.discordrive.test"] : ["io.github.magiszonekk.discordrive.syncjs.InteropDeviceTest", "io.github.magiszonekk.discordrive.syncjs.test"];
-  child = spawn("adb", ["shell", "am", "instrument", "-w", "-e", "class", target[0]!, "-e", "ddnRpc", rpcUrl, "-e", "ddnServer", url, "-e", "ddnDiscord", discordOrigin || "none", ...(updatesApi ? ["-e", "ddnUpdates", updatesApi] : []), ...(engine ? ["-e", "ddnEngine", engine] : []), `${target[1]}/androidx.test.runner.AndroidJUnitRunner`], { stdio: ["ignore", "pipe", "inherit"] });
+  child = spawn("adb", ["shell", "am", "instrument", "-w", "-e", "class", target[0]!, "-e", "ddnRpc", rpcUrl, "-e", "ddnServer", url, "-e", "ddnDiscord", discordOrigin || "none", ...(updatesApi ? ["-e", "ddnUpdates", updatesApi] : []), "-e", "ddnAi", aiApi, ...(engine ? ["-e", "ddnEngine", engine] : []), `${target[1]}/androidx.test.runner.AndroidJUnitRunner`], { stdio: ["ignore", "pipe", "inherit"] });
 } else {
   step("phone: JVM InteropTest through Gradle (pairing, join, operations)");
   child = spawn(process.platform === "win32" ? "gradlew.bat" : "./gradlew", ["--no-daemon", "-q", ":core:ddn:test", "--tests", "*InteropTest*", "-PddnInterop=1", "--rerun-tasks"], {
@@ -309,7 +364,7 @@ child.stdout!.on("data", (d: Buffer) => ((childOut += d.toString()), process.std
 const code: number = await new Promise((res) => child.on("close", (c) => res(c ?? 1)));
 // am instrument exits 0 even when a test fails: its report says OK or FAILURES.
 check(onDevice ? "deviceTestPassed" : "jvmTestPassed", code === 0 && (!onDevice || /\nOK \(1 test\)/.test(childOut)));
-if (onDevice) for (const u of [url, discordOrigin, rpcUrl, updatesApi].filter(Boolean)) spawnSync("adb", ["reverse", "--remove", `tcp:${new URL(u).port}`], { stdio: "ignore" });
+if (onDevice) for (const u of [url, discordOrigin, rpcUrl, updatesApi, aiApi].filter(Boolean)) spawnSync("adb", ["reverse", "--remove", `tcp:${new URL(u).port}`], { stdio: "ignore" });
 check("pairedSameCode", !!paired);
 void sealDeviceName;
 rpc.close();

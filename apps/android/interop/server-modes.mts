@@ -65,7 +65,7 @@ await ts.upload(memorySource(big), "duży.bin", "fold-0000000001");
 ups["duży.bin"] = { sha: shaB(big), size: big.byteLength };
 await ts.commitOp({ type: "trash", nodeId: "fold-0000000005" }, "trash");
 
-const row = (n: NodeRecord) => ({ id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: n.content?.sizeBytes ?? null, ref: n.content?.manifestRef ?? null, sha: n.content?.plaintextSha256 ?? null, at: n.content?.createdAt ?? 0, ...(n.trashed ? { tat: n.trashed.at } : {}) });
+const row = (n: NodeRecord) => ({ id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: n.content?.sizeBytes ?? null, ref: n.content?.manifestRef ?? null, sha: n.content?.plaintextSha256 ?? null, at: n.content?.createdAt ?? 0, up: n.content?.uploadId ?? null, ...(n.trashed ? { tat: n.trashed.at } : {}) });
 type Req = { id: number; m: string; a?: unknown };
 let store = initIndex(new MemoryIndexStore());
 let paired: { sas: string; deviceId: string } | null = null;

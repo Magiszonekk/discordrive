@@ -67,7 +67,7 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
         override fun expiredTrash(nowServerMs: Long): List<String> = rpc("expired", JsonPrimitive(nowServerMs)).jsonArray.map { it.jsonPrimitive.content }
         private fun rows(e: JsonElement) = e.jsonArray.map {
             val o = it.jsonObject
-            IndexReplica.Child(o.str("id"), o.str("name"), o.str("kind"), o.longOrNull("size"), o.strOrNull("ref"), o.strOrNull("sha"), o.longOrNull("at") ?: 0, o.strOrNull("parent"), o.longOrNull("tat"))
+            IndexReplica.Child(o.str("id"), o.str("name"), o.str("kind"), o.longOrNull("size"), o.strOrNull("ref"), o.strOrNull("sha"), o.longOrNull("at") ?: 0, o.strOrNull("parent"), o.longOrNull("tat"), o.strOrNull("up"))
         }
         override fun close() {}
     }
@@ -124,6 +124,20 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
             results["thumbnailOfWebUpload"] = pv != null && sha256Hex(pv.data) == t && pv.mime == "image/webp"
             results["noThumbnailOnVideo"] = reader.preview(inFolder["film.webm"]!!.manifestRef!!, 't') == null
         }
+        // 2c. An AI description added later to the web client's photo (its message edited, the thumbnail kept).
+        if (photo?.manifestRef != null) {
+            val loc = FileFormat.decodeManifestRef(photo.manifestRef!!)
+            val rec = Describe.Record("Testowy obraz z pasami", listOf("test", "pasy"), text = "DDN", model = "fake", at = 1)
+            val hookUrl = Vault.webhooks(sync.vault).first { it.id == loc.webhookId }.url
+            val w = ExtraWriter(apiOrigin = discordOrigin.takeUnless { it.isEmpty() || it == "none" })
+            val added = w.addToMessage(sync.discord, hookUrl, loc.messageId, Describe.name(loc.fileKey), Describe.seal(loc.fileKey, rec))
+            val again = w.addToMessage(sync.discord, hookUrl, loc.messageId, Describe.name(loc.fileKey), Describe.seal(loc.fileKey, rec))
+            val fresh = FileReader(sync.discord, { id -> Vault.webhooks(sync.vault).first { it.id == id }.url })
+            results["descriptionAddedToMessage"] = added && !again && fresh.description(photo.manifestRef!!) == rec
+            if (t != null) results["thumbnailKeptAfterEdit"] = fresh.preview(photo.manifestRef!!, 't')?.let { sha256Hex(it.data) == t } == true &&
+                rpc("thumbOf", JsonPrimitive(photo.id)).jsonPrimitive.content == t
+        }
+
         val media = sync.replica.media(listOf(".jpg", ".webm"), 100)
         results["galleryListsMedia"] = media.map { it.name }.toSet() == setOf("Wakacje \u017B.jpg", "film.webm")
         val albums = sync.replica.albums(listOf(".jpg", ".webm"))

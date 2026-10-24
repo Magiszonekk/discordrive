@@ -104,6 +104,7 @@ open class DdnActivity : AppCompatActivity() {
                 show()
                 refresh()
                 DdnBackup.schedule(this)
+                DdnAi.schedule(this)
                 DdnApp.schedule(this)
             }
         }

@@ -92,6 +92,8 @@ interface IndexReplica : AutoCloseable {
         val parentId: String? = null,
         /** Server time of the trash operation (only in [trash]). */
         val trashedAt: Long? = null,
+        /** The upload holding this version (e2ee / plain: extras added later go to it). */
+        val uploadId: String? = null,
     ) {
         val isFolder: Boolean get() = kind == "folder"
     }

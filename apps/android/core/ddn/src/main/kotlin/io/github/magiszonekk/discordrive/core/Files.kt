@@ -168,6 +168,14 @@ class FileReader(private val src: BlobSource, private val parallel: Int = 4) {
         return FileFormat.openPreview(keys, kind, get())
     }
 
+    /** The AI description stored with the version (Describe), or null when it has none. */
+    fun description(manifestRef: String): Describe.Record? {
+        val loc = FileFormat.decodeManifestRef(manifestRef)
+        val (size, get) = src.extras(loc.webhookId, loc.channelId, loc.messageId, loc.attachmentId)[Describe.name(loc.fileKey)] ?: return null
+        if (size > Describe.MAX_BYTES) return null
+        return Describe.open(loc.fileKey, get())
+    }
+
     private fun fragment(contentKey: ByteArray, c: FileFormat.Chunk): ByteArray {
         val ct = src.fetch(c.webhookId, c.channelId, c.messageId, c.attachmentId)
         if (c.sha256 != null && sha256Hex(ct) != c.sha256) throw IllegalStateException("fragment ${c.index}: ciphertext hash mismatch")

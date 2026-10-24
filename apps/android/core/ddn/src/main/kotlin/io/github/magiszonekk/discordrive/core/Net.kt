@@ -173,7 +173,10 @@ class InstanceApi(
      * SHA-256; the instance posts it on its webhooks and answers with the placement (the same (upload, index,
      * hash) again returns the stored one: a resume). 503 / 429 = the instance is busy: waits as it asks.
      */
-    fun putBlob(uploadId: String, index: String, data: ByteArray, sha256: String): JsonObject {
+    fun putBlob(uploadId: String, index: String, data: ByteArray, sha256: String): JsonObject = putBlobResult(uploadId, index, data, sha256).first
+
+    /** As putBlob; second = the instance already had it (an extra added by another device first). */
+    fun putBlobResult(uploadId: String, index: String, data: ByteArray, sha256: String): Pair<JsonObject, Boolean> {
         var waited = 0L
         for (attempt in 0 until 8) {
             val rb = Request.Builder().url(baseUrl.trimEnd('/') + "/v1/uploads/$uploadId/blobs/$index")
@@ -183,7 +186,7 @@ class InstanceApi(
             http.newCall(rb.build()).execute().use { res ->
                 val text = res.body?.string().orEmpty()
                 val j = runCatching { json.parseToJsonElement(text) as? JsonObject }.getOrNull()
-                if (res.isSuccessful) return j!!.getValue("placement").jsonObject
+                if (res.isSuccessful) return j!!.getValue("placement").jsonObject to (j["reused"]?.jsonPrimitive?.content == "true")
                 val err = j?.strOrNull("error") ?: "?"
                 when {
                     res.code == 401 && err == "unauthorized" -> token = null

@@ -267,6 +267,72 @@ class BrowseUiTest {
      * releases API, downloaded with its SHA-256 checked, handed to the system installer), Open with (VIEW) of
      * a photo of another app.
      */
+    /**
+     * AI descriptions (Settings → AI search) against the harness's fake endpoint: a wrong key is a readable
+     * error, the check describes the test picture, the background run describes the account's photos (a 429
+     * answered once on the way), stores each description with the file (the web client opens it), and a second
+     * run sends nothing again. A private album is left out.
+     */
+    private fun aiDescriptions(sc: InteropScenario, r: LinkedHashMap<String, Boolean>, aiApi: String?) {
+        if (aiApi == null) return
+        val s = DdnSession.get(ctx)!!
+        s.refresh()
+        DdnAi.Db(ctx).clear(s.acct.accountId)
+        // A private album is left out: the folder of one photo locked, the candidates without it.
+        val every = DdnAi.candidates(ctx, s)
+        val lockedFolder = every.lastOrNull()?.parentId
+        if (lockedFolder != null) DdnPrivate.set(ctx, lockedFolder, true)
+        try {
+            // The phone in English, the app in Polish: descriptions are asked for in the app's language.
+            val sysLocale = java.util.Locale.getDefault()
+            java.util.Locale.setDefault(java.util.Locale.US)
+            ActivityScenario.launch<DdnAiActivity>(Intent(ctx, DdnAiActivity::class.java)).use { a ->
+                a.onActivity { r["aiKeyMasked"] = it.keyMaskedForTest() }
+                a.onActivity { it.fillForTest(aiApi, "bad", "fake-vision"); it.checkForTest() }
+                r["aiBadKeyReadable"] = waitUntil { var t = ""; a.onActivity { x -> t = x.resultForTest() }; t.contains(ctx.getString(R.string.ddn_ai_err_auth)) }
+                a.onActivity { it.fillForTest(aiApi, "good-key", "fake-vision"); it.checkForTest() }
+                r["aiCheckDescribes"] = waitUntil { var t = ""; a.onActivity { x -> t = x.resultForTest() }; t.contains("DISCORDRIVE 42") }
+                shot("14-ai-settings")
+            }
+            r["aiConfigInVault"] = io.github.magiszonekk.discordrive.core.Describe.configOf(s.sync.vault)?.model == "fake-vision"
+            val photos = DdnAi.candidates(ctx, s)
+            // "Describe now" works with the background describing off.
+            DdnAi.set(ctx, on = false, wifi = false, charging = false)
+            val wm = androidx.work.WorkManager.getInstance(ctx)
+            val pl0 = sc.rpc("aiPolish").jsonPrimitive.content.toInt()
+            val calls0 = sc.rpc("aiCalls").jsonPrimitive.content.toInt()
+            DdnAi.runNow(ctx)
+            Thread.sleep(1500)
+            waitUntil(240_000) { wm.getWorkInfosForUniqueWork(DdnAi.WORK_NOW).get().all { it.state.isFinished } }
+            val db = DdnAi.Db(ctx)
+            java.util.Locale.setDefault(sysLocale)
+            val calls1 = sc.rpc("aiCalls").jsonPrimitive.content.toInt()
+            r["aiPolishOnEnglishPhone"] = calls1 > calls0 && sc.rpc("aiPolish").jsonPrimitive.content.toInt() - pl0 == calls1 - calls0
+            // Every photo handled (described, or "none": nothing decodable to send); the web client's photo described.
+            r["aiDescribedAll"] = photos.isNotEmpty() && photos.all { db.state(s.acct.accountId, it.manifestRef!!)?.first in setOf("ok", "none") }
+            r["aiPrivateLeftOut"] = lockedFolder != null && photos.none { it.parentId == lockedFolder } && every.size > photos.size
+            val first = photos.firstOrNull { db.record(s.acct.accountId, it.manifestRef!!) != null } ?: photos.first()
+            val web = sc.rpc("descriptionOf", JsonPrimitive(first.id))
+            r["aiWebReadsDescription"] = web is kotlinx.serialization.json.JsonObject && web["text"]?.toString()?.contains("DISCORDRIVE 42") == true
+            r["aiStoredWithFile"] = s.files.description(first.manifestRef!!)?.tags?.contains("pasy") == true
+            // Thumbnails stay readable after the message edit.
+            r["aiThumbnailKept"] = first.manifestRef.let { runCatching { s.files.preview(it!!, 't') }.getOrNull() } != null || !DdnSession.isImage(first.name)
+            // A second run: nothing left, nothing sent.
+            val before = sc.rpc("aiCalls").jsonPrimitive.content.toInt()
+            DdnAi.runNow(ctx)
+            Thread.sleep(1500)
+            waitUntil(120_000) { wm.getWorkInfosForUniqueWork(DdnAi.WORK_NOW).get().all { it.state.isFinished } }
+            r["aiSecondRunSendsNothing"] = sc.rpc("aiCalls").jsonPrimitive.content.toInt() == before
+            ActivityScenario.launch<DdnAiActivity>(Intent(ctx, DdnAiActivity::class.java)).use { a ->
+                val n = minOf(db.count(s.acct.accountId, "ok"), photos.size)
+                r["aiProgressShown"] = waitUntil { var t = ""; a.onActivity { x -> t = x.progressForTest() }; t.startsWith(ctx.getString(R.string.ddn_ai_described, n, photos.size)) }
+            }
+        } finally {
+            DdnAi.set(ctx, on = false)
+            if (lockedFolder != null) DdnPrivate.set(ctx, lockedFolder, false)
+        }
+    }
+
     private fun trashAndSettings(sc: InteropScenario, r: LinkedHashMap<String, Boolean>, updatesApi: String?) {
         val s = DdnSession.get(ctx)!!
         s.refresh()
@@ -413,6 +479,7 @@ class BrowseUiTest {
         // Last: the edited copy adds a file to the photo folder (the counts above stay as they were).
         editAndPicker(sc, r)
         failedUpload(sc, r)
+        aiDescriptions(sc, r, args.getString("ddnAi"))
         Log.i("ddn-ui", "RESULT $r")
         sc.rpc("done", kotlinx.serialization.json.JsonObject(r.mapValues { JsonPrimitive(it.value) }))
         assertTrue("ui checks: $r", r.values.all { it })

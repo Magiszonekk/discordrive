@@ -79,6 +79,7 @@ class DdnSettingsActivity : AppCompatActivity() {
         root.addView(button(R.string.ddn_backup) { startActivity(Intent(this, DdnBackupActivity::class.java)) })
         root.addView(button(R.string.ddn_trash) { DdnTrashActivity.open(this) })
         root.addView(button(R.string.ddn_free) { startActivity(Intent(this, DdnFreeUpActivity::class.java)) })
+        root.addView(button(R.string.ddn_ai_title) { startActivity(Intent(this, DdnAiActivity::class.java)) })
 
         // Private albums: the PIN (set, change, remove) and fingerprint.
         root.addView(head(R.string.private_title))
