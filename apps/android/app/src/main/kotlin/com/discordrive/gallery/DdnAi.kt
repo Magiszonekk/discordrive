@@ -122,7 +122,8 @@ object DdnAi {
 
     class Db(c: Context) : SQLiteOpenHelper(c, "ddn-ai.db", null, 1) {
         override fun onCreate(db: SQLiteDatabase) {
-            // ref: manifestRef of the version; state: "ok" (described), "none" (not describable), "err" (failed, retried later).
+            // ref: manifestRef of the version; state: "ok" (described), "absent" (no description stored with it, asked
+            // at `at`), "none" (not describable), "err" (failed, retried later).
             db.execSQL("CREATE TABLE d (account TEXT NOT NULL, ref TEXT NOT NULL, node TEXT NOT NULL, state TEXT NOT NULL, rec TEXT, at INTEGER NOT NULL, tries INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account, ref))")
         }
         override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) {}
@@ -140,6 +141,17 @@ object DdnAi {
         fun record(account: String, ref: String): Describe.Record? = readableDatabase.rawQuery("SELECT rec FROM d WHERE account=? AND ref=? AND state='ok'", arrayOf(account, ref)).use { if (it.moveToFirst()) it.getString(0)?.let(::decode) else null }
 
         fun clear(account: String) = writableDatabase.delete("d", "account=?", arrayOf(account))
+
+        /** Every stored description of the account: manifestRef → record. */
+        fun records(account: String): Map<String, Describe.Record> {
+            val out = HashMap<String, Describe.Record>()
+            readableDatabase.rawQuery("SELECT ref, rec FROM d WHERE account=? AND state='ok'", arrayOf(account)).use { c ->
+                while (c.moveToNext()) c.getString(1)?.let(::decode)?.let { out[c.getString(0)] = it }
+            }
+            return out
+        }
+
+        fun askedAt(account: String, ref: String): Long = readableDatabase.rawQuery("SELECT at FROM d WHERE account=? AND ref=?", arrayOf(account, ref)).use { if (it.moveToFirst()) it.getLong(0) else 0 }
 
         private fun encode(r: Describe.Record) = io.github.magiszonekk.discordrive.core.json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), kotlinx.serialization.json.buildJsonObject {
             put("d", kotlinx.serialization.json.JsonPrimitive(r.description)); put("g", kotlinx.serialization.json.JsonArray(r.tags.map { kotlinx.serialization.json.JsonPrimitive(it) }))
@@ -199,6 +211,33 @@ object DdnAi {
         return rec
     }
 
+    /**
+     * The local table catches up with the descriptions stored in the account (made by another device): for
+     * media not looked at yet (or found without one more than a day ago) one read of the extras of its
+     * manifest. At most `budget` reads per call (a big account fills up over a few runs). Returns how many
+     * descriptions it found. Needs no AI endpoint: search works with descriptions made elsewhere.
+     */
+    fun syncDescriptions(c: Context, s: DdnSession, budget: Int = 300): Int {
+        val db = Db(c)
+        val acct = s.acct.accountId
+        val now = System.currentTimeMillis()
+        var reads = 0
+        var found = 0
+        for (f in s.media(1_000_000, null)) {
+            if (reads >= budget) break
+            val ref = f.manifestRef ?: continue
+            val st = db.state(acct, ref)?.first
+            if (st == "ok" || st == "none" || st == "err") continue
+            if (st == "absent" && now - db.askedAt(acct, ref) < 24 * 3600_000L) continue
+            reads++
+            val got = runCatching { s.files.description(ref) }
+            if (got.isFailure) continue
+            val rec = got.getOrNull()
+            if (rec != null) { db.put(acct, ref, f.id, "ok", rec); found++ } else db.put(acct, ref, f.id, "absent", null)
+        }
+        return found
+    }
+
     /** A readable reason for an endpoint failure. */
     fun reason(c: Context, e: Throwable): String = when ((e as? AiException)?.kind) {
         "auth" -> c.getString(R.string.ddn_ai_err_auth)
@@ -239,7 +278,7 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
         val acct = s.acct.accountId
         val all = DdnAi.candidates(c, s)
         // Not described yet; a failed one again after a while (at most 3 tries).
-        val todo = all.filter { f -> db.state(acct, f.manifestRef!!).let { it == null || (it.first == "err" && it.second < 3) } }
+        val todo = all.filter { f -> db.state(acct, f.manifestRef!!).let { it == null || it.first == "absent" || (it.first == "err" && it.second < 3) } }
         total = todo.size
         val t0 = System.currentTimeMillis()
         var err: String? = null

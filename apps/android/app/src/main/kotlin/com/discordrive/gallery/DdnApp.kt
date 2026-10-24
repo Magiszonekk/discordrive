@@ -153,6 +153,8 @@ class DdnMaintenanceWorker(ctx: Context, params: WorkerParameters) : CoroutineWo
             DdnApp.setLastClean(c, "${System.currentTimeMillis()} ${if (d is TrashPolicy.Decision.Clean) "purged ${d.nodeIds.size}" else (d as TrashPolicy.Decision.Skip).reason}")
             DdnApp.log("trash cleanup: $d")
         }.onFailure { DdnApp.log("trash cleanup failed: ${it.message}") }
+        // Search: descriptions other devices stored with the files.
+        runCatching { DdnSession.get(c)?.let { DdnAi.syncDescriptions(c, it) } }.onFailure { DdnApp.log("descriptions: ${it.message}") }
         if (DdnApp.checkUpdates(c)) runCatching { DdnApp.newer(c)?.let { DdnApp.notifyUpdate(c, it) } }
         Result.success()
     }

@@ -142,6 +142,17 @@ class DdnSession private constructor(private val app: Context, val acct: Account
         }
     }
 
+    /** Every file of the account (not in the trash), newest first; files inside `locked` folders left out. */
+    fun allFiles(locked: Set<String> = emptySet()): List<IndexReplica.Child> = ix { r ->
+        // An empty suffix matches every name (the replica's media list without the type filter).
+        val all = r.media(listOf(""), 1_000_000, null)
+        if (locked.isEmpty()) all else {
+            val parents = HashMap<String, String?>()
+            val up = { id: String -> parents.getOrPut(id) { r.node(id)?.parentId } }
+            all.filter { !DdnPrivate.hidden(locked, it.parentId, up) }
+        }
+    }
+
     /** Albums (folders with photos or videos), newest first. */
     fun albums(): List<IndexReplica.Album> = ix { it.albums(MEDIA_EXT) }
 

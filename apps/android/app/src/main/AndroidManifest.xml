@@ -72,6 +72,7 @@
         <activity android:name=".DdnTrashActivity" android:exported="false" android:label="@string/ddn_trash" />
         <activity android:name=".DdnFreeUpActivity" android:exported="false" android:label="@string/ddn_free" />
         <activity android:name=".DdnEditActivity" android:exported="false" android:theme="@style/Theme.Gallery.Viewer" />
+        <activity android:name=".DdnSearchActivity" android:exported="false" android:label="@string/ddn_search" android:windowSoftInputMode="stateVisible|adjustResize" />
         <activity android:name=".DdnAiActivity" android:exported="false" android:label="@string/ddn_ai_title" />
         <activity android:name=".DdnSettingsActivity" android:exported="false" android:label="@string/ddn_settings" />
         <!-- Open with → discordrive: photos and videos of other apps (the system may make it the default gallery). -->

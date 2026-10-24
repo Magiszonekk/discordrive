@@ -235,3 +235,50 @@ class AiDescriber(baseUrl: String, private val key: String, val model: String, p
         }
     }
 }
+
+/**
+ * Search over the account's files on the phone: names, dates and the AI descriptions (description, tags, the
+ * text on the picture, a transcript). Case and Polish diacritics do not matter ("zolty" finds "żółty"); every
+ * word of the query must be found somewhere in the file's text (name + description); a word that is a year
+ * ("2024"), a year-month ("2024-05") or a day ("2024-05-17") matches the file's date instead.
+ */
+object Search {
+    private val marks = Regex("\\p{Mn}+")
+
+    fun fold(s: String): String = java.text.Normalizer.normalize(s.lowercase().replace('ł', 'l'), java.text.Normalizer.Form.NFD).replace(marks, "")
+
+    data class Item(val id: String, val name: String, val createdAt: Long, val record: Describe.Record?)
+
+    private val dateWord = Regex("^(\\d{4})(?:-(\\d{2})(?:-(\\d{2}))?)?$")
+
+    /** Results best first: more words in the name and the description, then newer. */
+    fun run(items: List<Item>, query: String, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): List<Item> {
+        val words = fold(query).split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (words.isEmpty()) return emptyList()
+        val scored = ArrayList<Pair<Item, Int>>()
+        for (it in items) {
+            val name = fold(it.name)
+            val r = it.record
+            val desc = if (r == null) "" else fold(r.description + " " + r.tags.joinToString(" ") + " " + (r.text ?: "") + " " + (r.transcript ?: ""))
+            val day = if (it.createdAt > 0) java.time.Instant.ofEpochMilli(it.createdAt).atZone(zone).toLocalDate() else null
+            var score = 0
+            var all = true
+            for (w in words) {
+                val d = dateWord.find(w)
+                val hit = when {
+                    d != null && day != null -> {
+                        val (y, m, dd) = d.destructured
+                        day.year == y.toInt() && (m.isEmpty() || day.monthValue == m.toInt()) && (dd.isEmpty() || day.dayOfMonth == dd.toInt())
+                    }
+                    else -> false
+                }
+                val inName = name.contains(w)
+                val inDesc = desc.contains(w)
+                if (!(hit || inName || inDesc)) { all = false; break }
+                score += (if (inName) 3 else 0) + (if (r != null && r.tags.any { t -> fold(t) == w }) 2 else 0) + (if (inDesc) 1 else 0) + (if (hit) 1 else 0)
+            }
+            if (all) scored += it to score
+        }
+        return scored.sortedWith(compareByDescending<Pair<Item, Int>> { it.second }.thenByDescending { it.first.createdAt }).map { it.first }
+    }
+}

@@ -336,6 +336,11 @@
     <string name="ddn_ai_lang" translatable="false">pl</string>
     <string name="ddn_ai_show_key">Pokaż klucz</string>
     <string name="ddn_ai_started">Opisywanie ruszyło (postęp poniżej).</string>
+    <string name="ddn_search">Szukaj</string>
+    <string name="ddn_search_hint">Szukaj: co jest na zdjęciu, tekst, nazwa, data (2024-05)</string>
+    <string name="ddn_search_loading">Wczytywanie…</string>
+    <string name="ddn_search_ready">%1$d plików, %2$d z opisem AI. Prywatne albumy są pomijane.</string>
+    <string name="ddn_search_found">Znaleziono: %1$d</string>
     <string name="ddn_ai_title">Wyszukiwanie AI</string>
     <string name="ddn_ai_privacy">Zdjęcia (pomniejszone) są wysyłane pod ten adres. Opisy zapisujemy zaszyfrowane w koncie. Domyślnie wyłączone.</string>
     <string name="ddn_ai_plain_note">To konto jest w trybie jawnym: opis jest zaszyfrowany tak jak plik.</string>
