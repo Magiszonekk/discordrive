@@ -250,22 +250,29 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             val wait = last + 60_000L / DdnAi.PER_MIN - System.currentTimeMillis()
             if (wait > 0) Thread.sleep(wait)
             last = System.currentTimeMillis()
-            try {
-                DdnAi.describeOne(c, s, ai, f, db)
-                done++
-                DdnAi.live = db.count(acct, "ok") to all.size
-            } catch (e: AiException) {
-                err = DdnAi.reason(c, e)
-                when (e.kind) {
-                    // The key refused / the endpoint unreachable: the rest would fail the same way.
-                    "auth", "net" -> break
-                    "rate" -> Thread.sleep(minOf(120L, maxOf(5L, e.retryAfterS)) * 1000)
-                    else -> db.put(acct, f.manifestRef!!, f.id, "err", null)
+            var stop = false
+            // A 429 waits as asked and tries the same photo again (up to 3 times), it is not skipped.
+            for (attempt in 0 until 3) {
+                try {
+                    DdnAi.describeOne(c, s, ai, f, db)
+                    done++
+                    DdnAi.live = db.count(acct, "ok") to all.size
+                    err = null
+                } catch (e: AiException) {
+                    err = DdnAi.reason(c, e)
+                    when (e.kind) {
+                        // The key refused / the endpoint unreachable: the rest would fail the same way.
+                        "auth", "net" -> stop = true
+                        "rate" -> { Thread.sleep(minOf(120L, maxOf(2L, e.retryAfterS)) * 1000); continue }
+                        else -> db.put(acct, f.manifestRef!!, f.id, "err", null)
+                    }
+                } catch (e: Exception) {
+                    err = DdnAi.reason(c, e)
+                    db.put(acct, f.manifestRef!!, f.id, "err", null)
                 }
-            } catch (e: Exception) {
-                err = DdnAi.reason(c, e)
-                db.put(acct, f.manifestRef!!, f.id, "err", null)
+                break
             }
+            if (stop) break
             if (done % 5 == 0) runCatching { setForeground(info()) }
         }
         DdnAi.live = null
