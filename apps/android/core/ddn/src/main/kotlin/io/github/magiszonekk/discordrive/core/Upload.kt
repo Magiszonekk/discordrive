@@ -187,13 +187,38 @@ class FileWriter(
 ) {
     data class Result(val nodeId: String, val uploadId: String, val manifestRef: String, val sha256: String, val size: Long, val name: String, val chunks: Int, val outcome: String)
 
+    companion object {
+        /** Webhook IDs that answered 401 / 404 in this process (removed on Discord). */
+        val dead: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    }
+
     class Cancelled : Exception("upload cancelled")
+
+    /**
+     * Post on the next channel; a webhook removed on Discord (401 / 404) is marked dead for this process
+     * (`dead`, shared by every writer: the vault still lists it until someone removes it) and the post goes to
+     * another channel.
+     */
+    private fun postAny(filename: String, data: ByteArray, extras: List<Pair<String, ByteArray>> = emptyList()): Pair<Vault.Webhook, DiscordWriter.Posted> {
+        while (true) {
+            val hook = nextHook()
+            try {
+                return hook to writer.post(hook, filename, data, extras)
+            } catch (e: ServerException) {
+                if (e.status != 401 && e.status != 404) throw e
+                dead += hook.id
+            }
+        }
+    }
 
     private var rr = 0
 
     @Synchronized private fun nextHook(): Vault.Webhook {
-        val all = writable()
-        if (all.isEmpty()) throw IllegalStateException("need_channel: no active channel to post to")
+        val listed = writable()
+        if (listed.isEmpty()) throw IllegalStateException("need_channel: no active channel to post to")
+        // Webhooks Discord answered 401/404 for (removed there) are skipped while others remain.
+        val all = listed.filter { it.id !in dead }
+        if (all.isEmpty()) throw IllegalStateException("need_channel: every channel of the account answered 'unknown webhook' (removed on Discord); remove them from the account and add a working one")
         // Round-robin over channels (webhooks of one channel share its limit).
         val byChannel = all.groupBy { it.channelId.ifEmpty { it.id } }.values.toList()
         val group = byChannel[rr % byChannel.size]
@@ -260,8 +285,7 @@ class FileWriter(
                             val ct = Aes.encrypt(ck, plain)
                             val hash = sha256Hex(ct)
                             val blobId = OpCodec.newId()
-                            val hook = nextHook()
-                            val p = writer.post(hook, blobId + FileWrite.BLOB_EXT, ct)
+                            val (hook, p) = postAny(blobId + FileWrite.BLOB_EXT, ct)
                             posted += hook to p.messageId
                             chunks[i] = buildJsonObject {
                                 put("index", i); put("blobId", blobId); put("ciphertextSizeBytes", ct.size); put("ciphertextHash", hash)
@@ -291,8 +315,7 @@ class FileWriter(
             val keys = FileFormat.PreviewKeys(fileKey)
             val extras = pictures.filter(FileWrite::pictureOk).distinctBy { it.kind }.map { p -> FileWrite.sealPicture(keys, p).let { (n, d) -> n + FileWrite.BLOB_EXT to d } }
             renew()
-            val mhook = nextHook()
-            val mp = writer.post(mhook, OpCodec.newId() + FileWrite.BLOB_EXT, mct, extras)
+            val (mhook, mp) = postAny(OpCodec.newId() + FileWrite.BLOB_EXT, mct, extras)
             posted += mhook to mp.messageId
             val ref = FileWrite.encodeManifestRef(fileKey, mp.webhookId, mp.channelId, mp.messageId, mp.attachmentId)
             // Rules v3: pieces per location (fragments + the manifest), sorted by location.

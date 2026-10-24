@@ -23,6 +23,7 @@ import java.io.File
 import android.net.Uri
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.int
 
 /**
  * The app's browsing screens on a real account (apps/android/interop/harness.mts --app): pair through the
@@ -117,6 +118,59 @@ class BrowseUiTest {
         } finally {
             DdnBackup.set(ctx, on = false)
             cr.delete(uri, null, null)
+        }
+    }
+
+    /**
+     * A file the phone cannot send (the account's webhooks removed on Discord: 404): it stays in the queue with
+     * its cause in words, the automatic copy screen lists it; webhooks back, Retry sends it; Remove drops one.
+     */
+    private fun failedUpload(sc: InteropScenario, r: LinkedHashMap<String, Boolean>) {
+        if (sc.rpc("hooksOff").jsonPrimitive.int < 0) return // real Discord: not here
+        val wm = androidx.work.WorkManager.getInstance(ctx)
+        val f1 = File(ctx.cacheDir, "nie dojdzie.txt").apply { writeText("x".repeat(5000)) }
+        val f2 = File(ctx.cacheDir, "do usunięcia.txt").apply { writeText("y".repeat(3000)) }
+        try {
+            DdnUploads.queue(ctx, listOf(Uri.fromFile(f1), Uri.fromFile(f2)), null)
+            waitUntil(120_000) { wm.getWorkInfosForUniqueWork(DdnBackup.WORK_NOW).get().let { l -> l.isNotEmpty() && l.all { it.state.isFinished } } }
+            val failed = DdnBackup.failed(ctx)
+            Log.i("ddn-ui", "failed: ${failed.map { it.name + " / " + it.error }}")
+            r["failedListed"] = failed.map { it.name }.toSet() == setOf("nie dojdzie.txt", "do usunięcia.txt")
+            // Every channel removed: the cause says so (add a channel, remove the old ones).
+            r["failedReasonInWords"] = failed.all { DdnBackup.reason(ctx, it.error!!) == ctx.getString(R.string.ddn_fail_all_channels_gone) }
+            ActivityScenario.launch<DdnBackupActivity>(Intent(ctx, DdnBackupActivity::class.java)).use { b ->
+                Thread.sleep(800)
+                shot("13-failed-upload")
+            }
+            // Remove one, retry the other with the webhooks back.
+            DdnBackup.Db(ctx).drop(failed.first { it.name == "do usunięcia.txt" }.id)
+            sc.rpc("hooksOn")
+            DdnBackup.Db(ctx).retry(failed.first { it.name == "nie dojdzie.txt" }.id)
+            DdnBackup.runNow(ctx, autoCopy = false)
+            Thread.sleep(1500)
+            waitUntil(120_000) { wm.getWorkInfosForUniqueWork(DdnBackup.WORK_NOW).get().all { it.state.isFinished } }
+            val s = DdnSession.get(ctx)!!
+            s.refresh()
+            val z = s.children("root").firstOrNull { it.name == DdnUploads.SHARED_FOLDER }
+            r["retrySends"] = DdnBackup.failed(ctx).isEmpty() && z != null && s.children(z.id).any { it.name == "nie dojdzie.txt" } && s.children(z.id).none { it.name == "do usunięcia.txt" }
+
+            // Two channels, one removed on Discord (the other works): the upload goes to the working one.
+            io.github.magiszonekk.discordrive.core.FileWriter.dead.clear()
+            val hooks = io.github.magiszonekk.discordrive.core.Vault.webhooks(s.sync.vault).filter { !it.retired }
+            if (hooks.size >= 2) {
+                sc.rpc("hooksOff", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive(hooks[0].id))))
+                val f3 = File(ctx.cacheDir, "drugi kanał.txt").apply { writeText("z".repeat(200_000)) }
+                DdnUploads.queue(ctx, listOf(Uri.fromFile(f3)), null)
+                Thread.sleep(1500)
+                waitUntil(120_000) { wm.getWorkInfosForUniqueWork(DdnBackup.WORK_NOW).get().all { it.state.isFinished } }
+                s.refresh()
+                r["deadChannelSkipped"] = DdnBackup.failed(ctx).isEmpty() && z != null && s.children(z.id).any { it.name == "drugi kanał.txt" } &&
+                    hooks[0].id in io.github.magiszonekk.discordrive.core.FileWriter.dead
+                f3.delete()
+            }
+        } finally {
+            sc.rpc("hooksOn")
+            io.github.magiszonekk.discordrive.core.FileWriter.dead.clear()
         }
     }
 
@@ -356,6 +410,7 @@ class BrowseUiTest {
         trashAndSettings(sc, r, args.getString("ddnUpdates"))
         // Last: the edited copy adds a file to the photo folder (the counts above stay as they were).
         editAndPicker(sc, r)
+        failedUpload(sc, r)
         Log.i("ddn-ui", "RESULT $r")
         sc.rpc("done", kotlinx.serialization.json.JsonObject(r.mapValues { JsonPrimitive(it.value) }))
         assertTrue("ui checks: $r", r.values.all { it })

@@ -456,5 +456,22 @@
     <string name="ddn_edit_cannot">Nie udało się wczytać zdjęcia.</string>
     <string name="ddn_saf_title">discordrive</string>
     <string name="ddn_saf_recent">Ostatnie zdjęcia i filmy</string>
+    <plurals name="ddn_fail_title">
+        <item quantity="one">%d plik nie został wysłany</item>
+        <item quantity="few">%d pliki nie zostały wysłane</item>
+        <item quantity="many">%d plików nie zostało wysłanych</item>
+        <item quantity="other">%d pliku nie wysłano</item>
+    </plurals>
+    <string name="ddn_fail_tap">Dotknij, żeby zobaczyć przyczynę: ponów albo usuń z kolejki.</string>
+    <string name="ddn_fail_channel">Nieudane wysłania</string>
+    <string name="ddn_fail_retry">Ponów</string>
+    <string name="ddn_fail_remove">Usuń z kolejki</string>
+    <string name="ddn_fail_channel_gone">Kanał (webhook) tego konta został usunięty na Discordzie. Dodaj nowy kanał i usuń stary w ustawieniach konta (w przeglądarce lub na komputerze), potem Ponów.</string>
+    <string name="ddn_fail_all_channels_gone">Wszystkie kanały konta zostały usunięte na Discordzie. Dodaj nowy kanał i usuń stare w ustawieniach konta (w przeglądarce lub na komputerze), potem Ponów.</string>
+    <string name="ddn_fail_channel_denied">Discord odmówił zapisu na kanale (webhook bez uprawnień). Sprawdź kanał i ponów.</string>
+    <string name="ddn_fail_no_channel">Konto nie ma kanału do zapisu. Dodaj kanał (w przeglądarce lub na komputerze) i ponów.</string>
+    <string name="ddn_fail_source_gone">Pliku nie ma już na telefonie.</string>
+    <string name="ddn_fail_too_large">Plik jest za duży.</string>
+    <string name="ddn_fail_other">Nie udało się wysłać (szczegóły w logu aplikacji). Ponów później.</string>
     <string name="ddn_open_send">Wyślij do discordrive</string>
 </resources>

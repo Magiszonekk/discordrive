@@ -165,6 +165,7 @@ function core(q: Req): unknown {
 }
 
 const tsState = () => sha(canonicalState(ts.store));
+let savedHooks: Map<string, unknown> | null = null;
 let paired: { sas: string; deviceId: string } | null = null;
 
 async function handle(q: Req): Promise<unknown> {
@@ -218,6 +219,17 @@ async function handle(q: Req): Promise<unknown> {
     return { sha: h.digest("hex") === a.sha, thumb: !!pv && shaHex(pv.data) === a.thumbSha && pv.width === 320, thumbW: pv ? Math.min(pv.width, pv.height) : 0 };
   }
   if (q.m === "files") return { folder: "fold-0000000001", files: ups, thumbSha: thumb ? shaHex(thumb) : null };
+  // The webhooks of the account removed on Discord and back (the phone's failed upload, then Retry).
+  if (q.m === "hooksOff" || q.m === "hooksOn") {
+    const hooks = (fake as unknown as { hooks: Map<string, unknown> }).hooks;
+    if (q.m === "hooksOff") {
+      savedHooks = new Map(hooks);
+      const only = q.a as string[] | null;
+      if (Array.isArray(only)) for (const id of only) hooks.delete(id); else hooks.clear();
+    }
+    else if (savedHooks) for (const [k, v] of savedHooks) hooks.set(k, v);
+    return realHooks ? -1 : hooks.size;
+  }
   if (q.m === "newHook") {
     const h = hookUrl(2, "1550000000000000303");
     return realHooks ? { ...h, channelId: (await inspectForVault(transport, h.url)).channelId } : h;
