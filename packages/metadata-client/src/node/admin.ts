@@ -105,6 +105,7 @@ export function adminTables(db: DatabaseSync): void {
 const ACCOUNT_TABLES: [table: string, column: string][] = [
   ["log", "account_id"],
   ["vault", "account_id"],
+  ["settings", "account_id"],
   ["gc_runs", "account_id"],
   ["gc_done", "account_id"],
   ["shares", "account_id"],
@@ -155,6 +156,7 @@ export class AdminStore {
     };
     if (has(this.db, "log")) addSize("SELECT account_id AS a, coalesce(sum(length(entry)), 0) AS n FROM log GROUP BY account_id");
     if (has(this.db, "vault")) addSize("SELECT account_id AS a, coalesce(sum(length(blob)), 0) AS n FROM vault GROUP BY account_id");
+    if (has(this.db, "settings")) addSize("SELECT account_id AS a, coalesce(sum(length(blob)), 0) AS n FROM settings GROUP BY account_id");
     if (has(this.db, "shares")) addSize("SELECT account_id AS a, coalesce(sum(length(meta) + length(atts) + length(owner_note)), 0) AS n FROM shares GROUP BY account_id");
     const rows = this.db
       .prepare(

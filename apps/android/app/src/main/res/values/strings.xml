@@ -350,8 +350,7 @@
     <string name="ddn_ai_title">Wyszukiwanie AI</string>
     <string name="ddn_ai_privacy">Zdjęcia (pomniejszone) są wysyłane pod ten adres. Opisy zapisujemy zaszyfrowane w koncie. Domyślnie wyłączone.</string>
     <string name="ddn_ai_plain_note">To konto jest w trybie jawnym: opis jest zaszyfrowany tak jak plik.</string>
-    <string name="ddn_ai_where_vault">Adres, klucz i model trafiają do zaszyfrowanego sejfu konta, więc inne urządzenia mogą ich użyć.</string>
-    <string name="ddn_ai_where_phone">Adres, klucz i model zostają na tym telefonie (zaszyfrowane): w tym trybie konto nie ma własnego sejfu.</string>
+    <string name="ddn_ai_where_vault">Adres, klucz i model trafiają do zaszyfrowanych ustawień konta (na serwerze, czytelne tylko dla urządzeń konta), więc inne urządzenia mogą ich użyć.</string>
     <string name="ddn_ai_url">Adres (np. http://localhost:8080/v1)</string>
     <string name="ddn_ai_key">Klucz API</string>
     <string name="ddn_ai_model">Model</string>

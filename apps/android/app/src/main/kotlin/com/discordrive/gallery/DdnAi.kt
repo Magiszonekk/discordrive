@@ -63,22 +63,55 @@ object DdnAi {
 
     // ── the endpoint settings ──
 
-    /** Metadata only: from the vault (the account's); else this phone's copy. */
+    /** The account's settings (every mode), the revision seen kept on the phone (a rollback is refused). */
+    private fun settings(c: Context, s: DdnSession) = io.github.magiszonekk.discordrive.core.AccountSettings(
+        s.sync.api, io.github.magiszonekk.discordrive.core.AccountKey.fromB64(s.acct.accountKey), s.acct.accountId, prefs(c).getLong("settings_rev", 0),
+    )
+    private fun keep(c: Context, st: io.github.magiszonekk.discordrive.core.AccountSettings) = prefs(c).edit().putLong("settings_rev", st.seenRevision).apply()
+
+    @Volatile private var cached: Pair<String, Describe.AiConfig?>? = null
+
+    /**
+     * The AI endpoint from the account's settings (shared by every device, every mode). Settings made
+     * before (the metadata-only vault's "ai", or this phone's own copy in e2ee/plain) move there once.
+     */
     fun config(c: Context, s: DdnSession? = DdnSession.get(c)): Describe.AiConfig? {
-        if (s != null && !s.acct.serverBlobs) runCatching { Describe.configOf(s.sync.vault) }.getOrNull()?.let { return it }
+        if (s == null) return null
+        cached?.takeIf { it.first == s.acct.accountId }?.let { return it.second }
+        val st = settings(c, s)
+        val now = runCatching { st.load() }.getOrElse { return localCopy(c) }
+        keep(c, st)
+        var cfg = Describe.configOf(now)
+        if (cfg == null) {
+            val old = (if (!s.acct.serverBlobs) runCatching { Describe.configOf(s.sync.vault) }.getOrNull() else null) ?: localCopy(c)
+            if (old != null && runCatching { st.update { v -> if (Describe.configOf(v) == null) Describe.withConfig(v, old) else v } }.isSuccess) {
+                keep(c, st)
+                cfg = Describe.configOf(st.content)
+                SecureStore(c).remove(SECRET)
+                if (!s.acct.serverBlobs) runCatching { s.sync.updateVault { v -> Describe.withConfig(v, null) }; DdnAccount.setVaultRevision(c, s.sync.vaultRevision) }
+            }
+        }
+        cached = s.acct.accountId to cfg
+        return cfg
+    }
+
+    private fun localCopy(c: Context): Describe.AiConfig? {
         val t = SecureStore(c).getString(SECRET) ?: return null
         return runCatching { Describe.configOf(io.github.magiszonekk.discordrive.core.json.parseToJsonElement(t) as kotlinx.serialization.json.JsonObject) }.getOrNull()
     }
 
-    /** Store the settings (null = remove): in the vault (metadata only, a compare-and-swap edit) or on the phone. */
+    /** Store the endpoint (null = remove) in the account's settings (a compare-and-swap edit). */
     fun saveConfig(c: Context, s: DdnSession?, cfg: Describe.AiConfig?) {
-        if (s != null && !s.acct.serverBlobs) {
-            s.sync.updateVault { v -> Describe.withConfig(v, cfg) }
-            DdnAccount.setVaultRevision(c, s.sync.vaultRevision)
-            SecureStore(c).remove(SECRET)
-        } else if (cfg == null) SecureStore(c).remove(SECRET)
-        else SecureStore(c).putString(SECRET, io.github.magiszonekk.discordrive.core.json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), Describe.withConfig(kotlinx.serialization.json.JsonObject(emptyMap()), cfg)))
+        val ss = s ?: throw IllegalStateException("no account")
+        val st = settings(c, ss)
+        st.update { v -> Describe.withConfig(v, cfg) }
+        keep(c, st)
+        cached = ss.acct.accountId to cfg
+        SecureStore(c).remove(SECRET)
     }
+
+    /** Forget what was read (another device may have changed the settings). */
+    fun reloadConfig() { cached = null }
 
     /**
      * The language of descriptions and tags: the app's (its strings), not the phone's — a Polish app on an

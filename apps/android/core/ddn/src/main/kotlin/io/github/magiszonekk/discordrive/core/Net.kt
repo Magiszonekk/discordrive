@@ -121,6 +121,24 @@ class InstanceApi(
         return o.getValue("revision").jsonPrimitive.long to blob?.let { B64.dec(it) }
     }
 
+    /** Account settings (every mode): (revision, sealed blob or null). */
+    fun settings(): Pair<Long, ByteArray?> {
+        val o = call("GET", "/v1/settings", null).second.jsonObject
+        val blob = o["blob"]?.takeUnless { it is JsonNull }?.jsonPrimitive?.content
+        return o.getValue("revision").jsonPrimitive.long to blob?.let { B64.dec(it) }
+    }
+
+    /** Compare-and-swap of the settings; null = stored, else the current (revision, blob) that won. */
+    fun putSettings(expectedRevision: Long, revision: Long, blob: ByteArray): Pair<Long, ByteArray?>? {
+        val (_, b) = call("PUT", "/v1/settings", buildJsonObject {
+            put("expectedRevision", expectedRevision); put("revision", revision); put("blob", B64.enc(blob))
+        }, ok = setOf(409))
+        val o = b.jsonObject
+        if (o.strOrNull("status") == "ok") return null
+        val cur = o["current"] as? JsonObject ?: return 0L to null
+        return cur.getValue("revision").jsonPrimitive.long to B64.dec(cur.str("blob"))
+    }
+
     /** Compare-and-swap on the revision; null = stored, else the current (revision, blob) that won. */
     fun putVault(expectedRevision: Long, revision: Long, blob: ByteArray): Pair<Long, ByteArray?>? {
         val (_, b) = call("PUT", "/v1/vault", buildJsonObject {

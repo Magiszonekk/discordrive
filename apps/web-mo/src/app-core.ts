@@ -64,6 +64,7 @@ import {
   type PreviewKind,
 } from "@ddv4/metadata-client";
 import { searchItems, type DescriptionRecord } from "@ddv4/metadata-client";
+import { AccountSettingsStore } from "@ddv4/metadata-client";
 import { NetControl, cleanupLeftovers, discordSpeed, lineSpeed, speedHints, type BaselineData, type LaneFetch, type NetUiState, type SpeedTestProgress, type SpeedTestResult } from "@ddv4/metadata-client";
 import { fromBase64, toBase64 } from "@ddv4/processing";
 // Resolved at build time to ONE mode (build.ts): the other modes are not in the bundle.
@@ -1899,6 +1900,28 @@ export class AppCore {
 
   pairCancel(): void {
     this.pending = null;
+  }
+
+  // ── account settings shared by the devices (every mode) ──
+
+  private settingsStore: AccountSettingsStore | null = null;
+  private settings(): AccountSettingsStore {
+    if (!this.settingsStore) this.settingsStore = new AccountSettingsStore(this.http!, this.key!, this.acct!.accountId);
+    return this.settingsStore;
+  }
+
+  /** The AI endpoint of the account (used by the phones that describe photos); the key is not returned. */
+  async aiSettings(): Promise<{ url: string; model: string; hasKey: boolean } | null> {
+    const v = await this.settings().load();
+    return v.ai ? { url: v.ai.url, model: v.ai.model, hasKey: !!v.ai.key } : null;
+  }
+
+  /** Store the AI endpoint (null = remove). An empty key keeps the stored one. */
+  async setAiSettings(ai: { url: string; key: string; model: string } | null): Promise<void> {
+    await this.settings().update((v) => {
+      const { ai: old, ...rest } = v;
+      return ai ? { ...rest, ai: { url: ai.url, model: ai.model, key: ai.key || old?.key || "" } } : (rest as typeof v);
+    });
   }
 
   // ── optional password-protected account key ──

@@ -36,6 +36,7 @@ import {
   createPointerMessage,
   decodeManifestRef,
   searchItems,
+  AccountSettingsStore,
   generateDeviceKey,
   inspectForVault,
   newAccountKey,
@@ -227,6 +228,11 @@ async function handle(q: Req): Promise<unknown> {
   // The web client opens a file's thumbnail (after the phone edited its message): its SHA-256.
   // The web client reads the AI description the phone stored with a file (the same name and key derivation).
   if (q.m === "aiCalls") return aiCalls;
+  // The web client reads the account's settings the phone stored (the AI endpoint, without the key).
+  if (q.m === "aiSettings") {
+    const st = await new AccountSettingsStore(api, key, r0.accountId).load();
+    return st.ai ? { url: st.ai.url, model: st.ai.model, hasKey: !!st.ai.key } : null;
+  }
   // The manifest of a file the phone uploaded, as the web client reads it: its takenAt.
   if (q.m === "takenOf") {
     const t2 = await mk();

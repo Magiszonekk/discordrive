@@ -633,6 +633,19 @@
           </div>
         </section>
 
+        <section id="ai" aria-labelledby="ai-h" data-ddn="ai-sec" data-tab="account">
+          <h2 class="sec-h"><span id="ai-h" data-i18n="ai.h">AI search</span><span class="chip" data-ddn="ai-state"></span></h2>
+          <p class="sec-lead" data-i18n="ai.lead"></p>
+          <div class="sec-body">
+            <form class="stack" data-ddn-ui="ai-form">
+              <label class="field"><span class="lab" data-i18n="ai.url">Address</span><input class="input" data-ddn="ai-url" placeholder="http://localhost:8080/v1" autocapitalize="none" spellcheck="false"></label>
+              <label class="field"><span class="lab" data-i18n="ai.key">API key</span><input class="input" type="password" data-ddn="ai-key" autocomplete="off"><span class="hint" data-ddn="ai-key-hint"></span></label>
+              <label class="field"><span class="lab" data-i18n="ai.model">Model</span><input class="input" data-ddn="ai-model" autocapitalize="none" spellcheck="false"></label>
+              <div class="row-btns"><button class="btn primary" type="submit" data-ddn="ai-save" data-i18n="ai.save">Save</button><button class="btn danger" type="button" data-ddn="ai-off" data-i18n="ai.off" hidden>Remove</button></div>
+            </form>
+          </div>
+        </section>
+
         <section id="sharing" aria-labelledby="sh-h" data-tab="account">
           <h2 class="sec-h"><span id="sh-h" data-i18n="sh.h">Sharing</span><span class="chip" data-ddn-ui="share-state"></span></h2>
           <p class="sec-lead" data-ddn-ui="share-lead"></p>

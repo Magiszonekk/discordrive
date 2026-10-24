@@ -1187,7 +1187,7 @@ async function renderNow() {
     ui("about-storage").textContent = st.persistent ? t("status.persistent") : t("status.cache");
     ui("about-storage-t").textContent = st.persistent ? t("status.persistent.t") : t("status.cache.t");
     ui("about-device").textContent = st.deviceId ?? "-";
-    await Promise.all([renderShares(), renderStorage(), renderSecurity(), renderDiagnostics(), renderDesktopApp(), channelsUi.paintStorage(wh)]);
+    await Promise.all([renderShares(), renderStorage(), renderSecurity(), renderAi(), renderDiagnostics(), renderDesktopApp(), channelsUi.paintStorage(wh)]);
     return;
   }
 
@@ -2888,6 +2888,39 @@ function paintStrength() {
     ui("pw-strength-t").textContent = pw ? t(`pw.s${r.score}`) : "";
   });
 }
+async function renderAi() {
+  const st = await core.aiSettings().catch(() => undefined);
+  if (st === undefined) return;
+  $("ai-state").textContent = st ? t("ai.state.on") : t("ai.state.off");
+  $("ai-state").className = `chip${st ? " chip--success" : ""}`;
+  $<HTMLInputElement>("ai-url").value = st?.url ?? "";
+  $<HTMLInputElement>("ai-model").value = st?.model ?? "";
+  $<HTMLInputElement>("ai-key").value = "";
+  $("ai-key-hint").textContent = st?.hasKey ? t("ai.key.kept") : "";
+  $("ai-off").hidden = !st;
+}
+
+function wireAi() {
+  ui<HTMLFormElement>("ai-form").onsubmit = (e) => {
+    e.preventDefault();
+    void act($("ai-save"), async () => {
+      const url = $<HTMLInputElement>("ai-url").value.trim();
+      const model = $<HTMLInputElement>("ai-model").value.trim();
+      if (!/^https?:\/\/\S+$/.test(url)) throw new Error(t("ai.err.url"));
+      if (!model) throw new Error(t("ai.err.model"));
+      await core.setAiSettings({ url, model, key: $<HTMLInputElement>("ai-key").value });
+      await renderAi();
+      toast(t("ai.saved"));
+    });
+  };
+  $("ai-off").onclick = (e) =>
+    void act(e.currentTarget as HTMLElement, async () => {
+      await core.setAiSettings(null);
+      await renderAi();
+      toast(t("ai.removed"));
+    });
+}
+
 function wireSecurity() {
   $<HTMLInputElement>("pw-password").oninput = () => paintStrength();
   ui<HTMLFormElement>("pw-form").onsubmit = (e) => {
@@ -3464,6 +3497,7 @@ async function main() {
   wireNet();
   wireSpeedTest();
   wireSecurity();
+  wireAi();
   adminUi.wire();
   // Desktop: the agent uploads and downloads, also with the window closed (the browser notes speak of a tab).
   if (desktop) {

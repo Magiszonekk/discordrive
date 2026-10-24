@@ -238,6 +238,17 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     return { status: "conflict", current: c ? { revision: c.revision, blob: fromBase64(c.blob) } : null };
   }
 
+  // Account settings (every mode): the same compare-and-swap as the vault, a separate blob.
+  async getSettings(): Promise<{ revision: number; blob: string | null }> {
+    const r = await this.call<{ revision: number; blob: string | null }>("GET", "/v1/settings");
+    return { revision: r.body.revision, blob: r.body.blob };
+  }
+  async putSettings(expectedRevision: number, revision: number, blob: string): Promise<{ revision: number; blob: string | null } | null> {
+    const r = await this.call<{ status: "ok" } | { status: "conflict"; current: { revision: number; blob: string } | null }>("PUT", "/v1/settings", { expectedRevision, revision, blob }, [409]);
+    if (r.body.status === "ok") return null;
+    return r.body.current ?? { revision: 0, blob: null };
+  }
+
   /** Pairing: this signed-in device vouches for the new device's public key. */
   async addDevice(newDevicePublicKey: string): Promise<{ deviceId: string }> {
     const c = await this.challenge();

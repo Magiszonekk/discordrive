@@ -105,6 +105,49 @@ object Describe {
         JsonObject(vault.filterKeys { it != "ai" } + (if (c != null) mapOf("ai" to buildJsonObject { put("url", c.url); put("key", c.key); put("model", c.model) }) else emptyMap()))
 }
 
+class SettingsRollbackException(seen: Long, got: Long) : Exception("account settings went back from revision $seen to $got: refusing")
+
+/**
+ * Settings of the account shared by its devices, in every mode (packages/metadata-client account-settings.ts):
+ * JSON {format:"ddn-account-settings", version:1, ai?:{url,key,model}, …} sealed with the account subkey
+ * "settings" (AAD "ddn-settings-v1|account|revision"), stored on the instance with a compare-and-swap.
+ * Unknown fields are kept.
+ */
+class AccountSettings(private val api: InstanceApi, private val key: AccountKey, private val accountId: String, var seenRevision: Long = 0) {
+    private var revision = 0L
+    var content: JsonObject = empty()
+        private set
+
+    private fun aad(rev: Long) = "ddn-settings-v1|$accountId|$rev"
+
+    private fun open(rev: Long, blob: ByteArray?): JsonObject {
+        if (rev < seenRevision) throw SettingsRollbackException(seenRevision, rev)
+        val v = if (blob == null) empty() else Seal.unsealJson(key.subkey("settings"), blob, aad(rev), "account settings").jsonObject
+        require(v.strOrNull("format") == FORMAT && v["version"]?.jsonPrimitive?.content == "1") { "unsupported account settings format" }
+        seenRevision = rev; revision = rev; content = v
+        return v
+    }
+
+    fun load(): JsonObject = api.settings().let { (r, b) -> open(r, b) }
+
+    fun update(change: (JsonObject) -> JsonObject): JsonObject {
+        load()
+        repeat(5) {
+            val next = change(content)
+            val rev = revision + 1
+            val won = api.putSettings(revision, rev, Seal.sealJson(key.subkey("settings"), next, aad(rev)))
+            if (won == null) { seenRevision = rev; revision = rev; content = next; return next }
+            open(won.first, won.second)
+        }
+        throw IllegalStateException("account settings: too many concurrent edits")
+    }
+
+    companion object {
+        const val FORMAT = "ddn-account-settings"
+        fun empty(): JsonObject = buildJsonObject { put("format", FORMAT); put("version", 1) }
+    }
+}
+
 /**
  * Adds an extra object to a version already stored (a description made later). Metadata only: the
  * manifest's message is edited, keeping its attachments by ID (measured on Discord: kept byte for byte);
