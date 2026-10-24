@@ -259,6 +259,8 @@ class FileWriter(
         pictures: List<FileWrite.Picture> = emptyList(),
         progress: (Long, Long) -> Unit = { _, _ -> },
         cancelled: () -> Boolean = { false },
+        /** When the content was made (EXIF / camera date, mtime), ms; stored in the encrypted manifest. */
+        takenAt: Long? = null,
     ): Result {
         val nfc = Normalizer.normalize(name, Normalizer.Form.NFC)
         val uploadId = OpCodec.newId()
@@ -330,6 +332,7 @@ class FileWriter(
             val sha = md.digest().joinToString("") { "%02x".format(it) }
             val manifest = buildJsonObject {
                 put("schemaVersion", FileWrite.MANIFEST_SCHEMA); put("chunkSizeBytes", chunkSize)
+                if (takenAt != null && takenAt > 0) put("takenAt", takenAt)
                 put("chunks", JsonArray(chunks.map { it!! }))
             }
             val mct = Aes.encrypt(ck, json.encodeToString(JsonObject.serializer(), manifest).toByteArray(Charsets.UTF_8))

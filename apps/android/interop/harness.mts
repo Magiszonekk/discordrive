@@ -117,7 +117,9 @@ for (const [name, data, pv] of [
   ["film.webm", video, null],
   ["duży.bin", big, null],
 ] as const) {
-  const r = await ts.upload(memorySource(data), name, "fold-0000000001", pv ? { previews: Promise.resolve(pv as never) } : {});
+  // The photo as picked in the browser: its lastModified (2024-05-17) goes into the manifest (search by date).
+  const taken = name === "Wakacje Ż.jpg" ? { takenAt: Date.UTC(2024, 4, 17, 10, 0, 0) } : {};
+  const r = await ts.upload(memorySource(data), name, "fold-0000000001", { ...(pv ? { previews: Promise.resolve(pv as never) } : {}), ...taken });
   ups[name] = { nodeId: r.nodeId, sha: shaHex(data), size: data.byteLength };
 }
 // After the base: entries the phone gets from the instance (the tail), not from the snapshot.
@@ -224,6 +226,14 @@ async function handle(q: Req): Promise<unknown> {
   // The web client opens a file's thumbnail (after the phone edited its message): its SHA-256.
   // The web client reads the AI description the phone stored with a file (the same name and key derivation).
   if (q.m === "aiCalls") return aiCalls;
+  // The manifest of a file the phone uploaded, as the web client reads it: its takenAt.
+  if (q.m === "takenOf") {
+    const t2 = await mk();
+    await t2.pull();
+    const n = [...t2.store.allNodes()].find((x) => x.name === (q.a as string) && x.content);
+    if (!n) return null;
+    return (await t2.loadManifest(n.content!.manifestRef)).manifest.takenAt ?? null;
+  }
   if (q.m === "aiPolish") return aiPolish;
   if (q.m === "descriptionOf") {
     const t2 = await mk();

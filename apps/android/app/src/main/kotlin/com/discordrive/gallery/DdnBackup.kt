@@ -126,13 +126,16 @@ object DdnBackup {
     }
 
     // ── what was copied (MediaStore ID + size + date → node) ──
-    internal class Db(c: Context) : SQLiteOpenHelper(c, "ddn-upload.db", null, 1) {
+    internal class Db(c: Context) : SQLiteOpenHelper(c, "ddn-upload.db", null, 2) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("CREATE TABLE copied (media INTEGER, size INTEGER, modified INTEGER, account TEXT, node TEXT, at INTEGER, PRIMARY KEY (media, size, modified, account))")
             // The queue: files the user sent (a copy in the app's storage, or a URI the app may read for good).
-            db.execSQL("CREATE TABLE queue (id INTEGER PRIMARY KEY AUTOINCREMENT, uri TEXT, local TEXT, name TEXT, size INTEGER, folder TEXT, account TEXT, error TEXT, at INTEGER)")
+            db.execSQL("CREATE TABLE queue (id INTEGER PRIMARY KEY AUTOINCREMENT, uri TEXT, local TEXT, name TEXT, size INTEGER, folder TEXT, account TEXT, error TEXT, at INTEGER, taken INTEGER)")
         }
-        override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {}
+        override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
+            // 2: when the shared file was made (read before the copy into the outbox loses it).
+            if (old < 2) db.execSQL("ALTER TABLE queue ADD COLUMN taken INTEGER")
+        }
 
         fun isCopied(media: Long, size: Long, modified: Long, account: String): Boolean =
             readableDatabase.rawQuery("SELECT 1 FROM copied WHERE media=? AND size=? AND modified=? AND account=?", arrayOf("$media", "$size", "$modified", account)).use { it.moveToFirst() }
@@ -148,13 +151,14 @@ object DdnBackup {
         }
         fun copiedCount(account: String): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM copied WHERE account=?", arrayOf(account)).use { it.moveToFirst(); it.getInt(0) }
 
-        data class Queued(val id: Long, val uri: String?, val local: String?, val name: String, val size: Long, val folder: String, val error: String?)
-        fun enqueue(uri: String?, local: String?, name: String, size: Long, folder: String, account: String): Long =
+        data class Queued(val id: Long, val uri: String?, val local: String?, val name: String, val size: Long, val folder: String, val error: String?, val taken: Long? = null)
+        fun enqueue(uri: String?, local: String?, name: String, size: Long, folder: String, account: String, taken: Long? = null): Long =
             writableDatabase.insert("queue", null, ContentValues().apply {
                 put("uri", uri); put("local", local); put("name", name); put("size", size); put("folder", folder); put("account", account); put("at", System.currentTimeMillis())
+                if (taken != null) put("taken", taken)
             })
-        fun queued(account: String): List<Queued> = readableDatabase.rawQuery("SELECT id, uri, local, name, size, folder, error FROM queue WHERE account=? ORDER BY id", arrayOf(account)).use { c ->
-            buildList { while (c.moveToNext()) add(Queued(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getLong(4), c.getString(5), c.getString(6))) }
+        fun queued(account: String): List<Queued> = readableDatabase.rawQuery("SELECT id, uri, local, name, size, folder, error, taken FROM queue WHERE account=? ORDER BY id", arrayOf(account)).use { c ->
+            buildList { while (c.moveToNext()) add(Queued(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getLong(4), c.getString(5), c.getString(6), if (c.isNull(7)) null else c.getLong(7))) }
         }
         fun done(id: Long) = writableDatabase.delete("queue", "id=?", arrayOf("$id"))
         fun failed(id: Long, error: String) = writableDatabase.update("queue", ContentValues().apply { put("error", error) }, "id=?", arrayOf("$id"))
@@ -239,8 +243,10 @@ object DdnBackup {
         val acct = DdnAccount.load(c) ?: throw IllegalStateException("no account")
         val dir = File(c.filesDir, "outbox").apply { mkdirs() }
         val f = File.createTempFile("up-", ".bin", dir)
+        // The date first: the copy in the outbox has today's mtime and the source may lose its permission.
+        val taken = runCatching { DdnPictures.takenAt(c, source) }.getOrNull()
         c.contentResolver.openInputStream(source)!!.use { i -> f.outputStream().use { o -> i.copyTo(o, 1 shl 20) } }
-        return Db(c).enqueue(null, f.path, name, f.length(), folderId, acct.accountId)
+        return Db(c).enqueue(null, f.path, name, f.length(), folderId, acct.accountId, taken)
     }
 
     internal fun log(msg: String) = Log.i(TAG, msg)
@@ -306,7 +312,8 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                     val local = q.local?.let(::File)
                     val open = { local?.inputStream() ?: c.contentResolver.openInputStream(Uri.parse(q.uri))!! }
                     val pics = if (DdnSession.isImage(q.name) || DdnSession.isVideo(q.name)) runCatching { picturesOf(c, local, q.uri) }.getOrDefault(emptyList()) else emptyList()
-                    up.upload(open, q.size, q.name, q.folder, pics, progress = { a, b -> progress(q.name, a, b) }, cancelled = { isStopped })
+                    val taken = q.taken ?: q.uri?.let { u -> runCatching { DdnPictures.takenAt(c, Uri.parse(u)) }.getOrNull() }
+                    up.upload(open, q.size, q.name, q.folder, pics, progress = { a, b -> progress(q.name, a, b) }, cancelled = { isStopped }, takenAt = taken)
                     db.done(q.id)
                     local?.delete()
                     done++; copied++
@@ -336,7 +343,8 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                             val src = if (Build.VERSION.SDK_INT >= 29) runCatching { MediaStore.setRequireOriginal(m.uri) }.getOrDefault(m.uri) else m.uri
                             val open = { runCatching { c.contentResolver.openInputStream(src)!! }.getOrElse { c.contentResolver.openInputStream(m.uri)!! } }
                             val pics = runCatching { DdnPictures.make(c.contentResolver, m.uri) }.getOrDefault(emptyList())
-                            val r = up.upload(open, m.size, m.name, folder, pics, progress = { a, b -> progress(m.name, a, b) }, cancelled = { isStopped })
+                            val taken = runCatching { DdnPictures.takenAt(c, src) }.getOrNull() ?: (m.modified * 1000).takeIf { it > 0 }
+                            val r = up.upload(open, m.size, m.name, folder, pics, progress = { a, b -> progress(m.name, a, b) }, cancelled = { isStopped }, takenAt = taken)
                             db.markCopied(m.id, m.size, m.modified, acct, r.nodeId)
                             copied++
                         }

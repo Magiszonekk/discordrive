@@ -1013,6 +1013,8 @@ export class AppCore {
     const r = await this.c().upload(blobSource(file), name, parentId, {
       signal: ac.signal,
       resumeKey,
+      // A picked file's modification time: for a photo usually when it was taken (search by date).
+      takenAt: (file as File).lastModified || undefined,
       previews: previews ? this.previewsFor(token) : undefined,
       onProgress: (done, total, stages) => {
         const t = Date.now();
@@ -1156,6 +1158,7 @@ export class AppCore {
       const r = await this.c().upload(src, src.name, into, {
         signal: ac.signal,
         resumeKey: diskResumeKey(into, path, src.size, src.mtimeMs),
+        takenAt: src.mtimeMs || undefined,
         previews: previews ? this.previewsFor(token) : undefined,
         onProgress: (done, total, stages) => {
           const t = Date.now();

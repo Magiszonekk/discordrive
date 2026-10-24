@@ -266,7 +266,7 @@ class BrowseUiTest {
      * picture, by name; a private album's photos are not found; descriptions stored by another device reach
      * this phone's table (the local table cleared, syncDescriptions reads them from the account).
      */
-    private fun search(r: LinkedHashMap<String, Boolean>) {
+    private fun search(sc: InteropScenario, r: LinkedHashMap<String, Boolean>) {
         val s = DdnSession.get(ctx)!!
         val db = DdnAi.Db(ctx)
         val acct = s.acct.accountId
@@ -291,6 +291,19 @@ class BrowseUiTest {
         val all = s.media(100, null).filter { it.manifestRef in described.keys }.map { it.name }.toSet()
         r["searchByDescription"] = results("obraz testowy").toSet() == all
         r["searchByPictureText"] = results("discordrive 42").toSet() == all
+        // Search by the date the content was made, not when it was sent: a file shared from the phone with an
+        // mtime of 2024-05-17 (today's upload) is found under "2024-05"; the web client reads its takenAt.
+        val old = File(ctx.cacheDir, "stare zdjecie.txt").apply { writeText("x".repeat(5000)); setLastModified(1715940000000L) }
+        DdnUploads.queue(ctx, listOf(android.net.Uri.fromFile(old)), null)
+        Thread.sleep(1500)
+        waitUntil(120_000) { androidx.work.WorkManager.getInstance(ctx).getWorkInfosForUniqueWork(DdnBackup.WORK_NOW).get().all { it.state.isFinished } }
+        s.refresh()
+        r["takenAtStoredFromPhone"] = sc.rpc("takenOf", JsonPrimitive("stare zdjecie.txt")).let { it is JsonPrimitive && it.content == "1715940000000" }
+        DdnAi.syncDescriptions(ctx, s)
+        val may = results("2024-05")
+        r["searchByTakenDate"] = "stare zdjecie.txt" in may && results("2024-05-17").contains("stare zdjecie.txt")
+        r["searchWebTakenDate"] = s.children("fold-0000000001").none { it.name == "Wakacje \u017B.jpg" } || "Wakacje \u017B.jpg" in may
+        old.delete()
         r["searchByName"] = s.children("fold-0000000001").none { it.name == "Wakacje \u017B.jpg" } || results("wakacje").isNotEmpty()
         DdnPrivate.set(ctx, anyPhoto.parentId!!, true)
         try {
@@ -519,7 +532,7 @@ class BrowseUiTest {
         editAndPicker(sc, r)
         failedUpload(sc, r)
         aiDescriptions(sc, r, args.getString("ddnAi"))
-        if (args.getString("ddnAi") != null) search(r)
+        if (args.getString("ddnAi") != null) search(sc, r)
         Log.i("ddn-ui", "RESULT $r")
         sc.rpc("done", kotlinx.serialization.json.JsonObject(r.mapValues { JsonPrimitive(it.value) }))
         assertTrue("ui checks: $r", r.values.all { it })

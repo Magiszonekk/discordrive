@@ -27,6 +27,12 @@ export interface ChunkManifest {
   schemaVersion: number;
   chunkSizeBytes: number;
   chunks: ChunkRef[];
+  /**
+   * When the content was made, if the uploader knew (a photo's EXIF / camera date, a file's modification
+   * time), ms since the epoch. Optional and inside the encrypted manifest: search and the gallery use it
+   * instead of the upload time. Readers that do not know it ignore it.
+   */
+  takenAt?: number;
 }
 
 export interface ManifestSource {

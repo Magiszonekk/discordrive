@@ -251,6 +251,8 @@ export interface UploadOptions {
    * A rejection or a picture that does not fit the limits is skipped: the file is uploaded without it.
    */
   previews?: Promise<PreviewImage[] | null>;
+  /** When the content was made (File.lastModified, a file's mtime, a photo's date), ms; kept in the manifest. */
+  takenAt?: number;
 }
 
 export interface DownloadOptions {
@@ -612,7 +614,8 @@ export class DriveClient {
       await hashChain;
       const plaintextSha256 = hasher.digest("hex");
 
-      const manifest: ChunkManifest = { schemaVersion: MANIFEST_SCHEMA_VERSION, chunkSizeBytes: this.chunkSize, chunks };
+      const taken = opts.takenAt !== undefined && Number.isFinite(opts.takenAt) && opts.takenAt > 0 ? Math.floor(opts.takenAt) : undefined;
+      const manifest: ChunkManifest = { schemaVersion: MANIFEST_SCHEMA_VERSION, chunkSizeBytes: this.chunkSize, chunks, ...(taken ? { takenAt: taken } : {}) };
       const mct = await encryptManifest(key, manifest);
       throwIfAborted(signal);
       // Previews go with the manifest (same message): a failed or missing one never fails the upload.

@@ -1,5 +1,7 @@
 package com.discordrive.gallery
 
+import java.io.File
+
 import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.net.Uri
@@ -19,6 +21,36 @@ import kotlin.math.roundToInt
  * uploads).
  */
 object DdnPictures {
+    /**
+     * When a photo or video was made, ms: EXIF DateTimeOriginal (with its offset when there is one, else the
+     * phone's zone), then MediaStore DATE_TAKEN, then the file's modification time. Null when nothing is known.
+     */
+    fun takenAt(c: android.content.Context, uri: android.net.Uri, file: java.io.File? = null): Long? {
+        val local = file ?: uri.takeIf { it.scheme == "file" }?.path?.let(::File)
+        runCatching {
+            val exif = if (local != null) android.media.ExifInterface(local.path) else c.contentResolver.openInputStream(uri)!!.use { android.media.ExifInterface(it) }
+            val d = exif.getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL) ?: exif.getAttribute(android.media.ExifInterface.TAG_DATETIME)
+            if (d != null) {
+                val off = exif.getAttribute("OffsetTimeOriginal") ?: exif.getAttribute("OffsetTime")
+                val ldt = java.time.LocalDateTime.parse(d.trim(), java.time.format.DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss"))
+                val zone = off?.let { runCatching { java.time.ZoneOffset.of(it.trim()) }.getOrNull() } ?: java.time.ZoneId.systemDefault()
+                val ms = ldt.atZone(zone).toInstant().toEpochMilli()
+                if (ms > 0) return ms
+            }
+        }
+        if (local == null) runCatching {
+            c.contentResolver.query(uri, arrayOf(android.provider.MediaStore.MediaColumns.DATE_TAKEN, android.provider.MediaStore.MediaColumns.DATE_MODIFIED), null, null, null)?.use { cur ->
+                if (cur.moveToFirst()) {
+                    val taken = if (!cur.isNull(0)) cur.getLong(0) else 0L
+                    if (taken > 0) return taken
+                    val mod = if (!cur.isNull(1)) cur.getLong(1) else 0L
+                    if (mod > 0) return mod * 1000
+                }
+            }
+        }
+        return local?.lastModified()?.takeIf { it > 0 }
+    }
+
     fun make(cr: ContentResolver, uri: Uri): List<FileWrite.Picture> {
         val viaSystem = listOfNotNull(
             runCatching { one(cr, uri, 't') }.onFailure { android.util.Log.w("ddn-backup", "loadThumbnail: ${it.message}") }.getOrNull(),

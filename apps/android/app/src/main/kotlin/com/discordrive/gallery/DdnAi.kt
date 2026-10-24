@@ -120,13 +120,28 @@ object DdnAi {
 
     // ── the local table of descriptions (search, "described X of Y") ──
 
-    class Db(c: Context) : SQLiteOpenHelper(c, "ddn-ai.db", null, 1) {
+    class Db(c: Context) : SQLiteOpenHelper(c, "ddn-ai.db", null, 2) {
         override fun onCreate(db: SQLiteDatabase) {
             // ref: manifestRef of the version; state: "ok" (described), "absent" (no description stored with it, asked
             // at `at`), "none" (not describable), "err" (failed, retried later).
             db.execSQL("CREATE TABLE d (account TEXT NOT NULL, ref TEXT NOT NULL, node TEXT NOT NULL, state TEXT NOT NULL, rec TEXT, at INTEGER NOT NULL, tries INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account, ref))")
+            onUpgrade(db, 1, 2)
         }
-        override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) {}
+        override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) {
+            // 2: when each version's content was made (manifest takenAt; 0 = not stored), for search by date.
+            if (o < 2) db.execSQL("CREATE TABLE taken (account TEXT NOT NULL, ref TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (account, ref))")
+        }
+
+        fun putTaken(account: String, ref: String, at: Long) = writableDatabase.execSQL("INSERT OR REPLACE INTO taken (account, ref, at) VALUES (?, ?, ?)", arrayOf(account, ref, at))
+
+        /** manifestRef → when the content was made (only versions that have it). */
+        fun taken(account: String): Map<String, Long> {
+            val out = HashMap<String, Long>()
+            readableDatabase.rawQuery("SELECT ref, at FROM taken WHERE account=? AND at > 0", arrayOf(account)).use { c -> while (c.moveToNext()) out[c.getString(0)] = c.getLong(1) }
+            return out
+        }
+
+        fun hasTaken(account: String, ref: String): Boolean = readableDatabase.rawQuery("SELECT 1 FROM taken WHERE account=? AND ref=?", arrayOf(account, ref)).use { it.moveToFirst() }
 
         fun state(account: String, ref: String): Pair<String, Int>? = readableDatabase.rawQuery("SELECT state, tries FROM d WHERE account=? AND ref=?", arrayOf(account, ref)).use { if (it.moveToFirst()) it.getString(0) to it.getInt(1) else null }
 
@@ -223,9 +238,15 @@ object DdnAi {
         val now = System.currentTimeMillis()
         var reads = 0
         var found = 0
-        for (f in s.media(1_000_000, null)) {
+        for (f in s.allFiles()) {
             if (reads >= budget) break
             val ref = f.manifestRef ?: continue
+            // When the content was made: from the manifest (one read, kept; 0 = the uploader did not store it).
+            if (!db.hasTaken(acct, ref)) {
+                reads++
+                runCatching { s.files.manifest(ref).second.takenAt ?: 0L }.onSuccess { db.putTaken(acct, ref, it) }
+            }
+            if (!(DdnSession.isImage(f.name) || DdnSession.isVideo(f.name))) continue
             val st = db.state(acct, ref)?.first
             if (st == "ok" || st == "none" || st == "err") continue
             if (st == "absent" && now - db.askedAt(acct, ref) < 24 * 3600_000L) continue
@@ -282,6 +303,7 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
         total = todo.size
         val t0 = System.currentTimeMillis()
         var err: String? = null
+        var gone = 0
         var last = 0L
         runCatching { setForeground(info()) }
         for (f in todo) {
@@ -306,7 +328,9 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
                         else -> db.put(acct, f.manifestRef!!, f.id, "err", null)
                     }
                 } catch (e: Exception) {
-                    err = DdnAi.reason(c, e)
+                    // A file whose pieces are on a channel removed on Discord: counted, not "the last error".
+                    if (e is io.github.magiszonekk.discordrive.core.ServerException && (e.status == 404 || e.status == 401)) gone++
+                    else err = DdnAi.reason(c, e)
                     db.put(acct, f.manifestRef!!, f.id, "err", null)
                 }
                 break
@@ -315,6 +339,7 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             if (done % 5 == 0) runCatching { setForeground(info()) }
         }
         DdnAi.live = null
+        if (gone > 0) err = listOfNotNull(c.resources.getQuantityString(R.plurals.ddn_ai_gone, gone, gone), err).joinToString("; ")
         DdnAi.setStatus(c, DdnAi.Status(System.currentTimeMillis(), db.count(acct, "ok"), all.size, err))
         Result.success()
     }
