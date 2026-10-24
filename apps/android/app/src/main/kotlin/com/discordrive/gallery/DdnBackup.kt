@@ -159,7 +159,12 @@ object DdnBackup {
         fun done(id: Long) = writableDatabase.delete("queue", "id=?", arrayOf("$id"))
         fun failed(id: Long, error: String) = writableDatabase.update("queue", ContentValues().apply { put("error", error) }, "id=?", arrayOf("$id"))
         /** Try a failed item again (its error cleared). */
-        fun retry(id: Long) = writableDatabase.update("queue", ContentValues().apply { putNull("error") }, "id=?", arrayOf("$id"))
+        fun retry(id: Long): Int {
+            // A fresh try: channels marked removed are asked again (one fixed meanwhile is used; a removed one
+            // answers 404 once and is skipped again).
+            io.github.magiszonekk.discordrive.core.FileWriter.dead.clear()
+            return writableDatabase.update("queue", ContentValues().apply { putNull("error") }, "id=?", arrayOf("$id"))
+        }
         /** Drop a failed item from the queue (its copy in the app's storage too). */
         fun drop(id: Long) {
             readableDatabase.rawQuery("SELECT local FROM queue WHERE id=?", arrayOf("$id")).use { if (it.moveToFirst()) it.getString(0)?.let { p -> java.io.File(p).delete() } }
@@ -206,6 +211,7 @@ object DdnBackup {
 
     /** A failure in words (the server's or Discord's code stays in the log). */
     fun reason(c: Context, error: String): String = when {
+        error.contains("every channel of the account answered", true) -> c.getString(R.string.ddn_fail_all_channels_gone)
         // 404 "Unknown Webhook" / 401 "Invalid Webhook Token": the webhook (or its token) is gone.
         Regex("HTTP 40[14]").containsMatchIn(error) && error.contains("discord", true) -> c.getString(R.string.ddn_fail_channel_gone)
         Regex("HTTP 403").containsMatchIn(error) && error.contains("discord", true) -> c.getString(R.string.ddn_fail_channel_denied)

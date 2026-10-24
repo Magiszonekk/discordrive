@@ -222,7 +222,11 @@ async function handle(q: Req): Promise<unknown> {
   // The webhooks of the account removed on Discord and back (the phone's failed upload, then Retry).
   if (q.m === "hooksOff" || q.m === "hooksOn") {
     const hooks = (fake as unknown as { hooks: Map<string, unknown> }).hooks;
-    if (q.m === "hooksOff") { savedHooks = new Map(hooks); hooks.clear(); }
+    if (q.m === "hooksOff") {
+      savedHooks = new Map(hooks);
+      const only = q.a as string[] | null;
+      if (Array.isArray(only)) for (const id of only) hooks.delete(id); else hooks.clear();
+    }
     else if (savedHooks) for (const [k, v] of savedHooks) hooks.set(k, v);
     return realHooks ? -1 : hooks.size;
   }

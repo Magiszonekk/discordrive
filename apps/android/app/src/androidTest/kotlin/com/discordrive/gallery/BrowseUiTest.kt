@@ -136,7 +136,8 @@ class BrowseUiTest {
             val failed = DdnBackup.failed(ctx)
             Log.i("ddn-ui", "failed: ${failed.map { it.name + " / " + it.error }}")
             r["failedListed"] = failed.map { it.name }.toSet() == setOf("nie dojdzie.txt", "do usunięcia.txt")
-            r["failedReasonInWords"] = failed.all { DdnBackup.reason(ctx, it.error!!) == ctx.getString(R.string.ddn_fail_channel_gone) }
+            // Every channel removed: the cause says so (add a channel, remove the old ones).
+            r["failedReasonInWords"] = failed.all { DdnBackup.reason(ctx, it.error!!) == ctx.getString(R.string.ddn_fail_all_channels_gone) }
             ActivityScenario.launch<DdnBackupActivity>(Intent(ctx, DdnBackupActivity::class.java)).use { b ->
                 Thread.sleep(800)
                 shot("13-failed-upload")
@@ -152,8 +153,24 @@ class BrowseUiTest {
             s.refresh()
             val z = s.children("root").firstOrNull { it.name == DdnUploads.SHARED_FOLDER }
             r["retrySends"] = DdnBackup.failed(ctx).isEmpty() && z != null && s.children(z.id).any { it.name == "nie dojdzie.txt" } && s.children(z.id).none { it.name == "do usunięcia.txt" }
+
+            // Two channels, one removed on Discord (the other works): the upload goes to the working one.
+            io.github.magiszonekk.discordrive.core.FileWriter.dead.clear()
+            val hooks = io.github.magiszonekk.discordrive.core.Vault.webhooks(s.sync.vault).filter { !it.retired }
+            if (hooks.size >= 2) {
+                sc.rpc("hooksOff", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive(hooks[0].id))))
+                val f3 = File(ctx.cacheDir, "drugi kanał.txt").apply { writeText("z".repeat(200_000)) }
+                DdnUploads.queue(ctx, listOf(Uri.fromFile(f3)), null)
+                Thread.sleep(1500)
+                waitUntil(120_000) { wm.getWorkInfosForUniqueWork(DdnBackup.WORK_NOW).get().all { it.state.isFinished } }
+                s.refresh()
+                r["deadChannelSkipped"] = DdnBackup.failed(ctx).isEmpty() && z != null && s.children(z.id).any { it.name == "drugi kanał.txt" } &&
+                    hooks[0].id in io.github.magiszonekk.discordrive.core.FileWriter.dead
+                f3.delete()
+            }
         } finally {
             sc.rpc("hooksOn")
+            io.github.magiszonekk.discordrive.core.FileWriter.dead.clear()
         }
     }
 
