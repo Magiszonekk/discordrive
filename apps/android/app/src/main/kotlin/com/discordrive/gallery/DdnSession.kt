@@ -96,7 +96,7 @@ class DdnSession private constructor(private val app: Context, val acct: Account
     /** Vault + log tail (or a join from the snapshot when there is no local copy); saves the local copy. */
     fun refresh(): Long = ix { _ ->
         try {
-            if (headSeq == 0L && !localCopy.exists()) sync.join() else {
+            if (headSeq == 0L && !localCopy.exists()) sync.join().also { j -> j.snapshotSkipped?.let { AppLog.w("DdnSession", "snapshot skipped, index from the whole log: $it") } } else {
                 sync.loadVault()
                 sync.pull()
             }

@@ -164,7 +164,8 @@ class JoinActivity : AppCompatActivity() {
                 DdnAccount.setVaultRevision(this, sync.vaultRevision)
                 runCatching { sync.setOwnName(acct.deviceName) }
                 val top = ix.children("root")
-                return getString(R.string.ddn_joined, core.engine.name, j.headSeq, j.baseHeadSeq, j.ms, top.size, top.take(8).joinToString(", ") { it.name })
+                val done = getString(R.string.ddn_joined, core.engine.name, j.headSeq, j.baseHeadSeq, j.ms, top.size, top.take(8).joinToString(", ") { it.name })
+                return if (j.snapshotSkipped != null) done + "\n\n" + getString(R.string.ddn_join_snapshot_skipped) else done
             }
         }
     }
