@@ -133,6 +133,7 @@ export class SqlIndexStore implements IndexStore {
       CREATE TABLE IF NOT EXISTS piece_src (upload_id TEXT PRIMARY KEY, manifest_ref TEXT NOT NULL, complete INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS unavail (upload_id TEXT PRIMARY KEY, locs TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS previews (manifest_ref TEXT PRIMARY KEY, v TEXT NOT NULL, at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS descs (manifest_ref TEXT PRIMARY KEY, v TEXT, taken INTEGER, at INTEGER NOT NULL);
     `);
     if (from < 2) {
       this.atomically(() => {
@@ -171,6 +172,27 @@ export class SqlIndexStore implements IndexStore {
   setPreviewInfo(manifestRef: string, v: string, at: number): void {
     this.sql.run("INSERT INTO previews (manifest_ref, v, at) VALUES (?, ?, ?) ON CONFLICT(manifest_ref) DO UPDATE SET v = excluded.v, at = excluded.at", [manifestRef, v, at]);
   }
+  /**
+   * What this device learned about a version's AI description and content date (a cache: losing it costs
+   * one look at the manifest and its message). v: the record JSON, "" = none stored; taken: ms or 0.
+   */
+  descInfo(manifestRef: string): { v: string | null; taken: number | null; at: number } | undefined {
+    return this.sql.get<{ v: string | null; taken: number | null; at: number }>("SELECT v, taken, at FROM descs WHERE manifest_ref = ?", [manifestRef]);
+  }
+  setDescInfo(manifestRef: string, v: string | null, taken: number | null, at: number): void {
+    this.sql.run("INSERT INTO descs (manifest_ref, v, taken, at) VALUES (?, ?, ?, ?) ON CONFLICT(manifest_ref) DO UPDATE SET v = excluded.v, taken = excluded.taken, at = excluded.at", [manifestRef, v, taken, at]);
+  }
+  /** Every current file (not in the trash) with what is known of its description and date. */
+  searchRows(): { nodeId: string; manifestRef: string; v: string | null; taken: number | null; at: number | null }[] {
+    this.refreshTrash();
+    return this.sql
+      .all<{ node_id: string; manifest_ref: string; v: string | null; taken: number | null; at: number | null }>(
+        "SELECT f.node_id, f.manifest_ref, d.v, d.taken, d.at FROM files f LEFT JOIN descs d ON d.manifest_ref = f.manifest_ref WHERE f.trashed = 0",
+        [],
+      )
+      .map((r) => ({ nodeId: r.node_id, manifestRef: r.manifest_ref, v: r.v, taken: r.taken === null ? null : Number(r.taken), at: r.at === null ? null : Number(r.at) }));
+  }
+
   /** Current files (not in the trash) whose name matches, without known previews, after `after` (upload ID order). */
   filesWithoutPreviews(nameLike: RegExp, after: string, limit: number): { nodeId: string; uploadId: string; manifestRef: string; size: number; name: string }[] {
     const out: { nodeId: string; uploadId: string; manifestRef: string; size: number; name: string }[] = [];

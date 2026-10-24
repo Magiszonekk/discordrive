@@ -20,7 +20,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createDecipheriv, createHash, createHmac, hkdfSync } from "node:crypto";
+import { createHash } from "node:crypto";
 import { canonicalState, ROOT_ID, applyEntry, expiredTrash, initIndex, inTrash, loadSnapshot, MemoryIndexStore, uploadsTouched, RULES_VERSION, type IndexSnapshot, type LogEntry, type NodeRecord } from "@ddv4/sync-core";
 import {
   ChannelPacer,
@@ -35,6 +35,7 @@ import {
   createAccountHttp,
   createPointerMessage,
   decodeManifestRef,
+  searchItems,
   generateDeviceKey,
   inspectForVault,
   newAccountKey,
@@ -235,22 +236,18 @@ async function handle(q: Req): Promise<unknown> {
     return (await t2.loadManifest(n.content!.manifestRef)).manifest.takenAt ?? null;
   }
   if (q.m === "aiPolish") return aiPolish;
+  // The web client reads the AI description the phone stored with a file (metadata-client readDescription)
+  // and finds the file with its search (the same code the web app runs).
   if (q.m === "descriptionOf") {
     const t2 = await mk();
     await t2.pull();
-    const ref = (t2.store.getNode(q.a as string)!.content as { manifestRef: string }).manifestRef;
-    const loc = decodeManifestRef(ref);
-    const fk = Buffer.from(loc.k, "base64");
-    const hk = (info: string) => new Uint8Array(hkdfSync("sha256", fk, new Uint8Array(), info, 32));
-    const name = createHmac("sha256", hk("ddv4-file-preview-name-v1")).update("ddn-description:1").digest("base64url").slice(0, 22);
-    const ex = (await t2.blobs.extrasOf!(loc.at)).find((x) => x.name.replace(/\.[^.]*$/, "") === name);
-    if (!ex) return null;
-    const d = await t2.blobs.get(ex.placement);
-    const dc = createDecipheriv("aes-256-gcm", hk("ddv4-file-description-v1"), d.subarray(0, 12));
-    dc.setAAD(Buffer.from("ddn-description-v1"));
-    dc.setAuthTag(d.subarray(d.byteLength - 16));
-    return JSON.parse(Buffer.concat([dc.update(d.subarray(12, d.byteLength - 16)), dc.final()]).toString("utf8"));
+    const n = t2.store.getNode(q.a as string)!;
+    const d = await t2.readDescription((n.content as { manifestRef: string }).manifestRef);
+    if (!d) return null;
+    const hit = searchItems([{ id: n.id, name: n.name, date: 0, record: d }], d.tags[0] ?? d.description).length === 1;
+    return { ...d, webSearchFinds: hit };
   }
+
   if (q.m === "thumbOf") {
     const t2 = await mk();
     await t2.pull();

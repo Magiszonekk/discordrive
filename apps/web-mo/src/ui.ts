@@ -105,6 +105,8 @@ function onCoreEvent(e: CoreEvent) {
   else if (e.type === "notices") showNotices(e.notices);
   else if (e.type === "cleanup" && route.name === "settings") void renderStorage();
   else if (e.type === "backfill") paintBackfillState(e.state);
+  // Descriptions fetched in the background: an open search shows the new hits.
+  else if (e.type === "descriptions" && searchQ) void render();
   else if (e.type === "channel-move") channelsUi.onMoveEvent(e.status);
   else if (e.type === "net") paintNet(e.state);
   else if (e.type === "net-baseline") storeNet({ baseline: e.data });
@@ -1243,11 +1245,12 @@ async function renderNow() {
   };
 }
 
-/** plain: results of a server search in the file table (one page, up to 200). */
+/** Search results in the file table (one page, up to 500), best first. */
 async function renderSearch() {
   const hits = await core.search(searchQ);
   searchRows = hits.map((x: PreviewRow) => ({ id: x.id, name: x.name, kind: x.kind, size: x.size }));
-  ui("folder-meta").textContent = tn("search.results", hits.length, { q: searchQ });
+  const ds = await core.descState();
+  ui("folder-meta").textContent = [tn("search.results", hits.length, { q: searchQ }), ds.described ? tn("search.described", ds.described) : ""].filter(Boolean).join(" · ");
   $("list").replaceChildren(...hits.map((x, i) => fileRow({ ...x, cursor: "" } as never, i, false)));
   ui("empty").hidden = true;
   ui("search-empty").hidden = hits.length > 0;
@@ -1256,9 +1259,9 @@ async function renderSearch() {
 }
 
 function wireSearch() {
+  // Every mode: names, dates and AI descriptions from the local index (plain adds the server's name search).
   const box = ui<HTMLFormElement>("search");
-  box.hidden = !features.search;
-  if (!features.search) return;
+  box.hidden = false;
   const input = $<HTMLInputElement>("search");
   const clear = ui<HTMLButtonElement>("search-clear");
   let timer: ReturnType<typeof setTimeout> | null = null;

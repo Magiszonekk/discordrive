@@ -497,12 +497,14 @@ export const en: Record<string, string> = {
   "err.discord_blocked": "Discord is blocking the server for a while. Try again later.",
   "err.webhook_in_use": "This webhook is already used by another account.",
   "err.too_many_channels": "Too many channels on this account.",
-  "search.ph": "Search by name",
+  "search.ph": "Search: name, date (2024-05), what is on a photo",
+  "search.described_one": "{n} file with an AI description",
+  "search.described_other": "{n} files with an AI description",
   "search.results_one": "{n} result for “{q}”",
   "search.results_other": "{n} results for “{q}”",
   "search.clear": "Clear search",
   "search.none": "No files match your search",
-  "search.none.s": "Search looks at file names in every folder.",
+  "search.none.s": "Search looks at names, dates and AI descriptions of files in every folder. A phone with “AI search” on makes the descriptions.",
 
   // trash, rename, move, selection
   "nav.trash": "Trash",

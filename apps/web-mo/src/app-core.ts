@@ -63,6 +63,7 @@ import {
   type PreviewImage,
   type PreviewKind,
 } from "@ddv4/metadata-client";
+import { searchItems, type DescriptionRecord } from "@ddv4/metadata-client";
 import { NetControl, cleanupLeftovers, discordSpeed, lineSpeed, speedHints, type BaselineData, type LaneFetch, type NetUiState, type SpeedTestProgress, type SpeedTestResult } from "@ddv4/metadata-client";
 import { fromBase64, toBase64 } from "@ddv4/processing";
 // Resolved at build time to ONE mode (build.ts): the other modes are not in the bundle.
@@ -125,6 +126,7 @@ export type CoreEvent =
   | { type: "share-progress"; done: number; total: number }
   /** "Make thumbnails for existing photos": the UI makes them (it has the decoder), the core stores them. */
   | { type: "backfill"; state: BackfillState }
+  | { type: "descriptions"; state: { described: number; left: number } }
   | { type: "changed" }
   | { type: "cleanup"; running: boolean }
   /** Moving a channel: progress of the job (this tab in metadata only, the instance in e2ee/plain). */
@@ -1308,13 +1310,90 @@ export class AppCore {
     return mode.thumbnail ? mode.thumbnail(this.ctx!, nodeId) : null;
   }
 
-  /** plain: search by name on the server. */
+  /**
+   * Search in the account (every mode): names, the content's date ("2024", "2024-05", "2024-05-17") and the
+   * AI descriptions stored with the files (made on a phone or another device). From the local index; what is
+   * not known yet (description, date) is fetched in the background (descSync) and the next search sees it.
+   * plain: the server's name search is added for files the local index does not have.
+   */
   async search(q: string) {
-    if (!mode.search) throw new Error("not supported in this mode");
-    const hits = await mode.search(this.ctx!, q);
+    const s = this.store;
+    const tree = this.c().store;
+    const descs = new Map<string, { v: string | null; taken: number | null }>();
+    const files: { id: string; manifestRef: string; name: string; createdAt: number }[] = [];
+    if (s instanceof SqlIndexStore) {
+      for (const r of s.searchRows()) {
+        const n = tree.getNode(r.nodeId);
+        if (!n?.content) continue;
+        files.push({ id: n.id, manifestRef: r.manifestRef, name: n.name, createdAt: n.content.createdAt });
+        if (r.at !== null) descs.set(r.manifestRef, { v: r.v, taken: r.taken });
+      }
+    } else {
+      for (const n of tree.allNodes()) if (n.kind === "file" && n.content && !inTrash(tree, n.id)) files.push({ id: n.id, manifestRef: n.content.manifestRef, name: n.name, createdAt: n.content.createdAt });
+      for (const [k, v] of this.descMem) descs.set(k, v);
+    }
+    const items = files.map((f) => {
+      const d = descs.get(f.manifestRef);
+      const record = d?.v ? (JSON.parse(d.v) as DescriptionRecord) : null;
+      return { id: f.id, name: f.name, date: d?.taken || f.createdAt, record };
+    });
+    void this.descSync();
+    const found = searchItems(items, q).slice(0, 500);
+    const byId = new Set(found.map((x) => x.id));
+    let hits: { id: string; name: string; kind: "file" | "folder"; parentId: string | null; size: number | null }[] = found.map((x) => {
+      const n = tree.getNode(x.id)!;
+      return { id: n.id, name: n.name, kind: "file" as const, parentId: n.parentId, size: n.content?.sizeBytes ?? null };
+    });
+    if (mode.search) for (const h of await mode.search(this.ctx!, q).catch(() => [])) if (!byId.has(h.id)) hits.push(h);
     // Unavailable files are hidden from search too unless the Settings switch is on.
     if (this.showUnavailable) return hits.map((h) => ({ ...h, unavailable: this.unavailableInfo(h.id)?.webhookIds }));
     return hits.filter((h) => h.kind !== "file" || !this.unavailableInfo(h.id));
+  }
+
+  /** Descriptions / dates known in a secondary tab (no SQL index): manifestRef → what was read. */
+  private readonly descMem = new Map<string, { v: string | null; taken: number | null }>();
+  private descRunning = false;
+  /** Search: how many files have a description known here, how many are still to look at. */
+  descState(): { described: number; left: number } {
+    const s = this.store;
+    if (s instanceof SqlIndexStore) {
+      const rows = s.searchRows();
+      return { described: rows.filter((r) => r.v).length, left: rows.filter((r) => r.at === null).length };
+    }
+    return { described: [...this.descMem.values()].filter((x) => x.v).length, left: 0 };
+  }
+  /**
+   * Fill the local index with the descriptions and content dates of files not looked at yet (one read of the
+   * manifest and its message each, a few at a time; "none" is looked at again after a day). Emits
+   * "descriptions" when something new is known.
+   */
+  async descSync(budget = 200): Promise<number> {
+    if (this.descRunning || !this.ctx) return 0;
+    this.descRunning = true;
+    let found = 0;
+    // Something a search can use (a description or a content date): the open search is redone.
+    let learned = 0;
+    try {
+      const s = this.store;
+      const now = Date.now();
+      const todo = s instanceof SqlIndexStore
+        ? s.searchRows().filter((r) => r.at === null || (!r.v && now - r.at > 24 * 3600_000))
+        : [...this.c().store.allNodes()].filter((n) => n.kind === "file" && n.content && !this.descMem.has(n.content.manifestRef)).map((n) => ({ nodeId: n.id, manifestRef: n.content!.manifestRef }));
+      for (const r of todo.slice(0, budget)) {
+        if (this.unavailableInfo(r.nodeId)) continue;
+        const [d, t] = await Promise.all([this.c().readDescription(r.manifestRef).catch(() => undefined), this.c().takenAt(r.manifestRef).catch(() => null)]);
+        if (d === undefined) continue;
+        const v = d ? JSON.stringify(d) : null;
+        if (d) found++;
+        if (d || t) learned++;
+        if (s instanceof SqlIndexStore) s.setDescInfo(r.manifestRef, v, t, now);
+        else this.descMem.set(r.manifestRef, { v, taken: t });
+      }
+    } finally {
+      this.descRunning = false;
+    }
+    if (learned) this.onEvent({ type: "descriptions", state: this.descState() });
+    return found;
   }
 
   /** plain: a URL the <video> element can play straight from the server (Range, ticket in the URL). */

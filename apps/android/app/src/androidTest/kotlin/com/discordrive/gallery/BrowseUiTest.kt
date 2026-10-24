@@ -359,7 +359,8 @@ class BrowseUiTest {
             r["aiPrivateLeftOut"] = lockedFolder != null && photos.none { it.parentId == lockedFolder } && every.size > photos.size
             val first = photos.firstOrNull { db.record(s.acct.accountId, it.manifestRef!!) != null } ?: photos.first()
             val web = sc.rpc("descriptionOf", JsonPrimitive(first.id))
-            r["aiWebReadsDescription"] = web is kotlinx.serialization.json.JsonObject && web["text"]?.toString()?.contains("DISCORDRIVE 42") == true
+            r["aiWebReadsDescription"] = web is kotlinx.serialization.json.JsonObject && web["text"]?.toString()?.contains("DISCORDRIVE 42") == true &&
+                web["webSearchFinds"]?.toString() == "true"
             r["aiStoredWithFile"] = s.files.description(first.manifestRef!!)?.tags?.contains("pasy") == true
             // Thumbnails stay readable after the message edit.
             r["aiThumbnailKept"] = first.manifestRef.let { runCatching { s.files.preview(it!!, 't') }.getOrNull() } != null || !DdnSession.isImage(first.name)
