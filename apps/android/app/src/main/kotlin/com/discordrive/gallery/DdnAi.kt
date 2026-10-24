@@ -26,7 +26,6 @@ import io.github.magiszonekk.discordrive.core.IndexReplica
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
-import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
@@ -81,7 +80,11 @@ object DdnAi {
         else SecureStore(c).putString(SECRET, io.github.magiszonekk.discordrive.core.json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), Describe.withConfig(kotlinx.serialization.json.JsonObject(emptyMap()), cfg)))
     }
 
-    fun lang(): String = if (Locale.getDefault().language == "pl") "pl" else "en"
+    /**
+     * The language of descriptions and tags: the app's (its strings), not the phone's — a Polish app on an
+     * English phone searches Polish words. Stored descriptions keep their language (Record.lang).
+     */
+    fun lang(c: Context): String = c.getString(R.string.ddn_ai_lang)
 
     // ── progress ──
 
@@ -102,11 +105,18 @@ object DdnAi {
         wm.enqueueUniquePeriodicWork(WORK_PERIODIC, ExistingPeriodicWorkPolicy.UPDATE, PeriodicWorkRequestBuilder<DdnAiWorker>(6, TimeUnit.HOURS).setConstraints(constraints(c)).build())
     }
 
-    /** "Describe now": with the user's constraints dropped to "any network" (they asked for it). */
-    fun runNow(c: Context) {
+    /**
+     * "Describe now": with the user's constraints dropped to "any network" (they asked for it); runs also when
+     * the background describing is off (`manual`).
+     */
+    fun runNow(c: Context, manual: Boolean = true) {
         WorkManager.getInstance(c).enqueueUniqueWork(WORK_NOW, ExistingWorkPolicy.KEEP,
-            OneTimeWorkRequestBuilder<DdnAiWorker>().setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build())
+            OneTimeWorkRequestBuilder<DdnAiWorker>().setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setInputData(androidx.work.Data.Builder().putBoolean("manual", manual).build()).build())
     }
+
+    /** Live progress of a run (the settings screen polls it). */
+    @Volatile var live: Pair<Int, Int>? = null
 
     // ── the local table of descriptions (search, "described X of Y") ──
 
@@ -179,7 +189,7 @@ object DdnAi {
         val acct = s.acct.accountId
         runCatching { s.files.description(ref) }.getOrNull()?.let { db.put(acct, ref, f.id, "ok", it); return it }
         val jpeg = picture(s, f) ?: run { db.put(acct, ref, f.id, "none", null); return null }
-        val rec = ai.describe(jpeg, lang())
+        val rec = ai.describe(jpeg, lang(c))
         val loc = FileFormat.decodeManifestRef(ref)
         if (!s.addExtra(f, Describe.name(loc.fileKey), Describe.seal(loc.fileKey, rec))) {
             // Another device stored one meanwhile: that one counts (the same for every device).
@@ -223,7 +233,7 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
         val s = DdnSession.get(c) ?: return@withContext Result.success()
         runCatching { s.refresh() }
         val cfg = DdnAi.config(c, s) ?: return@withContext Result.success()
-        if (!DdnAi.enabled(c)) return@withContext Result.success()
+        if (!DdnAi.enabled(c) && !inputData.getBoolean("manual", false)) return@withContext Result.success()
         val ai = AiDescriber(cfg.url, cfg.key, cfg.model)
         val db = DdnAi.Db(c)
         val acct = s.acct.accountId
@@ -243,6 +253,7 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             try {
                 DdnAi.describeOne(c, s, ai, f, db)
                 done++
+                DdnAi.live = db.count(acct, "ok") to all.size
             } catch (e: AiException) {
                 err = DdnAi.reason(c, e)
                 when (e.kind) {
@@ -257,6 +268,7 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             }
             if (done % 5 == 0) runCatching { setForeground(info()) }
         }
+        DdnAi.live = null
         DdnAi.setStatus(c, DdnAi.Status(System.currentTimeMillis(), db.count(acct, "ok"), all.size, err))
         Result.success()
     }

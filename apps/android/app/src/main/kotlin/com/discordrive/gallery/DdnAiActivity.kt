@@ -35,7 +35,8 @@ class DdnAiActivity : AppCompatActivity() {
         val pad = (16 * resources.displayMetrics.density).toInt()
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad, pad, pad); setBackgroundColor(getColor(R.color.bg)) }
         fun text(s: CharSequence, dim: Boolean = false) = TextView(this).apply { text = s; textSize = if (dim) 13f else 15f; setTextColor(getColor(if (dim) R.color.text_dim else R.color.text)); setPadding(0, pad / 4, 0, pad / 4) }
-        fun field(hint: Int, type: Int) = EditText(this).apply { this.hint = getString(hint); inputType = type; setTextColor(getColor(R.color.text)); setHintTextColor(getColor(R.color.text_dim)); isSingleLine = true }
+        // Single line first: setSingleLine resets the input type's transformation (a password field showed the key).
+        fun field(hint: Int, type: Int) = EditText(this).apply { this.hint = getString(hint); isSingleLine = true; inputType = type; setTextColor(getColor(R.color.text)); setHintTextColor(getColor(R.color.text_dim)) }
         fun check(s: Int, v: Boolean, f: (Boolean) -> Unit) = CheckBox(this).apply { text = getString(s); isChecked = v; setTextColor(getColor(R.color.text)); setOnCheckedChangeListener { _, x -> f(x) } }
 
         val s = DdnSession.get(this)
@@ -46,7 +47,15 @@ class DdnAiActivity : AppCompatActivity() {
         url = field(R.string.ddn_ai_url, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI).apply { setText(cfg?.url ?: "") }
         key = field(R.string.ddn_ai_key, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD).apply { setText(cfg?.key ?: "") }
         model = field(R.string.ddn_ai_model, InputType.TYPE_CLASS_TEXT).apply { setText(cfg?.model ?: "") }
-        root.addView(url); root.addView(key); root.addView(model)
+        root.addView(url); root.addView(key)
+        root.addView(CheckBox(this).apply {
+            text = getString(R.string.ddn_ai_show_key); setTextColor(getColor(R.color.text))
+            setOnCheckedChangeListener { _, x ->
+                key.transformationMethod = if (x) null else android.text.method.PasswordTransformationMethod.getInstance()
+                key.setSelection(key.text.length)
+            }
+        })
+        root.addView(model)
         root.addView(Button(this).apply { text = getString(R.string.ddn_ai_pick_model); setOnClickListener { pickModel() } })
         root.addView(Button(this).apply { text = getString(R.string.ddn_ai_save_check); setOnClickListener { saveAndCheck() } })
         result = text("", dim = true).apply { tag = "ddn-ai-result" }
@@ -64,7 +73,13 @@ class DdnAiActivity : AppCompatActivity() {
         root.addView(check(R.string.ddn_backup_wifi, DdnAi.wifiOnly(this)) { DdnAi.set(this, wifi = it) })
         root.addView(check(R.string.ddn_backup_charging, DdnAi.chargingOnly(this)) { DdnAi.set(this, charging = it) })
         root.addView(check(R.string.ddn_ai_private, DdnAi.privateAllowed(this)) { DdnAi.set(this, private = it) })
-        root.addView(Button(this).apply { text = getString(R.string.ddn_ai_now); setOnClickListener { if (DdnAi.enabled(this@DdnAiActivity)) DdnAi.runNow(this@DdnAiActivity) else result.text = getString(R.string.ddn_ai_turn_on) } })
+        root.addView(Button(this).apply {
+            text = getString(R.string.ddn_ai_now)
+            setOnClickListener {
+                if (DdnAi.config(this@DdnAiActivity, DdnSession.get(this@DdnAiActivity)) == null) result.text = getString(R.string.ddn_ai_need_config)
+                else { DdnAi.runNow(this@DdnAiActivity); result.text = getString(R.string.ddn_ai_started) }
+            }
+        })
         progress = text("", dim = true).apply { tag = "ddn-ai-progress" }
         root.addView(progress)
 
@@ -72,9 +87,22 @@ class DdnAiActivity : AppCompatActivity() {
         Insets.apply(root)
     }
 
+    private val tick = object : Runnable {
+        override fun run() {
+            DdnAi.live?.let { (n, total) -> progress.text = getString(R.string.ddn_ai_described, minOf(n, total), total) } ?: showProgress()
+            progress.postDelayed(this, 2000)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         showProgress()
+        progress.postDelayed(tick, 2000)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        progress.removeCallbacks(tick)
     }
 
     private fun showProgress() {
@@ -117,7 +145,7 @@ class DdnAiActivity : AppCompatActivity() {
         thread {
             val r = runCatching {
                 DdnAi.saveConfig(this, DdnSession.get(this), c)
-                AiDescriber(c.url, c.key, c.model).describe(testPicture(), DdnAi.lang())
+                AiDescriber(c.url, c.key, c.model).describe(testPicture(), DdnAi.lang(this))
             }
             runOnUiThread {
                 r.onSuccess { rec -> result.text = getString(R.string.ddn_ai_check_ok, rec.description, rec.tags.joinToString(", "), rec.text ?: "—") }
@@ -142,4 +170,5 @@ class DdnAiActivity : AppCompatActivity() {
     internal fun progressForTest(): String = progress.text.toString()
     internal fun fillForTest(u: String, k: String, m: String) { url.setText(u); key.setText(k); model.setText(m) }
     internal fun checkForTest() = saveAndCheck()
+    internal fun keyMaskedForTest(): Boolean = key.transformationMethod is android.text.method.PasswordTransformationMethod
 }

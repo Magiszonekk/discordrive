@@ -224,6 +224,7 @@ async function handle(q: Req): Promise<unknown> {
   // The web client opens a file's thumbnail (after the phone edited its message): its SHA-256.
   // The web client reads the AI description the phone stored with a file (the same name and key derivation).
   if (q.m === "aiCalls") return aiCalls;
+  if (q.m === "aiPolish") return aiPolish;
   if (q.m === "descriptionOf") {
     const t2 = await mk();
     await t2.pull();
@@ -310,6 +311,7 @@ if (ua >= 0) {
 // (an answer per picture; the key "bad" is refused; the first call of a run answers 429 once).
 let aiApi = "";
 let aiCalls = 0;
+let aiPolish = 0;
 {
   let first429 = true;
   const ai = createServer((req, res) => {
@@ -321,6 +323,7 @@ let aiCalls = 0;
       if (req.url === "/v1/chat/completions") {
         if (first429 && aiCalls > 0) { first429 = false; return res.writeHead(429, { "retry-after": "1" }).end("{}"); }
         aiCalls++;
+        if (body.includes("po polsku")) aiPolish++;
         const hasImage = body.includes("data:image/jpeg;base64,");
         const content = hasImage ? JSON.stringify({ description: `Obraz testowy numer ${aiCalls}`, tags: ["test", "pasy"], text: "DISCORDRIVE 42" }) : "no image";
         return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ choices: [{ message: { content } }] }));

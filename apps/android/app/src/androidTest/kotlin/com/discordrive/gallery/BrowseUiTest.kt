@@ -283,7 +283,11 @@ class BrowseUiTest {
         val lockedFolder = every.lastOrNull()?.parentId
         if (lockedFolder != null) DdnPrivate.set(ctx, lockedFolder, true)
         try {
+            // The phone in English, the app in Polish: descriptions are asked for in the app's language.
+            val sysLocale = java.util.Locale.getDefault()
+            java.util.Locale.setDefault(java.util.Locale.US)
             ActivityScenario.launch<DdnAiActivity>(Intent(ctx, DdnAiActivity::class.java)).use { a ->
+                a.onActivity { r["aiKeyMasked"] = it.keyMaskedForTest() }
                 a.onActivity { it.fillForTest(aiApi, "bad", "fake-vision"); it.checkForTest() }
                 r["aiBadKeyReadable"] = waitUntil { var t = ""; a.onActivity { x -> t = x.resultForTest() }; t.contains(ctx.getString(R.string.ddn_ai_err_auth)) }
                 a.onActivity { it.fillForTest(aiApi, "good-key", "fake-vision"); it.checkForTest() }
@@ -292,12 +296,18 @@ class BrowseUiTest {
             }
             r["aiConfigInVault"] = io.github.magiszonekk.discordrive.core.Describe.configOf(s.sync.vault)?.model == "fake-vision"
             val photos = DdnAi.candidates(ctx, s)
-            DdnAi.set(ctx, on = true, wifi = false, charging = false)
+            // "Describe now" works with the background describing off.
+            DdnAi.set(ctx, on = false, wifi = false, charging = false)
             val wm = androidx.work.WorkManager.getInstance(ctx)
+            val pl0 = sc.rpc("aiPolish").jsonPrimitive.content.toInt()
+            val calls0 = sc.rpc("aiCalls").jsonPrimitive.content.toInt()
             DdnAi.runNow(ctx)
             Thread.sleep(1500)
             waitUntil(240_000) { wm.getWorkInfosForUniqueWork(DdnAi.WORK_NOW).get().all { it.state.isFinished } }
             val db = DdnAi.Db(ctx)
+            java.util.Locale.setDefault(sysLocale)
+            val calls1 = sc.rpc("aiCalls").jsonPrimitive.content.toInt()
+            r["aiPolishOnEnglishPhone"] = calls1 > calls0 && sc.rpc("aiPolish").jsonPrimitive.content.toInt() - pl0 == calls1 - calls0
             // Every photo handled (described, or "none": nothing decodable to send); the web client's photo described.
             r["aiDescribedAll"] = photos.isNotEmpty() && photos.all { db.state(s.acct.accountId, it.manifestRef!!)?.first in setOf("ok", "none") }
             r["aiPrivateLeftOut"] = lockedFolder != null && photos.none { it.parentId == lockedFolder } && every.size > photos.size

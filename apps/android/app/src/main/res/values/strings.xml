@@ -332,6 +332,10 @@
         <item quantity="other">%d pliku w kolejce do wysłania (folder „Z telefonu”)</item>
     </plurals>
     <string name="ddn_upload">Wyślij plik</string>
+    <!-- The language AI descriptions and tags are written in: the app's (a translation sets its own). -->
+    <string name="ddn_ai_lang" translatable="false">pl</string>
+    <string name="ddn_ai_show_key">Pokaż klucz</string>
+    <string name="ddn_ai_started">Opisywanie ruszyło (postęp poniżej).</string>
     <string name="ddn_ai_title">Wyszukiwanie AI</string>
     <string name="ddn_ai_privacy">Zdjęcia (pomniejszone) są wysyłane pod ten adres. Opisy zapisujemy zaszyfrowane w koncie. Domyślnie wyłączone.</string>
     <string name="ddn_ai_plain_note">To konto jest w trybie jawnym: opis jest zaszyfrowany tak jak plik.</string>
