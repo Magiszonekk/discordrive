@@ -641,6 +641,7 @@ export const en: Record<string, string> = {
   "signin.done": "Signed in. This device joined the account.",
   "ai.h": "AI search",
   "ai.lead": "The address of an AI server in the OpenAI format (with images) that phones with “AI search” on use to describe photos. Stored encrypted in the account's settings: only the account's devices can read it. Photos (downscaled) are sent to that address.",
+  "ai.lead@plain": "The address of an AI server in the OpenAI format (with images) that phones with “AI search” on use to describe photos. Stored in the account's settings, shared by its devices. Photos (downscaled) are sent to that address.",
   "ai.url": "Address",
   "ai.key": "API key",
   "ai.model": "Model",
