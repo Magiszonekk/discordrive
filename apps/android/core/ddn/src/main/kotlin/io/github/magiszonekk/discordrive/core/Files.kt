@@ -7,6 +7,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
+import kotlinx.serialization.json.put
 import java.io.OutputStream
 import java.security.MessageDigest
 import java.util.Collections
@@ -17,7 +18,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Reading files of a metadata-only account on the phone, in the formats of packages/metadata-client:
+ * Reading files on the phone (any storage mode, see BlobSource), in the formats of packages/metadata-client:
  *  - manifestRef "ddn1:[1, format, fileKey, webhookId, channelId, messageId, attachmentId]" (the file key
  *    travels only inside the encrypted tree);
  *  - manifest and fragments: iv(12) || AES-256-GCM with the content key HKDF(fileKey, "ddv4-file-content-v1");
@@ -45,7 +46,7 @@ object FileFormat {
 
     fun contentKey(fileKey: ByteArray): ByteArray = Hkdf.derive(fileKey, "ddv4-file-content-v1")
 
-    data class Chunk(val index: Int, val size: Long, val sha256: String?, val webhookId: String, val messageId: String, val attachmentId: String)
+    data class Chunk(val index: Int, val size: Long, val sha256: String?, val webhookId: String, val messageId: String, val attachmentId: String, val channelId: String = "")
     data class Manifest(val chunkSize: Long, val chunks: List<Chunk>)
 
     fun openManifest(fileKey: ByteArray, sealed: ByteArray): Manifest {
@@ -54,7 +55,7 @@ object FileFormat {
             val o = c.jsonObject
             val p = (o["placements"] as? JsonArray)?.firstOrNull()?.jsonObject ?: throw IllegalStateException("fragment without a location")
             if (p.strOrNull("provider") != Discord.PROVIDER) throw IllegalStateException("storage backend ${p.strOrNull("provider")} not supported on the phone yet")
-            Chunk(o.getValue("index").jsonPrimitive.content.toInt(), o.getValue("ciphertextSizeBytes").jsonPrimitive.long, o.strOrNull("ciphertextHash"), p.str("locationId"), p.str("messageId"), p.str("attachmentId"))
+            Chunk(o.getValue("index").jsonPrimitive.content.toInt(), o.getValue("ciphertextSizeBytes").jsonPrimitive.long, o.strOrNull("ciphertextHash"), p.str("locationId"), p.str("messageId"), p.str("attachmentId"), p.strOrNull("channelId") ?: "")
         }.sortedBy { it.index }
         return Manifest(m.getValue("chunkSizeBytes").jsonPrimitive.long, chunks)
     }
@@ -98,7 +99,54 @@ object FileFormat {
  * checked against their SHA-256 and decrypted on the phone. Thread-safe; downloads fetch a few fragments
  * at a time.
  */
-class FileReader(private val discord: Discord, private val webhookUrl: (String) -> String, private val parallel: Int = 4) {
+/**
+ * Where a file's stored objects are read from: the account's own webhooks (metadata only: GET the message,
+ * then the CDN) or the instance (e2ee / plain: fresh CDN links from it, the instance as a fallback).
+ */
+interface BlobSource {
+    /** One stored object (a manifest or a fragment). */
+    fun fetch(webhookId: String, channelId: String, messageId: String, attachmentId: String): ByteArray
+    /** The extra objects next to a manifest (thumbnail, preview): stored name (no extension) → reader. */
+    fun extras(webhookId: String, channelId: String, messageId: String, manifestAttachmentId: String): Map<String, Pair<Long, () -> ByteArray>>
+}
+
+/** Metadata only: the account's own webhooks (from the vault). */
+class WebhookSource(private val discord: Discord, private val webhookUrl: (String) -> String) : BlobSource {
+    override fun fetch(webhookId: String, channelId: String, messageId: String, attachmentId: String) = discord.fetch(webhookUrl(webhookId), messageId, attachmentId)
+    override fun extras(webhookId: String, channelId: String, messageId: String, manifestAttachmentId: String): Map<String, Pair<Long, () -> ByteArray>> =
+        discord.attachments(webhookUrl(webhookId), messageId).filter { it.id != manifestAttachmentId }
+            .associate { a -> FileFormat.stripExt(a.filename) to (a.size to { discord.download(a.url) }) }
+}
+
+/**
+ * e2ee / plain: the instance knows the webhooks. Fresh CDN links come from it (kept an hour), the bytes from the
+ * CDN; when the CDN cannot be read the instance reads them (its proxy). No webhook URL reaches the phone.
+ */
+class InstanceSource(private val api: InstanceApi, private val discord: Discord) : BlobSource {
+    private val links = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
+
+    private fun placement(w: String, c: String, m: String, a: String) = kotlinx.serialization.json.buildJsonObject {
+        put("provider", Discord.PROVIDER); put("locationId", w); put("channelId", c); put("messageId", m); put("attachmentId", a)
+    }
+
+    private fun read(p: JsonObject): ByteArray {
+        val a = p.str("attachmentId")
+        val now = System.currentTimeMillis()
+        val url = links[a]?.takeIf { it.second > now }?.first ?: api.blobUrls(listOf(p))[a]?.also { links[a] = it to now + 3_600_000 }
+        if (url != null) runCatching { return discord.download(url) }.onFailure { links.remove(a) }
+        return api.blobProxy(p)
+    }
+
+    override fun fetch(webhookId: String, channelId: String, messageId: String, attachmentId: String) = read(placement(webhookId, channelId, messageId, attachmentId))
+
+    override fun extras(webhookId: String, channelId: String, messageId: String, manifestAttachmentId: String): Map<String, Pair<Long, () -> ByteArray>> =
+        api.extras(manifestAttachmentId).mapValues { (_, p) -> (p.longOrNull("size") ?: 0L) to { read(p) } }
+}
+
+class FileReader(private val src: BlobSource, private val parallel: Int = 4) {
+    /** Metadata only (the account's own webhooks). */
+    constructor(discord: Discord, webhookUrl: (String) -> String, parallel: Int = 4) : this(WebhookSource(discord, webhookUrl), parallel)
+
     private val manifests = Collections.synchronizedMap(object : LinkedHashMap<String, FileFormat.Manifest>(64, 0.75f, true) {
         override fun removeEldestEntry(e: MutableMap.MutableEntry<String, FileFormat.Manifest>) = size > 256
     })
@@ -106,7 +154,7 @@ class FileReader(private val discord: Discord, private val webhookUrl: (String) 
     fun manifest(manifestRef: String): Pair<FileFormat.Location, FileFormat.Manifest> {
         val loc = FileFormat.decodeManifestRef(manifestRef)
         require(loc.format == FileFormat.FRAGMENT_FORMAT) { "unsupported fragment format ${loc.format}" }
-        val m = manifests[manifestRef] ?: FileFormat.openManifest(loc.fileKey, discord.fetch(webhookUrl(loc.webhookId), loc.messageId, loc.attachmentId)).also { manifests[manifestRef] = it }
+        val m = manifests[manifestRef] ?: FileFormat.openManifest(loc.fileKey, src.fetch(loc.webhookId, loc.channelId, loc.messageId, loc.attachmentId)).also { manifests[manifestRef] = it }
         return loc to m
     }
 
@@ -115,13 +163,13 @@ class FileReader(private val discord: Discord, private val webhookUrl: (String) 
         val loc = FileFormat.decodeManifestRef(manifestRef)
         val keys = FileFormat.PreviewKeys(loc.fileKey)
         val name = keys.name(kind)
-        val att = discord.attachments(webhookUrl(loc.webhookId), loc.messageId).firstOrNull { it.id != loc.attachmentId && FileFormat.stripExt(it.filename) == name } ?: return null
-        if (att.size > FileFormat.PREVIEW_READ_MAX) return null
-        return FileFormat.openPreview(keys, kind, discord.download(att.url))
+        val (size, get) = src.extras(loc.webhookId, loc.channelId, loc.messageId, loc.attachmentId)[name] ?: return null
+        if (size > FileFormat.PREVIEW_READ_MAX) return null
+        return FileFormat.openPreview(keys, kind, get())
     }
 
     private fun fragment(contentKey: ByteArray, c: FileFormat.Chunk): ByteArray {
-        val ct = discord.fetch(webhookUrl(c.webhookId), c.messageId, c.attachmentId)
+        val ct = src.fetch(c.webhookId, c.channelId, c.messageId, c.attachmentId)
         if (c.sha256 != null && sha256Hex(ct) != c.sha256) throw IllegalStateException("fragment ${c.index}: ciphertext hash mismatch")
         return FileFormat.openFragment(contentKey, ct)
     }

@@ -71,6 +71,9 @@ interface IndexReplica : AutoCloseable {
 
     data class Album(val id: String, val name: String, val count: Int, val cover: Child)
 
+    /** Uploads released (purged / superseded) after `afterSeq`: (uploadId, server time of the release, seq). */
+    fun released(afterSeq: Long): List<Triple<String, Long, Long>> = emptyList()
+
     /** Trashed nodes whose 30 days (server time `nowServerMs`) are over (sync-core expiredTrash). */
     fun expiredTrash(nowServerMs: Long): List<String> = emptyList()
 
@@ -110,11 +113,14 @@ class AccountSync(
     private val now: () -> Long = System::currentTimeMillis,
 ) {
     private val key = acct.key
-    private val codec = OpCodec(key, acct.accountId)
+    /** Plain mode: the server reads the operations; otherwise they are sealed with the account key. */
+    private val codec: LogCodec = if (acct.mode == AccountState.MODE_PLAIN) PlainCodec(acct.accountId) else OpCodec(key, acct.accountId)
     var vault: JsonObject = Vault.empty()
         private set
 
     fun loadVault(): JsonObject {
+        // e2ee / plain: the instance holds the webhooks; there is no vault of the account's own.
+        if (acct.serverBlobs) return vault
         val (rev, blob) = api.vault()
         return accept(rev, blob)
     }
@@ -157,6 +163,12 @@ class AccountSync(
         val t0 = now()
         loadVault()
         replica.reset()
+        // e2ee / plain: the snapshot chain is the instance's (written with its own key, on its channels): the
+        // phone replays the log from the instance (the server compacts it, rewriteChain).
+        if (acct.serverBlobs) {
+            val n = pull()
+            return JoinReport(0, 0, n, replica.headSeq, now() - t0)
+        }
         var toSeq = 0L
         var baseHead = 0L
         Vault.pointer(vault)?.let { (hook, msg) ->
@@ -260,6 +272,15 @@ class AccountSync(
         return if (ops.size == 1) ops[0] else buildJsonObject { put("type", "group"); put("ops", JsonArray(ops)) }
     }
 
+    /** Readers of the account's files: the vault's webhooks (metadata only) or the instance (e2ee / plain). */
+    fun blobSource(): BlobSource = if (acct.serverBlobs) InstanceSource(api, discord) else WebhookSource(discord, ::hookUrl)
+
+    /**
+     * e2ee / plain: the instance deletes a version's fragments 30 days after a release; it learns of releases
+     * from the clients' indexes (POST /v1/uploads/released). Releases after `afterSeq` (from the replica).
+     */
+    fun reportReleased(released: List<Pair<String, Long>>) { if (acct.serverBlobs && released.isNotEmpty()) api.released(released) }
+
     /** The account's webhooks that take new pieces (not retired, not being drained). */
     fun writableWebhooks(): List<Vault.Webhook> = Vault.webhooks(vault).filter { !it.retired }
 
@@ -296,8 +317,12 @@ class AccountSync(
          */
         fun finishPairing(serverUrl: String, deviceName: String, device: Ed25519Key, r: Pairing.Result, http: InstanceApi): AccountState {
             val c = http.challenge()
-            return AccountState(serverUrl, c.instanceId, r.accountId, r.deviceId, deviceName, r.key.rawB64, B64.enc(device.exportSeed()))
+            return AccountState(serverUrl, c.instanceId, r.accountId, r.deviceId, deviceName, r.key.rawB64, B64.enc(device.exportSeed()), modeOf(http))
         }
+
+        /** The instance's storage mode (GET /v1/health "mode"; older instances: metadata only). */
+        fun modeOf(http: InstanceApi): String =
+            runCatching { http.health().strOrNull("mode") }.getOrNull()?.takeIf { it in setOf(AccountState.MODE_METADATA, AccountState.MODE_E2EE, AccountState.MODE_PLAIN) } ?: AccountState.MODE_METADATA
 
         /** New device from a rescue kit: registered with the rescue key derived from the account key. */
         fun joinWithKit(serverUrl: String, deviceName: String, kitText: String, http: InstanceApi = InstanceApi(serverUrl, null, null, null)): AccountState {
@@ -305,7 +330,7 @@ class AccountSync(
             val key = AccountKey.fromB64(kit.key)
             val device = Ed25519Key.generate()
             val deviceId = http.rescueRegisterDevice(key, kit.accountId, device)
-            return AccountState(serverUrl, http.challenge().instanceId, kit.accountId, deviceId, deviceName, kit.key, B64.enc(device.exportSeed()))
+            return AccountState(serverUrl, http.challenge().instanceId, kit.accountId, deviceId, deviceName, kit.key, B64.enc(device.exportSeed()), modeOf(http))
         }
     }
 }

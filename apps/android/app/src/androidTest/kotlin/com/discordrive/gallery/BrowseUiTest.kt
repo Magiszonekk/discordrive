@@ -290,6 +290,8 @@ class BrowseUiTest {
             r["restoredFromScreen"] = waitUntil { DdnSession.get(ctx)!!.children("fold-0000000001").any { it.id == video.id } }
             t.onActivity { a -> a.selectForTest(big.id); a.actForTest(restore = false) }
             r["purgedFromScreen"] = waitUntil { DdnSession.get(ctx)!!.node(big.id) == null }
+            // The replica lists the purged upload as released (e2ee / plain report these to the instance).
+            r["purgeReleasesUpload"] = DdnSession.get(ctx)!!.ix { it.released(0) }.isNotEmpty()
         }
         // Back to Files: the restored video is in the list without a refresh by hand.
         r["filesShowRestored"] = waitUntil { var n = -1; files.onActivity { a -> n = a.findRecycler()?.adapter?.itemCount ?: -1 }; n == 2 }

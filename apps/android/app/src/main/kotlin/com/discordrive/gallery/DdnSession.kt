@@ -35,7 +35,11 @@ class DdnSession private constructor(private val app: Context, val acct: Account
     lateinit var sync: AccountSync
         private set
     val discord = Discord(apiOrigin = testDiscordOrigin)
-    val files: FileReader = FileReader(discord, { id -> webhookUrl(id) })
+    /** Reads files: the vault's webhooks (metadata only) or through the instance (e2ee / plain). */
+    val files: FileReader by lazy {
+        if (acct.serverBlobs) FileReader(io.github.magiszonekk.discordrive.core.InstanceSource(InstanceApi(acct.serverUrl, acct.accountId, acct.deviceId, acct.device, acct.instanceId), discord))
+        else FileReader(discord, { id -> webhookUrl(id) })
+    }
     /** Posts to the account's channels, paced per channel (30/min, as every client). */
     val writer = DiscordWriter(apiOrigin = testDiscordOrigin)
     @Volatile var engineName: String = "?"
@@ -105,7 +109,7 @@ class DdnSession private constructor(private val app: Context, val acct: Account
             Log.w(TAG, "refresh: ${e.message}")
             // Offline: the vault is still needed to read files (last one seen).
             if (e is JsEngineException) throw e
-            if (Vault.webhooks(sync.vault).isEmpty()) runCatching { sync.loadVault() }
+            if (!acct.serverBlobs && Vault.webhooks(sync.vault).isEmpty()) runCatching { sync.loadVault() }
         }
         headSeq
     }
@@ -120,7 +124,7 @@ class DdnSession private constructor(private val app: Context, val acct: Account
      * The uploader of this session: fragments go out on upload threads; the operations (upload_begin,
      * upload_commit + create) run on the index thread, and the local copy is saved after each file.
      */
-    fun uploader(parallel: Int = 3): FileWriter = FileWriter(writer, sync.api, { sync.writableWebhooks() }, { op ->
+    fun uploader(parallel: Int = 3): FileWriter = FileWriter(writer, sync.api, { sync.writableWebhooks() }, viaInstance = acct.serverBlobs, commit = { op ->
         ix { _ -> sync.commit(op).also { headSeq = replica.headSeq; DdnAccount.setVaultRevision(app, sync.vaultRevision); saveCopy() } }
     }, parallel = parallel)
 
@@ -171,6 +175,12 @@ class DdnSession private constructor(private val app: Context, val acct: Account
         val gc = sync.api.gcStatus()
         val last = listOfNotNull(sync.lastPurgeAt, gc.lastRunAt).maxOrNull()
         val d = TrashPolicy.decide(replica.expiredTrash(gc.now), gc.now, isPrimary = false, fullySynced = true, metered = metered, lastPurgeAt = last, logStartedAt = sync.logStartedAt ?: gc.firstEntryAt)
+        // e2ee / plain: tell the instance which uploads the index released (it deletes them 30 days later).
+        if (acct.serverBlobs) runCatching {
+            val from = DdnAccount.releasedUpTo(app)
+            val list = replica.released(from)
+            if (list.isNotEmpty()) { sync.reportReleased(list.map { it.first to it.second }); DdnAccount.setReleasedUpTo(app, list.last().third) }
+        }
         if (d is TrashPolicy.Decision.Clean) {
             sync.purge(d.nodeIds)
             runCatching { sync.api.gcRecordRun() }

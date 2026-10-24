@@ -166,6 +166,85 @@ class InstanceApi(
         call("PUT", "/v1/pairing/$pairingId", buildJsonObject { put("pub", m.pub); put("sealed", m.sealed) })
     }
 
+    // ── blobs through the instance (e2ee / plain) ──
+
+    /**
+     * One blob of an upload (fragment `index`, "m" the manifest, "x<name>" an extra next to it), PUT with its
+     * SHA-256; the instance posts it on its webhooks and answers with the placement (the same (upload, index,
+     * hash) again returns the stored one: a resume). 503 / 429 = the instance is busy: waits as it asks.
+     */
+    fun putBlob(uploadId: String, index: String, data: ByteArray, sha256: String): JsonObject {
+        var waited = 0L
+        for (attempt in 0 until 8) {
+            val rb = Request.Builder().url(baseUrl.trimEnd('/') + "/v1/uploads/$uploadId/blobs/$index")
+                .header("authorization", "Bearer " + session())
+                .header("x-ddn-sha256", sha256)
+                .put(data.toRequestBody("application/octet-stream".toMediaType()))
+            http.newCall(rb.build()).execute().use { res ->
+                val text = res.body?.string().orEmpty()
+                val j = runCatching { json.parseToJsonElement(text) as? JsonObject }.getOrNull()
+                if (res.isSuccessful) return j!!.getValue("placement").jsonObject
+                val err = j?.strOrNull("error") ?: "?"
+                when {
+                    res.code == 401 && err == "unauthorized" -> token = null
+                    res.code == 503 || res.code == 429 -> {
+                        val wait = maxOf(500L, (res.header("retry-after")?.toDoubleOrNull()?.times(1000))?.toLong() ?: j?.get("retryAfterMs")?.jsonPrimitive?.content?.toLongOrNull() ?: 2000L)
+                        if (waited + wait > 120_000) throw ServerException(res.code, "instance_busy")
+                        waited += wait
+                        Thread.sleep(wait)
+                    }
+                    res.code >= 500 -> Thread.sleep(500L shl attempt)
+                    else -> throw ServerException(res.code, err)
+                }
+            }
+        }
+        throw ServerException(503, "instance_busy")
+    }
+
+    fun finalizeUpload(uploadId: String) { call("POST", "/v1/uploads/$uploadId/final", buildJsonObject {}) }
+    fun abortUpload(uploadId: String) { call("DELETE", "/v1/uploads/$uploadId", null, ok = setOf(404)) }
+
+    /** Fresh CDN links (at most 50 at a time) for blobs of this account: attachmentId → URL. */
+    fun blobUrls(placements: List<JsonObject>): Map<String, String> {
+        val out = HashMap<String, String>()
+        for (part in placements.chunked(50)) {
+            val body = buildJsonObject {
+                put("attachments", JsonArray(part.map { p -> buildJsonObject { put("webhookId", p.str("locationId")); put("messageId", p.str("messageId")); put("attachmentId", p.str("attachmentId")) } }))
+            }
+            for (x in call("POST", "/v1/blobs/urls", body).second.jsonObject.getValue("urls").jsonArray) {
+                val o = x.jsonObject
+                o.strOrNull("url")?.let { out[o.str("attachmentId")] = it }
+            }
+        }
+        return out
+    }
+
+    /** The extras (thumbnail, preview) stored next to a manifest: name (without extension) → placement. */
+    fun extras(manifestAttachmentId: String): Map<String, JsonObject> {
+        val r = call("POST", "/v1/blobs/extras", buildJsonObject { put("attachmentIds", JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive(manifestAttachmentId)))) }).second.jsonObject
+        val list = (r.getValue("extras").jsonObject[manifestAttachmentId] as? JsonArray) ?: return emptyMap()
+        return list.associate { it.jsonObject.str("name") to it.jsonObject.getValue("placement").jsonObject }
+    }
+
+    /** A blob through the instance (the fallback when the CDN cannot be read). */
+    fun blobProxy(p: JsonObject): ByteArray {
+        val rb = Request.Builder().url(baseUrl.trimEnd('/') + "/v1/blobs/${p.str("attachmentId")}?w=${p.str("locationId")}&m=${p.str("messageId")}")
+            .header("authorization", "Bearer " + session()).get()
+        http.newCall(rb.build()).execute().use { res ->
+            if (!res.isSuccessful) throw ServerException(res.code, "blob")
+            return res.body!!.bytes()
+        }
+    }
+
+    /** Uploads this phone's index released (purged / superseded): the instance deletes them 30 days later. */
+    fun released(list: List<Pair<String, Long>>) {
+        for (part in list.chunked(1000)) {
+            call("POST", "/v1/uploads/released", buildJsonObject {
+                put("uploads", JsonArray(part.map { (u, at) -> buildJsonObject { put("uploadId", u); put("at", at) } }))
+            })
+        }
+    }
+
     // ── transport ──
 
     private fun call(method: String, path: String, body: JsonElement?, auth: Boolean = true, ok: Set<Int> = emptySet()): Pair<Int, JsonElement> {

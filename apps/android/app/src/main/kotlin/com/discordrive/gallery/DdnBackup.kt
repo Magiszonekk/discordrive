@@ -216,6 +216,7 @@ object DdnBackup {
         Regex("HTTP 40[14]").containsMatchIn(error) && error.contains("discord", true) -> c.getString(R.string.ddn_fail_channel_gone)
         Regex("HTTP 403").containsMatchIn(error) && error.contains("discord", true) -> c.getString(R.string.ddn_fail_channel_denied)
         error.startsWith("need_channel") || error.contains("no channel", true) -> c.getString(R.string.ddn_fail_no_channel)
+        error.contains("instance_busy") -> c.getString(R.string.ddn_fail_instance_busy)
         error.contains("No such file", true) || error.contains("FileNotFound", true) || error.contains("ENOENT") -> c.getString(R.string.ddn_fail_source_gone)
         error.contains("too large", true) || error.contains("413") -> c.getString(R.string.ddn_fail_too_large)
         else -> c.getString(R.string.ddn_fail_other)

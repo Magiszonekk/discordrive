@@ -93,6 +93,10 @@ jobs:
 
       - name: "Interop: the phone's account layer with a real instance and the TypeScript client (pairing, join from a snapshot, operations)"
         run: npx tsx apps/android/interop/harness.mts
+      - name: phone in an e2ee and a plain account (JVM, real instance + fake Discord)
+        run: |
+          npx tsx apps/android/interop/server-modes.mts --mode e2ee
+          npx tsx apps/android/interop/server-modes.mts --mode plain
 
       - name: Debug build and the instrumentation test APK
         working-directory: apps/android

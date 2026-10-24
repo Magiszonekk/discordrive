@@ -147,6 +147,8 @@ function core(q: Req): unknown {
         .sort((a, b) => b.trashed!.at - a.trashed!.at || (a.id < b.id ? -1 : 1))
         .map((n) => ({ ...row(n), tat: n.trashed!.at }));
     case "expired": return expiredTrash(store, q.a as number);
+    case "node": { const n = store.getNode(q.a as string); return n ? [{ ...row(n), ...(inTrash(store, n.id) ? { tat: n.trashed?.at ?? 0 } : {}) }] : []; }
+    case "released": return [...store.allUploads()].filter((u) => u.status === "released" && u.ended && u.ended.seq > (q.a as number)).map((u) => [u.id, u.ended!.at, u.ended!.seq]).sort((a, b) => (a[2] as number) - (b[2] as number));
     case "albums": {
       const ex = q.a as string[];
       const files = [...store.allNodes()].filter((n) => n.kind === "file" && n.content && !inTrash(store, n.id) && ex.some((e) => n.name.toLowerCase().endsWith(e))).sort((a, b) => b.content!.createdAt - a.content!.createdAt || (a.id < b.id ? -1 : 1));

@@ -14,6 +14,7 @@ import kotlinx.serialization.json.jsonObject
 object DdnAccount {
     private const val KEY = "ddn_account"
     private const val VAULT_REV = "ddn_vault_revision"
+    private const val RELEASED = "ddn_released_up_to"
 
     fun load(context: Context): AccountState? =
         SecureStore(context).getString(KEY)?.let { runCatching { AccountState.fromJson(json.parseToJsonElement(it).jsonObject) }.getOrNull() }
@@ -22,10 +23,14 @@ object DdnAccount {
 
     fun forget(context: Context) {
         SecureStore(context).remove(KEY)
-        context.getSharedPreferences("ddn", Context.MODE_PRIVATE).edit().remove(VAULT_REV).apply()
+        context.getSharedPreferences("ddn", Context.MODE_PRIVATE).edit().remove(VAULT_REV).remove(RELEASED).apply()
     }
 
     /** Highest vault revision seen (a server handing an older one is refused). */
     fun vaultRevision(context: Context): Long = context.getSharedPreferences("ddn", Context.MODE_PRIVATE).getLong(VAULT_REV, 0)
     fun setVaultRevision(context: Context, r: Long) = context.getSharedPreferences("ddn", Context.MODE_PRIVATE).edit().putLong(VAULT_REV, r).apply()
+
+    /** e2ee / plain: releases reported to the instance up to this log seq. */
+    fun releasedUpTo(context: Context): Long = context.getSharedPreferences("ddn", Context.MODE_PRIVATE).getLong(RELEASED, 0)
+    fun setReleasedUpTo(context: Context, seq: Long) = context.getSharedPreferences("ddn", Context.MODE_PRIVATE).edit().putLong(RELEASED, seq).apply()
 }
