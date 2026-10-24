@@ -123,11 +123,19 @@ export class FragDiskCache extends Map<string, Uint8Array> {
 }
 
 /** Serve the helper's requests on `socketPath` (0600 in a 0700 directory). */
-export function serveVdisk(core: VdiskCore, socketPath: string, cache: FragDiskCache): Server {
+export function serveVdisk(core: VdiskCore, socketPath: string, cache: FragDiskCache): Server & { conns: Set<Socket> } {
   const dir = join(socketPath, "..");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (existsSync(socketPath)) rmSync(socketPath, { force: true });
-  const srv = createServer((sock) => connection(core, sock, cache));
+  const conns = new Set<Socket>();
+  const srv = Object.assign(
+    createServer((sock) => {
+      conns.add(sock);
+      sock.on("close", () => conns.delete(sock));
+      connection(core, sock, cache);
+    }),
+    { conns },
+  );
   srv.listen(socketPath);
   // listen() creates the socket with the umask: owner only.
   srv.on("listening", () => {
@@ -185,12 +193,29 @@ function connection(core: VdiskCore, sock: Socket, cache: FragDiskCache) {
   sock.on("error", () => {});
 }
 
+/** PIDs of ddn-fuse processes of this user serving `mountpoint` (from /proc: no pgrep needed). */
+export function helpersFor(mountpoint: string): number[] {
+  const out: number[] = [];
+  const uid = process.getuid?.();
+  for (const d of readdirSync("/proc")) {
+    if (!/^\d+$/.test(d) || Number(d) === process.pid) continue;
+    try {
+      if (uid !== undefined && statSync(`/proc/${d}`).uid !== uid) continue;
+      const argv = readFileSync(`/proc/${d}/cmdline`, "utf8").split("\0");
+      if (argv[0]?.endsWith("ddn-fuse") && argv[1] === mountpoint) out.push(Number(d));
+    } catch {
+      /* gone meanwhile */
+    }
+  }
+  return out;
+}
+
 /** The mount: the helper process, cleaning a stale mount first (a killed helper leaves one). */
 export class Vdisk {
   private child: ChildProcess | null = null;
-  private srv: Server | null = null;
+  private srv: (Server & { conns: Set<Socket> }) | null = null;
   constructor(
-    readonly opts: { helper: string; mountpoint: string; socket: string; cache: FragDiskCache; core: VdiskCore; log?: (m: string) => void; fusermount?: string },
+    readonly opts: { helper: string; mountpoint: string; socket: string; cache: FragDiskCache; core: VdiskCore; log?: (m: string) => void; fusermount?: string; onState?: (s: string) => void },
   ) {}
 
   /** Can this computer mount it (FUSE device, fusermount3, the helper)? null = yes, else why not. */
@@ -202,12 +227,34 @@ export class Vdisk {
     return null;
   }
 
-  /** Unmount a mount left by a helper that was killed (the directory says "not connected"). */
+  /**
+   * Clean what an earlier run left: a helper still running for this mount point (its agent died: it answers
+   * EIO to everything) is stopped, and the mount is taken down lazily (a killed helper leaves "not
+   * connected"; a file manager may hold the directory).
+   */
   cleanStale() {
-    spawnSync(this.opts.fusermount ?? "fusermount3", ["-u", "-q", this.opts.mountpoint]);
+    const mp = this.opts.mountpoint;
+    for (const pid of helpersFor(mp)) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        /* gone */
+      }
+    }
+    spawnSync(this.opts.fusermount ?? "fusermount3", ["-u", "-z", "-q", mp]);
+  }
+
+  private stopping = false;
+  private restarts = 0;
+
+  private async remount(): Promise<void> {
+    await new Promise<void>((r) => (this.srv ? this.srv.close(() => r()) : r()));
+    this.srv = null;
+    await this.start();
   }
 
   async start(): Promise<void> {
+    this.stopping = false;
     const mp = this.opts.mountpoint;
     this.cleanStale();
     mkdirSync(mp, { recursive: true });
@@ -216,9 +263,23 @@ export class Vdisk {
     await new Promise<void>((r) => this.srv!.once("listening", () => r()));
     this.child = spawn(this.opts.helper, [mp, this.opts.socket], { stdio: ["ignore", "ignore", "pipe"] });
     this.child.stderr?.on("data", (d) => this.opts.log?.(`vdisk: ${String(d).trim()}`));
-    this.child.on("exit", (code) => {
-      this.opts.log?.(`vdisk: helper exited ${code}`);
+    const me = this.child;
+    me.on("exit", (code, sig) => {
+      this.opts.log?.(`vdisk: helper exited ${code ?? sig}`);
+      if (this.child !== me) return;
       this.child = null;
+      // Killed or crashed while the disk should be there: clean up and mount again (a few tries).
+      if (!this.stopping && this.restarts < 5) {
+        this.restarts++;
+        this.opts.onState?.("restarting");
+        setTimeout(() => {
+          if (this.stopping) return;
+          void this.remount().then(
+            () => this.opts.onState?.("mounted"),
+            (e) => this.opts.onState?.(`error: ${String((e as Error)?.message ?? e)}`),
+          );
+        }, 500);
+      } else if (!this.stopping) this.opts.onState?.(`error: helper exited ${code ?? sig}`);
     });
     // Mounted when the directory shows the root (the helper mounts in a few ms).
     for (let i = 0; i < 100; i++) {
@@ -226,6 +287,14 @@ export class Vdisk {
       await new Promise((r) => setTimeout(r, 50));
     }
     throw new Error("the disk did not mount");
+  }
+
+  /** Tests: the agent "dies" (its connections to the helper close), the helper keeps running. */
+  dropAgentForTest() {
+    this.stopping = true;
+    for (const c of this.srv?.conns ?? []) c.destroy();
+    this.srv?.close();
+    this.srv = null;
   }
 
   mounted(): boolean {
@@ -237,6 +306,7 @@ export class Vdisk {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
     spawnSync(this.opts.fusermount ?? "fusermount3", ["-u", "-z", this.opts.mountpoint]);
     this.child?.kill();
     this.child = null;

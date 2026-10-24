@@ -2755,7 +2755,10 @@ async function renderDesktopApp() {
     sw.checked = vd.on;
     sw.disabled = !!vd.unavailable;
     $<HTMLInputElement>("app-vdisk-cache").value = String(vd.cacheGb);
-    $("app-vdisk-hint").textContent = vd.unavailable ? t("app.vdisk.unavailable", { why: vd.unavailable }) : vd.on ? t("app.vdisk.where", { dir: vd.mountpoint, state: vd.state }) : t("app.vdisk.off");
+    const stateText = vd.state === "mounted" ? t("app.vdisk.mounted", { dir: vd.mountpoint }) : vd.state === "mounting" || vd.state === "restarting" || vd.state === "off" ? t("app.vdisk.mounting") : t("app.vdisk.failed", { why: vd.state.replace(/^error: /, "") });
+    $("app-vdisk-hint").textContent = vd.unavailable ? t("app.vdisk.unavailable", { why: vd.unavailable }) : vd.on ? stateText : t("app.vdisk.off");
+    // Mounting takes a moment: the state again shortly (until it is mounted or failed).
+    if (vd.on && !vd.unavailable && vd.state !== "mounted" && !/^error/.test(vd.state)) setTimeout(() => void renderDesktopApp(), 1500);
   }
   // Not awaited: the check asks GitHub, and a slow or hanging network must not hold up the page (every later
   // render, a tab change too, waits for this one).

@@ -85,15 +85,38 @@ describe.skipIf(why !== null)(`disk in the system (FUSE)${why ? ` — skipped: $
     // Read-only in this version.
     await expect(run("sh", ["-c", `echo x > '${join(dir, "nowy.txt")}'`])).rejects.toThrow();
 
-    // 4. A killed helper: the mount is stale ("not connected"); start() cleans it and mounts again.
+    // 4. A killed helper: the disk mounts again by itself (no restart of the app).
+    const states: string[] = [];
+    (disk.opts as { onState?: (s: string) => void }).onState = (st) => states.push(st);
     spawnSync("pkill", ["-9", "-f", `ddn-fuse ${mp}`]);
-    await new Promise((r) => setTimeout(r, 300));
-    await expect(readdir(mp)).rejects.toThrow();
+    let back = false;
+    for (let i = 0; i < 60 && !back; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      back = await readdir(join(mp, "Zdjęcia Ż")).then((l) => l.length === 2, () => false);
+    }
+    expect(back).toBe(true);
+    for (let i = 0; i < 25 && !states.includes("mounted"); i++) await new Promise((r) => setTimeout(r, 100));
+    expect(states).toContain("mounted");
+
+    // 5. The agent goes away while the helper lives (its socket closed): the helper unmounts and exits, and
+    //    the next start mounts with no manual kill (before: EIO to everything until ddn-fuse was killed).
+    disk.dropAgentForTest();
+    await run("ls", [mp]).catch(() => {}); // a request the dead agent cannot answer
+    let gone = false;
+    for (let i = 0; i < 50 && !gone; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      gone = !disk.mounted();
+    }
+    expect(gone).toBe(true);
+    // A fresh agent (the app started again): mounts at once.
+    const disk2 = new Vdisk({ helper, mountpoint: mp, socket: join(base, "run", "fuse.sock"), cache, core: core as never });
+    disks.push(disk2);
     await disk.stop();
-    await disk.start();
+    await disk2.start();
     expect((await readdir(join(mp, "Zdjęcia Ż"))).length).toBe(2);
-    await disk.stop();
-    expect(disk.mounted()).toBe(false);
+    // 6. An old helper still running for this mount point (its agent died before it noticed) is stopped.
+    await disk2.stop();
+    expect(disk2.mounted()).toBe(false);
     expect(await exists(join(mp, "Zdjęcia Ż"))).toBe(false);
     core.close();
     console.log(JSON.stringify({ vdisk: { listedWithoutDiscord, readMBps: Math.round((big.byteLength / 1e6 / (ms / 1000)) * 10) / 10, cacheBytes: cache.bytes, cacheLimit: cache.limit } }));

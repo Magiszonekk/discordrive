@@ -73,7 +73,7 @@ function setVdisk(cfg: VdiskConfig | undefined) {
     // The account must be open (the tree from its index).
     for (let i = 0; i < 600 && !(await c.status()).signedIn; i++) await new Promise((r) => setTimeout(r, 500));
     diskCache ??= new FragDiskCache(cfg.cacheDir, cfg.cacheBytes);
-    disk = new Vdisk({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, log: (m) => console.error(m) });
+    disk = new Vdisk({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, log: (m) => console.error(m), onState: state });
     try {
       await disk.start();
       state("mounted");

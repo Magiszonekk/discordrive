@@ -503,6 +503,7 @@ function wireUpdates() {
     const p = (patch && typeof patch === "object" ? patch : {}) as { checkUpdates?: unknown; autostart?: unknown; downloadsDir?: unknown; keyring?: unknown; vdisk?: unknown; vdiskCacheGb?: unknown };
     if (process.platform === "linux" && typeof p.vdisk === "boolean" && p.vdisk !== (settings.vdisk === true)) {
       settings.vdisk = p.vdisk;
+      vdiskState = p.vdisk ? "mounting" : "off";
       agent?.postMessage({ type: "vdisk", ...vdiskInit().vdisk! });
     }
     if (process.platform === "linux" && typeof p.vdiskCacheGb === "number" && Number.isFinite(p.vdiskCacheGb) && p.vdiskCacheGb >= 1 && p.vdiskCacheGb <= 10_000) {

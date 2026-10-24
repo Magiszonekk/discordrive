@@ -37,6 +37,18 @@ struct Entry {
 
 struct Agent {
     s: UnixStream,
+    mountpoint: String,
+}
+
+impl Agent {
+    /// The agent is gone (its socket closed): nothing can be answered any more. Unmount (lazily: a file
+    /// manager may hold the directory) and exit, so the next start of the app mounts afresh instead of
+    /// finding a mount that answers EIO to everything.
+    fn gone(&self) -> ! {
+        eprintln!("ddn-fuse: the agent closed the connection: unmounting");
+        let _ = std::process::Command::new("fusermount3").args(["-u", "-z", &self.mountpoint]).status();
+        std::process::exit(5);
+    }
 }
 
 impl Agent {
@@ -44,14 +56,21 @@ impl Agent {
         let body = serde_json::to_vec(&q).map_err(|_| libc::EIO)?;
         let mut out = (body.len() as u32).to_le_bytes().to_vec();
         out.extend_from_slice(&body);
-        self.s.write_all(&out).map_err(|_| libc::EIO)?;
+        if self.s.write_all(&out).is_err() {
+            self.gone();
+        }
         let mut n = [0u8; 4];
-        self.s.read_exact(&mut n).map_err(|_| libc::EIO)?;
+        if self.s.read_exact(&mut n).is_err() {
+            self.gone();
+        }
         let mut j = vec![0u8; u32::from_le_bytes(n) as usize];
-        self.s.read_exact(&mut j).map_err(|_| libc::EIO)?;
-        self.s.read_exact(&mut n).map_err(|_| libc::EIO)?;
+        if self.s.read_exact(&mut j).is_err() || self.s.read_exact(&mut n).is_err() {
+            self.gone();
+        }
         let mut d = vec![0u8; u32::from_le_bytes(n) as usize];
-        self.s.read_exact(&mut d).map_err(|_| libc::EIO)?;
+        if self.s.read_exact(&mut d).is_err() {
+            self.gone();
+        }
         let v: serde_json::Value = serde_json::from_slice(&j).map_err(|_| libc::EIO)?;
         if let Some(e) = v.get("err").and_then(|x| x.as_str()) {
             return Err(match e {
@@ -252,8 +271,28 @@ fn main() {
             std::process::exit(3);
         }
     };
+    // A second connection that carries nothing: when the agent dies the socket closes and the read below
+    // returns, even while no request is in flight (the kernel answers from its caches meanwhile).
+    match UnixStream::connect(&a[2]) {
+        Ok(mut watch) => {
+            let mp = a[1].clone();
+            std::thread::spawn(move || {
+                let mut b = [0u8; 1];
+                loop {
+                    match watch.read(&mut b) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => continue,
+                    }
+                }
+                eprintln!("ddn-fuse: the agent is gone: unmounting");
+                let _ = std::process::Command::new("fusermount3").args(["-u", "-z", &mp]).status();
+                std::process::exit(5);
+            });
+        }
+        Err(e) => eprintln!("ddn-fuse: no watch connection: {e}"),
+    }
     let fs = Fs {
-        agent: Agent { s },
+        agent: Agent { s, mountpoint: a[1].clone() },
         uid: unsafe { libc::getuid() },
         gid: unsafe { libc::getgid() },
         ids: HashMap::new(),

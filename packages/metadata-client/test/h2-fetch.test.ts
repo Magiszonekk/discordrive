@@ -36,6 +36,20 @@ beforeAll(async () => {
       st.close(http2.constants.NGHTTP2_REFUSED_STREAM);
       return;
     }
+    // A long body sent in many pieces (a reader that stops in the middle).
+    if (String(h[":path"]).startsWith("/stream")) {
+      st.respond({ ":status": 200, "content-type": "application/octet-stream" });
+      let i = 0;
+      const t = setInterval(() => {
+        if (st.closed || st.destroyed) return clearInterval(t);
+        st.write(Buffer.alloc(64 * 1024, i & 0xff));
+        if (++i >= 400) {
+          clearInterval(t);
+          st.end();
+        }
+      }, 1);
+      return;
+    }
     const chunks: Buffer[] = [];
     st.on("data", (c: Buffer) => chunks.push(c));
     st.on("end", () => {
@@ -126,6 +140,37 @@ describe("h2Fetch", () => {
     const f = h2Fetch({ fallback: async () => (called++, new Response("ok")) });
     expect(await (await f("http://127.0.0.1:9/x")).text()).toBe("ok");
     expect(called).toBe(1);
+  });
+
+  it("a reader that stops while data is in flight (cancel, abort): no exception, the next requests work", async () => {
+    reset();
+    const f = h2Fetch({ tls: { ca }, downStreams: 2 });
+    const uncaught: unknown[] = [];
+    const onErr = (e: unknown) => uncaught.push(e);
+    process.on("uncaughtException", onErr);
+    try {
+      for (let k = 0; k < 20; k++) {
+        // cancel() after a first piece (the body keeps arriving from the socket)
+        const r = await f(`${origin}/stream-${k}`);
+        const rd = r.body!.getReader();
+        await rd.read();
+        await rd.cancel();
+        // abort() of a request whose body is being read
+        const ac = new AbortController();
+        const r2 = await f(`${origin}/stream-a${k}`, { signal: ac.signal });
+        const rd2 = r2.body!.getReader();
+        await rd2.read();
+        ac.abort();
+        await rd2.read().catch(() => {});
+        await new Promise((x) => setTimeout(x, 5));
+      }
+      await new Promise((x) => setTimeout(x, 100));
+      expect(uncaught).toEqual([]);
+      expect(await (await f(`${origin}/after-cancel`)).json()).toMatchObject({ path: "/after-cancel" });
+    } finally {
+      process.off("uncaughtException", onErr);
+      f.close();
+    }
   });
 
   it("abort before the answer rejects with AbortError and frees the slot", async () => {
