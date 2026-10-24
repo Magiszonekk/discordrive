@@ -1911,8 +1911,13 @@ export class AppCore {
   }
 
   /** The AI endpoint of the account (used by the phones that describe photos); the key is not returned. */
-  async aiSettings(): Promise<{ url: string; model: string; hasKey: boolean } | null> {
-    const v = await this.settings().load();
+  async aiSettings(): Promise<{ url: string; model: string; hasKey: boolean } | null | "unsupported"> {
+    // An older instance without account settings (404): the section says so instead of failing.
+    const v = await this.settings().load().catch((e: unknown) => {
+      if (/\b404\b|not_found/.test(String((e as Error)?.message ?? e))) return "unsupported" as const;
+      throw e;
+    });
+    if (v === "unsupported") return v;
     return v.ai ? { url: v.ai.url, model: v.ai.model, hasKey: !!v.ai.key } : null;
   }
 

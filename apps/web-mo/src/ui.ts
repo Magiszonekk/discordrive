@@ -2889,8 +2889,12 @@ function paintStrength() {
   });
 }
 async function renderAi() {
-  const st = await core.aiSettings().catch(() => undefined);
-  if (st === undefined) return;
+  const got = await core.aiSettings().catch(() => undefined);
+  if (got === undefined) return;
+  const unsupported = got === "unsupported";
+  $("ai-sec").querySelector<HTMLFormElement>("form")!.hidden = unsupported;
+  $("ai-unsupported").hidden = !unsupported;
+  const st = unsupported ? null : got;
   $("ai-state").textContent = st ? t("ai.state.on") : t("ai.state.off");
   $("ai-state").className = `chip${st ? " chip--success" : ""}`;
   $<HTMLInputElement>("ai-url").value = st?.url ?? "";

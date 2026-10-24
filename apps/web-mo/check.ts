@@ -1135,6 +1135,16 @@ try {
     await p.click("[data-ddn=ai-off]");
     await p.waitForFunction(() => /^(Not set|Nie ustawione)$/.test(document.querySelector("[data-ddn=ai-state]")?.textContent ?? ""), null, { timeout: 15_000 }).catch(() => {});
     (ops.aiSettings as Record<string, unknown>).removed = /Not set|Nie ustawione/.test((await p.textContent("[data-ddn=ai-state]")) ?? "");
+    // An older instance without account settings (404 on /v1/settings): the section says so, nothing fails.
+    // Without a reload (a reload here made the next tab a secondary one for a while: later steps differ).
+    await p.route("**/v1/settings", (rt) => rt.fulfill({ status: 404, contentType: "application/json", body: '{"error":"not_found"}' }));
+    await nav(p, "files");
+    await nav(p, "settings", "account");
+    await p.waitForFunction(() => !document.querySelector<HTMLElement>("[data-ddn=ai-unsupported]")?.hidden, null, { timeout: 15_000 }).catch(() => {});
+    (ops.aiSettings as Record<string, unknown>).oldServer = !(await p.locator("[data-ddn=ai-unsupported]").isHidden()) && (await p.locator("[data-ddn-ui=ai-form]").isHidden());
+    await p.unroute("**/v1/settings");
+    await nav(p, "files");
+    await nav(p, "settings", "account");
   }
   // Settings → Security: password sign-in (off by default), then a fresh browser signs in with it.
   const pwLogin = `check.${Date.now().toString(36)}`;
@@ -2181,8 +2191,8 @@ try {
       // e2ee/plain: "last cleanup" is the instance's background pass (every 30 s on a live server), so it may be set already.
       return by.test(o.before.by) && (SERVER_SIDE || /not yet|jeszcze nie/.test(o.before.last)) && !/not yet|jeszcze nie/.test(o.after.last) && /\d/.test(o.after.result) && /^2 /.test(o.after.waiting);
     })(),
-    aiSettings: ((x) => !!x && x.offFirst && x.keyEmpty && x.kept && x.afterReload.url === "http://localhost:8080/v1" && x.afterReload.model === "vision-2" && x.afterReload.kept && x.notInPage && x.removed)(
-      (r.ops as { aiSettings?: { offFirst: boolean; keyEmpty: boolean; kept: boolean; afterReload: { url: string; model: string; kept: boolean }; notInPage: boolean; removed: boolean } } | undefined)?.aiSettings,
+    aiSettings: ((x) => !!x && x.offFirst && x.keyEmpty && x.kept && x.afterReload.url === "http://localhost:8080/v1" && x.afterReload.model === "vision-2" && x.afterReload.kept && x.notInPage && x.removed && x.oldServer)(
+      (r.ops as { aiSettings?: { offFirst: boolean; keyEmpty: boolean; kept: boolean; afterReload: { url: string; model: string; kept: boolean }; notInPage: boolean; removed: boolean; oldServer: boolean } } | undefined)?.aiSettings,
     ),
     passwordSignIn: (() => {
       const o = r.ops as Record<string, unknown> | undefined;

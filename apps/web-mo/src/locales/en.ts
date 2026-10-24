@@ -642,6 +642,7 @@ export const en: Record<string, string> = {
   "ai.h": "AI search",
   "ai.lead": "The address of an AI server in the OpenAI format (with images) that phones with “AI search” on use to describe photos. Stored encrypted in the account's settings: only the account's devices can read it. Photos (downscaled) are sent to that address.",
   "ai.lead@plain": "The address of an AI server in the OpenAI format (with images) that phones with “AI search” on use to describe photos. Stored in the account's settings, shared by its devices. Photos (downscaled) are sent to that address.",
+  "ai.unsupported": "This server has no shared account settings yet (an older version). The phone keeps the AI address itself (or in the channel vault); after the server is updated it moves it here on its own.",
   "ai.url": "Address",
   "ai.key": "API key",
   "ai.model": "Model",

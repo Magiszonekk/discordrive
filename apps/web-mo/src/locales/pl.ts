@@ -684,6 +684,7 @@ export const pl: Record<string, string> = {
   "ai.h": "Wyszukiwanie AI",
   "ai.lead": "Adres serwera AI w formacie OpenAI (z obsługą obrazu), którego telefony z włączonym „Wyszukiwaniem AI” używają do opisywania zdjęć. Zapisany zaszyfrowany w ustawieniach konta: widzą go tylko urządzenia konta. Zdjęcia (pomniejszone) są wysyłane pod ten adres.",
   "ai.lead@plain": "Adres serwera AI w formacie OpenAI (z obsługą obrazu), którego telefony z włączonym „Wyszukiwaniem AI” używają do opisywania zdjęć. Zapisany w ustawieniach konta, wspólnych dla jego urządzeń. Zdjęcia (pomniejszone) są wysyłane pod ten adres.",
+  "ai.unsupported": "Ten serwer nie ma jeszcze wspólnych ustawień konta (starsza wersja). Telefon trzyma adres AI u siebie (lub w sejfie kanałów); po aktualizacji serwera przeniesie go tutaj sam.",
   "ai.url": "Adres",
   "ai.key": "Klucz API",
   "ai.model": "Model",
