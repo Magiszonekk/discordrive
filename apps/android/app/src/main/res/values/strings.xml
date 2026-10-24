@@ -332,6 +332,38 @@
         <item quantity="other">%d pliku w kolejce do wysłania (folder „Z telefonu”)</item>
     </plurals>
     <string name="ddn_upload">Wyślij plik</string>
+    <string name="ddn_ai_title">Wyszukiwanie AI</string>
+    <string name="ddn_ai_privacy">Zdjęcia (pomniejszone) są wysyłane pod ten adres. Opisy zapisujemy zaszyfrowane w koncie. Domyślnie wyłączone.</string>
+    <string name="ddn_ai_plain_note">To konto jest w trybie jawnym: opis jest zaszyfrowany tak jak plik.</string>
+    <string name="ddn_ai_where_vault">Adres, klucz i model trafiają do zaszyfrowanego sejfu konta, więc inne urządzenia mogą ich użyć.</string>
+    <string name="ddn_ai_where_phone">Adres, klucz i model zostają na tym telefonie (zaszyfrowane): w tym trybie konto nie ma własnego sejfu.</string>
+    <string name="ddn_ai_url">Adres (np. http://localhost:8080/v1)</string>
+    <string name="ddn_ai_key">Klucz API</string>
+    <string name="ddn_ai_model">Model</string>
+    <string name="ddn_ai_pick_model">Wybierz model z listy</string>
+    <string name="ddn_ai_save_check">Zapisz i sprawdź połączenie</string>
+    <string name="ddn_ai_checking">Sprawdzanie: wysyłam jedno zdjęcie testowe…</string>
+    <string name="ddn_ai_check_ok">Działa. Opis zdjęcia testowego: %1$s
+Tagi: %2$s
+Tekst: %3$s</string>
+    <string name="ddn_ai_check_failed">Nie działa: %1$s</string>
+    <string name="ddn_ai_fetching">Pobieranie listy modeli…</string>
+    <string name="ddn_ai_no_models">Serwer nie podał listy modeli — wpisz nazwę modelu ręcznie.</string>
+    <string name="ddn_ai_models_failed">Nie udało się pobrać listy: %1$s</string>
+    <string name="ddn_ai_need_url">Najpierw wpisz adres.</string>
+    <string name="ddn_ai_need_config">Najpierw wpisz adres i model, potem „Zapisz i sprawdź połączenie”.</string>
+    <string name="ddn_ai_on">Opisuj zdjęcia w tle</string>
+    <string name="ddn_ai_private">Opisuj też zdjęcia z prywatnych albumów</string>
+    <string name="ddn_ai_now">Opisz teraz</string>
+    <string name="ddn_ai_turn_on">Najpierw włącz opisywanie.</string>
+    <string name="ddn_ai_described">Opisano %1$d z %2$d</string>
+    <string name="ddn_ai_last_error">Ostatni błąd: %1$s</string>
+    <string name="ddn_ai_progress">Opisywanie zdjęć: %1$d z %2$d</string>
+    <string name="ddn_ai_err_auth">serwer AI odrzucił klucz (sprawdź klucz API).</string>
+    <string name="ddn_ai_err_rate">serwer AI ogranicza liczbę zapytań — spróbuję później.</string>
+    <string name="ddn_ai_err_net">brak połączenia z serwerem AI (sprawdź adres).</string>
+    <string name="ddn_ai_err_parse">model nie zwrócił opisu w oczekiwanym formacie (wybierz model z obsługą obrazu).</string>
+    <string name="ddn_ai_err_other">%1$s</string>
     <string name="ddn_backup">Auto-kopia zdjęć</string>
     <string name="ddn_backup_on">Kopiuj nowe zdjęcia i filmy automatycznie</string>
     <string name="ddn_backup_wifi">Tylko przez Wi-Fi (bez łącza taryfowego)</string>

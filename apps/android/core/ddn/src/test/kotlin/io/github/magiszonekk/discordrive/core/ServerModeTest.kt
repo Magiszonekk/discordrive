@@ -64,6 +64,18 @@ class ServerModeTest {
         val photo = inFolder["Zdj\u0119cie \u017B.jpg"]!!
         r["thumbnailThroughInstance"] = reader.preview(photo.manifestRef!!, 't')?.let { sha256Hex(it.data) == f.getValue("thumbSha").jsonPrimitive.content } == true
 
+        // An AI description added later through the instance (blob "x<name>" of the version's upload).
+        run {
+            val loc = FileFormat.decodeManifestRef(photo.manifestRef!!)
+            val rec = Describe.Record("Zdjęcie testowe", listOf("test"), model = "fake", at = 1)
+            val w = ExtraWriter()
+            val added = w.addThroughInstance(api, photo.uploadId!!, Describe.name(loc.fileKey), Describe.seal(loc.fileKey, rec))
+            val again = w.addThroughInstance(api, photo.uploadId!!, Describe.name(loc.fileKey), Describe.seal(loc.fileKey, rec))
+            val fresh = FileReader(sync.blobSource())
+            r["descriptionThroughInstance"] = added && !again && fresh.description(photo.manifestRef!!) == rec &&
+                fresh.preview(photo.manifestRef!!, 't')?.let { sha256Hex(it.data) == f.getValue("thumbSha").jsonPrimitive.content } == true
+        }
+
         // An upload through the instance (fragments, the manifest, the thumbnail as an extra).
         val fw = FileWriter(DiscordWriter(apiOrigin = origin), api, { emptyList() }, { op -> sync.commit(op) }, chunkSize = 64 * 1024, viaInstance = true)
         val data = randomBytes(150_007)

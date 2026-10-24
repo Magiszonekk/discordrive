@@ -115,7 +115,7 @@ class JsIndexReplica(private val engine: JsEngine) : IndexReplica {
             size = o["size"]?.jsonPrimitive?.content?.toLongOrNull(),
             manifestRef = s("ref"), sha256 = s("sha"),
             createdAt = o["at"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0, parentId = s("parent"),
-            trashedAt = o["tat"]?.jsonPrimitive?.content?.toLongOrNull(),
+            trashedAt = o["tat"]?.jsonPrimitive?.content?.toLongOrNull(), uploadId = s("up"),
         )
     }
 
@@ -130,7 +130,7 @@ globalThis.__ddnIx = (function () {
   var S = SyncCore, st = S.initIndex(new S.MemoryIndexStore()), snap = null, state = null, mediaCache = null;
   function row(n) {
     var c = n.content;
-    return { id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: c ? c.sizeBytes : null, ref: c ? c.manifestRef : null, sha: c ? c.plaintextSha256 : null, at: c ? c.createdAt : 0 };
+    return { id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: c ? c.sizeBytes : null, ref: c ? c.manifestRef : null, sha: c ? c.plaintextSha256 : null, at: c ? c.createdAt : 0, up: c ? c.uploadId : null };
   }
   return {
     reset: function () { st = S.initIndex(new S.MemoryIndexStore()); return "ok"; },

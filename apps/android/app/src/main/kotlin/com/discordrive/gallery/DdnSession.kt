@@ -151,6 +151,17 @@ class DdnSession private constructor(private val app: Context, val acct: Account
     }
     fun node(id: String): IndexReplica.Child? = ix { it.node(id) }
 
+    /**
+     * Store a small extra object next to a stored version (an AI description): metadata only edits the
+     * manifest's message on the account's webhook, e2ee / plain give it to the instance. False = it was there.
+     */
+    fun addExtra(c: IndexReplica.Child, name: String, data: ByteArray): Boolean {
+        val w = io.github.magiszonekk.discordrive.core.ExtraWriter(apiOrigin = testDiscordOrigin)
+        if (acct.serverBlobs) return w.addThroughInstance(sync.api, c.uploadId ?: throw IllegalStateException("no upload of ${c.id}"), name, data)
+        val loc = FileFormat.decodeManifestRef(c.manifestRef!!)
+        return w.addToMessage(discord, webhookUrl(loc.webhookId), loc.messageId, name, data)
+    }
+
     // ── the trash ──
     fun trash(): List<IndexReplica.Child> = ix { it.trash() }
 
