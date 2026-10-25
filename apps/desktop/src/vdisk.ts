@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { open as openFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
+import { release as osRelease } from "node:os";
 import { join } from "node:path";
 import { Thumbnails, type ThumbCore } from "./vdisk-thumbs.js";
 
@@ -421,9 +422,14 @@ export class Outbox {
 }
 
 export function serveVdisk(core: VdiskCore, socketPath: string, cache: FragDiskCache, hooks: Hooks = {}): Server & { conns: Set<Socket>; watchers: Set<Socket> } {
-  const dir = join(socketPath, "..");
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (existsSync(socketPath)) rmSync(socketPath, { force: true });
+  // A Windows named pipe (\\.\pipe\…): any process of the user can open it, so the helper proves itself
+  // with the secret it was started with (hooks.token, its first request "hello").
+  const pipe = socketPath.startsWith("\\\\.\\pipe\\");
+  if (!pipe) {
+    const dir = join(socketPath, "..");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (existsSync(socketPath)) rmSync(socketPath, { force: true });
+  }
   const conns = new Set<Socket>();
   const watchers = new Set<Socket>();
   const srv = Object.assign(
@@ -436,7 +442,7 @@ export function serveVdisk(core: VdiskCore, socketPath: string, cache: FragDiskC
   );
   srv.listen(socketPath);
   // listen() creates the socket with the umask: owner only.
-  srv.on("listening", () => {
+  if (!pipe) srv.on("listening", () => {
     try {
       spawnSync("chmod", ["600", socketPath]);
     } catch {
@@ -447,6 +453,8 @@ export function serveVdisk(core: VdiskCore, socketPath: string, cache: FragDiskC
 }
 
 interface Hooks {
+  /** Required first request {op:"hello", token} (a named pipe on Windows); absent: none. */
+  token?: string;
   /** A folder was listed (the file manager opened it). */
   listed?: (id: string, entries: ReturnType<VdiskCore["vdiskList"]> & object) => Promise<void> | void;
   /** The writable disk's queue of uploads (an upload's path must be inside its directory). */
@@ -458,6 +466,7 @@ function connection(core: VdiskCore, sock: Socket, disk: FragDiskCache, hooks: H
   const cache = new MemFront(disk);
   let buf = Buffer.alloc(0);
   let busy = Promise.resolve();
+  let trusted = !hooks.token;
   const send = (j: unknown, data: Uint8Array = new Uint8Array(0)) => {
     const body = Buffer.from(JSON.stringify(j));
     const h1 = Buffer.alloc(4);
@@ -468,6 +477,15 @@ function connection(core: VdiskCore, sock: Socket, disk: FragDiskCache, hooks: H
   };
   const handle = async (q: { op?: string; id?: string; off?: number; len?: number; dir?: string; name?: string; toDir?: string; toName?: string; path?: string; folder?: boolean }) => {
     try {
+      if (!trusted) {
+        if (q.op === "hello" && typeof (q as { token?: unknown }).token === "string" && (q as { token: string }).token === hooks.token) {
+          trusted = true;
+          return send({});
+        }
+        sock.destroy();
+        return;
+      }
+      if (q.op === "hello") return send({});
       // The helper's second connection: invalidations go out on it, nothing is answered.
       if (q.op === "watch") return hooks.watch?.();
       if (q.op === "list") {
@@ -853,5 +871,126 @@ export class Vdisk {
     await new Promise<void>((r) => (this.srv ? this.srv.close(() => r()) : r()));
     this.srv = null;
     for (let i = 0; i < 40 && this.mounted(); i++) await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+/**
+ * The disk in the system on Windows: %USERPROFILE%\discordrive as a sync root of the Cloud Files API (like
+ * OneDrive), served by the helper ddn-cf (native/cf) through a named pipe; the agent side is the one of Linux
+ * (serveVdisk: tree, ranges, cache, thumbnails' pictures). Read-only for now.
+ */
+export class VdiskWin {
+  private child: ChildProcess | null = null;
+  private srv: (Server & { conns: Set<Socket>; watchers: Set<Socket> }) | null = null;
+  private readonly token = createHash("sha256").update(String(Math.random()) + process.pid + Date.now()).digest("hex");
+  private readonly listedNow = new Map<string, true>();
+  private stopping = false;
+  private restarts = 0;
+  ready = false;
+  constructor(
+    readonly opts: {
+      helper: string;
+      mountpoint: string;
+      /** Pipe name (\\.\pipe\…). */
+      socket: string;
+      cache: FragDiskCache;
+      core: VdiskCore;
+      icon: string;
+      version: string;
+      log?: (m: string) => void;
+      onState?: (s: string) => void;
+    },
+  ) {}
+
+  static unavailable(helper: string): string | null {
+    if (process.platform !== "win32") return "not windows";
+    // Cloud Files: Windows 10 1809 (build 17763) and later.
+    const build = Number(/\d+\.\d+\.(\d+)/.exec(osRelease())?.[1] ?? 0);
+    if (build && build < 17763) return "Windows 10 1809 or later needed";
+    if (!existsSync(helper)) return "no helper";
+    return null;
+  }
+
+  /** After a sync: the helper compares the folders Explorer opened with the account. */
+  invalidate(_ids: string[] | "all") {
+    const body = Buffer.from(JSON.stringify({ names: [], inval: "all" }));
+    const h = Buffer.alloc(4);
+    h.writeUInt32LE(body.length);
+    for (const w of this.srv?.watchers ?? []) w.write(Buffer.concat([h, body]));
+  }
+
+  mounted(): boolean {
+    return this.ready && this.child !== null;
+  }
+
+  async start(): Promise<void> {
+    this.stopping = false;
+    const core = this.opts.core;
+    this.srv = serveVdisk(core, this.opts.socket, this.opts.cache, { token: this.token, listed: (id) => void this.listedNow.set(id, true) });
+    await new Promise<void>((r, j) => (this.srv!.once("listening", () => r()), this.srv!.once("error", j)));
+    const child = spawn(this.opts.helper, ["serve", this.opts.mountpoint, this.opts.socket, this.opts.icon, this.opts.version], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, DDN_CF_TOKEN: this.token },
+      windowsHide: true,
+    });
+    this.child = child;
+    child.stderr?.on("data", (d) => this.opts.log?.(`vdisk: ${String(d).trim()}`));
+    const up = new Promise<void>((ok, fail) => {
+      let out = "";
+      child.stdout?.on("data", (d) => {
+        out += String(d);
+        if (out.includes("ready")) ok();
+      });
+      child.once("exit", (code) => fail(new Error(code === 4 ? "Windows refused the sync root (Cloud Files)" : `the disk helper exited (${code})`)));
+      setTimeout(() => fail(new Error("the disk did not start")), 30_000).unref?.();
+    });
+    child.on("exit", (code, sig) => {
+      if (this.child !== child) return;
+      this.child = null;
+      this.ready = false;
+      this.opts.log?.(`vdisk: helper exited ${code ?? sig}`);
+      if (this.stopping) return;
+      if (code === 4 || this.restarts >= 5) return this.opts.onState?.(`error: the disk stopped (helper exited ${code ?? sig})`);
+      this.restarts++;
+      this.opts.onState?.("restarting");
+      setTimeout(() => {
+        if (this.stopping) return;
+        void (async () => {
+          await new Promise<void>((r) => (this.srv ? this.srv.close(() => r()) : r()));
+          this.srv = null;
+          await this.start();
+        })().then(
+          () => this.opts.onState?.("mounted"),
+          (e) => this.opts.onState?.(`error: ${String((e as Error)?.message ?? e)}`),
+        );
+      }, 500);
+    });
+    await up;
+    this.ready = true;
+  }
+
+  async stop(): Promise<void> {
+    this.stopping = true;
+    this.ready = false;
+    // The helper disconnects the sync root when its pipe closes (the placeholders stay for the next start).
+    for (const c of this.srv?.conns ?? []) c.destroy();
+    await new Promise<void>((r) => (this.srv ? this.srv.close(() => r()) : r()));
+    this.srv = null;
+    const c = this.child;
+    this.child = null;
+    if (c && c.exitCode === null) await new Promise<void>((r) => (c.once("exit", () => r()), setTimeout(() => (c.kill(), r()), 3000).unref?.()));
+  }
+
+  /** Option off / uninstall: the sync root and its placeholders taken down (files the user put there stay). */
+  unregister(): void {
+    if (existsSync(this.opts.helper)) spawnSync(this.opts.helper, ["unregister", this.opts.mountpoint], { stdio: "ignore", windowsHide: true, timeout: 60_000 });
+  }
+
+  /** Tests: the agent "dies" (its pipe closes), the helper notices and ends. */
+  dropAgentForTest() {
+    this.stopping = true;
+    for (const c of this.srv?.conns ?? []) c.destroy();
+    this.srv?.close();
+    this.srv = null;
   }
 }

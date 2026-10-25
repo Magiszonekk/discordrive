@@ -81,6 +81,14 @@ jobs:
           cargo build --release --manifest-path apps/desktop/native/fuse/Cargo.toml
           ls -l apps/desktop/native/fuse/target/release/ddn-fuse
 
+      # The disk in the system (Windows): the Cloud Files helper in Rust.
+      - name: "Windows: build the disk helper (ddn-cf)"
+        if: runner.os == 'Windows'
+        timeout-minutes: 12
+        run: |
+          cargo build --release --manifest-path apps/desktop/native/cf/Cargo.toml
+          ls -l apps/desktop/native/cf/target/release/ddn-cf.exe
+
       - name: Typecheck
         run: npm run typecheck -w @ddv4/desktop
 
