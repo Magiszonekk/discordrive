@@ -243,7 +243,11 @@ try {
   // listing without fragments, a delete refused, off = the folder gone. (Windows only.)
   if (process.platform === "win32") {
     const root = join(process.env.USERPROFILE ?? "", "discordrive");
-    const ps = (cmd: string, timeout = 120_000) => execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", cmd], { encoding: "utf8", timeout }).trim();
+    // Asynchronously: the fake Discord the app downloads from runs on this script's event loop; a synchronous
+    // child would freeze it (the disk's reads then time out).
+    const { promisify } = await import("node:util");
+    const { execFile } = await import("node:child_process");
+    const ps = async (cmd: string, timeout = 120_000) => (await promisify(execFile)("powershell", ["-NoProfile", "-NonInteractive", "-Command", cmd], { encoding: "utf8", timeout })).stdout.trim();
     const explorerShot = async (name: string, path: string) => {
       try {
         spawn("explorer.exe", [path], { detached: true, stdio: "ignore" }).unref();
@@ -252,7 +256,7 @@ try {
       desktopShot(name);
       try {
         // Close the Explorer windows this step opened (not the shell).
-        ps(`(New-Object -ComObject Shell.Application).Windows() | ForEach-Object { $_.Quit() }`, 20_000);
+        await ps(`(New-Object -ComObject Shell.Application).Windows() | ForEach-Object { $_.Quit() }`, 20_000);
       } catch {}
     };
     await step(p, "V1-disk-on", "Settings → App → Disk in the system on: mounted, the state shown", async () => {
@@ -268,7 +272,7 @@ try {
     });
     await step(p, "V2-explorer", "Explorer on %USERPROFILE%\\discordrive: the folder in the navigation pane, the files with their state icons; no fragment fetched by listing", async () => {
       const g0 = fake.cdnGets;
-      const names = ps(`Get-ChildItem -LiteralPath '${root}' -Recurse | ForEach-Object { $_.Name }`).split(/\r?\n/).filter(Boolean);
+      const names = (await ps(`Get-ChildItem -LiteralPath '${root}' -Recurse | ForEach-Object { $_.Name }`)).split(/\r?\n/).filter(Boolean);
       await explorerShot("V2-explorer-root", root);
       const fetched = fake.cdnGets - g0;
       return { ok: names.includes(`qa-${MB}mb.bin`) && fetched === 0, note: `${names.length} entries (${names.slice(0, 6).join(", ")}); CDN requests while listing and opening the folder: ${fetched}` };
@@ -279,7 +283,7 @@ try {
       let h = "";
       let err = "";
       try {
-        h = ps(`$ErrorActionPreference='Stop'; try { (Get-FileHash -Algorithm SHA256 -LiteralPath '${f}').Hash } catch { Write-Output ("ERR " + $_.Exception.Message) }`, 600_000);
+        h = await ps(`$ErrorActionPreference='Stop'; try { (Get-FileHash -Algorithm SHA256 -LiteralPath '${f}').Hash } catch { Write-Output ("ERR " + $_.Exception.Message) }`, 600_000);
       } catch (e) {
         err = String((e as { stderr?: string }).stderr ?? (e as Error).message).slice(0, 300);
       }
@@ -292,7 +296,7 @@ try {
     await step(p, "V4-delete-refused", "Remove-Item on a file of the disk: refused (read only), the file stays", async () => {
       let msg = "";
       try {
-        ps(`Remove-Item -LiteralPath '${join(root, `qa-${MB}mb.bin`)}' -ErrorAction Stop`);
+        await ps(`Remove-Item -LiteralPath '${join(root, `qa-${MB}mb.bin`)}' -ErrorAction Stop`);
         msg = "removed (not refused)";
       } catch (e) {
         msg = String((e as { stderr?: string }).stderr ?? (e as Error).message).split(/\r?\n/).find((l) => l.trim()) ?? "refused";
