@@ -25,10 +25,14 @@ static OBJECTS: AtomicU32 = AtomicU32::new(0);
 
 /// DDN_CF_THUMB_LOG=<file>: each step appended there (tests; the user's own machine otherwise logs nothing).
 fn log(m: &str) {
-    if let Ok(f) = std::env::var("DDN_CF_THUMB_LOG") {
-        if let Ok(mut h) = std::fs::OpenOptions::new().create(true).append(true).open(f) {
-            let _ = writeln!(h, "{m}");
-        }
+    let Ok(base) = std::env::var("LOCALAPPDATA") else { return };
+    let f = format!("{base}\\discordrive\\cf-thumb.log");
+    // Only when the log exists already (tests create it): nothing is written on a user's machine.
+    if !std::path::Path::new(&f).exists() {
+        return;
+    }
+    if let Ok(mut h) = std::fs::OpenOptions::new().append(true).open(f) {
+        let _ = writeln!(h, "[{}] {m}", std::process::id());
     }
 }
 
@@ -171,7 +175,10 @@ pub extern "system" fn DllCanUnloadNow() -> HRESULT {
 }
 
 #[no_mangle]
-pub extern "system" fn DllMain(_h: HINSTANCE, _reason: u32, _r: *mut c_void) -> windows_core::BOOL {
+pub extern "system" fn DllMain(_h: HINSTANCE, reason: u32, _r: *mut c_void) -> windows_core::BOOL {
+    if reason == 1 {
+        log(&format!("loaded into {}", std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default()));
+    }
     true.into()
 }
 
