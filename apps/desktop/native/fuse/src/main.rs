@@ -10,7 +10,7 @@
 // failure. Requests: {"op":"list","id"}, {"op":"stat","id"}, {"op":"read","id","off","len"},
 // {"op":"statfs"}. The root's id is "root". This first version is read-only.
 
-use fuser::{FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, ReplyOpen, ReplyStatfs, Request};
+use fuser::{FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, Request, TimeOrNow};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -78,6 +78,11 @@ impl Agent {
                 "ENOTDIR" => libc::ENOTDIR,
                 "EACCES" => libc::EACCES,
                 "EAGAIN" => libc::EAGAIN,
+                "EEXIST" => libc::EEXIST,
+                "EINVAL" => libc::EINVAL,
+                "EISDIR" => libc::EISDIR,
+                "ENOTEMPTY" => libc::ENOTEMPTY,
+                "ENOSPC" => libc::ENOSPC,
                 _ => libc::EIO,
             });
         }
@@ -99,9 +104,86 @@ struct Fs {
     stale_after: std::sync::Arc<std::sync::Mutex<Instant>>,
     /// What each inode was when last seen (getattr between listings).
     attrs: HashMap<u64, Entry>,
+    /// The folder each inode was listed in (where a written file goes back to).
+    parents: HashMap<u64, u64>,
+    /// truncate(2) by path before an open (how the kernel sends O_TRUNC): the size the next open starts at.
+    truncated: HashMap<u64, u64>,
+    /// Files being written: handle → the local copy (in the agent's outbox), where it goes, whether written.
+    open_w: HashMap<u64, Writing>,
+    next_fh: u64,
+    /// The outbox directory (local copies of files written into the disk until they are uploaded).
+    outbox: Option<std::path::PathBuf>,
+}
+
+struct Writing {
+    file: std::fs::File,
+    path: std::path::PathBuf,
+    ino: u64,
+    parent: u64,
+    name: String,
+    dirty: bool,
 }
 
 impl Fs {
+    /// A local copy for a file opened for writing: empty (new file, O_TRUNC) or the current content.
+    fn start_write(&mut self, ino: u64, parent: u64, name: &str, from: Option<&str>, size: u64) -> Result<u64, i32> {
+        let dir = self.outbox.clone().ok_or(libc::EROFS)?;
+        let fh = self.next_fh;
+        self.next_fh += 1;
+        let path = dir.join(format!("w-{}-{fh}", std::process::id()));
+        let mut f = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&path).map_err(|_| libc::EIO)?;
+        if let Some(id) = from {
+            // The current content first (an editor writing a part of the file keeps the rest).
+            let mut off = 0u64;
+            while off < size {
+                let len = (size - off).min(8 << 20);
+                let (_, d) = self.agent.call(json!({ "op": "read", "id": id, "off": off, "len": len }))?;
+                if d.is_empty() {
+                    break;
+                }
+                f.write_all(&d).map_err(|_| libc::EIO)?;
+                off += d.len() as u64;
+            }
+        }
+        self.open_w.insert(fh, Writing { file: f, path, ino, parent, name: name.to_string(), dirty: from.is_none() });
+        Ok(fh)
+    }
+
+    /// Upload a written file's local copy (when it changed since the last upload); the copy is kept until
+    /// the handle is released (a program may write again after a flush).
+    fn upload(&mut self, fh: u64) -> Result<(), i32> {
+        let Some(w) = self.open_w.get_mut(&fh) else { return Ok(()) };
+        if !w.dirty {
+            return Ok(());
+        }
+        let _ = w.file.sync_all();
+        let (path, parent, name, ino) = (w.path.clone(), w.parent, w.name.clone(), w.ino);
+        // The agent removes the copy it uploaded: hand it a hard link (this one stays for later writes).
+        let sent = path.with_extension("up");
+        std::fs::hard_link(&path, &sent).map_err(|_| libc::EIO)?;
+        let dir = self.id(parent).ok_or(libc::ENOENT)?;
+        let r = self.agent.call(json!({ "op": "upload", "dir": dir, "name": name, "path": sent.to_string_lossy() }));
+        let _ = std::fs::remove_file(&sent);
+        let (v, _) = r?;
+        if let Some(w) = self.open_w.get_mut(&fh) {
+            w.dirty = false;
+        }
+        // The node the upload made (or the existing one with a new version) for this inode.
+        if let Some(id) = v.get("id").and_then(|x| x.as_str()) {
+            self.ids.insert(ino, id.to_string());
+            self.inos.lock().unwrap().insert(id.to_string(), ino);
+            if let Some(e) = self.attrs.get_mut(&ino) {
+                e.id = id.to_string();
+            }
+        }
+        self.forget_lists();
+        Ok(())
+    }
+
+    fn forget_lists(&mut self) {
+        self.lists.clear();
+    }
+
     fn ino(&mut self, id: &str) -> u64 {
         if id == "root" {
             return ROOT;
@@ -137,7 +219,12 @@ impl Fs {
             ctime: t,
             crtime: t,
             kind: if dir { FileType::Directory } else { FileType::RegularFile },
-            perm: if dir { 0o555 } else { 0o444 },
+            perm: match (dir, self.outbox.is_some()) {
+                (true, true) => 0o755,
+                (true, false) => 0o555,
+                (false, true) => 0o644,
+                (false, false) => 0o444,
+            },
             nlink: if dir { 2 } else { 1 },
             uid: self.uid,
             gid: self.gid,
@@ -163,6 +250,7 @@ impl Fs {
         for e in &l {
             let i = self.ino(&e.id);
             self.attrs.insert(i, e.clone());
+            self.parents.insert(i, ino);
         }
         self.lists.insert(ino, (Instant::now(), l.clone()));
         Ok(l)
@@ -212,7 +300,16 @@ impl Filesystem for Fs {
 
     fn open(&mut self, r: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
         if flags & libc::O_ACCMODE != libc::O_RDONLY {
-            return reply.error(libc::EROFS);
+            if self.outbox.is_none() {
+                return reply.error(libc::EROFS);
+            }
+            let Some(e) = self.attrs.get(&ino).cloned() else { return reply.error(libc::ENOENT) };
+            let parent = self.parents.get(&ino).copied().unwrap_or(ROOT);
+            let size = if flags & libc::O_TRUNC != 0 { 0 } else { self.truncated.remove(&ino).unwrap_or(e.size).min(e.size) };
+            return match self.start_write(ino, parent, &e.name, if size == 0 { None } else { Some(&e.id) }, size) {
+                Ok(fh) => reply.opened(fh, fuser::consts::FOPEN_DIRECT_IO),
+                Err(err) => reply.error(err),
+            };
         }
         // The desktop's thumbnailers would download whole files to make what the agent already wrote from
         // the stored previews (or marked as "none"): refused, so a folder opened in the file manager costs
@@ -227,7 +324,14 @@ impl Filesystem for Fs {
         reply.opened(0, fuser::consts::FOPEN_KEEP_CACHE)
     }
 
-    fn read(&mut self, _r: &Request, ino: u64, _fh: u64, offset: i64, size: u32, _f: i32, _l: Option<u64>, reply: ReplyData) {
+    fn read(&mut self, _r: &Request, ino: u64, fh: u64, offset: i64, size: u32, _f: i32, _l: Option<u64>, reply: ReplyData) {
+        // A file being written reads its local copy.
+        if let Some(w) = self.open_w.get_mut(&fh) {
+            use std::io::{Seek, SeekFrom};
+            let mut b = vec![0u8; size as usize];
+            let n = w.file.seek(SeekFrom::Start(offset.max(0) as u64)).and_then(|_| w.file.read(&mut b)).unwrap_or(0);
+            return reply.data(&b[..n]);
+        }
         let Some(id) = self.id(ino) else { return reply.error(libc::ENOENT) };
         let total = self.attrs.get(&ino).map(|e| e.size).unwrap_or(u64::MAX);
         let off = offset.max(0) as u64;
@@ -259,6 +363,140 @@ impl Filesystem for Fs {
         reply.ok()
     }
 
+    fn create(&mut self, _r: &Request, parent: u64, name: &OsStr, _mode: u32, _umask: u32, _flags: i32, reply: ReplyCreate) {
+        let Some(n) = name.to_str().map(str::to_string) else { return reply.error(libc::EINVAL) };
+        // A placeholder entry until the upload ends (the agent gives the node ID then).
+        let ino = self.next;
+        self.next += 1;
+        match self.start_write(ino, parent, &n, None, 0) {
+            Ok(fh) => {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+                let e = Entry { id: format!("new:{fh}"), name: n, kind: "file".into(), size: 0, mtime: now };
+                self.ids.insert(ino, e.id.clone());
+                self.attrs.insert(ino, e.clone());
+                self.parents.insert(ino, parent);
+                let mut a = self.attr(ino, &e);
+                a.perm = 0o644;
+                reply.created(&TTL, &a, 0, fh, fuser::consts::FOPEN_DIRECT_IO)
+            }
+            Err(e) => reply.error(e),
+        }
+    }
+
+    fn write(&mut self, _r: &Request, ino: u64, fh: u64, offset: i64, data: &[u8], _wf: u32, _f: i32, _l: Option<u64>, reply: ReplyWrite) {
+        use std::io::{Seek, SeekFrom};
+        let Some(w) = self.open_w.get_mut(&fh) else { return reply.error(libc::EBADF) };
+        if w.file.seek(SeekFrom::Start(offset.max(0) as u64)).and_then(|_| w.file.write_all(data)).is_err() {
+            return reply.error(libc::ENOSPC);
+        }
+        w.dirty = true;
+        let len = w.file.metadata().map(|m| m.len()).unwrap_or(0);
+        if let Some(e) = self.attrs.get_mut(&ino) {
+            e.size = len;
+        }
+        reply.written(data.len() as u32)
+    }
+
+    fn setattr(&mut self, _r: &Request, ino: u64, _mode: Option<u32>, _uid: Option<u32>, _gid: Option<u32>, size: Option<u64>, _a: Option<TimeOrNow>, _m: Option<TimeOrNow>, _c: Option<SystemTime>, fh: Option<u64>, _cr: Option<SystemTime>, _ch: Option<SystemTime>, _bk: Option<SystemTime>, _fl: Option<u32>, reply: ReplyAttr) {
+        // truncate(2) on an open file (an editor saving): its local copy.
+        // (The kernel may send it without the handle: the open copy of that inode then.)
+        let h = fh.filter(|h| self.open_w.contains_key(h)).or_else(|| self.open_w.iter().find(|(_, w)| w.ino == ino).map(|(h, _)| *h));
+        if let (Some(sz), Some(w)) = (size, h.and_then(|h| self.open_w.get_mut(&h))) {
+            if w.file.set_len(sz).is_err() {
+                return reply.error(libc::EIO);
+            }
+            w.dirty = true;
+            if let Some(e) = self.attrs.get_mut(&ino) {
+                e.size = sz;
+            }
+        } else if let Some(sz) = size {
+            if self.outbox.is_none() {
+                return reply.error(libc::EROFS);
+            }
+            self.truncated.insert(ino, sz);
+            if let Some(e) = self.attrs.get_mut(&ino) {
+                e.size = e.size.min(sz);
+            }
+        }
+        // Times and modes are not kept (the disk shows when the content was made); answer what it is.
+        match self.attrs.get(&ino).cloned() {
+            Some(e) => {
+                let a = self.attr(ino, &e);
+                reply.attr(&TTL, &a)
+            }
+            None if ino == ROOT => {
+                let a = self.attr(ROOT, &Fs::root_entry());
+                reply.attr(&TTL, &a)
+            }
+            None => reply.error(libc::ENOENT),
+        }
+    }
+
+    /// close(2) of a written file: the agent uploads its local copy now (a new file, or a new version), so
+    /// `cp` ends when the file is in the account and a failure is the close's error. (release comes after
+    /// close returned: too late for either.)
+    fn flush(&mut self, _r: &Request, _ino: u64, fh: u64, _lo: u64, reply: ReplyEmpty) {
+        match self.upload(fh) {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(e),
+        }
+    }
+
+    fn release(&mut self, _r: &Request, _ino: u64, fh: u64, _f: i32, _lo: Option<u64>, _fl: bool, reply: ReplyEmpty) {
+        let _ = self.upload(fh);
+        if let Some(w) = self.open_w.remove(&fh) {
+            let _ = std::fs::remove_file(&w.path);
+        }
+        reply.ok()
+    }
+
+    fn mkdir(&mut self, _r: &Request, parent: u64, name: &OsStr, _mode: u32, _umask: u32, reply: ReplyEntry) {
+        if self.outbox.is_none() {
+            return reply.error(libc::EROFS);
+        }
+        let Some(dir) = self.id(parent) else { return reply.error(libc::ENOENT) };
+        // Names that are not UTF-8 are refused (the account's names are Unicode; a lossy one would differ).
+        let Some(n) = name.to_str().map(str::to_string) else { return reply.error(libc::EINVAL) };
+        match self.agent.call(json!({ "op": "mkdir", "dir": dir, "name": n })) {
+            Ok((v, _)) => {
+                let id = v.get("id").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+                let e = Entry { id: id.clone(), name: n, kind: "folder".into(), size: 0, mtime: now };
+                let i = self.ino(&id);
+                self.attrs.insert(i, e.clone());
+                self.forget_lists();
+                let a = self.attr(i, &e);
+                reply.entry(&TTL, &a, 0)
+            }
+            Err(e) => reply.error(e),
+        }
+    }
+
+    fn unlink(&mut self, _r: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        self.remove(parent, name, false, reply)
+    }
+
+    fn rmdir(&mut self, _r: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        self.remove(parent, name, true, reply)
+    }
+
+    fn rename(&mut self, _r: &Request, parent: u64, name: &OsStr, newparent: u64, newname: &OsStr, _flags: u32, reply: ReplyEmpty) {
+        if self.outbox.is_none() {
+            return reply.error(libc::EROFS);
+        }
+        let (Some(dir), Some(to)) = (self.id(parent), self.id(newparent)) else { return reply.error(libc::ENOENT) };
+        if newname.to_str().is_none() {
+            return reply.error(libc::EINVAL);
+        }
+        match self.agent.call(json!({ "op": "rename", "dir": dir, "name": name.to_string_lossy(), "toDir": to, "toName": newname.to_string_lossy() })) {
+            Ok(_) => {
+                self.forget_lists();
+                reply.ok()
+            }
+            Err(e) => reply.error(e),
+        }
+    }
+
     fn statfs(&mut self, _r: &Request, _ino: u64, reply: ReplyStatfs) {
         // Free = what the agent's cache may still take (a file manager shows something sensible).
         let (blocks, free) = match self.agent.call(json!({ "op": "statfs" })) {
@@ -266,6 +504,22 @@ impl Filesystem for Fs {
             Err(_) => (0, 0),
         };
         reply.statfs(blocks, free, free, 0, 0, 4096, 255, 4096)
+    }
+}
+
+impl Fs {
+    fn remove(&mut self, parent: u64, name: &OsStr, folder: bool, reply: ReplyEmpty) {
+        if self.outbox.is_none() {
+            return reply.error(libc::EROFS);
+        }
+        let Some(dir) = self.id(parent) else { return reply.error(libc::ENOENT) };
+        match self.agent.call(json!({ "op": "remove", "dir": dir, "name": name.to_string_lossy(), "folder": folder })) {
+            Ok(_) => {
+                self.forget_lists();
+                reply.ok()
+            }
+            Err(e) => reply.error(e),
+        }
     }
 }
 
@@ -405,8 +659,18 @@ fn main() {
         lists: HashMap::new(),
         stale_after: stale_after.clone(),
         attrs: HashMap::new(),
+        open_w: HashMap::new(),
+        parents: HashMap::new(),
+        truncated: HashMap::new(),
+        next_fh: 1,
+        // Writable when the agent gives an outbox (DDN_FUSE_OUTBOX); read-only otherwise.
+        outbox: std::env::var_os("DDN_FUSE_OUTBOX").map(std::path::PathBuf::from).filter(|p| p.is_dir()),
     };
-    let opts = [MountOption::RO, MountOption::FSName("discordrive".into()), MountOption::Subtype(std::env::var("DDN_FUSE_SUBTYPE").unwrap_or_else(|_| "discordrive".into())), MountOption::DefaultPermissions, MountOption::NoExec, MountOption::NoAtime];
+    let writable = std::env::var_os("DDN_FUSE_OUTBOX").is_some();
+    let mut opts = vec![MountOption::FSName("discordrive".into()), MountOption::Subtype(std::env::var("DDN_FUSE_SUBTYPE").unwrap_or_else(|_| "discordrive".into())), MountOption::DefaultPermissions, MountOption::NoExec, MountOption::NoAtime];
+    if !writable {
+        opts.push(MountOption::RO);
+    }
     let mut session = match fuser::Session::new(fs, &a[1], &opts) {
         Ok(s) => s,
         Err(e) => {

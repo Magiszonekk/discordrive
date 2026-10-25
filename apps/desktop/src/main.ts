@@ -136,6 +136,8 @@ function vdiskInit(): Partial<AgentInit> {
       socket: join(process.env.XDG_RUNTIME_DIR || join(DATA(), "run"), "discordrive", "fuse.sock"),
       cacheDir: join(process.env.XDG_CACHE_HOME || join(app.getPath("home"), ".cache"), "discordrive", "frags"),
       cacheBytes: settings.vdiskCacheBytes ?? 10 * 1024 ** 3,
+      // Files written into the disk wait for their upload here (kept across restarts).
+      ...(settings.vdiskWrite === true ? { outbox: join(DATA(), "vdisk-outbox") } : {}),
     },
   };
 }
@@ -500,11 +502,15 @@ function wireUpdates() {
   // Settings → Desktop app: update checks, autostart, downloads folder (a folder picked in the system dialog).
   ipcMain.handle("ddn:app-settings", (e, patch: unknown) => {
     fromApp(e);
-    const p = (patch && typeof patch === "object" ? patch : {}) as { checkUpdates?: unknown; autostart?: unknown; downloadsDir?: unknown; keyring?: unknown; vdisk?: unknown; vdiskCacheGb?: unknown };
+    const p = (patch && typeof patch === "object" ? patch : {}) as { checkUpdates?: unknown; autostart?: unknown; downloadsDir?: unknown; keyring?: unknown; vdisk?: unknown; vdiskCacheGb?: unknown; vdiskWrite?: unknown };
     if (process.platform === "linux" && typeof p.vdisk === "boolean" && p.vdisk !== (settings.vdisk === true)) {
       settings.vdisk = p.vdisk;
       vdiskState = p.vdisk ? "mounting" : "off";
       agent?.postMessage({ type: "vdisk", ...vdiskInit().vdisk! });
+    }
+    if (process.platform === "linux" && typeof p.vdiskWrite === "boolean" && p.vdiskWrite !== (settings.vdiskWrite === true)) {
+      settings.vdiskWrite = p.vdiskWrite;
+      if (settings.vdisk === true) agent?.postMessage({ type: "vdisk", ...vdiskInit().vdisk! });
     }
     if (process.platform === "linux" && typeof p.vdiskCacheGb === "number" && Number.isFinite(p.vdiskCacheGb) && p.vdiskCacheGb >= 1 && p.vdiskCacheGb <= 10_000) {
       settings.vdiskCacheBytes = Math.round(p.vdiskCacheGb) * 1024 ** 3;
@@ -530,7 +536,7 @@ function wireUpdates() {
       keyring: settings.keyring,
       platform: process.platform,
       ...(process.platform === "linux"
-        ? { vdisk: { on: settings.vdisk === true, cacheGb: Math.round((settings.vdiskCacheBytes ?? 10 * 1024 ** 3) / 1024 ** 3), mountpoint: VDISK_DIR(), unavailable: Vdisk.unavailable(VDISK_HELPER()), state: vdiskState } }
+        ? { vdisk: { on: settings.vdisk === true, write: settings.vdiskWrite === true, cacheGb: Math.round((settings.vdiskCacheBytes ?? 10 * 1024 ** 3) / 1024 ** 3), mountpoint: VDISK_DIR(), unavailable: Vdisk.unavailable(VDISK_HELPER()), state: vdiskState } }
         : {}),
     };
   });

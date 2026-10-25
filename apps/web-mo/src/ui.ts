@@ -60,13 +60,13 @@ interface DesktopBridge {
   updates: {
     check(): Promise<{ current: { version: string; build: string; commit: string | null }; available: { build: string; commit: string; publishedAt: string; htmlUrl: string } | null; kind: string }>;
     download(): Promise<{ path: string; hint: string; busy: boolean; inPlace?: boolean; command?: string }>;
-    settings(patch?: { checkUpdates?: boolean; autostart?: boolean; downloadsDir?: string; keyring?: "ask" | "file"; vdisk?: boolean; vdiskCacheGb?: number }): Promise<{
+    settings(patch?: { checkUpdates?: boolean; autostart?: boolean; downloadsDir?: string; keyring?: "ask" | "file"; vdisk?: boolean; vdiskCacheGb?: number; vdiskWrite?: boolean }): Promise<{
       checkUpdates: boolean;
       autostart: boolean;
       downloadsDir: string;
       keyring?: "ask" | "file";
       platform?: string;
-      vdisk?: { on: boolean; cacheGb: number; mountpoint: string; unavailable: string | null; state: string };
+      vdisk?: { on: boolean; write?: boolean; cacheGb: number; mountpoint: string; unavailable: string | null; state: string };
     }>;
     open(path: string): void;
     onProgress?(cb: (p: { done: number; total: number }) => void): void;
@@ -2758,11 +2758,13 @@ async function renderDesktopApp() {
   const vd = st.vdisk;
   $("app-vdisk-row").hidden = !vd;
   $("app-vdisk-cache-row").hidden = !vd;
+  $("app-vdisk-write-row").hidden = !vd || !vd.on || !!vd.unavailable;
   if (vd) {
     const sw = $<HTMLInputElement>("app-vdisk");
     sw.checked = vd.on;
     sw.disabled = !!vd.unavailable;
     $<HTMLInputElement>("app-vdisk-cache").value = String(vd.cacheGb);
+    $<HTMLInputElement>("app-vdisk-write").checked = vd.write === true;
     const stateText = vd.state === "mounted" ? t("app.vdisk.mounted", { dir: vd.mountpoint }) : vd.state === "mounting" || vd.state === "restarting" || vd.state === "off" ? t("app.vdisk.mounting") : t("app.vdisk.failed", { why: vdiskWhy(vd.state.replace(/^error: /, "")) });
     $("app-vdisk-hint").textContent = vd.unavailable ? t("app.vdisk.unavailable", { why: vd.unavailable }) : vd.on ? stateText : t("app.vdisk.off");
     // Mounting takes a moment: the state again shortly (until it is mounted or failed).
@@ -2823,6 +2825,7 @@ function wireDesktopApp() {
     });
   $<HTMLInputElement>("app-check-updates").onchange = (e) => void d.updates.settings({ checkUpdates: (e.currentTarget as HTMLInputElement).checked });
   $<HTMLInputElement>("app-autostart").onchange = (e) => void d.updates.settings({ autostart: (e.currentTarget as HTMLInputElement).checked });
+  $<HTMLInputElement>("app-vdisk-write").onchange = (e) => void d.updates.settings({ vdiskWrite: (e.currentTarget as HTMLInputElement).checked }).then(() => renderDesktopApp());
   $<HTMLInputElement>("app-vdisk").onchange = (e) => void d.updates.settings({ vdisk: (e.currentTarget as HTMLInputElement).checked }).then(() => renderDesktopApp());
   $<HTMLInputElement>("app-vdisk-cache").onchange = (e) => {
     const gb = Math.max(1, Math.min(10_000, Math.round(Number((e.currentTarget as HTMLInputElement).value) || 10)));

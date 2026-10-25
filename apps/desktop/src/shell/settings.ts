@@ -33,6 +33,8 @@ export interface DesktopSettings {
   vdisk?: boolean;
   /** The disk's cache of file pieces on this computer, bytes (default 10 GB). */
   vdiskCacheBytes?: number;
+  /** The disk in the system is writable (files copied in are uploaded); off by default. */
+  vdiskWrite?: boolean;
 }
 
 export const DEFAULTS: DesktopSettings = { v: 1, servers: [], active: -1, autostart: true, downloadsDir: null, checkUpdates: true, localTermsAt: null, keyring: "ask" };

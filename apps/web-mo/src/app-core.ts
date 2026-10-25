@@ -1736,6 +1736,86 @@ export class AppCore {
     if (id === "root" && n) return { ...this.vdiskEntry(n as never), id: "root" };
     return n && !n.trashed ? this.vdiskEntry(n as never) : null;
   }
+  // ── writing through the disk ──
+
+  private vdiskFolder(id: string): string {
+    const n = this.c().store.getNode(id === "root" ? ROOT_ID : id);
+    if (!n || n.kind !== "folder" || n.trashed) throw new Error("ENOENT: no such folder");
+    return n.id;
+  }
+  private vdiskChild(dir: string, name: string) {
+    const tree = this.c().store;
+    for (const id of tree.childIds(dir)) {
+      const n = tree.getNode(id);
+      if (n && !n.trashed && n.name === name) return n;
+    }
+    return null;
+  }
+  private vdiskName(name: string): string {
+    const nfc = normalizeName(name);
+    if (validateName(nfc)) throw new Error("EINVAL: name not allowed");
+    return nfc;
+  }
+  /**
+   * A file written into the disk (closed): uploaded from its local copy into `dirId` as `name`; an existing
+   * file of that name gets a new version (on the version this device saw: a concurrent change elsewhere
+   * becomes a conflict copy). The copy is read from `path` and left there (the caller removes it).
+   */
+  async vdiskUpload(path: string, dirId: string, name: string): Promise<{ id: string }> {
+    const dir = this.vdiskFolder(dirId);
+    const nfc = this.vdiskName(name);
+    const was = this.vdiskChild(dir, nfc);
+    if (was && was.kind !== "file") throw new Error("EISDIR: a folder of that name");
+    const src = await this.disk().openSource(path);
+    try {
+      const r = await this.c().upload(src, nfc, dir, {
+        takenAt: src.mtimeMs || undefined,
+        ...(was ? { replace: { nodeId: was.id, baseVersionId: was.content?.versionId ?? null } } : {}),
+      });
+      this.version++;
+      void this.snapshotSoon();
+      return { id: r.nodeId };
+    } finally {
+      await src.close();
+    }
+  }
+  vdiskCheckName(dirId: string, name: string): void {
+    const dir = this.vdiskFolder(dirId);
+    const was = this.vdiskChild(dir, this.vdiskName(name));
+    if (was && was.kind !== "file") throw new Error("EISDIR: a folder of that name");
+  }
+  async vdiskMkdir(dirId: string, name: string): Promise<{ id: string }> {
+    const dir = this.vdiskFolder(dirId);
+    const nfc = this.vdiskName(name);
+    if (this.vdiskChild(dir, nfc)) throw new Error("EEXIST: name taken");
+    return { id: await this.mkdir(nfc, dir) };
+  }
+  /** Rename and / or move (mv in the file manager); a node of that name at the target is trashed first. */
+  async vdiskRename(dirId: string, name: string, toDirId: string, toName: string): Promise<void> {
+    const dir = this.vdiskFolder(dirId);
+    const to = this.vdiskFolder(toDirId);
+    const n = this.vdiskChild(dir, normalizeName(name));
+    if (!n) throw new Error("ENOENT: no such file");
+    const nfc = this.vdiskName(toName);
+    const there = this.vdiskChild(to, nfc);
+    if (there && there.id !== n.id) {
+      if (there.kind === "folder" && [...this.c().store.childIds(there.id)].some((c) => !this.c().store.getNode(c)?.trashed)) throw new Error("ENOTEMPTY: folder not empty");
+      await this.trash([there.id]);
+    }
+    if (to !== n.parentId) await this.move([n.id], to);
+    if (nfc !== n.name) await this.rename(n.id, nfc);
+  }
+  /** rm / rmdir: into the account's trash (30 days), never deleted for good from the disk. */
+  async vdiskRemove(dirId: string, name: string, folder: boolean): Promise<void> {
+    const dir = this.vdiskFolder(dirId);
+    const n = this.vdiskChild(dir, normalizeName(name));
+    if (!n) throw new Error("ENOENT: no such file");
+    if (folder && n.kind !== "folder") throw new Error("ENOTDIR: not a folder");
+    if (!folder && n.kind === "folder") throw new Error("EISDIR: a folder");
+    if (folder && [...this.c().store.childIds(n.id)].some((c) => !this.c().store.getNode(c)?.trashed)) throw new Error("ENOTEMPTY: folder not empty");
+    await this.trash([n.id]);
+  }
+
   /** The stored thumbnail / preview of a file for the disk's thumbnails (no download of the file). */
   async vdiskPreview(id: string, kind: "t" | "p"): Promise<{ data: Uint8Array; mime: string } | null> {
     const ref = this.c().store.getNode(id)?.content?.manifestRef;
@@ -1755,7 +1835,14 @@ export class AppCore {
     const n = this.c().store.getNode(id);
     if (!n || n.kind !== "file" || !n.content) throw new Error("not a file");
     if (len === 0 || off >= n.content.sizeBytes) return new Uint8Array(0);
-    const r = await this.c().readRange(id, off, Math.min(n.content.sizeBytes - 1, off + len - 1), cache);
+    const end = Math.min(n.content.sizeBytes - 1, off + len - 1);
+    // A file manager sniffing the type reads the first few KB: answered from the manifest when it carries
+    // them (no fragment downloaded).
+    if (end < 64 * 1024) {
+      const head = await this.c().headOf(n.content.manifestRef).catch(() => null);
+      if (head && head.byteLength > end) return head.slice(off, end + 1);
+    }
+    const r = await this.c().readRange(id, off, end, cache);
     return r.data;
   }
 

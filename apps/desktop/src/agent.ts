@@ -47,6 +47,8 @@ export interface VdiskConfig {
   socket: string;
   cacheDir: string;
   cacheBytes: number;
+  /** Writable (files copied in are uploaded): the queue of uploads lives here. Absent: read-only. */
+  outbox?: string;
 }
 
 // ── the disk in the system ──
@@ -67,13 +69,19 @@ function setVdisk(cfg: VdiskConfig | undefined) {
       new Vdisk({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: null as never, core: c as never }).cleanStale();
       return state("off");
     }
+    // Read-only ↔ writable: mounted again with the other mode.
+    if (disk && disk.mounted() && (disk.opts.outbox ?? null) !== (cfg.outbox ?? null)) {
+      await disk.outbox?.idle().catch(() => {});
+      await disk.stop().catch(() => {});
+      disk = null;
+    }
     if (disk && disk.mounted()) return state("mounted");
     const why = Vdisk.unavailable(cfg.helper);
     if (why) return state(`unavailable: ${why}`);
     // The account must be open (the tree from its index).
     for (let i = 0; i < 600 && !(await c.status()).signedIn; i++) await new Promise((r) => setTimeout(r, 500));
     diskCache ??= new FragDiskCache(cfg.cacheDir, cfg.cacheBytes);
-    disk = new Vdisk({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, log: (m) => console.error(m), onState: state });
+    disk = new Vdisk({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, outbox: cfg.outbox, log: (m) => console.error(m), onState: state });
     try {
       await disk.start();
       state("mounted");
