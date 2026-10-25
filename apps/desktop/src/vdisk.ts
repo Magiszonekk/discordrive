@@ -156,7 +156,7 @@ export class Outbox {
   private running: Promise<void> | null = null;
   private wake: (() => void) | null = null;
   /** After each upload (ok or not): the folder, the name, the pending id, an error. */
-  onDone: (dir: string, name: string, id: string, err: string | null) => void = () => {};
+  onDone: (dir: string, name: string, id: string, err: string | null, nodeId?: string) => void = () => {};
   constructor(
     readonly dir: string,
     private readonly core: VdiskCore,
@@ -172,6 +172,7 @@ export class Outbox {
       }
       try {
         const j = JSON.parse(readFileSync(join(dir, f), "utf8")) as { dir: string; name: string; mtime: number };
+        j.mtime = Math.floor(j.mtime);
         // An editor's temporary file of an earlier run: not kept.
         if (localOnlyName(j.name)) throw new Error("temporary");
         const st = statSync(join(dir, `q-${m[1]}`));
@@ -189,7 +190,8 @@ export class Outbox {
     writeFileSync(join(this.dir, `q-${n}.json`), JSON.stringify({ dir, name, mtime: st.mtimeMs }), { mode: 0o600 });
     // A newer copy of the same name replaces one not started yet (an editor saving often).
     for (const [k, it] of this.items) if (it.dir === dir && it.name === name && k !== this.current) this.drop(k);
-    this.items.set(n, { n, dir, name, size: st.size, mtime: Date.now() });
+    // The copy's own mtime (when it was written): the same the file shows once uploaded (its takenAt).
+    this.items.set(n, { n, dir, name, size: st.size, mtime: Math.floor(st.mtimeMs) });
     this.kick();
     return `out:${n}`;
   }
@@ -256,13 +258,13 @@ export class Outbox {
       const path = join(this.dir, `q-${next.n}`);
       try {
         const at = { dir: next.dir, name: next.name };
-        await this.core.vdiskUpload!(path, at.dir, at.name);
+        const up = await this.core.vdiskUpload!(path, at.dir, at.name);
         const it = this.items.get(next.n);
         this.drop(next.n);
         // Renamed, moved or removed on the disk while it was uploading: the same in the account now.
         if (it?.trashed) await this.core.vdiskRemove?.(at.dir, at.name, false).catch(() => {});
         else if (it && (it.dir !== at.dir || it.name !== at.name)) await this.core.vdiskRename?.(at.dir, at.name, it.dir, it.name).catch((e) => this.log(`vdisk: rename after upload: ${e}`));
-        this.onDone(it?.dir ?? at.dir, it?.name ?? at.name, `out:${next.n}`, null);
+        this.onDone(it?.dir ?? at.dir, it?.name ?? at.name, `out:${next.n}`, null, up.id);
         delay = 2000;
       } catch (e) {
         const m = String((e as Error)?.message ?? e);
@@ -466,7 +468,7 @@ export class Vdisk {
    * folders listed so far are compared with what they hold now: their added and removed names go along,
    * so the kernel tells inotify watchers and an open file manager window refreshes.
    */
-  invalidate(ids: string[] | "all") {
+  invalidate(ids: string[] | "all", alias: [string, string][] = []) {
     const names: { dir: string; added: string[]; removed: { id: string; name: string }[] }[] = [];
     for (const [dir, before] of this.listedNow) {
       const acc = this.opts.core.vdiskList(dir) ?? [];
@@ -480,7 +482,7 @@ export class Vdisk {
       if (added.length || removed.length) names.push({ dir, added, removed });
       this.listedNow.set(dir, now.map((e) => ({ id: e.id, name: e.name })));
     }
-    const body = Buffer.from(JSON.stringify({ inval: ids, names }));
+    const body = Buffer.from(JSON.stringify({ alias, inval: ids, names }));
     const h = Buffer.alloc(4);
     h.writeUInt32LE(body.length);
     for (const w of this.srv?.watchers ?? []) w.write(Buffer.concat([h, body]));
@@ -595,7 +597,9 @@ export class Vdisk {
     if (this.opts.outbox && !this.outbox) {
       this.outbox = new Outbox(this.opts.outbox, core, this.opts.log);
       // Uploaded: the folder shows the account's file instead of the queued copy.
-      this.outbox.onDone = (dir) => this.invalidate([dir]);
+      // The uploaded node keeps the inode of its queued copy (editors compare it, and the mtime, to notice
+      // a change by another program).
+      this.outbox.onDone = (dir, _name, pending, err, nodeId) => this.invalidate([dir], err || !nodeId ? [] : [[pending, nodeId]]);
       this.outbox.kick();
     }
     this.srv = serveVdisk(core, this.opts.socket, this.opts.cache, {

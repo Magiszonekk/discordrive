@@ -153,6 +153,25 @@ os.close(fd)`]);
     if (!spawnSync("gio", ["--version"]).error) await run("gio", ["trash", join(mp, "nowa-nazwa.txt")]).catch(() => {});
     expect(tree().some((n) => n.startsWith(".Trash"))).toBe(false);
 
+    // 9. Written, then uploaded from the queue: the same mtime and inode as right after the write (an
+    //    editor comparing them would report the file as changed by another program).
+    await writeFile(join(mp, "mt.txt"), "abc");
+    const s0 = await stat(join(mp, "mt.txt"));
+    await disk.outbox!.idle();
+    await new Promise((r) => setTimeout(r, 1200));
+    const s1 = await stat(join(mp, "mt.txt"));
+    expect(nodeOf("mt.txt")).toBeTruthy();
+    expect([s1.ino, s1.mtimeMs, s1.size]).toEqual([s0.ino, s0.mtimeMs, s0.size]);
+    // Saved again over it (a new version): still the same inode, the new mtime.
+    await new Promise((r) => setTimeout(r, 20));
+    await writeFile(join(mp, "mt.txt"), "abcd");
+    const s2 = await stat(join(mp, "mt.txt"));
+    await disk.outbox!.idle();
+    await new Promise((r) => setTimeout(r, 1200));
+    const s3 = await stat(join(mp, "mt.txt"));
+    expect(s2.ino).toBe(s0.ino);
+    expect([s3.ino, s3.mtimeMs, s3.size]).toEqual([s2.ino, s2.mtimeMs, 4]);
+
     // The outbox holds nothing after the uploads.
     expect((await readdir(outbox)).length).toBe(0);
     expect((await stat(mp)).isDirectory()).toBe(true);

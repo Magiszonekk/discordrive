@@ -1768,10 +1768,16 @@ export class AppCore {
     if (was && was.kind !== "file") throw new Error("EISDIR: a folder of that name");
     const src = await this.disk().openSource(path);
     try {
+      const taken = Math.floor(src.mtimeMs) || undefined;
       const r = await this.c().upload(src, nfc, dir, {
-        takenAt: src.mtimeMs || undefined,
+        takenAt: taken,
         ...(was ? { replace: { nodeId: was.id, baseVersionId: was.content?.versionId ?? null } } : {}),
       });
+      // The content date known in the index at once (the disk shows it as the file's mtime: the same the
+      // written copy had, so an editor does not see the file as changed by someone else).
+      const s = this.store;
+      if (taken && s instanceof SqlIndexStore) s.setDescInfo(r.version.manifestRef, null, taken, Date.now());
+      else if (taken) this.descMem.set(r.version.manifestRef, { v: null, taken });
       this.version++;
       void this.snapshotSoon();
       return { id: r.nodeId };
