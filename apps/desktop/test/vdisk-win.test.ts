@@ -115,7 +115,7 @@ describe.skipIf(why !== null)(`disk in the system (Windows, Cloud Files)${why ? 
     // 1b. Explorer's thumbnail of the photo (IShellItemImageFactory, thumbnail only: the sync root's provider):
     //     made from the stored preview, no fragment fetched, the file still not on this computer.
     if (existsSync(thumbDll)) {
-      const { execFileSync } = await import("node:child_process");
+      const { execFile, execFileSync } = await import("node:child_process");
       const g1 = fake.cdnGets;
       const ps = `
 Add-Type -TypeDefinition @"
@@ -140,7 +140,7 @@ public static class T {
       const thumbLog = join(process.env.LOCALAPPDATA ?? base, "discordrive", "cf-thumb.log");
       (await import("node:fs")).writeFileSync(thumbLog, "");
       try {
-        got = execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8", timeout: 60_000 }).trim();
+        got = (await (await import("node:util")).promisify(execFile)("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8", timeout: 60_000 })).stdout.trim();
       } catch (e) {
         got = `error: ${String((e as { stderr?: string }).stderr ?? e).slice(0, 300)}`;
       }
@@ -223,13 +223,15 @@ public static class T {
     // 6b. A large file (200 MB, 20 fragments), read by another program (PowerShell's Get-FileHash, which
     //     reads it in large blocks): its hash = the account's.
     {
-      const { execFileSync } = await import("node:child_process");
+      // Never a synchronous child here: the agent answering the helper runs on this same event loop.
+      const { execFile } = await import("node:child_process");
+      const run = (await import("node:util")).promisify(execFile);
       const huge = new Uint8Array(randomBytes(200 * 1024 * 1024));
       await core.upload(new Blob([huge]), "duży 200.bin", f);
       disk.invalidate("all");
       const hp = fileOf("duży 200.bin");
       await until(() => existsSync(hp));
-      const h = execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", `(Get-FileHash -Algorithm SHA256 -LiteralPath '${hp.replace(/'/g, "''")}').Hash`], { encoding: "utf8", timeout: 600_000 }).trim().toLowerCase();
+      const h = (await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", `(Get-FileHash -Algorithm SHA256 -LiteralPath '${hp.replace(/'/g, "''")}').Hash`], { encoding: "utf8", timeout: 600_000 })).stdout.trim().toLowerCase();
       expect(h).toBe(sha(huge));
     }
 
