@@ -151,6 +151,7 @@ function vdiskInit(): Partial<AgentInit> {
         cacheDir: join(app.getPath("userData"), "disk-cache"),
         cacheBytes: settings.vdiskCacheBytes ?? 10 * 1024 ** 3,
         logFile: join(DATA(), "vdisk.log"),
+        ...(settings.vdiskWrite === true ? { outbox: join(DATA(), "vdisk-outbox") } : {}),
         windows: {
           icon: process.execPath,
           version: app.getVersion(),
@@ -543,7 +544,7 @@ function wireUpdates() {
       vdiskState = p.vdisk ? "mounting" : "off";
       agent?.postMessage({ type: "vdisk", ...vdiskInit().vdisk! });
     }
-    if (process.platform === "linux" && typeof p.vdiskWrite === "boolean" && p.vdiskWrite !== (settings.vdiskWrite === true)) {
+    if (VDISK_OS && typeof p.vdiskWrite === "boolean" && p.vdiskWrite !== (settings.vdiskWrite === true)) {
       settings.vdiskWrite = p.vdiskWrite;
       if (settings.vdisk === true) agent?.postMessage({ type: "vdisk", ...vdiskInit().vdisk! });
     }
@@ -571,7 +572,7 @@ function wireUpdates() {
       keyring: settings.keyring,
       platform: process.platform,
       ...(VDISK_OS
-        ? { vdisk: { on: settings.vdisk === true, write: settings.vdiskWrite === true, writable: !VDISK_WIN, queue: vdiskQueue, cacheGb: Math.round((settings.vdiskCacheBytes ?? 10 * 1024 ** 3) / 1024 ** 3), mountpoint: VDISK_DIR(), unavailable: vdiskUnavailable(), state: vdiskState } }
+        ? { vdisk: { on: settings.vdisk === true, write: settings.vdiskWrite === true, writable: true, queue: vdiskQueue, cacheGb: Math.round((settings.vdiskCacheBytes ?? 10 * 1024 ** 3) / 1024 ** 3), mountpoint: VDISK_DIR(), unavailable: vdiskUnavailable(), state: vdiskState } }
         : {}),
     };
   });

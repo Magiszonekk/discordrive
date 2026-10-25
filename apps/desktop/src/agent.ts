@@ -120,13 +120,17 @@ async function setVdiskWin(c: AppCore, cfg: VdiskConfig, w: NonNullable<VdiskCon
   if (diskWin?.mounted()) {
     // On Windows the files fetched are the cache (Explorer shows them as "on this device"): the limit is theirs.
     if (diskWin.opts.limit !== cfg.cacheBytes) diskWin.setLimit(cfg.cacheBytes);
-    return state("mounted");
+    // Read only ↔ writable: started again with the other mode.
+    if ((diskWin.opts.outbox ?? null) === (cfg.outbox ?? null)) return state("mounted");
+    await diskWin.outbox?.idle().catch(() => {});
+    await diskWin.stop().catch(() => {});
+    diskWin = null;
   }
   const why = VdiskWin.unavailable(cfg.helper);
   if (why) return state(`unavailable: ${why}`);
   for (let i = 0; i < 600 && !(await c.status()).signedIn; i++) await new Promise((r) => setTimeout(r, 500));
   diskCache ??= new FragDiskCache(cfg.cacheDir, cfg.cacheBytes);
-  diskWin = new VdiskWin({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, icon: w.icon, version: w.version, limit: cfg.cacheBytes, thumbDll: w.thumbDll, thumbConfig: w.thumbConfig, log: diskLog(cfg.logFile), onState: state });
+  diskWin = new VdiskWin({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, icon: w.icon, version: w.version, limit: cfg.cacheBytes, thumbDll: w.thumbDll, thumbConfig: w.thumbConfig, outbox: cfg.outbox, onQueue: diskQueue, log: diskLog(cfg.logFile), onState: state });
   try {
     await diskWin.start();
     state("mounted");

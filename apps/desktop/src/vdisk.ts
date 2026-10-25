@@ -11,7 +11,7 @@
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { open as openFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { release as osRelease } from "node:os";
@@ -32,6 +32,7 @@ export interface VdiskCore {
   vdiskMkdir?(dirId: string, name: string): Promise<{ id: string }>;
   vdiskRename?(dirId: string, name: string, toDirId: string, toName: string): Promise<void>;
   vdiskRemove?(dirId: string, name: string, folder: boolean): Promise<void>;
+  vdiskTrash?(id: string): Promise<void>;
   /** Throws (EINVAL / EISDIR / ENOENT …) when `name` cannot be written into `dirId`. */
   vdiskCheckName?(dirId: string, name: string): void;
 }
@@ -232,7 +233,7 @@ export class FragDiskCache extends Map<string, Uint8Array> {
  * normal name (a save renaming its temporary file) they are uploaded.
  */
 export function localOnlyName(name: string): boolean {
-  return /^\.goutputstream-|^\.~lock\..*#$|~$|^\.#|^#.*#$|\.sw[px]$|^\.Trash/.test(name);
+  return /^\.goutputstream-|^\.~lock\..*#$|~$|^\.#|^#.*#$|\.sw[px]$|^\.Trash|^~\$|^~WRL\d+\.tmp$|\.tmp$|^desktop\.ini$|^Thumbs\.db$/i.test(name);
 }
 
 export class Outbox {
@@ -299,6 +300,7 @@ export class Outbox {
     const n = String(++this.seq);
     const st = statSync(path);
     renameSync(path, join(this.dir, `q-${n}`));
+    // (On Windows the helper's copy is in this directory too: a rename within it.)
     writeFileSync(join(this.dir, `q-${n}.json`), JSON.stringify({ dir, name, mtime: st.mtimeMs }), { mode: 0o600 });
     // A newer copy of the same name replaces one not started yet (an editor saving often).
     for (const [k, it] of this.items) if (it.dir === dir && it.name === name && k !== this.current) this.drop(k);
@@ -423,9 +425,41 @@ export class Outbox {
 
 /** The names ddn-cf shows for characters Windows does not allow (full-width look-alikes), back to the account's. */
 const WIN_LOOKALIKE: Record<string, string> = { "＼": "\\", "：": ":", "＊": "*", "？": "?", "＂": '"', "＜": "<", "＞": ">", "｜": "|" };
-/** The node of a file at `path` under `root` (a path on this computer), or null. */
-function nodeAtPath(core: VdiskCore, root: string, path: string): string | null {
+/** The folder holding `path` (its node, "root" for the disk's root) and the account's name of the last part. */
+function parentAtPath(core: VdiskCore, root: string, path: string): { dir: string; name: string } | null {
+  const p = path.replace(/\//g, "\\").replace(/\\+$/, "");
+  const i = p.lastIndexOf("\\");
+  if (i < 0) return null;
+  const parent = p.slice(0, i);
   const norm = (x: string) => x.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  const dir = rootsOf(root).some((x) => norm(parent) === norm(x)) ? "root" : nodeAtPath(core, root, parent);
+  if (!dir) return null;
+  return { dir, name: [...p.slice(i + 1)].map((c) => WIN_LOOKALIKE[c] ?? c).join("") };
+}
+/** The node of a file at `path` under `root` (a path on this computer), or null. */
+/**
+ * The disk's root as the paths given to us may spell it: as configured and its long form (a root given with
+ * an 8.3 short name, like C:\\Users\\RUNNER~1, comes back from Windows' callbacks spelled out).
+ */
+const rootForms = new Map<string, string[]>();
+function rootsOf(root: string): string[] {
+  let r = rootForms.get(root);
+  if (!r) {
+    r = [root];
+    try {
+      const long = realpathSync.native(root);
+      if (long.toLowerCase() !== root.toLowerCase()) r.push(long);
+    } catch {
+      /* not there yet: asked again next time */
+      return r;
+    }
+    rootForms.set(root, r);
+  }
+  return r;
+}
+function nodeAtPath(core: VdiskCore, root0: string, path: string): string | null {
+  const norm = (x: string) => x.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  const root = rootsOf(root0).find((x) => norm(path.replace(/\//g, "\\")).startsWith(norm(x) + "\\")) ?? root0;
   const r = norm(root);
   const p = path.replace(/\//g, "\\");
   if (!norm(p).startsWith(r + "\\")) return null;
@@ -495,7 +529,7 @@ function connection(core: VdiskCore, sock: Socket, disk: FragDiskCache, hooks: H
     h2.writeUInt32LE(data.byteLength);
     sock.write(Buffer.concat([h1, body, h2, Buffer.from(data.buffer, data.byteOffset, data.byteLength)]));
   };
-  const handle = async (q: { op?: string; id?: string; off?: number; len?: number; dir?: string; name?: string; toDir?: string; toName?: string; path?: string; folder?: boolean; kind?: string }) => {
+  const handle = async (q: { op?: string; id?: string; off?: number; len?: number; dir?: string; name?: string; toDir?: string; toName?: string; path?: string; folder?: boolean; kind?: string; target?: string; copy?: string }) => {
     try {
       if (!trusted) {
         if (q.op === "hello" && typeof (q as { token?: unknown }).token === "string" && (q as { token: string }).token === hooks.token) {
@@ -506,6 +540,34 @@ function connection(core: VdiskCore, sock: Socket, disk: FragDiskCache, hooks: H
         return;
       }
       if (q.op === "hello") return send({});
+      // Writing on the Windows disk, by paths under its root (the helper knows paths, the agent the tree).
+      if (q.op?.startsWith("w-") && hooks.root && hooks.outbox) {
+        const at = (p: unknown) => (typeof p === "string" ? parentAtPath(core, hooks.root!, p) : null);
+        const t = at((q as { target?: unknown }).target ?? q.path);
+        if (q.op === "w-upload") {
+          const copy = String((q as { copy?: unknown }).copy ?? "");
+          if (!t || !copy.startsWith(hooks.outbox.dir) || copy.includes("..")) return send({ err: "ENOENT" });
+          core.vdiskCheckName?.(t.dir, t.name);
+          return send({ id: hooks.outbox.add(copy, t.dir, t.name) });
+        }
+        if (q.op === "w-mkdir" && core.vdiskMkdir) {
+          if (!t) return send({ err: "ENOENT" });
+          return send(await core.vdiskMkdir(t.dir, t.name));
+        }
+        if (q.op === "w-rename" && core.vdiskRename) {
+          const to = at(q.toName);
+          if (!t || !to) return send({ err: "ENOENT" });
+          if (hooks.outbox.renamePending(t.dir, t.name, to.dir, to.name) && !core.vdiskList(t.dir)?.some((e) => e.name === t.name)) return send({});
+          await core.vdiskRename(t.dir, t.name, to.dir, to.name);
+          return send({});
+        }
+        if (q.op === "w-unqueue") {
+          if (t) hooks.outbox.removePending(t.dir, t.name);
+          return send({});
+        }
+        if (q.op === "w-trash" && core.vdiskTrash) return (await core.vdiskTrash(String(q.id)), send({}));
+        return send({ err: "EINVAL" });
+      }
       // Windows' thumbnail provider: the stored preview of the file at this path under the disk's root.
       if (q.op === "preview" && hooks.root && typeof q.path === "string") {
         const id = nodeAtPath(core, hooks.root, q.path);
@@ -914,6 +976,13 @@ export class VdiskWin {
   private stopping = false;
   private restarts = 0;
   ready = false;
+  outbox: Outbox | null = null;
+  private tell(j: unknown) {
+    const body = Buffer.from(JSON.stringify(j));
+    const h = Buffer.alloc(4);
+    h.writeUInt32LE(body.length);
+    for (const w of this.srv?.watchers ?? []) w.write(Buffer.concat([h, body]));
+  }
   constructor(
     readonly opts: {
       helper: string;
@@ -930,6 +999,9 @@ export class VdiskWin {
       thumbConfig?: string;
       /** The thumbnail provider DLL (registered for this user by the helper). */
       thumbDll?: string;
+      /** Writable: files put into the folder are uploaded through this queue (absent: read only). */
+      outbox?: string;
+      onQueue?: (left: number, done: number, total: number) => void;
       log?: (m: string) => void;
       onState?: (s: string) => void;
     },
@@ -978,7 +1050,15 @@ export class VdiskWin {
   async start(): Promise<void> {
     this.stopping = false;
     const core = this.opts.core;
-    this.srv = serveVdisk(core, this.opts.socket, this.opts.cache, { token: this.token, root: this.opts.mountpoint, listed: (id) => void this.listedNow.set(id, true) });
+    if (this.opts.outbox && !this.outbox) {
+      this.outbox = new Outbox(this.opts.outbox, core, this.opts.log);
+      this.outbox.onProgress = (left, done, total) => this.opts.onQueue?.(left, done, total);
+      this.outbox.previews = (path, name) => makeLocalPreviews(this.opts.helper, path, name);
+      // Uploaded: the helper makes the local file a placeholder of that node (in sync).
+      this.outbox.onDone = (_dir, _name, pending, err, nodeId) => this.tell({ uploaded: { pending, id: nodeId ?? null, err } });
+      this.outbox.kick();
+    }
+    this.srv = serveVdisk(core, this.opts.socket, this.opts.cache, { token: this.token, root: this.opts.mountpoint, outbox: this.outbox ?? undefined, listed: (id) => void this.listedNow.set(id, true) });
     // The thumbnail provider (a DLL Explorer loads) reaches the agent with this (its own user's file).
     if (this.opts.thumbConfig) {
       mkdirSync(join(this.opts.thumbConfig, ".."), { recursive: true });
@@ -987,7 +1067,7 @@ export class VdiskWin {
     await new Promise<void>((r, j) => (this.srv!.once("listening", () => r()), this.srv!.once("error", j)));
     const child = spawn(this.opts.helper, ["serve", this.opts.mountpoint, this.opts.socket, this.opts.icon, this.opts.version, ...(this.opts.thumbDll && existsSync(this.opts.thumbDll) ? [this.opts.thumbDll] : [])], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, DDN_CF_TOKEN: this.token, ...(this.opts.limit ? { DDN_CF_LIMIT: String(this.opts.limit) } : {}) },
+      env: { ...process.env, DDN_CF_TOKEN: this.token, ...(this.opts.limit ? { DDN_CF_LIMIT: String(this.opts.limit) } : {}), ...(this.opts.outbox ? { DDN_CF_OUTBOX: this.opts.outbox } : {}) },
       windowsHide: true,
     });
     this.child = child;
