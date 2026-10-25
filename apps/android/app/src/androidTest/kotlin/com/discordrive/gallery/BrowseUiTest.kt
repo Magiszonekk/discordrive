@@ -162,8 +162,8 @@ class BrowseUiTest {
                 if (pic != null) {
                     sc.rpc("hooksOff")
                     io.github.magiszonekk.discordrive.core.FileWriter.dead.clear()
-                    DdnSession.forget(ctx)
-                    DdnViewerActivity.pending = listOf(DdnSession.get(ctx)!!.media(50, null).first { it.id == pic.id })
+                    // The fragments are read through the webhooks (now gone); the session as it is.
+                    DdnViewerActivity.pending = listOf(pic)
                     ActivityScenario.launch<DdnViewerActivity>(Intent(ctx, DdnViewerActivity::class.java).putExtra("id", pic.id)).use { v ->
                         r["viewerSaysUnavailable"] = waitUntil(30_000) { var ok = false; v.onActivity { a -> ok = a.textForTest().contains(ctx.getString(R.string.ddn_file_unavailable).take(16)) }; ok }
                         shot("13b-unavailable")
