@@ -274,9 +274,20 @@ try {
       return { ok: names.includes(`qa-${MB}mb.bin`) && fetched === 0, note: `${names.length} entries (${names.slice(0, 6).join(", ")}); CDN requests while listing and opening the folder: ${fetched}` };
     });
     await step(p, "V3-hash", `Get-FileHash of qa-${MB}mb.bin read from the disk = the uploaded file`, async () => {
-      const h = ps(`(Get-FileHash -Algorithm SHA256 -LiteralPath '${join(root, `qa-${MB}mb.bin`)}').Hash`, 600_000).toLowerCase();
+      const f = join(root, `qa-${MB}mb.bin`).replace(/'/g, "''");
+      const g0 = fake.cdnGets;
+      let h = "";
+      let err = "";
+      try {
+        h = ps(`$ErrorActionPreference='Stop'; try { (Get-FileHash -Algorithm SHA256 -LiteralPath '${f}').Hash } catch { Write-Output ("ERR " + $_.Exception.Message) }`, 600_000);
+      } catch (e) {
+        err = String((e as { stderr?: string }).stderr ?? (e as Error).message).slice(0, 300);
+      }
+      if (h.startsWith("ERR ")) ((err = h.slice(4)), (h = ""));
+      h = h.toLowerCase();
+      const fetched = fake.cdnGets - g0;
       await explorerShot("V3-explorer-after-read", root);
-      return { ok: h === sha(big), note: `${h.slice(0, 16)}… vs ${sha(big).slice(0, 16)}…` };
+      return { ok: h === sha(big), note: `${h ? h.slice(0, 16) + "…" : "no hash"} vs ${sha(big).slice(0, 16)}…; CDN requests while reading: ${fetched}${err ? `; error: ${err}` : ""}` };
     });
     await step(p, "V4-delete-refused", "Remove-Item on a file of the disk: refused (read only), the file stays", async () => {
       let msg = "";
@@ -301,6 +312,9 @@ try {
       await explorerShot("V5-explorer-after-off", process.env.USERPROFILE ?? "C:\\");
       return { ok: gone, note: gone ? "the folder's placeholders are gone" : "the files are still there" };
     });
+    // Back to Files for the next steps.
+    await p.click("a[data-nav=files]").catch(() => {});
+    await p.waitForSelector("[data-page=files]:not([hidden])", { timeout: 30_000 }).catch(() => {});
   }
   await step(p, "S5-video", "Play an MP4 with moov at the end, seek to the middle", async () => {
     let mp4 = "";
@@ -377,6 +391,12 @@ try {
   steps.push({ id: "crash", what: "the run itself", ok: false, note: String((e as Error)?.stack ?? e).slice(0, 800), shot: "" });
 } finally {
   desktopShot("desktop-end");
+  // The app's logs (the disk's) next to the screenshots.
+  for (const f of ["vdisk.log", "vdisk.log.1"]) {
+    try {
+      if (existsSync(join(data, f))) writeFileSync(join(shots, f), readFileSync(join(data, f)));
+    } catch {}
+  }
   await app?.evaluate(({ app: a }) => a.exit(0)).catch(() => {});
   await app?.close().catch(() => {});
   await cdp?.close().catch(() => {});

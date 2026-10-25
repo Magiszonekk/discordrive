@@ -219,6 +219,19 @@ public static class T {
     await expect(rm(join(dir, "notatka： a？b.txt"))).rejects.toThrow();
     expect(core.list(f).rows.some((r) => r.name === "notatka: a?b.txt")).toBe(true);
 
+    // 6b. A large file (200 MB, 20 fragments), read by another program (PowerShell's Get-FileHash, which
+    //     reads it in large blocks): its hash = the account's.
+    {
+      const { execFileSync } = await import("node:child_process");
+      const huge = new Uint8Array(randomBytes(200 * 1024 * 1024));
+      await core.upload(new Blob([huge]), "duży 200.bin", f);
+      disk.invalidate("all");
+      const hp = fileOf("duży 200.bin");
+      await until(() => existsSync(hp));
+      const h = execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", `(Get-FileHash -Algorithm SHA256 -LiteralPath '${hp.replace(/'/g, "''")}').Hash`], { encoding: "utf8", timeout: 600_000 }).trim().toLowerCase();
+      expect(h).toBe(sha(huge));
+    }
+
     // 7. Option off: the sync root and its placeholders go.
     await disk.stop();
     disk.unregister();

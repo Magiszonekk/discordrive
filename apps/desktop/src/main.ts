@@ -150,6 +150,7 @@ function vdiskInit(): Partial<AgentInit> {
         socket: `\\\\.\\pipe\\discordrive-cf-${process.env.USERNAME ?? "user"}-${process.pid}`,
         cacheDir: join(app.getPath("userData"), "disk-cache"),
         cacheBytes: settings.vdiskCacheBytes ?? 10 * 1024 ** 3,
+        logFile: join(DATA(), "vdisk.log"),
         windows: {
           icon: process.execPath,
           version: app.getVersion(),
