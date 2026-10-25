@@ -32,6 +32,7 @@
     <string name="ddn_next">›</string>
     <string name="ddn_download">Pobierz</string>
     <string name="ddn_saved">Zapisano w Pobranych: %1$s</string>
+    <string name="ddn_file_unavailable">Plik niedostępny: kanał z jego fragmentami usunięto na Discordzie. Jeśli masz kopię, wyślij plik ponownie.</string>
     <string name="ddn_no_preview">Brak podglądu dla tego typu pliku. Pobierz, żeby otworzyć.</string>
 
     <!-- Login -->
@@ -372,6 +373,16 @@ Tekst: %3$s</string>
     <string name="ddn_ai_turn_on">Najpierw włącz opisywanie.</string>
     <string name="ddn_ai_described">Opisano %1$d z %2$d</string>
     <string name="ddn_ai_last_error">Ostatni błąd: %1$s</string>
+    <string name="ddn_ai_lang_title">Język opisów i tagów</string>
+    <string name="ddn_ai_lang_pl">Polski</string>
+    <string name="ddn_ai_lang_en">Angielski</string>
+    <plurals name="ddn_ai_relang">
+        <item quantity="one">Opisz ponownie %1$d plik opisany w innym języku</item>
+        <item quantity="few">Opisz ponownie %1$d pliki opisane w innym języku</item>
+        <item quantity="many">Opisz ponownie %1$d plików opisanych w innym języku</item>
+        <item quantity="other">Opisz ponownie %1$d pliku opisanego w innym języku</item>
+    </plurals>
+    <string name="ddn_ai_relang_note">Nowe opisy w wybranym języku służą wyszukiwaniu na tym telefonie; opis zapisany przy pliku (widoczny na innych urządzeniach) zostaje.</string>
     <string name="ddn_ai_progress">Opisywanie zdjęć: %1$d z %2$d</string>
     <string name="ddn_ai_err_auth">serwer AI odrzucił klucz (sprawdź klucz API).</string>
     <string name="ddn_ai_err_rate">serwer AI ogranicza liczbę zapytań — spróbuję później.</string>
@@ -386,6 +397,7 @@ Tekst: %3$s</string>
     <string name="ddn_backup_folders">Foldery do kopiowania</string>
     <string name="ddn_backup_no_folders">Brak zdjęć na telefonie albo brak uprawnienia do nich.</string>
     <string name="ddn_backup_now">Kopiuj teraz</string>
+    <string name="ddn_backup_no_chosen">Najpierw zaznacz foldery do kopiowania.</string>
     <string name="ddn_backup_started">Kopiowanie w tle — postęp w powiadomieniu.</string>
     <string name="ddn_backup_running">Trwa: %1$d z %2$d · %3$s</string>
     <string name="ddn_backup_last">Ostatnio: %1$s · skopiowano %2$d · czeka %3$d</string>

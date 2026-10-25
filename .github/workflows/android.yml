@@ -260,6 +260,9 @@ jobs:
             adb shell appops set io.github.magiszonekk.discordrive REQUEST_INSTALL_PACKAGES allow || true
             cd ../.. && npx tsx apps/android/interop/harness.mts --app --updates-apk apps/android/build/update-b/app-b.apk --updates-code 101 || { adb logcat -d -s ddn-ui:* ddn-backup:* ddn:* AndroidRuntime:E WM-WorkerWrapper:*; exit 1; }
             mkdir -p build/shots && adb pull /sdcard/Android/data/io.github.magiszonekk.discordrive/files/shots build/shots || true
+            # The join screen after a join with a note (OK enabled, opens the files): am instrument exits 0 on a
+            # failure too, its report says OK or FAILURES.
+            adb shell am instrument -w -e class com.discordrive.gallery.JoinNoteTest io.github.magiszonekk.discordrive.test/androidx.test.runner.AndroidJUnitRunner | tee build/join-note.txt; grep -q "^OK (1 test)" build/join-note.txt
 
       - name: Test report
         if: always()

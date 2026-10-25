@@ -130,7 +130,12 @@ class DdnBackupActivity : AppCompatActivity() {
         on.setOnCheckedChangeListener { _, v -> if (v && !hasMedia()) askMedia() else DdnBackup.set(this, on = v) }
         wifi.setOnCheckedChangeListener { _, v -> DdnBackup.set(this, wifi = v) }
         charging.setOnCheckedChangeListener { _, v -> DdnBackup.set(this, charging = v) }
-        now.setOnClickListener { if (!hasMedia()) askMedia() else { DdnBackup.runNow(this); Toast.makeText(this, R.string.ddn_backup_started, Toast.LENGTH_SHORT).show() } }
+        now.setOnClickListener {
+            if (!hasMedia()) askMedia()
+            else if (DdnBackup.buckets(this).let { chosen -> chosen.isEmpty() || runCatching { DdnBackup.allBuckets(this).keys.none { it in chosen } }.getOrDefault(false) })
+                Toast.makeText(this, R.string.ddn_backup_no_chosen, Toast.LENGTH_LONG).show()
+            else { DdnBackup.runNow(this, manual = true); Toast.makeText(this, R.string.ddn_backup_started, Toast.LENGTH_SHORT).show() }
+        }
 
         failedBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         for (v in listOf(failedBox, on, where, wifi, charging, text(getString(R.string.ddn_backup_folders), 15f), folders, now, state, partial)) root.addView(v)
