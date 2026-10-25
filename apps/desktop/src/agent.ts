@@ -190,6 +190,8 @@ async function start(init: AgentInit): Promise<AppCore> {
   };
   c.onEvent = (e) => {
     track(e);
+    // The tree changed (a sync, this device's own change): the file manager sees it without a restart.
+    if (e.type === "changed") disk?.invalidate("all");
     if (e.type === "net-baseline") keepNet({ baseline: e.data });
     else if (e.type === "net-tune") keepNet({ tune: e.data });
     broadcast(e);

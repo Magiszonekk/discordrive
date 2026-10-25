@@ -89,12 +89,14 @@ struct Fs {
     agent: Agent,
     uid: u32,
     gid: u32,
-    /// inode ↔ node ID, stable while mounted.
+    /// inode ↔ node ID, stable while mounted (inos shared with the invalidation thread).
     ids: HashMap<u64, String>,
-    inos: HashMap<String, u64>,
+    inos: std::sync::Arc<std::sync::Mutex<HashMap<String, u64>>>,
     next: u64,
     /// The last listing of each folder (lookup asks it again after TTL).
     lists: HashMap<u64, (Instant, Vec<Entry>)>,
+    /// Set by the invalidation thread: listings older than this are asked again.
+    stale_after: std::sync::Arc<std::sync::Mutex<Instant>>,
     /// What each inode was when last seen (getattr between listings).
     attrs: HashMap<u64, Entry>,
 }
@@ -104,13 +106,14 @@ impl Fs {
         if id == "root" {
             return ROOT;
         }
-        if let Some(i) = self.inos.get(id) {
+        let mut inos = self.inos.lock().unwrap();
+        if let Some(i) = inos.get(id) {
             return *i;
         }
         let i = self.next;
         self.next += 1;
         self.ids.insert(i, id.to_string());
-        self.inos.insert(id.to_string(), i);
+        inos.insert(id.to_string(), i);
         i
     }
 
@@ -150,7 +153,7 @@ impl Fs {
 
     fn list(&mut self, ino: u64) -> Result<Vec<Entry>, i32> {
         if let Some((at, l)) = self.lists.get(&ino) {
-            if at.elapsed() < TTL {
+            if at.elapsed() < TTL && *at > *self.stale_after.lock().unwrap() {
                 return Ok(l.clone());
             }
         }
@@ -184,10 +187,12 @@ impl Filesystem for Fs {
 
     fn getattr(&mut self, _r: &Request, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         if ino == ROOT {
-            let a = self.attr(ROOT, &Fs::root_entry());
+            // The root's mtime from the agent (when something in it changed), else now.
+            let e = self.agent.call(json!({ "op": "stat", "id": "root" })).ok().and_then(|(v, _)| serde_json::from_value::<Entry>(v.get("entry").cloned().unwrap_or(json!(null))).ok()).unwrap_or_else(Fs::root_entry);
+            let a = self.attr(ROOT, &e);
             return reply.attr(&TTL, &a);
         }
-        if let Some(e) = self.attrs.get(&ino).cloned() {
+        if let Some(e) = self.attrs.get(&ino).cloned().filter(|e| e.kind != "folder") {
             let a = self.attr(ino, &e);
             return reply.attr(&TTL, &a);
         }
@@ -205,9 +210,15 @@ impl Filesystem for Fs {
         }
     }
 
-    fn open(&mut self, _r: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
+    fn open(&mut self, r: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
         if flags & libc::O_ACCMODE != libc::O_RDONLY {
             return reply.error(libc::EROFS);
+        }
+        // The desktop's thumbnailers would download whole files to make what the agent already wrote from
+        // the stored previews (or marked as "none"): refused, so a folder opened in the file manager costs
+        // no download. Anything else (the user opening a file) reads as usual.
+        if is_thumbnailer(r.pid()) {
+            return reply.error(libc::EACCES);
         }
         if self.id(ino).is_none() {
             return reply.error(libc::ENOENT);
@@ -260,6 +271,59 @@ impl Filesystem for Fs {
 
 static MOUNTPOINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// Programs the desktop runs to make thumbnails: the freedesktop thumbnailers registered on this system
+/// (/usr/share/thumbnailers/*.thumbnailer, Exec=), and the usual ones.
+fn thumbnailers() -> &'static std::collections::HashSet<String> {
+    static T: std::sync::OnceLock<std::collections::HashSet<String>> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        let mut t: std::collections::HashSet<String> = ["gnome-thumbnail-factory", "tumblerd", "ffmpegthumbnailer", "totem-video-thumbnailer", "gdk-pixbuf-thumbnailer", "evince-thumbnailer"].iter().map(|s| s.to_string()).collect();
+        for dir in ["/usr/share/thumbnailers", "/usr/local/share/thumbnailers"] {
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                for line in std::fs::read_to_string(e.path()).unwrap_or_default().lines() {
+                    if let Some(x) = line.strip_prefix("Exec=") {
+                        if let Some(cmd) = x.split_whitespace().next() {
+                            t.insert(cmd.rsplit('/').next().unwrap_or(cmd).to_string());
+                        }
+                    }
+                }
+            }
+        }
+        t
+    })
+}
+
+/// A process that makes thumbnails for the desktop (GNOME / KDE / XFCE), or one started by such a process
+/// (GNOME runs its thumbnailers under bwrap from gnome-thumbnail-factory).
+fn is_thumbnailer(pid: u32) -> bool {
+    let exe = |p: u32| std::fs::read_link(format!("/proc/{p}/exe")).ok().and_then(|x| x.file_name().map(|n| n.to_string_lossy().trim_end_matches(" (deleted)").to_string())).unwrap_or_default();
+    let argv0 = |p: u32| std::fs::read(format!("/proc/{p}/cmdline")).ok().and_then(|c| c.split(|b| *b == 0).next().map(|a| String::from_utf8_lossy(a).rsplit('/').next().unwrap_or("").to_string())).unwrap_or_default();
+    let parent = |p: u32| -> u32 {
+        std::fs::read_to_string(format!("/proc/{p}/stat"))
+            .ok()
+            .and_then(|s| s.rsplit_once(')').map(|(_, r)| r.to_string()))
+            .and_then(|r| r.split_whitespace().nth(1).and_then(|x| x.parse().ok()))
+            .unwrap_or(0)
+    };
+    let known = thumbnailers();
+    let mut p = pid;
+    for _ in 0..5 {
+        if p <= 1 {
+            return false;
+        }
+        let (e, a) = (exe(p), argv0(p));
+        if known.contains(&e) || known.contains(&a) || (a == "kioworker" || e == "kioworker") && is_kio_thumb(p) {
+            return true;
+        }
+        p = parent(p);
+    }
+    false
+}
+
+/// KDE's thumbnail worker (kioworker thumbnail ...).
+fn is_kio_thumb(pid: u32) -> bool {
+    std::fs::read(format!("/proc/{pid}/cmdline")).map(|c| String::from_utf8_lossy(&c).contains("thumbnail")).unwrap_or(false)
+}
+
 extern "C" fn on_term(_: libc::c_int) {
     if let Some(mp) = MOUNTPOINT.get() {
         let _ = std::process::Command::new("fusermount3").args(["-u", "-z", mp]).status();
@@ -267,8 +331,35 @@ extern "C" fn on_term(_: libc::c_int) {
     std::process::exit(0);
 }
 
+/// `ddn-fuse thumb <max>`: an image on stdin (WebP, JPEG or PNG) to a PNG on stdout whose longer side is
+/// at most <max> pixels (never enlarged). The agent adds the freedesktop tEXt chunks.
+fn thumb(max: u32) -> ! {
+    let mut input = Vec::new();
+    if std::io::stdin().read_to_end(&mut input).is_err() {
+        std::process::exit(2);
+    }
+    let img = match image::load_from_memory(&input) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("ddn-fuse thumb: {e}");
+            std::process::exit(3);
+        }
+    };
+    let (w, h) = (img.width(), img.height());
+    let img = if w.max(h) > max { img.resize(max, max, image::imageops::FilterType::Triangle) } else { img };
+    let mut out = std::io::Cursor::new(Vec::new());
+    if img.to_rgba8().write_to(&mut out, image::ImageFormat::Png).is_err() {
+        std::process::exit(4);
+    }
+    let _ = std::io::stdout().write_all(out.get_ref());
+    std::process::exit(0);
+}
+
 fn main() {
     let a: Vec<String> = std::env::args().collect();
+    if a.len() == 3 && a[1] == "thumb" {
+        thumb(a[2].parse().unwrap_or(256));
+    }
     if a.len() != 3 {
         eprintln!("usage: ddn-fuse <mountpoint> <socket>");
         std::process::exit(2);
@@ -282,42 +373,101 @@ fn main() {
     };
     // SIGTERM (the app stopping a helper it did not start itself): unmount like a gone agent.
     unsafe {
-        libc::signal(libc::SIGTERM, on_term as usize);
+        libc::signal(libc::SIGTERM, on_term as *const () as usize);
     }
     MOUNTPOINT.set(a[1].clone()).ok();
-    // A second connection that carries nothing: when the agent dies the socket closes and the read below
+    let inos = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let stale_after = std::sync::Arc::new(std::sync::Mutex::new(Instant::now()));
+    // A second connection, from the agent to here: invalidations after a sync (u32 LE length + JSON
+    // {"inval":"all"} or {"inval":[node IDs]}), and when the agent dies the socket closes and the read
     // returns, even while no request is in flight (the kernel answers from its caches meanwhile).
-    match UnixStream::connect(&a[2]) {
-        Ok(mut watch) => {
-            let mp = a[1].clone();
-            std::thread::spawn(move || {
-                let mut b = [0u8; 1];
-                loop {
-                    match watch.read(&mut b) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => continue,
-                    }
-                }
-                eprintln!("ddn-fuse: the agent is gone: unmounting");
-                let _ = std::process::Command::new("fusermount3").args(["-u", "-z", &mp]).status();
-                std::process::exit(5);
-            });
+    let watch = match UnixStream::connect(&a[2]) {
+        Ok(mut w) => {
+            // Tell the agent which connection this is.
+            let hello = br#"{"op":"watch"}"#;
+            let mut m = (hello.len() as u32).to_le_bytes().to_vec();
+            m.extend_from_slice(hello);
+            let _ = w.write_all(&m);
+            Some(w)
         }
-        Err(e) => eprintln!("ddn-fuse: no watch connection: {e}"),
-    }
+        Err(e) => {
+            eprintln!("ddn-fuse: no watch connection: {e}");
+            None
+        }
+    };
     let fs = Fs {
         agent: Agent { s, mountpoint: a[1].clone() },
         uid: unsafe { libc::getuid() },
         gid: unsafe { libc::getgid() },
         ids: HashMap::new(),
-        inos: HashMap::new(),
+        inos: inos.clone(),
         next: 2,
         lists: HashMap::new(),
+        stale_after: stale_after.clone(),
         attrs: HashMap::new(),
     };
-    let opts = [MountOption::RO, MountOption::FSName("discordrive".into()), MountOption::Subtype("discordrive".into()), MountOption::DefaultPermissions, MountOption::NoExec, MountOption::NoAtime];
-    if let Err(e) = fuser::mount2(fs, &a[1], &opts) {
-        eprintln!("ddn-fuse: mount failed: {e}");
-        std::process::exit(4);
+    let opts = [MountOption::RO, MountOption::FSName("discordrive".into()), MountOption::Subtype(std::env::var("DDN_FUSE_SUBTYPE").unwrap_or_else(|_| "discordrive".into())), MountOption::DefaultPermissions, MountOption::NoExec, MountOption::NoAtime];
+    let mut session = match fuser::Session::new(fs, &a[1], &opts) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("ddn-fuse: mount failed: {e}");
+            std::process::exit(4);
+        }
+    };
+    let notifier = session.notifier();
+    if let Some(mut w) = watch {
+        let mp = a[1].clone();
+        std::thread::spawn(move || {
+            loop {
+                let mut n = [0u8; 4];
+                if w.read_exact(&mut n).is_err() {
+                    break;
+                }
+                let mut j = vec![0u8; u32::from_le_bytes(n) as usize];
+                if w.read_exact(&mut j).is_err() {
+                    break;
+                }
+                let Ok(v) = serde_json::from_slice::<serde_json::Value>(&j) else { continue };
+                // The kernel drops what it cached for these inodes (attributes, directory pages, file pages):
+                // a file changed on another device is read afresh, a folder lists its new children.
+                *stale_after.lock().unwrap() = Instant::now();
+                let ino_of = |id: &str| -> Option<u64> { if id == "root" { Some(ROOT) } else { inos.lock().unwrap().get(id).copied() } };
+                // Names that changed in a folder: the kernel forgets the entries (a new name is looked up
+                // again; a removed one reports a deletion to inotify watchers, a file manager refreshes).
+                if let Some(serde_json::Value::Array(dirs)) = v.get("names") {
+                    for d in dirs {
+                        let Some(parent) = d.get("dir").and_then(|x| x.as_str()).and_then(ino_of) else { continue };
+                        for n in d.get("added").and_then(|x| x.as_array()).into_iter().flatten().filter_map(|x| x.as_str()) {
+                            let _ = notifier.inval_entry(parent, OsStr::new(n));
+                        }
+                        for r in d.get("removed").and_then(|x| x.as_array()).into_iter().flatten() {
+                            let (Some(n), Some(child)) = (r.get("name").and_then(|x| x.as_str()), r.get("id").and_then(|x| x.as_str()).and_then(ino_of)) else { continue };
+                            if notifier.delete(parent, child, OsStr::new(n)).is_err() {
+                                let _ = notifier.inval_entry(parent, OsStr::new(n));
+                            }
+                        }
+                        let _ = notifier.inval_inode(parent, 0, 0);
+                    }
+                }
+                let targets: Vec<u64> = {
+                    let map = inos.lock().unwrap();
+                    match v.get("inval") {
+                        Some(serde_json::Value::String(s)) if s == "all" => map.values().copied().chain(std::iter::once(ROOT)).collect(),
+                        Some(serde_json::Value::Array(ids)) => ids.iter().filter_map(|x| x.as_str()).filter_map(|id| if id == "root" { Some(ROOT) } else { map.get(id).copied() }).collect(),
+                        _ => vec![],
+                    }
+                };
+                for ino in targets {
+                    let _ = notifier.inval_inode(ino, 0, 0);
+                }
+            }
+            eprintln!("ddn-fuse: the agent is gone: unmounting");
+            let _ = std::process::Command::new("fusermount3").args(["-u", "-z", &mp]).status();
+            std::process::exit(5);
+        });
+    }
+    if let Err(e) = session.run() {
+        eprintln!("ddn-fuse: {e}");
+        std::process::exit(6);
     }
 }

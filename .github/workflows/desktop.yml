@@ -75,6 +75,8 @@ jobs:
         timeout-minutes: 8
         run: |
           (command -v fusermount3 && test -e /dev/fuse) || sudo apt-get install -y -qq fuse3
+          # The disk test makes a photo and its stored pictures with ImageMagick.
+          command -v convert || sudo apt-get install -y -qq --no-install-recommends imagemagick
           ls -l /dev/fuse
           cargo build --release --manifest-path apps/desktop/native/fuse/Cargo.toml
           ls -l apps/desktop/native/fuse/target/release/ddn-fuse

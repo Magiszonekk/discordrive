@@ -2732,6 +2732,14 @@ function wireSpeedTest() {
       }
     });
 }
+/** The agent's reasons for a disk that did not mount, in the UI's language where known. */
+function vdiskWhy(why: string): string {
+  if (/^restart the app/.test(why)) return t("app.vdisk.why.restart");
+  if (/still mounted by an earlier run/.test(why)) return t("app.vdisk.why.stale", { cmd: why.match(/"([^"]+)"/)?.[1] ?? "fusermount3 -u -z ~/discordrive" });
+  if (/system refused the mount/.test(why)) return t("app.vdisk.why.refused");
+  if (/is not empty/.test(why)) return t("app.vdisk.why.notEmpty");
+  return why;
+}
 /** Settings → Desktop app (only in the desktop app): version and updates, autostart, downloads folder, key storage. */
 async function renderDesktopApp() {
   if (!desktop) return;
@@ -2755,7 +2763,7 @@ async function renderDesktopApp() {
     sw.checked = vd.on;
     sw.disabled = !!vd.unavailable;
     $<HTMLInputElement>("app-vdisk-cache").value = String(vd.cacheGb);
-    const stateText = vd.state === "mounted" ? t("app.vdisk.mounted", { dir: vd.mountpoint }) : vd.state === "mounting" || vd.state === "restarting" || vd.state === "off" ? t("app.vdisk.mounting") : t("app.vdisk.failed", { why: vd.state.replace(/^error: /, "") });
+    const stateText = vd.state === "mounted" ? t("app.vdisk.mounted", { dir: vd.mountpoint }) : vd.state === "mounting" || vd.state === "restarting" || vd.state === "off" ? t("app.vdisk.mounting") : t("app.vdisk.failed", { why: vdiskWhy(vd.state.replace(/^error: /, "")) });
     $("app-vdisk-hint").textContent = vd.unavailable ? t("app.vdisk.unavailable", { why: vd.unavailable }) : vd.on ? stateText : t("app.vdisk.off");
     // Mounting takes a moment: the state again shortly (until it is mounted or failed).
     if (vd.on && !vd.unavailable && vd.state !== "mounted" && !/^error/.test(vd.state)) setTimeout(() => void renderDesktopApp(), 1500);
