@@ -160,6 +160,11 @@ impl Fs {
         }
         let _ = w.file.sync_all();
         let (path, parent, name, ino) = (w.path.clone(), w.parent, w.name.clone(), w.ino);
+        // What the file shows from now on: the local copy's mtime (kept by the queue and the upload).
+        let copy_mtime = w.file.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64);
+        if let (Some(mt), Some(e)) = (copy_mtime, self.attrs.get_mut(&ino)) {
+            e.mtime = mt;
+        }
         // The agent removes the copy it uploaded: hand it a hard link (this one stays for later writes).
         let sent = path.with_extension("up");
         std::fs::hard_link(&path, &sent).map_err(|_| libc::EIO)?;
@@ -202,8 +207,12 @@ impl Fs {
             return ROOT;
         }
         let mut inos = self.inos.lock().unwrap();
-        if let Some(i) = inos.get(id) {
-            return *i;
+        if let Some(i) = inos.get(id).copied() {
+            // (An uploaded file takes over the inode of its queued copy: the inode's node ID follows.)
+            if self.ids.get(&i).map(|x| x != id).unwrap_or(true) {
+                self.ids.insert(i, id.to_string());
+            }
+            return i;
         }
         let i = self.next;
         self.next += 1;
@@ -774,6 +783,16 @@ fn main() {
                 // The kernel drops what it cached for these inodes (attributes, directory pages, file pages):
                 // a file changed on another device is read afresh, a folder lists its new children.
                 *stale_after.lock().unwrap() = Instant::now();
+                // A queued copy uploaded: the account's node keeps the copy's inode (editors compare it).
+                if let Some(serde_json::Value::Array(pairs)) = v.get("alias") {
+                    let mut map = inos.lock().unwrap();
+                    for p in pairs {
+                        let (Some(from), Some(to)) = (p.get(0).and_then(|x| x.as_str()), p.get(1).and_then(|x| x.as_str())) else { continue };
+                        if let Some(i) = map.get(from).copied() {
+                            map.insert(to.to_string(), i);
+                        }
+                    }
+                }
                 let ino_of = |id: &str| -> Option<u64> { if id == "root" { Some(ROOT) } else { inos.lock().unwrap().get(id).copied() } };
                 // Names that changed in a folder: the kernel forgets the entries (a new name is looked up
                 // again; a removed one reports a deletion to inotify watchers, a file manager refreshes).
