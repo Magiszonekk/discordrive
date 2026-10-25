@@ -24,8 +24,9 @@ use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
 use windows::Win32::Storage::CloudFilters::*;
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_BASIC_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, OPEN_EXISTING,
+    CreateFileW, GetCompressedFileSizeW, GetFileAttributesW, ReadDirectoryChangesW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_PINNED, FILE_ATTRIBUTE_UNPINNED,
+    FILE_BASIC_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_NOTIFY_CHANGE_ATTRIBUTES, FILE_NOTIFY_INFORMATION, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    OPEN_EXISTING,
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -125,6 +126,12 @@ struct State {
     /// Placeholders this helper is removing (its own deletes are not refused).
     removing: Mutex<HashSet<String>>,
     dirty: AtomicBool,
+    /// Something was fetched: the cache limit is checked a moment later.
+    dirty_cache: AtomicBool,
+    /// When each file was last read (path → ms): the least recently read go first when over the limit.
+    used: Mutex<HashMap<PathBuf, u64>>,
+    /// Bytes of unpinned files kept on this computer at most (Settings, the disk's cache).
+    limit: std::sync::atomic::AtomicU64,
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
@@ -363,6 +370,10 @@ unsafe fn transfer(info: *const CF_CALLBACK_INFO, status: NTSTATUS, off: i64, da
 /// A program reads a part of a file not here yet: that part (and a little ahead), in pieces, from the agent.
 unsafe extern "system" fn on_fetch_data(info: *const CF_CALLBACK_INFO, p: *const CF_CALLBACK_PARAMETERS) {
     let id = identity(info);
+    if let Some(path) = full_path(info) {
+        st().used.lock().unwrap().insert(path, now_ms());
+        st().dirty_cache.store(true, Ordering::SeqCst);
+    }
     let f = (*p).Anonymous.FetchData;
     let size = (*info).FileSize.max(0) as u64;
     let off = f.RequiredFileOffset.max(0) as u64;
@@ -486,6 +497,151 @@ fn update(p: &Path, e: &Entry) -> windows::core::Result<()> {
         }
         r
     }
+}
+
+// ── pin, "Free up space", the limit ──
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// The file's full path from a callback (the volume's DOS name + the normalized path).
+unsafe fn full_path(info: *const CF_CALLBACK_INFO) -> Option<PathBuf> {
+    let i = &*info;
+    if i.VolumeDosName.is_null() || i.NormalizedPath.is_null() {
+        return None;
+    }
+    Some(PathBuf::from(format!("{}{}", i.VolumeDosName.to_string().ok()?, i.NormalizedPath.to_string().ok()?)))
+}
+
+fn attrs(p: &Path) -> u32 {
+    let w = wide_path(p);
+    unsafe { GetFileAttributesW(PCWSTR(w.as_ptr())) }
+}
+
+/// Bytes of the file on this computer (a placeholder not fetched: 0; partly fetched: what was fetched).
+fn on_disk(p: &Path) -> u64 {
+    let w = wide_path(p);
+    let mut hi = 0u32;
+    let lo = unsafe { GetCompressedFileSizeW(PCWSTR(w.as_ptr()), Some(&mut hi)) };
+    if lo == u32::MAX {
+        return 0;
+    }
+    ((hi as u64) << 32) | lo as u64
+}
+
+fn open_for_cf(p: &Path) -> windows::core::Result<HANDLE> {
+    let w = wide_path(p);
+    // FILE_READ_DATA | FILE_WRITE_ATTRIBUTES | FILE_READ_ATTRIBUTES: what hydrating and dehydrating need.
+    unsafe { CreateFileW(PCWSTR(w.as_ptr()), 0x1 | 0x100 | 0x80, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, None, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, None) }
+}
+
+/// "Always keep on this device": the whole file fetched now. "Free up space": its content dropped (it stays
+/// listed and is fetched again when opened).
+fn pin_changed(p: &Path) {
+    let a = attrs(p);
+    if a == u32::MAX || a & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
+        return;
+    }
+    let h = match open_for_cf(p) {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    unsafe {
+        if a & FILE_ATTRIBUTE_PINNED.0 != 0 {
+            if let Err(e) = CfHydratePlaceholder(h, 0, -1, CF_HYDRATE_FLAG_NONE, None) {
+                eprintln!("ddn-cf: keep {}: {e}", p.display());
+            }
+        } else if a & FILE_ATTRIBUTE_UNPINNED.0 != 0 {
+            match CfDehydratePlaceholder(h, 0, -1, CF_DEHYDRATE_FLAG_NONE, None) {
+                // Done: back to "no preference", so the limit treats it like any other file.
+                Ok(()) => {
+                    let _ = CfSetPinState(h, CF_PIN_STATE_UNSPECIFIED, CF_SET_PIN_FLAG_NONE, None);
+                    st().used.lock().unwrap().remove(p);
+                }
+                Err(e) => eprintln!("ddn-cf: free up {}: {e}", p.display()),
+            }
+        }
+        let _ = CloseHandle(h);
+    }
+}
+
+/// Over the limit: the content of the least recently read unpinned files is dropped until under it (a file
+/// open in a program cannot be: it is left).
+fn trim() {
+    let limit = st().limit.load(Ordering::SeqCst);
+    let files: Vec<PathBuf> = st().made.lock().unwrap().iter().filter(|(_, v)| v.1 > 0).map(|(k, _)| k.clone()).collect();
+    let mut held: Vec<(u64, u64, PathBuf)> = Vec::new();
+    let mut total = 0u64;
+    let used = st().used.lock().unwrap().clone();
+    for p in files {
+        let a = attrs(&p);
+        if a == u32::MAX || a & FILE_ATTRIBUTE_PINNED.0 != 0 {
+            continue;
+        }
+        let n = on_disk(&p);
+        if n == 0 {
+            continue;
+        }
+        total += n;
+        held.push((used.get(&p).copied().unwrap_or(0), n, p));
+    }
+    if total <= limit {
+        return;
+    }
+    held.sort();
+    for (_, n, p) in held {
+        if total <= limit {
+            break;
+        }
+        let Ok(h) = open_for_cf(&p) else { continue };
+        if unsafe { CfDehydratePlaceholder(h, 0, -1, CF_DEHYDRATE_FLAG_NONE, None) }.is_ok() {
+            total = total.saturating_sub(n);
+            st().used.lock().unwrap().remove(&p);
+        }
+        unsafe {
+            let _ = CloseHandle(h);
+        }
+    }
+}
+
+/// Explorer's pin commands change the files' attributes: watched under the root.
+fn watch_pins(root: PathBuf) {
+    let w = wide_path(&root);
+    let h = match unsafe { CreateFileW(PCWSTR(w.as_ptr()), 0x1, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, None, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, None) } {
+        Ok(h) => h,
+        Err(e) => return eprintln!("ddn-cf: cannot watch {}: {e}", root.display()),
+    };
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let mut got = 0u32;
+        if unsafe { ReadDirectoryChangesW(h, buf.as_mut_ptr() as *mut c_void, buf.len() as u32, true, FILE_NOTIFY_CHANGE_ATTRIBUTES, Some(&mut got), None, None) }.is_err() {
+            std::thread::sleep(Duration::from_secs(1));
+            continue;
+        }
+        let mut off = 0usize;
+        let mut seen = HashSet::new();
+        while got > 0 && off + size_of::<FILE_NOTIFY_INFORMATION>() <= got as usize {
+            let fi = unsafe { &*(buf.as_ptr().add(off) as *const FILE_NOTIFY_INFORMATION) };
+            let name = unsafe { std::slice::from_raw_parts(fi.FileName.as_ptr(), fi.FileNameLength as usize / 2) };
+            seen.insert(root.join(String::from_utf16_lossy(name)));
+            if fi.NextEntryOffset == 0 {
+                break;
+            }
+            off += fi.NextEntryOffset as usize;
+        }
+        for p in seen {
+            pin_changed(&p);
+        }
+    }
+}
+
+/// `ddn-cf state <path>`: what a file is on this computer (tests, support): attributes, bytes here, size.
+fn print_state(p: &Path) -> i32 {
+    let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    let a = attrs(p);
+    println!("{}", json!({ "attrs": a, "pinned": a != u32::MAX && a & FILE_ATTRIBUTE_PINNED.0 != 0, "onDisk": on_disk(p), "size": size }));
+    0
 }
 
 // ── registration ──
@@ -631,6 +787,7 @@ pub fn main() {
     let a: Vec<String> = std::env::args().collect();
     match a.get(1).map(String::as_str) {
         Some("unregister") if a.len() == 3 => std::process::exit(unregister(Path::new(&a[2]))),
+        Some("state") if a.len() == 3 => std::process::exit(print_state(Path::new(&a[2]))),
         Some("serve") if a.len() == 6 => {}
         _ => {
             eprintln!("usage: ddn-cf serve <root> <pipe> <icon> <version> | ddn-cf unregister <root>");
@@ -670,6 +827,9 @@ pub fn main() {
         made: Mutex::new(HashMap::new()),
         removing: Mutex::new(HashSet::new()),
         dirty: AtomicBool::new(false),
+        dirty_cache: AtomicBool::new(false),
+        used: Mutex::new(HashMap::new()),
+        limit: std::sync::atomic::AtomicU64::new(std::env::var("DDN_CF_LIMIT").ok().and_then(|x| x.parse().ok()).unwrap_or(10 << 30)),
     });
     let table: &'static [CF_CALLBACK_REGISTRATION] = Box::leak(Box::new([
         CF_CALLBACK_REGISTRATION { Type: CF_CALLBACK_TYPE_FETCH_PLACEHOLDERS, Callback: Some(on_fetch_placeholders) },
@@ -702,12 +862,37 @@ pub fn main() {
             reconcile();
         }
     });
+    // The limit: after reads (a moment later, bursts merge) and every minute.
+    std::thread::spawn(|| {
+        let mut last = 0u64;
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let t = now_ms();
+            if st().dirty_cache.swap(false, Ordering::SeqCst) || t - last > 60_000 {
+                last = t;
+                trim();
+            }
+        }
+    });
+    {
+        let r = root.clone();
+        std::thread::spawn(move || watch_pins(r));
+    }
     eprintln!("ddn-cf: serving {} ({how})", root.display());
     println!("ready");
     let _ = std::io::stdout().flush();
     loop {
         match watch.frame() {
-            Ok(_) => st().dirty.store(true, Ordering::SeqCst),
+            Ok(f) => {
+                // {"limit": bytes}: the cache limit changed in Settings; else a sync: compare the folders.
+                let v: Value = serde_json::from_slice(&f).unwrap_or(json!({}));
+                if let Some(l) = v.get("limit").and_then(|x| x.as_u64()) {
+                    st().limit.store(l, Ordering::SeqCst);
+                    st().dirty_cache.store(true, Ordering::SeqCst);
+                } else {
+                    st().dirty.store(true, Ordering::SeqCst);
+                }
+            }
             Err(_) => gone(),
         }
     }

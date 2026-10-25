@@ -897,10 +897,31 @@ export class VdiskWin {
       core: VdiskCore;
       icon: string;
       version: string;
+      /** Bytes of unpinned files kept on this computer at most (least recently read freed first). */
+      limit?: number;
       log?: (m: string) => void;
       onState?: (s: string) => void;
     },
   ) {}
+
+  /** The cache limit changed (Settings): the helper frees up space when over it. */
+  setLimit(bytes: number) {
+    this.opts.limit = bytes;
+    const body = Buffer.from(JSON.stringify({ limit: bytes }));
+    const h = Buffer.alloc(4);
+    h.writeUInt32LE(body.length);
+    for (const w of this.srv?.watchers ?? []) w.write(Buffer.concat([h, body]));
+  }
+
+  /** What a file of the disk is on this computer (tests, support): pinned, bytes here, size. */
+  state(path: string): { attrs: number; pinned: boolean; onDisk: number; size: number } | null {
+    const r = spawnSync(this.opts.helper, ["state", path], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
+    try {
+      return JSON.parse(r.stdout.trim()) as { attrs: number; pinned: boolean; onDisk: number; size: number };
+    } catch {
+      return null;
+    }
+  }
 
   static unavailable(helper: string): string | null {
     if (process.platform !== "win32") return "not windows";
@@ -930,7 +951,7 @@ export class VdiskWin {
     await new Promise<void>((r, j) => (this.srv!.once("listening", () => r()), this.srv!.once("error", j)));
     const child = spawn(this.opts.helper, ["serve", this.opts.mountpoint, this.opts.socket, this.opts.icon, this.opts.version], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, DDN_CF_TOKEN: this.token },
+      env: { ...process.env, DDN_CF_TOKEN: this.token, ...(this.opts.limit ? { DDN_CF_LIMIT: String(this.opts.limit) } : {}) },
       windowsHide: true,
     });
     this.child = child;

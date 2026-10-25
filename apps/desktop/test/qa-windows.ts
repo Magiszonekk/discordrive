@@ -239,6 +239,69 @@ try {
     const same = !!f && sha(readFileSync(join(downloads, f))) === sha(big);
     return { ok: btn && same, note: `file: ${f ?? "none"}, sha ${same ? "ok" : "differs"}` };
   });
+  // The disk in the system (Cloud Files): on, the folder in Explorer, a file read from it = the uploaded bytes,
+  // listing without fragments, a delete refused, off = the folder gone. (Windows only.)
+  if (process.platform === "win32") {
+    const root = join(process.env.USERPROFILE ?? "", "discordrive");
+    const ps = (cmd: string, timeout = 120_000) => execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", cmd], { encoding: "utf8", timeout }).trim();
+    const explorerShot = async (name: string, path: string) => {
+      try {
+        spawn("explorer.exe", [path], { detached: true, stdio: "ignore" }).unref();
+      } catch {}
+      await p.waitForTimeout(4000);
+      desktopShot(name);
+      try {
+        // Close the Explorer windows this step opened (not the shell).
+        ps(`(New-Object -ComObject Shell.Application).Windows() | ForEach-Object { $_.Quit() }`, 20_000);
+      } catch {}
+    };
+    await step(p, "V1-disk-on", "Settings → App → Disk in the system on: mounted, the state shown", async () => {
+      await settingsTab(p, "app");
+      await p.locator("[data-ddn=app-vdisk-row]").scrollIntoViewIfNeeded().catch(() => {});
+      const sw = p.locator("[data-ddn=app-vdisk]");
+      if (!(await sw.isChecked())) await sw.evaluate((el) => (el as HTMLInputElement).click());
+      const hint = await p
+        .waitForFunction(() => /Mounted|Zamontowany|Not available|Niedostępne|could not|Nie udało/.test(document.querySelector("[data-ddn=app-vdisk-hint]")?.textContent ?? "") && document.querySelector("[data-ddn=app-vdisk-hint]")!.textContent, null, { timeout: 90_000 })
+        .then((h) => h.jsonValue() as Promise<string>)
+        .catch(async () => p.evaluate(() => document.querySelector("[data-ddn=app-vdisk-hint]")?.textContent ?? ""));
+      return { ok: /Mounted|Zamontowany/.test(hint), note: hint };
+    });
+    await step(p, "V2-explorer", "Explorer on %USERPROFILE%\\discordrive: the folder in the navigation pane, the files with their state icons; no fragment fetched by listing", async () => {
+      const g0 = fake.cdnGets;
+      const names = ps(`Get-ChildItem -LiteralPath '${root}' -Recurse | ForEach-Object { $_.Name }`).split(/\r?\n/).filter(Boolean);
+      await explorerShot("V2-explorer-root", root);
+      const fetched = fake.cdnGets - g0;
+      return { ok: names.includes(`qa-${MB}mb.bin`) && fetched === 0, note: `${names.length} entries (${names.slice(0, 6).join(", ")}); CDN requests while listing and opening the folder: ${fetched}` };
+    });
+    await step(p, "V3-hash", `Get-FileHash of qa-${MB}mb.bin read from the disk = the uploaded file`, async () => {
+      const h = ps(`(Get-FileHash -Algorithm SHA256 -LiteralPath '${join(root, `qa-${MB}mb.bin`)}').Hash`, 600_000).toLowerCase();
+      await explorerShot("V3-explorer-after-read", root);
+      return { ok: h === sha(big), note: `${h.slice(0, 16)}… vs ${sha(big).slice(0, 16)}…` };
+    });
+    await step(p, "V4-delete-refused", "Remove-Item on a file of the disk: refused (read only), the file stays", async () => {
+      let msg = "";
+      try {
+        ps(`Remove-Item -LiteralPath '${join(root, `qa-${MB}mb.bin`)}' -ErrorAction Stop`);
+        msg = "removed (not refused)";
+      } catch (e) {
+        msg = String((e as { stderr?: string }).stderr ?? (e as Error).message).split(/\r?\n/).find((l) => l.trim()) ?? "refused";
+      }
+      const still = existsSync(join(root, `qa-${MB}mb.bin`));
+      return { ok: still && !/not refused/.test(msg), note: msg.slice(0, 200) };
+    });
+    await step(p, "V5-disk-off", "Disk off: the folder gone from the navigation pane and the disk", async () => {
+      await settingsTab(p, "app");
+      const sw = p.locator("[data-ddn=app-vdisk]");
+      if (await sw.isChecked()) await sw.evaluate((el) => (el as HTMLInputElement).click());
+      let gone = false;
+      for (let i = 0; i < 60 && !gone; i++) {
+        await p.waitForTimeout(1000);
+        gone = !existsSync(join(root, `qa-${MB}mb.bin`));
+      }
+      await explorerShot("V5-explorer-after-off", process.env.USERPROFILE ?? "C:\\");
+      return { ok: gone, note: gone ? "the folder's placeholders are gone" : "the files are still there" };
+    });
+  }
   await step(p, "S5-video", "Play an MP4 with moov at the end, seek to the middle", async () => {
     let mp4 = "";
     try {

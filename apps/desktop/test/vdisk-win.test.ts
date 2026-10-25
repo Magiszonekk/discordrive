@@ -6,7 +6,7 @@
 //   - unregister takes the sync root and its placeholders down.
 // Skipped where the helper or the Cloud Files API is missing (Linux, macOS).
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { open, readdir, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -93,12 +93,42 @@ describe.skipIf(why !== null)(`disk in the system (Windows, Cloud Files)${why ? 
     expect(names).toContain("z innego urządzenia.txt");
     expect(sha(await readFile(join(dir, "z innego urządzenia.txt")))).toBe(sha(added));
 
-    // 4. Read-only: a delete is refused (the file stays in the account and on the disk).
+    // 4. Explorer's "Always keep on this device" (the pinned attribute): the whole file fetched; "Free up
+    //    space" (unpinned): its content dropped, it stays listed with its size.
+    const { execFileSync } = await import("node:child_process");
+    const fileOf = (n: string) => join(dir, n);
+    const until = async (f: () => boolean, ms = 30_000) => {
+      for (let t = 0; t < ms && !f(); t += 250) await new Promise((r) => setTimeout(r, 250));
+      return f();
+    };
+    const added2 = new Uint8Array(randomBytes(3 * 1024 * 1024));
+    await core.upload(new Blob([added2]), "do przypięcia.bin", f);
+    disk.invalidate("all");
+    await until(() => existsSync(fileOf("do przypięcia.bin")));
+    expect(disk.state(fileOf("do przypięcia.bin"))?.onDisk).toBe(0);
+    execFileSync("attrib", ["+P", fileOf("do przypięcia.bin")]);
+    expect(await until(() => disk.state(fileOf("do przypięcia.bin"))?.onDisk === added2.byteLength)).toBe(true);
+    execFileSync("attrib", ["-P", "+U", fileOf("do przypięcia.bin")]);
+    expect(await until(() => disk.state(fileOf("do przypięcia.bin"))?.onDisk === 0)).toBe(true);
+    expect((await stat(fileOf("do przypięcia.bin"))).size).toBe(added2.byteLength);
+
+    // 5. The limit: 8 MiB; the 25 MiB file read above and then the small one: the least recently read
+    //    content is freed until under the limit, a pinned file is kept.
+    execFileSync("attrib", ["+P", fileOf("notatka： a？b.txt")]);
+    await until(() => disk.state(fileOf("notatka： a？b.txt"))?.onDisk === small.byteLength);
+    disk.setLimit(8 * 1024 * 1024);
+    expect(await until(() => (disk.state(fileOf("film duży.bin"))?.onDisk ?? 1) === 0)).toBe(true);
+    expect(disk.state(fileOf("notatka： a？b.txt"))?.onDisk).toBe(small.byteLength);
+    // Read again after being freed: the same bytes.
+    expect(sha(await readFile(fileOf("film duży.bin")))).toBe(sha(big));
+    disk.setLimit(1 << 30);
+
+    // 6. Read-only: a delete is refused (the file stays in the account and on the disk).
     const { rm } = await import("node:fs/promises");
     await expect(rm(join(dir, "notatka： a？b.txt"))).rejects.toThrow();
     expect(core.list(f).rows.some((r) => r.name === "notatka: a?b.txt")).toBe(true);
 
-    // 5. Option off: the sync root and its placeholders go.
+    // 7. Option off: the sync root and its placeholders go.
     await disk.stop();
     disk.unregister();
     expect(await stat(root).then(() => readdir(root), () => [] as string[])).toEqual([]);

@@ -102,12 +102,16 @@ async function setVdiskWin(c: AppCore, cfg: VdiskConfig, w: { icon: string; vers
     diskWin = null;
     return state("off");
   }
-  if (diskWin?.mounted()) return state("mounted");
+  if (diskWin?.mounted()) {
+    // On Windows the files fetched are the cache (Explorer shows them as "on this device"): the limit is theirs.
+    if (diskWin.opts.limit !== cfg.cacheBytes) diskWin.setLimit(cfg.cacheBytes);
+    return state("mounted");
+  }
   const why = VdiskWin.unavailable(cfg.helper);
   if (why) return state(`unavailable: ${why}`);
   for (let i = 0; i < 600 && !(await c.status()).signedIn; i++) await new Promise((r) => setTimeout(r, 500));
   diskCache ??= new FragDiskCache(cfg.cacheDir, cfg.cacheBytes);
-  diskWin = new VdiskWin({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, icon: w.icon, version: w.version, log: (m) => console.error(m), onState: state });
+  diskWin = new VdiskWin({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, icon: w.icon, version: w.version, limit: cfg.cacheBytes, log: (m) => console.error(m), onState: state });
   try {
     await diskWin.start();
     state("mounted");
