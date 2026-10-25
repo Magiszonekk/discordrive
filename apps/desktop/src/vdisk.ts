@@ -27,7 +27,7 @@ export interface VdiskCore {
   vdiskStat(id: string): { id: string; name: string; kind: "file" | "folder"; size: number; mtime: number } | null;
   vdiskRead(id: string, off: number, len: number, cache: Map<string, Uint8Array>): Promise<Uint8Array>;
   /** Writing (when the disk is writable): a closed file's local copy uploaded, folders, renames, the trash. */
-  vdiskUpload?(path: string, dirId: string, name: string): Promise<{ id: string }>;
+  vdiskUpload?(path: string, dirId: string, name: string, previews?: { kind: "t" | "p"; mime: string; width: number; height: number; data: Uint8Array }[] | null): Promise<{ id: string }>;
   vdiskMkdir?(dirId: string, name: string): Promise<{ id: string }>;
   vdiskRename?(dirId: string, name: string, toDirId: string, toName: string): Promise<void>;
   vdiskRemove?(dirId: string, name: string, folder: boolean): Promise<void>;
@@ -40,6 +40,56 @@ export interface VdiskCore {
  * files are named by their SHA-256 (the key holds no secret, but it need not be readable either).
  * A Map, so readVersionRange uses it as its fragment cache.
  */
+/**
+ * Thumbnail and preview of a file written into the disk, made on this computer from its local copy before
+ * the upload (as the web client does at upload): pictures decoded by the helper, a video's frame at 10 %
+ * of its length taken by ffmpeg when it is installed. Null: not a picture or video, or it cannot be read.
+ */
+export async function makeLocalPreviews(helper: string, path: string, name: string): Promise<{ kind: "t" | "p"; mime: string; width: number; height: number; data: Uint8Array }[] | null> {
+  const image = /\.(jpe?g|jfif|png|webp)$/i.test(name);
+  const video = /\.(mp4|m4v|webm|mov|mkv|ogv)$/i.test(name);
+  if (!image && !video) return null;
+  let input: Buffer | null = null;
+  if (image) {
+    if (statSync(path).size > 60 * 1024 * 1024) return null;
+    input = readFileSync(path);
+  } else {
+    const run = (args: string[]) =>
+      new Promise<Buffer | null>((ok) => {
+        const p = spawn(args[0]!, args.slice(1), { stdio: ["ignore", "pipe", "ignore"] });
+        const out: Buffer[] = [];
+        const t = setTimeout(() => p.kill("SIGKILL"), 20_000);
+        p.stdout.on("data", (b: Buffer) => out.push(b));
+        p.on("error", () => (clearTimeout(t), ok(null)));
+        p.on("close", (c) => (clearTimeout(t), ok(c === 0 ? Buffer.concat(out) : null)));
+      });
+    const dur = Number((await run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path]))?.toString().trim());
+    const at = Number.isFinite(dur) && dur > 0 ? Math.min(dur * 0.1, Math.max(0, dur - 0.1)) : 0;
+    input = await run(["ffmpeg", "-v", "error", "-ss", String(at), "-i", path, "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"]);
+    if (!input?.length) return null;
+  }
+  const out = await new Promise<Buffer | null>((ok) => {
+    const p = spawn(helper, ["preview"], { stdio: ["pipe", "pipe", "ignore"] });
+    const o: Buffer[] = [];
+    p.stdout.on("data", (b: Buffer) => o.push(b));
+    p.on("error", () => ok(null));
+    p.on("close", (c) => ok(c === 0 ? Buffer.concat(o) : null));
+    p.stdin.on("error", () => {});
+    p.stdin.end(input);
+  });
+  if (!out) return null;
+  const imgs: { kind: "t" | "p"; mime: string; width: number; height: number; data: Uint8Array }[] = [];
+  let i = 0;
+  for (const kind of ["t", "p"] as const) {
+    if (i + 12 > out.length) break;
+    const [w, h, n] = [out.readUInt32LE(i), out.readUInt32LE(i + 4), out.readUInt32LE(i + 8)];
+    i += 12;
+    if (n && w && h) imgs.push({ kind, mime: "image/jpeg", width: w, height: h, data: new Uint8Array(out.subarray(i, i + n)) });
+    i += n;
+  }
+  return imgs.length ? imgs : null;
+}
+
 /**
  * The last few fragments in memory in front of the cache on disk: a player reads a fragment in thousands of
  * small pieces (4 KiB), each of which would otherwise read the whole fragment (10 MiB) from the disk.
@@ -189,6 +239,8 @@ export class Outbox {
   private seq = Date.now();
   private running: Promise<void> | null = null;
   private wake: (() => void) | null = null;
+  /** Thumbnail and preview of a queued copy before its upload (pictures, videos); null: none. */
+  previews: ((path: string, name: string) => Promise<{ kind: "t" | "p"; mime: string; width: number; height: number; data: Uint8Array }[] | null>) | null = null;
   /** After each upload (ok or not): the folder, the name, the pending id, an error. */
   onDone: (dir: string, name: string, id: string, err: string | null, nodeId?: string) => void = () => {};
   constructor(
@@ -292,7 +344,8 @@ export class Outbox {
       const path = join(this.dir, `q-${next.n}`);
       try {
         const at = { dir: next.dir, name: next.name };
-        const up = await this.core.vdiskUpload!(path, at.dir, at.name);
+        const pv = await this.previews?.(path, at.name).catch(() => null);
+        const up = await this.core.vdiskUpload!(path, at.dir, at.name, pv);
         const it = this.items.get(next.n);
         this.drop(next.n);
         // Renamed, moved or removed on the disk while it was uploading: the same in the account now.
@@ -634,7 +687,15 @@ export class Vdisk {
       // Uploaded: the folder shows the account's file instead of the queued copy.
       // The uploaded node keeps the inode of its queued copy (editors compare it, and the mtime, to notice
       // a change by another program).
-      this.outbox.onDone = (dir, _name, pending, err, nodeId) => this.invalidate([dir], err || !nodeId ? [] : [[pending, nodeId]]);
+      this.outbox.previews = (path, name) => makeLocalPreviews(this.opts.helper, path, name);
+      this.outbox.onDone = (dir, name, pending, err, nodeId) => {
+        this.invalidate([dir], err || !nodeId ? [] : [[pending, nodeId]]);
+        // Its thumbnail for the file manager now (a "none" marker written while it was queued is dropped:
+        // the mtime stays the same after the upload, so the file manager would never ask again).
+        const d = !err && nodeId ? core.vdiskPath?.(dir) : null;
+        const e = d !== null && d !== undefined ? core.vdiskList(dir)?.find((x) => x.id === nodeId) : null;
+        if (e && this.thumbs) void this.thumbs.again(e.id, join(d!, name), e.mtime);
+      };
       this.outbox.kick();
     }
     this.srv = serveVdisk(core, this.opts.socket, this.opts.cache, {

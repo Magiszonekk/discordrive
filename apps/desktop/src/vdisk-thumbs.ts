@@ -8,7 +8,7 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 
@@ -127,6 +127,15 @@ export class Thumbnails {
     const p = Promise.all(Array.from({ length: Math.min(6, todo.length) }, lane)).then(() => {});
     this.queue = this.queue.then(() => p);
     return p;
+  }
+
+  /** A file just uploaded through the disk: its thumbnails written again (a "none" marker dropped). */
+  async again(id: string, path: string, mtime: number): Promise<void> {
+    const uri = fileUri(join(this.opts.mountpoint, path));
+    const mt = Math.floor(mtime / 1000);
+    for (const s of ["normal", "large", "fail"] as const) rmSync(this.pathOf(uri, s), { force: true });
+    this.done.set(uri, mt);
+    await this.one(id, uri, mt).catch(() => {});
   }
 
   private async one(id: string, uri: string, mtime: number) {
