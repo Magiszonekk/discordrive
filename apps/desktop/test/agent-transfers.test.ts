@@ -117,7 +117,14 @@ describe("desktop agent transfers (Node, HTTP/2 to a fake Discord)", () => {
       next = 0;
       for (const acct of existsSync(resumeDir) ? readdirSync(resumeDir) : [])
         for (const fname of readdirSync(join(resumeDir, acct))) {
-          const e = JSON.parse(readFileSync(join(resumeDir, acct, fname), "utf8")) as { k: string; v: { next?: number; hash?: string } };
+          // The child writes each entry through a temp file renamed into place: one may be gone by now.
+          if (!fname.endsWith(".json")) continue;
+          let e: { k: string; v: { next?: number; hash?: string } };
+          try {
+            e = JSON.parse(readFileSync(join(resumeDir, acct, fname), "utf8")) as typeof e;
+          } catch {
+            continue;
+          }
           if (e.k.startsWith("dl:") && e.v.hash) next = Math.max(next, e.v.next ?? 0);
         }
       if (next >= 2) break;

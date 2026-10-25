@@ -87,7 +87,8 @@ jobs:
         timeout-minutes: 12
         run: |
           cargo build --release --manifest-path apps/desktop/native/cf/Cargo.toml
-          ls -l apps/desktop/native/cf/target/release/ddn-cf.exe
+          cargo build --release --manifest-path apps/desktop/native/cf-thumb/Cargo.toml
+          ls -l apps/desktop/native/cf/target/release/ddn-cf.exe apps/desktop/native/cf-thumb/target/release/ddn_cf_thumb.dll
 
       - name: Typecheck
         run: npm run typecheck -w @ddv4/desktop

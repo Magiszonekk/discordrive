@@ -239,6 +239,87 @@ try {
     const same = !!f && sha(readFileSync(join(downloads, f))) === sha(big);
     return { ok: btn && same, note: `file: ${f ?? "none"}, sha ${same ? "ok" : "differs"}` };
   });
+  // The disk in the system (Cloud Files): on, the folder in Explorer, a file read from it = the uploaded bytes,
+  // listing without fragments, a delete refused, off = the folder gone. (Windows only.)
+  if (process.platform === "win32") {
+    const root = join(process.env.USERPROFILE ?? "", "discordrive");
+    // Asynchronously: the fake Discord the app downloads from runs on this script's event loop; a synchronous
+    // child would freeze it (the disk's reads then time out).
+    const { promisify } = await import("node:util");
+    const { execFile } = await import("node:child_process");
+    const ps = async (cmd: string, timeout = 120_000) => (await promisify(execFile)("powershell", ["-NoProfile", "-NonInteractive", "-Command", cmd], { encoding: "utf8", timeout })).stdout.trim();
+    const explorerShot = async (name: string, path: string) => {
+      try {
+        spawn("explorer.exe", [path], { detached: true, stdio: "ignore" }).unref();
+      } catch {}
+      await p.waitForTimeout(4000);
+      desktopShot(name);
+      try {
+        // Close the Explorer windows this step opened (not the shell).
+        await ps(`(New-Object -ComObject Shell.Application).Windows() | ForEach-Object { $_.Quit() }`, 20_000);
+      } catch {}
+    };
+    await step(p, "V1-disk-on", "Settings → App → Disk in the system on: mounted, the state shown", async () => {
+      await settingsTab(p, "app");
+      await p.locator("[data-ddn=app-vdisk-row]").scrollIntoViewIfNeeded().catch(() => {});
+      const sw = p.locator("[data-ddn=app-vdisk]");
+      if (!(await sw.isChecked())) await sw.evaluate((el) => (el as HTMLInputElement).click());
+      const hint = await p
+        .waitForFunction(() => /Mounted|Zamontowany|Not available|Niedostępne|could not|Nie udało/.test(document.querySelector("[data-ddn=app-vdisk-hint]")?.textContent ?? "") && document.querySelector("[data-ddn=app-vdisk-hint]")!.textContent, null, { timeout: 90_000 })
+        .then((h) => h.jsonValue() as Promise<string>)
+        .catch(async () => p.evaluate(() => document.querySelector("[data-ddn=app-vdisk-hint]")?.textContent ?? ""));
+      return { ok: /Mounted|Zamontowany/.test(hint), note: hint };
+    });
+    await step(p, "V2-explorer", "Explorer on %USERPROFILE%\\discordrive: the folder in the navigation pane, the files with their state icons; no fragment fetched by listing", async () => {
+      const g0 = fake.cdnGets;
+      const names = (await ps(`Get-ChildItem -LiteralPath '${root}' -Recurse | ForEach-Object { $_.Name }`)).split(/\r?\n/).filter(Boolean);
+      await explorerShot("V2-explorer-root", root);
+      const fetched = fake.cdnGets - g0;
+      return { ok: names.includes(`qa-${MB}mb.bin`) && fetched === 0, note: `${names.length} entries (${names.slice(0, 6).join(", ")}); CDN requests while listing and opening the folder: ${fetched}` };
+    });
+    await step(p, "V3-hash", `Get-FileHash of qa-${MB}mb.bin read from the disk = the uploaded file`, async () => {
+      const f = join(root, `qa-${MB}mb.bin`).replace(/'/g, "''");
+      const g0 = fake.cdnGets;
+      let h = "";
+      let err = "";
+      try {
+        h = await ps(`$ErrorActionPreference='Stop'; try { (Get-FileHash -Algorithm SHA256 -LiteralPath '${f}').Hash } catch { Write-Output ("ERR " + $_.Exception.Message) }`, 600_000);
+      } catch (e) {
+        err = String((e as { stderr?: string }).stderr ?? (e as Error).message).slice(0, 300);
+      }
+      if (h.startsWith("ERR ")) ((err = h.slice(4)), (h = ""));
+      h = h.toLowerCase();
+      const fetched = fake.cdnGets - g0;
+      await explorerShot("V3-explorer-after-read", root);
+      return { ok: h === sha(big), note: `${h ? h.slice(0, 16) + "…" : "no hash"} vs ${sha(big).slice(0, 16)}…; CDN requests while reading: ${fetched}${err ? `; error: ${err}` : ""}` };
+    });
+    await step(p, "V4-delete-refused", "Remove-Item on a file of the disk: refused (read only), the file stays", async () => {
+      let msg = "";
+      try {
+        await ps(`Remove-Item -LiteralPath '${join(root, `qa-${MB}mb.bin`)}' -ErrorAction Stop`);
+        msg = "removed (not refused)";
+      } catch (e) {
+        msg = String((e as { stderr?: string }).stderr ?? (e as Error).message).split(/\r?\n/).find((l) => l.trim()) ?? "refused";
+      }
+      const still = existsSync(join(root, `qa-${MB}mb.bin`));
+      return { ok: still && !/not refused/.test(msg), note: msg.slice(0, 200) };
+    });
+    await step(p, "V5-disk-off", "Disk off: the folder gone from the navigation pane and the disk", async () => {
+      await settingsTab(p, "app");
+      const sw = p.locator("[data-ddn=app-vdisk]");
+      if (await sw.isChecked()) await sw.evaluate((el) => (el as HTMLInputElement).click());
+      let gone = false;
+      for (let i = 0; i < 60 && !gone; i++) {
+        await p.waitForTimeout(1000);
+        gone = !existsSync(join(root, `qa-${MB}mb.bin`));
+      }
+      await explorerShot("V5-explorer-after-off", process.env.USERPROFILE ?? "C:\\");
+      return { ok: gone, note: gone ? "the folder's placeholders are gone" : "the files are still there" };
+    });
+    // Back to Files for the next steps.
+    await p.click("a[data-nav=files]").catch(() => {});
+    await p.waitForSelector("[data-page=files]:not([hidden])", { timeout: 30_000 }).catch(() => {});
+  }
   await step(p, "S5-video", "Play an MP4 with moov at the end, seek to the middle", async () => {
     let mp4 = "";
     try {
@@ -314,6 +395,12 @@ try {
   steps.push({ id: "crash", what: "the run itself", ok: false, note: String((e as Error)?.stack ?? e).slice(0, 800), shot: "" });
 } finally {
   desktopShot("desktop-end");
+  // The app's logs (the disk's) next to the screenshots.
+  for (const f of ["vdisk.log", "vdisk.log.1"]) {
+    try {
+      if (existsSync(join(data, f))) writeFileSync(join(shots, f), readFileSync(join(data, f)));
+    } catch {}
+  }
   await app?.evaluate(({ app: a }) => a.exit(0)).catch(() => {});
   await app?.close().catch(() => {});
   await cdp?.close().catch(() => {});

@@ -421,6 +421,24 @@ export class Outbox {
   }
 }
 
+/** The names ddn-cf shows for characters Windows does not allow (full-width look-alikes), back to the account's. */
+const WIN_LOOKALIKE: Record<string, string> = { "＼": "\\", "：": ":", "＊": "*", "？": "?", "＂": '"', "＜": "<", "＞": ">", "｜": "|" };
+/** The node of a file at `path` under `root` (a path on this computer), or null. */
+function nodeAtPath(core: VdiskCore, root: string, path: string): string | null {
+  const norm = (x: string) => x.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  const r = norm(root);
+  const p = path.replace(/\//g, "\\");
+  if (!norm(p).startsWith(r + "\\")) return null;
+  let id = "root";
+  for (const part of p.slice(r.length + 1).split("\\").filter(Boolean)) {
+    const want = [...part].map((c) => WIN_LOOKALIKE[c] ?? c).join("");
+    const e = core.vdiskList(id)?.find((x) => x.name === want || x.name === part);
+    if (!e) return null;
+    id = e.id;
+  }
+  return id === "root" ? null : id;
+}
+
 export function serveVdisk(core: VdiskCore, socketPath: string, cache: FragDiskCache, hooks: Hooks = {}): Server & { conns: Set<Socket>; watchers: Set<Socket> } {
   // A Windows named pipe (\\.\pipe\…): any process of the user can open it, so the helper proves itself
   // with the secret it was started with (hooks.token, its first request "hello").
@@ -453,6 +471,8 @@ export function serveVdisk(core: VdiskCore, socketPath: string, cache: FragDiskC
 }
 
 interface Hooks {
+  /** The disk's root on this computer (Windows: the sync root), for requests by path. */
+  root?: string;
   /** Required first request {op:"hello", token} (a named pipe on Windows); absent: none. */
   token?: string;
   /** A folder was listed (the file manager opened it). */
@@ -475,7 +495,7 @@ function connection(core: VdiskCore, sock: Socket, disk: FragDiskCache, hooks: H
     h2.writeUInt32LE(data.byteLength);
     sock.write(Buffer.concat([h1, body, h2, Buffer.from(data.buffer, data.byteOffset, data.byteLength)]));
   };
-  const handle = async (q: { op?: string; id?: string; off?: number; len?: number; dir?: string; name?: string; toDir?: string; toName?: string; path?: string; folder?: boolean }) => {
+  const handle = async (q: { op?: string; id?: string; off?: number; len?: number; dir?: string; name?: string; toDir?: string; toName?: string; path?: string; folder?: boolean; kind?: string }) => {
     try {
       if (!trusted) {
         if (q.op === "hello" && typeof (q as { token?: unknown }).token === "string" && (q as { token: string }).token === hooks.token) {
@@ -486,6 +506,13 @@ function connection(core: VdiskCore, sock: Socket, disk: FragDiskCache, hooks: H
         return;
       }
       if (q.op === "hello") return send({});
+      // Windows' thumbnail provider: the stored preview of the file at this path under the disk's root.
+      if (q.op === "preview" && hooks.root && typeof q.path === "string") {
+        const id = nodeAtPath(core, hooks.root, q.path);
+        const pv = id && core.vdiskPreview ? await core.vdiskPreview(id, q.kind === "t" ? "t" : "p").catch(() => null) : null;
+        const t = !pv && id && core.vdiskPreview && q.kind !== "t" ? await core.vdiskPreview(id, "t").catch(() => null) : null;
+        return send({}, (pv ?? t)?.data ?? new Uint8Array(0));
+      }
       // The helper's second connection: invalidations go out on it, nothing is answered.
       if (q.op === "watch") return hooks.watch?.();
       if (q.op === "list") {
@@ -897,10 +924,35 @@ export class VdiskWin {
       core: VdiskCore;
       icon: string;
       version: string;
+      /** Bytes of unpinned files kept on this computer at most (least recently read freed first). */
+      limit?: number;
+      /** Where the thumbnail provider finds the pipe and its secret (%LOCALAPPDATA%\discordrive\cf-thumb.json). */
+      thumbConfig?: string;
+      /** The thumbnail provider DLL (registered for this user by the helper). */
+      thumbDll?: string;
       log?: (m: string) => void;
       onState?: (s: string) => void;
     },
   ) {}
+
+  /** The cache limit changed (Settings): the helper frees up space when over it. */
+  setLimit(bytes: number) {
+    this.opts.limit = bytes;
+    const body = Buffer.from(JSON.stringify({ limit: bytes }));
+    const h = Buffer.alloc(4);
+    h.writeUInt32LE(body.length);
+    for (const w of this.srv?.watchers ?? []) w.write(Buffer.concat([h, body]));
+  }
+
+  /** What a file of the disk is on this computer (tests, support): pinned, bytes here, size. */
+  state(path: string): { attrs: number; pinned: boolean; onDisk: number; size: number } | null {
+    const r = spawnSync(this.opts.helper, ["state", path], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
+    try {
+      return JSON.parse(r.stdout.trim()) as { attrs: number; pinned: boolean; onDisk: number; size: number };
+    } catch {
+      return null;
+    }
+  }
 
   static unavailable(helper: string): string | null {
     if (process.platform !== "win32") return "not windows";
@@ -926,11 +978,16 @@ export class VdiskWin {
   async start(): Promise<void> {
     this.stopping = false;
     const core = this.opts.core;
-    this.srv = serveVdisk(core, this.opts.socket, this.opts.cache, { token: this.token, listed: (id) => void this.listedNow.set(id, true) });
+    this.srv = serveVdisk(core, this.opts.socket, this.opts.cache, { token: this.token, root: this.opts.mountpoint, listed: (id) => void this.listedNow.set(id, true) });
+    // The thumbnail provider (a DLL Explorer loads) reaches the agent with this (its own user's file).
+    if (this.opts.thumbConfig) {
+      mkdirSync(join(this.opts.thumbConfig, ".."), { recursive: true });
+      writeFileSync(this.opts.thumbConfig, JSON.stringify({ pipe: this.opts.socket, token: this.token }), { mode: 0o600 });
+    }
     await new Promise<void>((r, j) => (this.srv!.once("listening", () => r()), this.srv!.once("error", j)));
-    const child = spawn(this.opts.helper, ["serve", this.opts.mountpoint, this.opts.socket, this.opts.icon, this.opts.version], {
+    const child = spawn(this.opts.helper, ["serve", this.opts.mountpoint, this.opts.socket, this.opts.icon, this.opts.version, ...(this.opts.thumbDll && existsSync(this.opts.thumbDll) ? [this.opts.thumbDll] : [])], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, DDN_CF_TOKEN: this.token },
+      env: { ...process.env, DDN_CF_TOKEN: this.token, ...(this.opts.limit ? { DDN_CF_LIMIT: String(this.opts.limit) } : {}) },
       windowsHide: true,
     });
     this.child = child;

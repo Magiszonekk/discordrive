@@ -17,7 +17,7 @@
 //   { type: "notify", kind, name, bytes }    a large transfer finished
 //   { type: "range-result", id, ok, data, size, start, end | error }
 import { FragDiskCache, Vdisk, VdiskWin } from "./vdisk.js";
-import { readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { h2Fetch } from "@ddv4/metadata-client/node";
@@ -49,8 +49,10 @@ export interface VdiskConfig {
   cacheBytes: number;
   /** Writable (files copied in are uploaded): the queue of uploads lives here. Absent: read-only. */
   outbox?: string;
+  /** The disk's log file (support). */
+  logFile?: string;
   /** Windows (Cloud Files): the sync root's icon and the app's version. */
-  windows?: { icon: string; version: string };
+  windows?: { icon: string; version: string; thumbDll?: string; thumbConfig?: string };
 }
 
 // ── the disk in the system ──
@@ -95,19 +97,36 @@ function setVdisk(cfg: VdiskConfig | undefined) {
   });
 }
 /** Windows: the sync root served by ddn-cf (read-only for now). Off = taken down with its placeholders. */
-async function setVdiskWin(c: AppCore, cfg: VdiskConfig, w: { icon: string; version: string }) {
+/** The disk's messages: the console and a file next to the app's data (support; the installed app has no console). */
+function diskLog(file: string | undefined): (m: string) => void {
+  return (m) => {
+    console.error(m);
+    if (!file) return;
+    try {
+      if ((statSync(file, { throwIfNoEntry: false })?.size ?? 0) > 1 << 20) renameSync(file, file + ".1");
+      appendFileSync(file, `${new Date().toISOString()} ${m}\n`);
+    } catch {
+      /* no log then */
+    }
+  };
+}
+async function setVdiskWin(c: AppCore, cfg: VdiskConfig, w: NonNullable<VdiskConfig["windows"]>) {
   if (!cfg.on) {
     if (diskWin) await diskWin.stop().catch(() => {});
     if (diskWin) diskWin.unregister();
     diskWin = null;
     return state("off");
   }
-  if (diskWin?.mounted()) return state("mounted");
+  if (diskWin?.mounted()) {
+    // On Windows the files fetched are the cache (Explorer shows them as "on this device"): the limit is theirs.
+    if (diskWin.opts.limit !== cfg.cacheBytes) diskWin.setLimit(cfg.cacheBytes);
+    return state("mounted");
+  }
   const why = VdiskWin.unavailable(cfg.helper);
   if (why) return state(`unavailable: ${why}`);
   for (let i = 0; i < 600 && !(await c.status()).signedIn; i++) await new Promise((r) => setTimeout(r, 500));
   diskCache ??= new FragDiskCache(cfg.cacheDir, cfg.cacheBytes);
-  diskWin = new VdiskWin({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, icon: w.icon, version: w.version, log: (m) => console.error(m), onState: state });
+  diskWin = new VdiskWin({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, icon: w.icon, version: w.version, limit: cfg.cacheBytes, thumbDll: w.thumbDll, thumbConfig: w.thumbConfig, log: diskLog(cfg.logFile), onState: state });
   try {
     await diskWin.start();
     state("mounted");
