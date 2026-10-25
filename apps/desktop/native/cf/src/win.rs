@@ -25,8 +25,8 @@ use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKE
 use windows::Win32::Storage::CloudFilters::*;
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, GetCompressedFileSizeW, GetFileAttributesW, ReadDirectoryChangesW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_PINNED, FILE_ATTRIBUTE_UNPINNED,
-    FILE_BASIC_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_NOTIFY_CHANGE_ATTRIBUTES, FILE_NOTIFY_INFORMATION, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    OPEN_EXISTING,
+    FILE_BASIC_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_NOTIFY_CHANGE_ATTRIBUTES, FILE_NOTIFY_CHANGE_DIR_NAME, FILE_NOTIFY_CHANGE_FILE_NAME,
+    FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_NOTIFY_CHANGE_SIZE, FILE_NOTIFY_INFORMATION, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use windows::Win32::System::Registry::{RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, REG_DWORD};
@@ -134,6 +134,12 @@ struct State {
     used: Mutex<HashMap<PathBuf, u64>>,
     /// Bytes of unpinned files kept on this computer at most (Settings, the disk's cache).
     limit: std::sync::atomic::AtomicU64,
+    /// Writable: the agent's upload queue directory (copies of files written here go there).
+    outbox: Option<PathBuf>,
+    /// Files changed by programs, waiting until nobody writes them: path → when last seen changing.
+    dirty_files: Mutex<HashMap<PathBuf, u64>>,
+    /// Copies queued, until the agent says they are uploaded: pending id → (path, size and mtime copied).
+    pending: Mutex<HashMap<String, (PathBuf, u64, std::time::SystemTime)>>,
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
@@ -422,10 +428,26 @@ unsafe extern "system" fn on_fetch_data(info: *const CF_CALLBACK_INFO, p: *const
 
 unsafe extern "system" fn on_cancel(_info: *const CF_CALLBACK_INFO, _p: *const CF_CALLBACK_PARAMETERS) {}
 
-/// Read-only disk: a delete or rename by a program is refused (the helper's own, after a sync, is not).
+/// A placeholder deleted by a program: writable, into the account's trash (the helper's own deletes after a
+/// sync just go); read only, refused.
 unsafe extern "system" fn on_delete(info: *const CF_CALLBACK_INFO, _p: *const CF_CALLBACK_PARAMETERS) {
     let id = identity(info);
-    let ok = st().removing.lock().unwrap().remove(&id);
+    let mut ok = st().removing.lock().unwrap().remove(&id);
+    if !ok && st().outbox.is_some() && id != "root" {
+        ok = match agent(|a| a.call(json!({ "op": "w-trash", "id": id }))) {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!("ddn-cf: trash {id}: {e}");
+                false
+            }
+        };
+        if ok {
+            if let Some(p) = full_path(info) {
+                st().made.lock().unwrap().retain(|q, _| !q.starts_with(&p));
+                st().dirs.lock().unwrap().retain(|_, d| !d.starts_with(&p));
+            }
+        }
+    }
     let oi = op_info(info, CF_OPERATION_TYPE_ACK_DELETE);
     let mut op = params::<CF_OPERATION_PARAMETERS_0_7>(CF_OPERATION_PARAMETERS_0 {
         AckDelete: CF_OPERATION_PARAMETERS_0_7 { Flags: CF_OPERATION_ACK_DELETE_FLAG_NONE, CompletionStatus: if ok { STATUS_SUCCESS } else { STATUS_CLOUD_FILE_READ_ONLY_VOLUME } },
@@ -433,10 +455,50 @@ unsafe extern "system" fn on_delete(info: *const CF_CALLBACK_INFO, _p: *const CF
     let _ = CfExecute(&oi, &mut op);
 }
 
-unsafe extern "system" fn on_rename(info: *const CF_CALLBACK_INFO, _p: *const CF_CALLBACK_PARAMETERS) {
+/// A placeholder renamed or moved: writable, the same in the account (moved out of the disk: to the trash);
+/// read only, refused.
+unsafe extern "system" fn on_rename(info: *const CF_CALLBACK_INFO, p: *const CF_CALLBACK_PARAMETERS) {
+    let mut status = STATUS_CLOUD_FILE_READ_ONLY_VOLUME;
+    if st().outbox.is_some() {
+        let r = (*p).Anonymous.Rename;
+        let from = full_path(info);
+        let to = if r.TargetPath.is_null() { None } else { r.TargetPath.to_string().ok() }
+            .map(|t| if t.starts_with('\\') && !t.starts_with("\\\\") { format!("{}{t}", (*info).VolumeDosName.to_string().unwrap_or_default()) } else { t })
+            .map(PathBuf::from);
+        let inside = r.Flags.0 & CF_CALLBACK_RENAME_FLAG_TARGET_IN_SCOPE.0 != 0;
+        let res = match (&from, &to, inside) {
+            (Some(f), Some(t), true) => agent(|a| a.call(json!({ "op": "w-rename", "target": f.to_string_lossy(), "toName": t.to_string_lossy() }))).map(|_| ()),
+            (Some(_), _, false) => agent(|a| a.call(json!({ "op": "w-trash", "id": identity(info) }))).map(|_| ()),
+            _ => Err("no path".into()),
+        };
+        match res {
+            Ok(()) => {
+                status = STATUS_SUCCESS;
+                if let (Some(f), Some(t)) = (from, to) {
+                    let mut made = st().made.lock().unwrap();
+                    let moved: Vec<(PathBuf, (String, u64, u64))> = made.iter().filter(|(q, _)| q.starts_with(&f)).map(|(q, v)| (q.clone(), v.clone())).collect();
+                    for (q, v) in moved {
+                        made.remove(&q);
+                        if inside {
+                            made.insert(t.join(q.strip_prefix(&f).unwrap_or(Path::new(""))), v);
+                        }
+                    }
+                    drop(made);
+                    let mut dirs = st().dirs.lock().unwrap();
+                    for d in dirs.values_mut() {
+                        if d.starts_with(&f) {
+                            *d = t.join(d.strip_prefix(&f).unwrap_or(Path::new("")).to_path_buf());
+                        }
+                    }
+                }
+                save_made();
+            }
+            Err(e) => eprintln!("ddn-cf: rename: {e}"),
+        }
+    }
     let oi = op_info(info, CF_OPERATION_TYPE_ACK_RENAME);
     let mut op = params::<CF_OPERATION_PARAMETERS_0_6>(CF_OPERATION_PARAMETERS_0 {
-        AckRename: CF_OPERATION_PARAMETERS_0_6 { Flags: CF_OPERATION_ACK_RENAME_FLAG_NONE, CompletionStatus: STATUS_CLOUD_FILE_READ_ONLY_VOLUME },
+        AckRename: CF_OPERATION_PARAMETERS_0_6 { Flags: CF_OPERATION_ACK_RENAME_FLAG_NONE, CompletionStatus: status },
     });
     let _ = CfExecute(&oi, &mut op);
 }
@@ -619,6 +681,150 @@ fn trim() {
     }
 }
 
+// ── writing ──
+
+/// Short-lived files of programs (Office's owner files, temp files of a save), never uploaded.
+fn local_only(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.starts_with("~$") || n.ends_with(".tmp") || n.ends_with(".crdownload") || n.ends_with(".part") || n == "desktop.ini" || n == "thumbs.db" || n.starts_with(".~lock.")
+}
+
+/// A file changed by a program: noted; uploaded once nobody has written to it for a moment.
+fn note_written(p: &Path) {
+    if st().outbox.is_none() || !p.starts_with(&st().root) || p == st().root {
+        return;
+    }
+    let Some(name) = p.file_name().map(|n| n.to_string_lossy().into_owned()) else { return };
+    if local_only(&name) {
+        return;
+    }
+    let Ok(m) = std::fs::symlink_metadata(p) else { return };
+    // A folder made here: in the account now (its files follow).
+    if m.is_dir() {
+        if m.file_attributes() & ATTR_REPARSE == 0 && !st().made.lock().unwrap().contains_key(p) {
+            match agent(|a| a.call(json!({ "op": "w-mkdir", "path": p.to_string_lossy() }))) {
+                Ok((v, _)) => {
+                    let id = v.get("id").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+                    let id_b = id.as_bytes().to_vec();
+                    if let Ok(h) = open_for_cf(p) {
+                        unsafe {
+                            if let Err(e) = CfConvertToPlaceholder(h, Some(id_b.as_ptr() as *const c_void), id_b.len() as u32, CF_CONVERT_FLAG_MARK_IN_SYNC, None, None) {
+                                eprintln!("ddn-cf: folder {} to placeholder: {e}", p.display());
+                            }
+                            let _ = CloseHandle(h);
+                        }
+                    }
+                    st().made.lock().unwrap().insert(p.to_path_buf(), (id.clone(), 0, now_ms()));
+                    st().dirs.lock().unwrap().insert(id, p.to_path_buf());
+                    save_made();
+                }
+                Err(e) => eprintln!("ddn-cf: mkdir {}: {e}", p.display()),
+            }
+        }
+        return;
+    }
+    // A placeholder the helper made and nobody changed is not a write.
+    if m.file_attributes() & ATTR_REPARSE != 0 {
+        if let Some((_, size, _)) = st().made.lock().unwrap().get(p).cloned() {
+            let in_sync = attrs(p) & 0x0040_0000 == 0 || m.len() == size;
+            let ours = st().pending.lock().unwrap().values().any(|(q, _, _)| q == p);
+            if (in_sync && m.len() == size) || ours {
+                return;
+            }
+        }
+    }
+    st().dirty_files.lock().unwrap().insert(p.to_path_buf(), now_ms());
+}
+
+/// Files nobody has written for 2 s: copied into the agent's queue (a share-none open fails while a program
+/// still writes: tried again later).
+fn flush_written() {
+    let now = now_ms();
+    let ready: Vec<PathBuf> = st().dirty_files.lock().unwrap().iter().filter(|(_, t)| now - **t > 2000).map(|(p, _)| p.clone()).collect();
+    for p in ready {
+        let Some(out) = st().outbox.clone() else { return };
+        // Exclusive open = no writer left.
+        let f = match { use std::os::windows::fs::OpenOptionsExt; std::fs::OpenOptions::new().read(true).share_mode(0).open(&p) } {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                st().dirty_files.lock().unwrap().remove(&p);
+                continue;
+            }
+            Err(_) => continue,
+        };
+        st().dirty_files.lock().unwrap().remove(&p);
+        let meta = f.metadata().ok();
+        let copy = out.join(format!("w-cf-{}-{}", std::process::id(), now_ms()));
+        let mut src = f;
+        let res = std::fs::File::create(&copy).and_then(|mut dst| std::io::copy(&mut src, &mut dst));
+        drop(src);
+        if let Err(e) = res {
+            eprintln!("ddn-cf: copy {}: {e}", p.display());
+            let _ = std::fs::remove_file(&copy);
+            continue;
+        }
+        // The copy keeps the file's time (the agent stores it as the content date).
+        if let Some(t) = meta.as_ref().and_then(|m| m.modified().ok()) {
+            if let Ok(c) = std::fs::OpenOptions::new().write(true).open(&copy) {
+                let _ = c.set_modified(t);
+            }
+        }
+        match agent(|a| a.call(json!({ "op": "w-upload", "target": p.to_string_lossy(), "copy": copy.to_string_lossy() }))) {
+            Ok((v, _)) => {
+                if let Some(id) = v.get("id").and_then(|x| x.as_str()) {
+                    st().pending.lock().unwrap().insert(id.to_string(), (p.clone(), meta.as_ref().map(|m| m.len()).unwrap_or(0), meta.and_then(|m| m.modified().ok()).unwrap_or(std::time::UNIX_EPOCH)));
+                }
+            }
+            Err(e) => {
+                eprintln!("ddn-cf: queue {}: {e}", p.display());
+                let _ = std::fs::remove_file(&copy);
+            }
+        }
+    }
+}
+
+/// A queued file uploaded: the local file becomes a placeholder of its node, in sync (it stays here; the
+/// limit may free it later). Changed again meanwhile: left as it is (its next copy is queued).
+fn uploaded(pending: &str, id: Option<&str>, err: Option<&str>) {
+    let Some((p, size, mtime)) = st().pending.lock().unwrap().remove(pending) else { return };
+    let Some(id) = id else {
+        return eprintln!("ddn-cf: upload of {} failed: {}", p.display(), err.unwrap_or("?"));
+    };
+    let Ok(m) = std::fs::metadata(&p) else { return };
+    if m.len() != size || m.modified().ok() != Some(mtime) {
+        return;
+    }
+    let idb = id.as_bytes().to_vec();
+    let Ok(h) = open_for_cf(&p) else { return };
+    unsafe {
+        let r = if m.file_attributes() & ATTR_REPARSE != 0 {
+            CfUpdatePlaceholder(h, None, Some(idb.as_ptr() as *const c_void), idb.len() as u32, None, CF_UPDATE_FLAG_MARK_IN_SYNC, None, None)
+        } else {
+            CfConvertToPlaceholder(h, Some(idb.as_ptr() as *const c_void), idb.len() as u32, CF_CONVERT_FLAG_MARK_IN_SYNC, None, None)
+        };
+        if let Err(e) = r {
+            eprintln!("ddn-cf: {} to placeholder: {e}", p.display());
+        }
+        let _ = CloseHandle(h);
+    }
+    let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64).unwrap_or(0);
+    st().made.lock().unwrap().insert(p, (id.to_string(), size, t));
+    save_made();
+}
+
+/// A file the user deleted before its upload ended: dropped from the queue.
+fn removed(p: &Path) {
+    if st().outbox.is_none() {
+        return;
+    }
+    st().dirty_files.lock().unwrap().remove(p);
+    let was: Vec<String> = st().pending.lock().unwrap().iter().filter(|(_, v)| v.0 == p).map(|(k, _)| k.clone()).collect();
+    if !was.is_empty() {
+        let _ = agent(|a| a.call(json!({ "op": "w-unqueue", "target": p.to_string_lossy() })));
+        st().pending.lock().unwrap().retain(|k, _| !was.contains(k));
+    }
+}
+
 /// Explorer's pin commands change the files' attributes: watched under the root.
 fn watch_pins(root: PathBuf) {
     let w = wide_path(&root);
@@ -629,7 +835,8 @@ fn watch_pins(root: PathBuf) {
     let mut buf = vec![0u8; 64 * 1024];
     loop {
         let mut got = 0u32;
-        if unsafe { ReadDirectoryChangesW(h, buf.as_mut_ptr() as *mut c_void, buf.len() as u32, true, FILE_NOTIFY_CHANGE_ATTRIBUTES, Some(&mut got), None, None) }.is_err() {
+        let what = FILE_NOTIFY_CHANGE_ATTRIBUTES | FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE;
+        if unsafe { ReadDirectoryChangesW(h, buf.as_mut_ptr() as *mut c_void, buf.len() as u32, true, what, Some(&mut got), None, None) }.is_err() {
             std::thread::sleep(Duration::from_secs(1));
             continue;
         }
@@ -638,7 +845,12 @@ fn watch_pins(root: PathBuf) {
         while got > 0 && off + size_of::<FILE_NOTIFY_INFORMATION>() <= got as usize {
             let fi = unsafe { &*(buf.as_ptr().add(off) as *const FILE_NOTIFY_INFORMATION) };
             let name = unsafe { std::slice::from_raw_parts(fi.FileName.as_ptr(), fi.FileNameLength as usize / 2) };
-            seen.insert(root.join(String::from_utf16_lossy(name)));
+            let q = root.join(String::from_utf16_lossy(name));
+            match fi.Action.0 {
+                2 => removed(&q),
+                _ => note_written(&q),
+            }
+            seen.insert(q);
             if fi.NextEntryOffset == 0 {
                 break;
             }
@@ -911,6 +1123,9 @@ pub fn main() {
         dirty_cache: AtomicBool::new(false),
         used: Mutex::new(HashMap::new()),
         limit: std::sync::atomic::AtomicU64::new(std::env::var("DDN_CF_LIMIT").ok().and_then(|x| x.parse().ok()).unwrap_or(10 << 30)),
+        outbox: std::env::var_os("DDN_CF_OUTBOX").map(PathBuf::from).filter(|p| p.is_dir()),
+        dirty_files: Mutex::new(HashMap::new()),
+        pending: Mutex::new(HashMap::new()),
     });
     let table: &'static [CF_CALLBACK_REGISTRATION] = Box::leak(Box::new([
         CF_CALLBACK_REGISTRATION { Type: CF_CALLBACK_TYPE_FETCH_PLACEHOLDERS, Callback: Some(on_fetch_placeholders) },
@@ -963,6 +1178,12 @@ pub fn main() {
         let r = root.clone();
         std::thread::spawn(move || watch_pins(r));
     }
+    if st().outbox.is_some() {
+        std::thread::spawn(|| loop {
+            std::thread::sleep(Duration::from_millis(500));
+            flush_written();
+        });
+    }
     eprintln!("ddn-cf: serving {} ({how})", root.display());
     println!("ready");
     let _ = std::io::stdout().flush();
@@ -971,7 +1192,12 @@ pub fn main() {
             Ok(f) => {
                 // {"limit": bytes}: the cache limit changed in Settings; else a sync: compare the folders.
                 let v: Value = serde_json::from_slice(&f).unwrap_or(json!({}));
-                if let Some(l) = v.get("limit").and_then(|x| x.as_u64()) {
+                if let Some(u) = v.get("uploaded") {
+                    let pending = u.get("pending").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+                    let id = u.get("id").and_then(|x| x.as_str()).map(str::to_string);
+                    let err = u.get("err").and_then(|x| x.as_str()).map(str::to_string);
+                    std::thread::spawn(move || uploaded(&pending, id.as_deref(), err.as_deref()));
+                } else if let Some(l) = v.get("limit").and_then(|x| x.as_u64()) {
                     st().limit.store(l, Ordering::SeqCst);
                     st().dirty_cache.store(true, Ordering::SeqCst);
                 } else {

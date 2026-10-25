@@ -1831,6 +1831,12 @@ export class AppCore {
     if (to !== n.parentId) await this.move([n.id], to);
     if (nfc !== n.name) await this.rename(n.id, nfc);
   }
+  /** A file or folder deleted on the Windows disk (its node known from the placeholder): into the trash. */
+  async vdiskTrash(id: string): Promise<void> {
+    const n = this.c().store.getNode(id);
+    if (!n || n.trashed) return;
+    await this.trash([id]);
+  }
   /** rm / rmdir: into the account's trash (30 days), never deleted for good from the disk. */
   async vdiskRemove(dirId: string, name: string, folder: boolean): Promise<void> {
     const dir = this.vdiskFolder(dirId);
