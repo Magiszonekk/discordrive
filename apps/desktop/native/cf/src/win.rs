@@ -19,7 +19,7 @@ use windows::Storage::Provider::{
     StorageProviderProtectionMode, StorageProviderSyncRootInfo, StorageProviderSyncRootManager,
 };
 use windows::Storage::StorageFolder;
-use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL, NTSTATUS, STATUS_ACCESS_DENIED, STATUS_CLOUD_FILE_UNSUCCESSFUL, STATUS_SUCCESS};
+use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL, NTSTATUS, STATUS_CLOUD_FILE_READ_ONLY_VOLUME, STATUS_CLOUD_FILE_UNSUCCESSFUL, STATUS_SUCCESS};
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
 use windows::Win32::Storage::CloudFilters::*;
@@ -428,7 +428,7 @@ unsafe extern "system" fn on_delete(info: *const CF_CALLBACK_INFO, _p: *const CF
     let ok = st().removing.lock().unwrap().remove(&id);
     let oi = op_info(info, CF_OPERATION_TYPE_ACK_DELETE);
     let mut op = params::<CF_OPERATION_PARAMETERS_0_7>(CF_OPERATION_PARAMETERS_0 {
-        AckDelete: CF_OPERATION_PARAMETERS_0_7 { Flags: CF_OPERATION_ACK_DELETE_FLAG_NONE, CompletionStatus: if ok { STATUS_SUCCESS } else { STATUS_ACCESS_DENIED } },
+        AckDelete: CF_OPERATION_PARAMETERS_0_7 { Flags: CF_OPERATION_ACK_DELETE_FLAG_NONE, CompletionStatus: if ok { STATUS_SUCCESS } else { STATUS_CLOUD_FILE_READ_ONLY_VOLUME } },
     });
     let _ = CfExecute(&oi, &mut op);
 }
@@ -436,7 +436,7 @@ unsafe extern "system" fn on_delete(info: *const CF_CALLBACK_INFO, _p: *const CF
 unsafe extern "system" fn on_rename(info: *const CF_CALLBACK_INFO, _p: *const CF_CALLBACK_PARAMETERS) {
     let oi = op_info(info, CF_OPERATION_TYPE_ACK_RENAME);
     let mut op = params::<CF_OPERATION_PARAMETERS_0_6>(CF_OPERATION_PARAMETERS_0 {
-        AckRename: CF_OPERATION_PARAMETERS_0_6 { Flags: CF_OPERATION_ACK_RENAME_FLAG_NONE, CompletionStatus: STATUS_ACCESS_DENIED },
+        AckRename: CF_OPERATION_PARAMETERS_0_6 { Flags: CF_OPERATION_ACK_RENAME_FLAG_NONE, CompletionStatus: STATUS_CLOUD_FILE_READ_ONLY_VOLUME },
     });
     let _ = CfExecute(&oi, &mut op);
 }
