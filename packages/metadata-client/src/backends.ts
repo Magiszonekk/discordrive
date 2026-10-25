@@ -13,7 +13,7 @@
 // frees up first wins) and paces them per `paceKey` (Discord limits posts per channel).
 
 import { AbortedError, type BlobGetContext, type BlobPutContext, type BlobStore, type ExtraPlacement, type LaneFetch } from "./blob-store.js";
-import { RateLimitedError } from "./discord-transport.js";
+import { DiscordHttpError, RateLimitedError } from "./discord-transport.js";
 import { LinkAhead, type LinkAheadOptions, type LinkHow, type LinkItem } from "./link-ahead.js";
 import { guardedRead, netCall, retryFree, watchedPost, type LaneTiming, type NetControl } from "./net.js";
 import { ChannelPacer } from "./rate-limit.js";
@@ -135,9 +135,21 @@ export interface BackendStoreOptions {
 }
 
 /** Blobs on the account's backends, paced per backend `paceKey` on this device. */
+/** A post refused because the webhook no longer exists (deleted on Discord: 401 Unauthorized / 404). */
+export function webhookGone(e: unknown): boolean {
+  if (e instanceof DiscordHttpError) return e.status === 404 || e.status === 401;
+  return /^webhook post: HTTP (401|404)\b/.test(String((e as Error)?.message ?? ""));
+}
+
 export class BackendBlobStore implements BlobStore {
   readonly pacer: ChannelPacer;
   readonly rt: BlobRuntime;
+  /**
+   * Backends whose posts answered 401 / 404 (a webhook removed on Discord): left out of new posts for the
+   * rest of this session, the post goes on another one. The vault still lists them until the user removes
+   * them (Settings shows the channel's files as unavailable).
+   */
+  readonly gone = new Set<string>();
   private rr = 0;
   private readonly rrInKey = new Map<string, number>();
   protected readonly maxRetries: number;
@@ -187,7 +199,9 @@ export class BackendBlobStore implements BlobStore {
    * have tokens); ties rotate, and the backends of one key take turns.
    */
   private next(exclude?: ReadonlySet<string>): BlobBackend {
-    const all = this.registry.writable().filter((b) => !exclude?.has(b.id));
+    const live = this.registry.writable().filter((b) => !exclude?.has(b.id));
+    const all = live.filter((b) => !this.gone.has(b.id));
+    if (!all.length && live.length) throw new Error("need_channel: every channel of the account answered 'unknown webhook' (removed on Discord): add a channel in Settings");
     if (!all.length) throw new Error("need_channel: no active channel to post to");
     const byKey = new Map<string, BlobBackend[]>();
     for (const b of all) byKey.set(b.paceKey, [...(byKey.get(b.paceKey) ?? []), b]);
@@ -216,7 +230,13 @@ export class BackendBlobStore implements BlobStore {
   /** Store on one given backend (snapshot objects go to the pointer's backend only). */
   async postTo(id: string, data: Uint8Array, filename: string): Promise<Placement> {
     const b = this.backend(id);
-    return this.postOn(() => b, data, filename, { posts: 0 });
+    const pick = () => b;
+    this.pinned = pick;
+    try {
+      return await this.postOn(pick, data, filename, { posts: 0 });
+    } finally {
+      if (this.pinned === pick) this.pinned = null;
+    }
   }
 
   async put(data: Uint8Array, filename: string, ctx: BlobPutContext = {}): Promise<Placement> {
@@ -305,11 +325,20 @@ export class BackendBlobStore implements BlobStore {
           continue; // 429s do not count against maxRetries: the pacer slows down instead
         }
         if (retryFree(e)) continue; // no network: it waits at the gate, the file does not fail
+        // The webhook was removed on Discord: it is left out and this blob goes to another channel at once
+        // (a 1 GB upload must not fail every few fragments on it). A backend given by the caller (postTo:
+        // the pointer's channel) has no other: the error stands.
+        if (webhookGone(e) && pick !== this.pinned) {
+          this.gone.add(b.id);
+          continue;
+        }
         if (++attempt > this.maxRetries) throw e;
         await this.backoff(attempt);
       }
     }
   }
+  /** Marker of postTo's fixed pick (a removed webhook there is an error, not a reason to go elsewhere). */
+  private pinned: (() => BlobBackend) | null = null;
 
   /** Download hint: the backends fetch what these reads need ahead, in this order. */
   async prefetch(ps: Placement[], ctx?: { x?: string; first?: number }): Promise<void> {

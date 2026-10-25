@@ -1788,6 +1788,8 @@ export class AppCore {
       const taken = Math.floor(src.mtimeMs) || undefined;
       const r = await this.c().upload(src, nfc, dir, {
         takenAt: taken,
+        // A failure after some fragments (no network, a channel gone): the next try goes on from them.
+        resumeKey: `vdisk|${dir}|${nfc}|${src.size}|${taken ?? 0}`,
         ...(onProgress ? { onProgress: (done: number, total: number) => onProgress(done, total) } : {}),
         // The thumbnail and preview the disk made from the local copy, stored with the file as by the web.
         ...(previews?.length ? { previews: Promise.resolve(previews) } : {}),
