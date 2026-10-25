@@ -136,12 +136,24 @@ public static class T {
 "@
 [T]::Get('${join(dir, "zdjęcie.jpg").replace(/'/g, "''")}')`;
       let got = "";
+      const thumbLog = join(base, "thumb.log");
       try {
-        got = execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8", timeout: 60_000 }).trim();
+        got = execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8", timeout: 60_000, env: { ...process.env, DDN_CF_THUMB_LOG: thumbLog } }).trim();
       } catch (e) {
         got = `error: ${String((e as { stderr?: string }).stderr ?? e).slice(0, 300)}`;
       }
       console.log("thumbnail", got);
+      if (got !== "96x72") {
+        const { readFileSync } = await import("node:fs");
+        console.log("thumb.log:", existsSync(thumbLog) ? readFileSync(thumbLog, "utf8") : "(none: the provider was not loaded)");
+        for (const k of ["HKCU\\Software\\Classes\\CLSID\\{7A3C9E51-2B84-4D1F-A6E0-9C8D2F41B305}", "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\SyncRootManager"]) {
+          try {
+            console.log(k, execFileSync("reg", ["query", k, "/s"], { encoding: "utf8", timeout: 20_000 }).slice(0, 2500));
+          } catch (e) {
+            console.log(k, "reg query failed", String(e).slice(0, 200));
+          }
+        }
+      }
       expect(got).toBe("96x72");
       expect(fake.cdnGets - g1).toBeLessThanOrEqual(2); // the stored preview (one small object), not the file
       expect(disk.state(join(dir, "zdjęcie.jpg"))?.onDisk).toBe(0);

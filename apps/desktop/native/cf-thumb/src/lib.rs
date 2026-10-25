@@ -23,6 +23,15 @@ pub const CLSID_THUMB: GUID = GUID::from_u128(0x7a3c9e51_2b84_4d1f_a6e0_9c8d2f41
 static LOCKS: AtomicU32 = AtomicU32::new(0);
 static OBJECTS: AtomicU32 = AtomicU32::new(0);
 
+/// DDN_CF_THUMB_LOG=<file>: each step appended there (tests; the user's own machine otherwise logs nothing).
+fn log(m: &str) {
+    if let Ok(f) = std::env::var("DDN_CF_THUMB_LOG") {
+        if let Ok(mut h) = std::fs::OpenOptions::new().create(true).append(true).open(f) {
+            let _ = writeln!(h, "{m}");
+        }
+    }
+}
+
 #[implement(IThumbnailProvider, IInitializeWithItem)]
 struct Thumb {
     path: Mutex<Option<String>>,
@@ -34,6 +43,7 @@ impl IInitializeWithItem_Impl for Thumb_Impl {
         let p = unsafe { item.GetDisplayName(SIGDN_FILESYSPATH)? };
         let s = unsafe { p.to_string() }.unwrap_or_default();
         unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(p.0 as *const c_void)) };
+        log(&format!("initialize {s}"));
         *self.path.lock().unwrap() = Some(s);
         Ok(())
     }
@@ -47,7 +57,9 @@ impl IThumbnailProvider_Impl for Thumb_Impl {
         let path = self.path.lock().unwrap().clone().ok_or(windows::core::Error::from(E_FAIL))?;
         // No stored picture: a failure; Explorer shows the file type's icon (it does not fetch the file: the
         // sync root's provider is the one asked for its files).
-        let img = preview(&path).ok_or(windows::core::Error::from(E_FAIL))?;
+        let got = preview(&path);
+        log(&format!("thumbnail {cx} {path}: {:?}", got.as_ref().map(|x| x.len())));
+        let img = got.ok_or(windows::core::Error::from(E_FAIL))?;
         let img = image::load_from_memory(&img).map_err(|_| windows::core::Error::from(E_FAIL))?;
         let img = if img.width().max(img.height()) > cx { img.thumbnail(cx, cx) } else { img };
         let rgba = img.to_rgba8();
@@ -80,6 +92,7 @@ impl IThumbnailProvider_Impl for Thumb_Impl {
 /// The stored preview of the file at `path` (the agent finds its node by the path), or None.
 fn preview(path: &str) -> Option<Vec<u8>> {
     let conf = std::env::var("LOCALAPPDATA").ok()? + "\\discordrive\\cf-thumb.json";
+    log(&format!("config {conf}: {}", std::path::Path::new(&conf).exists()));
     let c: serde_json::Value = serde_json::from_slice(&std::fs::read(conf).ok()?).ok()?;
     let (pipe, token) = (c.get("pipe")?.as_str()?, c.get("token")?.as_str()?);
     let mut f = std::fs::OpenOptions::new().read(true).write(true).open(pipe).ok()?;
@@ -139,6 +152,7 @@ pub unsafe extern "system" fn DllGetClassObject(rclsid: *const GUID, riid: *cons
         return E_POINTER;
     }
     *ppv = std::ptr::null_mut();
+    log(&format!("class object {:?}", *rclsid));
     if *rclsid != CLSID_THUMB {
         return CLASS_E_CLASSNOTAVAILABLE;
     }
