@@ -29,6 +29,8 @@ use windows::Win32::Storage::FileSystem::{
     OPEN_EXISTING,
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+use windows::Win32::System::Registry::{RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, REG_DWORD};
+use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 const PROVIDER_ID: GUID = GUID::from_u128(0x5f0c0a5e_6d1b_4c47_9a3e_d1c5d15c0d01);
@@ -644,6 +646,72 @@ fn print_state(p: &Path) -> i32 {
     0
 }
 
+// ── the thumbnail provider (ddn-cf-thumb.dll) ──
+
+/// Its CLSID (the same in native/cf-thumb).
+const CLSID_THUMB: &str = "{7A3C9E51-2B84-4D1F-A6E0-9C8D2F41B305}";
+
+fn reg_set(root: HKEY, key: &str, name: Option<&str>, value: RegVal) -> Result<(), String> {
+    let k = wide(key);
+    let mut h = HKEY::default();
+    let r = unsafe { RegCreateKeyExW(root, PCWSTR(k.as_ptr()), None, PCWSTR::null(), REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, None, &mut h, None) };
+    if r.is_err() {
+        return Err(format!("{key}: {r:?}"));
+    }
+    let n = name.map(wide);
+    let np = n.as_ref().map(|x| PCWSTR(x.as_ptr())).unwrap_or(PCWSTR::null());
+    let r = match value {
+        RegVal::Str(v) => {
+            let w = wide(&v);
+            let bytes = unsafe { std::slice::from_raw_parts(w.as_ptr() as *const u8, w.len() * 2) };
+            unsafe { RegSetValueExW(h, np, None, REG_SZ, Some(bytes)) }
+        }
+        RegVal::Dword(v) => unsafe { RegSetValueExW(h, np, None, REG_DWORD, Some(&v.to_le_bytes())) },
+    };
+    unsafe {
+        let _ = RegCloseKey(h);
+    }
+    if r.is_err() {
+        return Err(format!("{key}: {r:?}"));
+    }
+    Ok(())
+}
+enum RegVal {
+    Str(String),
+    Dword(u32),
+}
+
+/// The DLL registered as an in-process server for this user (HKCU: no admin rights), named as the sync root's
+/// thumbnail provider. The sync root's key is the shell's (HKLM ...\SyncRootManager): written by Register;
+/// the ThumbnailProvider value there only where this user may (else the CLSID still serves the files
+/// through the per-user association below).
+fn register_thumbs(dll: &Path) {
+    let clsid = format!("Software\\Classes\\CLSID\\{CLSID_THUMB}");
+    let ok = reg_set(HKEY_CURRENT_USER, &clsid, None, RegVal::Str("discordrive thumbnails".into()))
+        .and_then(|_| reg_set(HKEY_CURRENT_USER, &format!("{clsid}\\InprocServer32"), None, RegVal::Str(dll.to_string_lossy().into_owned())))
+        .and_then(|_| reg_set(HKEY_CURRENT_USER, &format!("{clsid}\\InprocServer32"), Some("ThreadingModel"), RegVal::Str("Apartment".into())))
+        // IInitializeWithItem needs the provider outside the shell's isolation.
+        .and_then(|_| reg_set(HKEY_CURRENT_USER, &clsid, Some("DisableProcessIsolation"), RegVal::Dword(1)));
+    if let Err(e) = ok {
+        return eprintln!("ddn-cf: thumbnail provider not registered: {e}");
+    }
+    let key = format!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\SyncRootManager\\{}", root_id());
+    for hive in [windows::Win32::System::Registry::HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
+        match reg_set(hive, &key, Some("ThumbnailProvider"), RegVal::Str(CLSID_THUMB.into())) {
+            Ok(()) => break,
+            Err(e) => eprintln!("ddn-cf: ThumbnailProvider: {e}"),
+        }
+    }
+    unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None) };
+}
+
+fn unregister_thumbs() {
+    let k = wide(&format!("Software\\Classes\\CLSID\\{CLSID_THUMB}"));
+    unsafe {
+        let _ = RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(k.as_ptr()));
+    }
+}
+
 // ── registration ──
 
 fn user_sid() -> String {
@@ -778,6 +846,7 @@ fn unregister(root: &Path) -> i32 {
         }
     }
     let _ = std::fs::remove_file(made_file(root));
+    unregister_thumbs();
     // The folder itself when nothing of the user's is left in it.
     let _ = std::fs::remove_dir(root);
     0
@@ -788,7 +857,7 @@ pub fn main() {
     match a.get(1).map(String::as_str) {
         Some("unregister") if a.len() == 3 => std::process::exit(unregister(Path::new(&a[2]))),
         Some("state") if a.len() == 3 => std::process::exit(print_state(Path::new(&a[2]))),
-        Some("serve") if a.len() == 6 => {}
+        Some("serve") if a.len() == 6 || a.len() == 7 => {}
         _ => {
             eprintln!("usage: ddn-cf serve <root> <pipe> <icon> <version> | ddn-cf unregister <root>");
             std::process::exit(2);
@@ -848,6 +917,10 @@ pub fn main() {
         }
     };
     *st().key.lock().unwrap() = key.0;
+    // Explorer's thumbnails from the stored previews (the DLL next to this helper, given by the agent).
+    if let Some(dll) = a.get(6) {
+        register_thumbs(Path::new(dll));
+    }
     // What changed after a sync: a watch connection; the folders are compared a moment later (bursts merge).
     let mut watch = match Agent::connect(&pipe, &token) {
         Ok(a) => a,

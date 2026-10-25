@@ -66,7 +66,13 @@ const config = {
     : {}),
   // Windows: the Cloud Files helper (native/cf), the same way.
   ...(existsSync(join(here, "native", "cf", "target", "release", "ddn-cf.exe")) && targetsWin()
-    ? { extraResources: [{ from: join(here, "native", "cf", "target", "release", "ddn-cf.exe"), to: "ddn-cf.exe" }] }
+    ? {
+        extraResources: [
+          { from: join(here, "native", "cf", "target", "release", "ddn-cf.exe"), to: "ddn-cf.exe" },
+          // Explorer's thumbnails of the disk's files (from the stored previews, no download).
+          ...(existsSync(join(here, "native", "cf-thumb", "target", "release", "ddn_cf_thumb.dll")) ? [{ from: join(here, "native", "cf-thumb", "target", "release", "ddn_cf_thumb.dll"), to: "ddn-cf-thumb.dll" }] : []),
+        ],
+      }
     : {}),
   asar: true,
   // Electron fuses (security checklist #18): no ELECTRON_RUN_AS_NODE, NODE_OPTIONS or --inspect for the

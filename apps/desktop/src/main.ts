@@ -150,7 +150,12 @@ function vdiskInit(): Partial<AgentInit> {
         socket: `\\\\.\\pipe\\discordrive-cf-${process.env.USERNAME ?? "user"}-${process.pid}`,
         cacheDir: join(app.getPath("userData"), "disk-cache"),
         cacheBytes: settings.vdiskCacheBytes ?? 10 * 1024 ** 3,
-        windows: { icon: process.execPath, version: app.getVersion() },
+        windows: {
+          icon: process.execPath,
+          version: app.getVersion(),
+          thumbDll: app.isPackaged ? join(process.resourcesPath, "ddn-cf-thumb.dll") : join(ROOT, "..", "native", "cf-thumb", "target", "release", "ddn_cf_thumb.dll"),
+          thumbConfig: join(process.env.LOCALAPPDATA ?? app.getPath("userData"), "discordrive", "cf-thumb.json"),
+        },
       },
     };
   return {

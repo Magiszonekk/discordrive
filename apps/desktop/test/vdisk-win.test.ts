@@ -9,6 +9,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync } from "node:fs";
 import { open, readdir, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { deflateSync } from "node:zlib";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
@@ -48,6 +49,43 @@ describe.skipIf(why !== null)(`disk in the system (Windows, Cloud Files)${why ? 
     const small = new Uint8Array(randomBytes(70_001));
     await core.upload(new Blob([big]), "film duży.bin", f);
     await core.upload(new Blob([small]), "notatka: a?b.txt", f);
+    // A photo with its thumbnail and preview stored (as the app makes them at upload).
+    const png = (w: number, h: number) => {
+      // A plain PNG (no image library here): one colour, valid and decodable.
+      const crcT = new Int32Array(256).map((_, n) => {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        return c;
+      });
+      const crc = (b: Buffer) => {
+        let c = -1;
+        for (const x of b) c = crcT[(c ^ x) & 0xff]! ^ (c >>> 8);
+        return (c ^ -1) >>> 0;
+      };
+      const chunk = (t: string, d: Buffer) => {
+        const len = Buffer.alloc(4);
+        len.writeUInt32BE(d.length);
+        const td = Buffer.concat([Buffer.from(t, "latin1"), d]);
+        const c = Buffer.alloc(4);
+        c.writeUInt32BE(crc(td));
+        return Buffer.concat([len, td, c]);
+      };
+      const ihdr = Buffer.alloc(13);
+      ihdr.writeUInt32BE(w, 0);
+      ihdr.writeUInt32BE(h, 4);
+      ihdr[8] = 8;
+      ihdr[9] = 2;
+      const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(w * 3, 0x5a)]);
+      const raw = Buffer.concat(Array.from({ length: h }, () => row));
+      return new Uint8Array(Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]));
+    };
+    const pics = [
+      { kind: "t" as const, mime: "image/png", width: 320, height: 240, data: png(320, 240) },
+      { kind: "p" as const, mime: "image/png", width: 640, height: 480, data: png(640, 480) },
+    ];
+    (core as unknown as { previewsFor(t: string): Promise<unknown> }).previewsFor = async () => pics;
+    await core.upload(new Blob([new Uint8Array(randomBytes(2 * 1024 * 1024))]), "zdjęcie.jpg", f, "pv", undefined, true);
+    const thumbDll = fileURLToPath(new URL("../native/cf-thumb/target/release/ddn_cf_thumb.dll", import.meta.url));
     const root = join(base, "discordrive");
     const disk = new VdiskWin({
       helper,
@@ -57,6 +95,8 @@ describe.skipIf(why !== null)(`disk in the system (Windows, Cloud Files)${why ? 
       core: core as never,
       icon: process.execPath,
       version: "0.0.1",
+      thumbDll,
+      thumbConfig: join(process.env.LOCALAPPDATA ?? base, "discordrive", "cf-thumb.json"),
       log: (m) => console.log(m),
     });
     disks.push(disk);
@@ -67,9 +107,45 @@ describe.skipIf(why !== null)(`disk in the system (Windows, Cloud Files)${why ? 
     expect(await readdir(root)).toEqual(["Zdjęcia Ż"]);
     const dir = join(root, "Zdjęcia Ż");
     // A name Windows does not allow (":" "?") shows with look-alike characters.
-    expect((await readdir(dir)).sort()).toEqual(["film duży.bin", "notatka： a？b.txt"]);
+    expect((await readdir(dir)).sort()).toEqual(["film duży.bin", "notatka： a？b.txt", "zdjęcie.jpg"]);
     expect((await stat(join(dir, "film duży.bin"))).size).toBe(big.byteLength);
     expect(fake.cdnGets - g0).toBe(0);
+
+    // 1b. Explorer's thumbnail of the photo (IShellItemImageFactory, thumbnail only: the sync root's provider):
+    //     made from the stored preview, no fragment fetched, the file still not on this computer.
+    if (existsSync(thumbDll)) {
+      const { execFileSync } = await import("node:child_process");
+      const g1 = fake.cdnGets;
+      const ps = `
+Add-Type -TypeDefinition @"
+using System; using System.Runtime.InteropServices;
+[ComImport, Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IShellItemImageFactory { void GetImage(SIZE size, int flags, out IntPtr phbm); }
+[StructLayout(LayoutKind.Sequential)] public struct SIZE { public int cx; public int cy; }
+public static class T {
+  [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+  public static extern void SHCreateItemFromParsingName(string path, IntPtr pbc, [MarshalAs(UnmanagedType.LPStruct)] Guid riid, [MarshalAs(UnmanagedType.Interface)] out IShellItemImageFactory f);
+  [DllImport("gdi32.dll")] public static extern int GetObject(IntPtr h, int c, byte[] o);
+  public static string Get(string p) {
+    IShellItemImageFactory f; SHCreateItemFromParsingName(p, IntPtr.Zero, new Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b"), out f);
+    IntPtr h; f.GetImage(new SIZE { cx = 96, cy = 96 }, 8, out h);
+    var b = new byte[32]; GetObject(h, 32, b);
+    return BitConverter.ToInt32(b, 4) + "x" + BitConverter.ToInt32(b, 8);
+  }
+}
+"@
+[T]::Get('${join(dir, "zdjęcie.jpg").replace(/'/g, "''")}')`;
+      let got = "";
+      try {
+        got = execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8", timeout: 60_000 }).trim();
+      } catch (e) {
+        got = `error: ${String((e as { stderr?: string }).stderr ?? e).slice(0, 300)}`;
+      }
+      console.log("thumbnail", got);
+      expect(got).toBe("96x72");
+      expect(fake.cdnGets - g1).toBeLessThanOrEqual(2); // the stored preview (one small object), not the file
+      expect(disk.state(join(dir, "zdjęcie.jpg"))?.onDisk).toBe(0);
+    }
 
     // 2. A range in the middle, then whole files: the same bytes as in the account.
     const off = 12 * 1024 * 1024 + 7;

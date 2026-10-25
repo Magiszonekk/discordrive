@@ -50,7 +50,7 @@ export interface VdiskConfig {
   /** Writable (files copied in are uploaded): the queue of uploads lives here. Absent: read-only. */
   outbox?: string;
   /** Windows (Cloud Files): the sync root's icon and the app's version. */
-  windows?: { icon: string; version: string };
+  windows?: { icon: string; version: string; thumbDll?: string; thumbConfig?: string };
 }
 
 // ── the disk in the system ──
@@ -95,7 +95,7 @@ function setVdisk(cfg: VdiskConfig | undefined) {
   });
 }
 /** Windows: the sync root served by ddn-cf (read-only for now). Off = taken down with its placeholders. */
-async function setVdiskWin(c: AppCore, cfg: VdiskConfig, w: { icon: string; version: string }) {
+async function setVdiskWin(c: AppCore, cfg: VdiskConfig, w: NonNullable<VdiskConfig["windows"]>) {
   if (!cfg.on) {
     if (diskWin) await diskWin.stop().catch(() => {});
     if (diskWin) diskWin.unregister();
@@ -111,7 +111,7 @@ async function setVdiskWin(c: AppCore, cfg: VdiskConfig, w: { icon: string; vers
   if (why) return state(`unavailable: ${why}`);
   for (let i = 0; i < 600 && !(await c.status()).signedIn; i++) await new Promise((r) => setTimeout(r, 500));
   diskCache ??= new FragDiskCache(cfg.cacheDir, cfg.cacheBytes);
-  diskWin = new VdiskWin({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, icon: w.icon, version: w.version, limit: cfg.cacheBytes, log: (m) => console.error(m), onState: state });
+  diskWin = new VdiskWin({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, icon: w.icon, version: w.version, limit: cfg.cacheBytes, thumbDll: w.thumbDll, thumbConfig: w.thumbConfig, log: (m) => console.error(m), onState: state });
   try {
     await diskWin.start();
     state("mounted");
