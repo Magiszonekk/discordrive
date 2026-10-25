@@ -122,6 +122,8 @@ struct Writing {
     parent: u64,
     name: String,
     dirty: bool,
+    /// Unlinked while open, never uploaded: dropped at close.
+    gone: bool,
 }
 
 impl Fs {
@@ -145,7 +147,7 @@ impl Fs {
                 off += d.len() as u64;
             }
         }
-        self.open_w.insert(fh, Writing { file: f, path, ino, parent, name: name.to_string(), dirty: from.is_none() });
+        self.open_w.insert(fh, Writing { file: f, path, ino, parent, name: name.to_string(), dirty: from.is_none(), gone: false });
         Ok(fh)
     }
 
@@ -153,7 +155,7 @@ impl Fs {
     /// the handle is released (a program may write again after a flush).
     fn upload(&mut self, fh: u64) -> Result<(), i32> {
         let Some(w) = self.open_w.get_mut(&fh) else { return Ok(()) };
-        if !w.dirty {
+        if !w.dirty || w.gone {
             return Ok(());
         }
         let _ = w.file.sync_all();
@@ -178,6 +180,17 @@ impl Fs {
         }
         self.forget_lists();
         Ok(())
+    }
+
+    /// A file open for writing under `name` in `parent` (it exists for the kernel before it is uploaded:
+    /// editors rename their temporary file over the original before closing it).
+    fn writer(&self, parent: u64, name: &str) -> Option<(u64, u64)> {
+        self.open_w.iter().find(|(_, w)| !w.gone && w.parent == parent && w.name == name).map(|(h, w)| (*h, w.ino))
+    }
+
+    /// Not in the account or the upload queue yet (created here and never closed).
+    fn local_only(&self, ino: u64) -> bool {
+        self.attrs.get(&ino).map(|e| e.id.starts_with("new:")).unwrap_or(false)
     }
 
     fn forget_lists(&mut self) {
@@ -260,6 +273,10 @@ impl Fs {
 impl Filesystem for Fs {
     fn lookup(&mut self, _r: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let n = name.to_string_lossy();
+        if let Some(e) = self.writer(parent, &n).and_then(|(_, ino)| self.attrs.get(&ino).cloned().map(|e| (ino, e))) {
+            let a = self.attr(e.0, &e.1);
+            return reply.entry(&TTL, &a, 0);
+        }
         match self.list(parent) {
             Ok(l) => match l.iter().find(|e| e.name == n) {
                 Some(e) => {
@@ -355,6 +372,11 @@ impl Filesystem for Fs {
             let i = self.ino(&e.id);
             all.push((i, if e.kind == "folder" { FileType::Directory } else { FileType::RegularFile }, e.name.clone()));
         }
+        // Files being written here that the account does not have yet.
+        let mut extra: Vec<(u64, String)> = self.open_w.values().filter(|w| !w.gone && w.parent == ino && !l.iter().any(|e| e.name == w.name)).map(|w| (w.ino, w.name.clone())).collect();
+        extra.sort();
+        extra.dedup_by(|a, b| a.1 == b.1);
+        all.extend(extra.into_iter().map(|(i, n)| (i, FileType::RegularFile, n)));
         for (k, (i, t, n)) in all.iter().enumerate().skip(offset as usize) {
             if reply.add(*i, (k + 1) as i64, *t, n) {
                 break;
@@ -435,6 +457,14 @@ impl Filesystem for Fs {
     /// close(2) of a written file: the agent uploads its local copy now (a new file, or a new version), so
     /// `cp` ends when the file is in the account and a failure is the close's error. (release comes after
     /// close returned: too late for either.)
+    /// fsync: the data is in the local copy (uploaded at close); editors check that it succeeds.
+    fn fsync(&mut self, _r: &Request, _ino: u64, fh: u64, _ds: bool, reply: ReplyEmpty) {
+        if let Some(w) = self.open_w.get_mut(&fh) {
+            let _ = w.file.sync_data();
+        }
+        reply.ok()
+    }
+
     fn flush(&mut self, _r: &Request, _ino: u64, fh: u64, _lo: u64, reply: ReplyEmpty) {
         match self.upload(fh) {
             Ok(()) => reply.ok(),
@@ -455,6 +485,12 @@ impl Filesystem for Fs {
             return reply.error(libc::EROFS);
         }
         let Some(dir) = self.id(parent) else { return reply.error(libc::ENOENT) };
+        // The desktop's trash folder at the top of the disk (gio trash, "Move to Trash") is refused: the file
+        // manager then offers to delete, which puts the file into the account's trash. A .Trash-1000 folder
+        // would be synced to every device as a normal folder.
+        if parent == ROOT && name.to_string_lossy().starts_with(".Trash") {
+            return reply.error(libc::EPERM);
+        }
         // Names that are not UTF-8 are refused (the account's names are Unicode; a lossy one would differ).
         let Some(n) = name.to_str().map(str::to_string) else { return reply.error(libc::EINVAL) };
         match self.agent.call(json!({ "op": "mkdir", "dir": dir, "name": n })) {
@@ -485,8 +521,29 @@ impl Filesystem for Fs {
             return reply.error(libc::EROFS);
         }
         let (Some(dir), Some(to)) = (self.id(parent), self.id(newparent)) else { return reply.error(libc::ENOENT) };
-        if newname.to_str().is_none() {
-            return reply.error(libc::EINVAL);
+        let (Some(src), Some(dst)) = (name.to_str(), newname.to_str()) else { return reply.error(libc::EINVAL) };
+        if newparent == ROOT && dst.starts_with(".Trash") {
+            return reply.error(libc::EPERM);
+        }
+        // A file still open for writing goes to its new name at close (an editor's save: the temporary file
+        // renamed over the original, then closed = a new version of the original). When it is only here
+        // (never closed), nothing to tell the agent.
+        let hits: Vec<(u64, u64)> = self.open_w.iter().filter(|(_, w)| !w.gone && w.parent == parent && w.name == src).map(|(h, w)| (*h, w.ino)).collect();
+        let only_here = !hits.is_empty() && hits.iter().all(|(_, ino)| self.local_only(*ino));
+        for (h, ino) in &hits {
+            if let Some(w) = self.open_w.get_mut(h) {
+                w.parent = newparent;
+                w.name = dst.to_string();
+            }
+            if let Some(e) = self.attrs.get_mut(ino) {
+                e.name = dst.to_string();
+            }
+            self.parents.insert(*ino, newparent);
+        }
+        if only_here {
+            // Another open writer of the target name (rare) is left as it is; the newer close wins.
+            self.forget_lists();
+            return reply.ok();
         }
         match self.agent.call(json!({ "op": "rename", "dir": dir, "name": name.to_string_lossy(), "toDir": to, "toName": newname.to_string_lossy() })) {
             Ok(_) => {
@@ -513,6 +570,28 @@ impl Fs {
             return reply.error(libc::EROFS);
         }
         let Some(dir) = self.id(parent) else { return reply.error(libc::ENOENT) };
+        let n = name.to_string_lossy().to_string();
+        if !folder {
+            // Open for writing and never closed: dropped at close (nothing uploaded).
+            if let Some((h, ino)) = self.writer(parent, &n) {
+                if self.local_only(ino) {
+                    if let Some(w) = self.open_w.get_mut(&h) {
+                        w.gone = true;
+                    }
+                    self.forget_lists();
+                    return reply.ok();
+                }
+            }
+        } else {
+            // A folder with a file being written in it is not empty.
+            let child = self.list(parent).ok().and_then(|l| l.into_iter().find(|e| e.name == n));
+            if let Some(c) = child {
+                let ci = self.ino(&c.id);
+                if self.open_w.values().any(|w| !w.gone && w.parent == ci) {
+                    return reply.error(libc::ENOTEMPTY);
+                }
+            }
+        }
         match self.agent.call(json!({ "op": "remove", "dir": dir, "name": name.to_string_lossy(), "folder": folder })) {
             Ok(_) => {
                 self.forget_lists();

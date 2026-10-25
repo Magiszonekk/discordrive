@@ -141,6 +141,15 @@ export class FragDiskCache extends Map<string, Uint8Array> {
  * copy `q-<n>` in the outbox and its target `q-<n>.json`, so the queue survives a restart of the app. Until
  * uploaded a file shows in its folder from the copy (id `out:<n>`), the file manager can open it again.
  */
+/**
+ * Short-lived files of editors and file managers (a save's temporary file, a backup, a lock): kept on this
+ * computer only, never uploaded (they would end up in the account's trash after each save). Renamed to a
+ * normal name (a save renaming its temporary file) they are uploaded.
+ */
+export function localOnlyName(name: string): boolean {
+  return /^\.goutputstream-|^\.~lock\..*#$|~$|^\.#|^#.*#$|\.sw[px]$|^\.Trash/.test(name);
+}
+
 export class Outbox {
   private items = new Map<string, { n: string; dir: string; name: string; size: number; mtime: number; trashed?: boolean }>();
   private seq = Date.now();
@@ -163,6 +172,8 @@ export class Outbox {
       }
       try {
         const j = JSON.parse(readFileSync(join(dir, f), "utf8")) as { dir: string; name: string; mtime: number };
+        // An editor's temporary file of an earlier run: not kept.
+        if (localOnlyName(j.name)) throw new Error("temporary");
         const st = statSync(join(dir, `q-${m[1]}`));
         this.items.set(m[1]!, { n: m[1]!, dir: j.dir, name: j.name, size: st.size, mtime: j.mtime, trashed: false });
       } catch {
@@ -208,6 +219,8 @@ export class Outbox {
         writeFileSync(join(this.dir, `q-${k}.json`), JSON.stringify({ dir: toDir, name: toName, mtime: it.mtime }), { mode: 0o600 });
         hit = true;
       }
+    // A temporary file renamed to a normal name (an editor's save): to be uploaded now.
+    if (hit) this.kick();
     return hit;
   }
   removePending(dir: string, name: string): boolean {
@@ -236,7 +249,7 @@ export class Outbox {
   private async loop() {
     let delay = 2000;
     for (;;) {
-      const first = [...this.items.values()].sort((a, b) => Number(a.n) - Number(b.n))[0];
+      const first = [...this.items.values()].filter((x) => !localOnlyName(x.name)).sort((a, b) => Number(a.n) - Number(b.n))[0];
       if (!first) return;
       const next = { ...first };
       this.current = next.n;
@@ -369,6 +382,10 @@ function connection(core: VdiskCore, sock: Socket, cache: FragDiskCache, hooks: 
         core.vdiskCheckName?.(String(q.toDir), String(q.toName));
         // Also in the account when an older version of it is there.
         if (!core.vdiskList(String(q.dir))?.some((e) => e.name === q.name)) return send({});
+      }
+      if (q.op === "remove" && q.folder && hooks.outbox) {
+        const f = core.vdiskList(String(q.dir))?.find((e) => e.name === q.name && e.kind === "folder");
+        if (f && hooks.outbox.entries(f.id).length) return send({ err: "ENOTEMPTY" });
       }
       if (q.op === "remove" && !q.folder && hooks.outbox?.removePending(String(q.dir), String(q.name))) {
         if (!core.vdiskList(String(q.dir))?.some((e) => e.name === q.name)) return send({});

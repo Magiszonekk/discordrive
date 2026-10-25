@@ -2,7 +2,7 @@
 //   cp a file in -> a file of the account (its bytes downloaded through the core = the same);
 //   overwrite it -> a new version of the same node; mkdir, mv (rename and move), rm -> the account's trash;
 //   a name the account does not allow -> refused (EINVAL); the outbox empty afterwards.
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { readdir, readFile, rename, rm, mkdir, writeFile, stat } from "node:fs/promises";
@@ -107,6 +107,52 @@ describe.skipIf(why !== null)("disk in the system, writing", () => {
     await rm(join(mp, "tymczasowy.txt"));
     await disk.outbox!.idle();
     expect(tree()).toEqual(["gotowe.txt"]);
+    // 6. An editor's save (GIO, gedit): a temporary file created with O_EXCL, written, renamed over the
+    //    original BEFORE it is closed, then closed: a new version of the original, no temporary file in
+    //    the account or its trash.
+    await writeFile(join(mp, "notatka.txt"), "pierwsza");
+    await disk.outbox!.idle();
+    const note = nodeOf("notatka.txt")!;
+    const trash0 = core.trashList().length;
+    await run("python3", ["-c", `import os
+d=${JSON.stringify(mp)}
+fd=os.open(d+'/.goutputstream-AB12', os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0o644)
+os.write(fd, b'druga wersja')
+os.fsync(fd)
+os.rename(d+'/.goutputstream-AB12', d+'/notatka.txt')
+os.close(fd)`]);
+    if (!spawnSync("gio", ["--version"]).error) {
+      await run("sh", ["-c", `printf 'trzecia przez gio' | gio save ${JSON.stringify(join(mp, "notatka.txt"))}`]);
+    }
+    await disk.outbox!.idle();
+    expect(tree()).toEqual(["gotowe.txt", "notatka.txt"]);
+    expect(nodeOf("notatka.txt")!.id).toBe(note.id);
+    const want = spawnSync("gio", ["--version"]).error ? "druga wersja" : "trzecia przez gio";
+    expect(await (await core.download(note.id)).text()).toBe(want);
+    expect(core.trashList().length).toBe(trash0);
+    //    An open file renamed to a new name: uploaded under the new name only.
+    await run("python3", ["-c", `import os
+d=${JSON.stringify(mp)}
+fd=os.open(d+'/tmpD', os.O_WRONLY|os.O_CREAT, 0o644)
+os.write(fd, b'x')
+os.rename(d+'/tmpD', d+'/nowa-nazwa.txt')
+os.close(fd)`]);
+    await disk.outbox!.idle();
+    expect(tree()).toEqual(["gotowe.txt", "notatka.txt", "nowa-nazwa.txt"]);
+
+    // 7. rmdir of a folder whose only file is still queued: ENOTEMPTY, the file uploaded into it.
+    await mkdir(join(mp, "d"));
+    await writeFile(join(mp, "d", "x"), "x");
+    await expect(run("rmdir", [join(mp, "d")])).rejects.toThrow(/not empty/i);
+    await disk.outbox!.idle();
+    expect(core.list(nodeOf("d")!.id).rows.map((r) => r.name)).toEqual(["x"]);
+
+    // 8. "Move to Trash" (gio trash): no .Trash-<uid> folder in the account; the file manager falls back to
+    //    deleting, which is the account's trash.
+    await expect(mkdir(join(mp, `.Trash-${process.getuid?.() ?? 1000}`))).rejects.toMatchObject({ code: "EPERM" });
+    if (!spawnSync("gio", ["--version"]).error) await run("gio", ["trash", join(mp, "nowa-nazwa.txt")]).catch(() => {});
+    expect(tree().some((n) => n.startsWith(".Trash"))).toBe(false);
+
     // The outbox holds nothing after the uploads.
     expect((await readdir(outbox)).length).toBe(0);
     expect((await stat(mp)).isDirectory()).toBe(true);
