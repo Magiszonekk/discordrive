@@ -290,6 +290,9 @@ class FileWriter(
             val pool = Executors.newFixedThreadPool(parallel)
             val done = ExecutorCompletionService<Unit>(pool)
             var read = 0L
+            // The file's first bytes go into the manifest too (a file manager sniffing the type reads them
+            // without the first fragment: manifest.ts ChunkManifest.head).
+            var head: ByteArray? = null
             try {
                 open().use { input ->
                     var inFlight = 0
@@ -302,6 +305,7 @@ class FileWriter(
                         while (off < n) { val r = input.read(plain, off, n - off); if (r < 0) throw IllegalStateException("file shorter than $size bytes"); off += r }
                         read += n
                         md.update(plain)
+                        if (i == 0) head = plain.copyOf(minOf(n, 64 * 1024))
                         while (inFlight >= parallel) { done.take().get(); inFlight-- }
                         done.submit {
                             renew()
@@ -333,6 +337,7 @@ class FileWriter(
             val manifest = buildJsonObject {
                 put("schemaVersion", FileWrite.MANIFEST_SCHEMA); put("chunkSizeBytes", chunkSize)
                 if (takenAt != null && takenAt > 0) put("takenAt", takenAt)
+                head?.takeIf { it.isNotEmpty() }?.let { put("head", B64.enc(it)) }
                 put("chunks", JsonArray(chunks.map { it!! }))
             }
             val mct = Aes.encrypt(ck, json.encodeToString(JsonObject.serializer(), manifest).toByteArray(Charsets.UTF_8))

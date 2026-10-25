@@ -33,6 +33,12 @@ export interface ChunkManifest {
    * instead of the upload time. Readers that do not know it ignore it.
    */
   takenAt?: number;
+  /**
+   * The first bytes of the file (up to 64 KiB, base64), inside the encrypted manifest: a file manager
+   * sniffing a file's type (GIO reads 32 KiB) reads these without the first fragment being downloaded.
+   * Optional.
+   */
+  head?: string;
 }
 
 export interface ManifestSource {

@@ -11,7 +11,8 @@
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { open as openFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { Thumbnails, type ThumbCore } from "./vdisk-thumbs.js";
@@ -25,6 +26,13 @@ export interface VdiskCore {
   vdiskList(id: string): { id: string; name: string; kind: "file" | "folder"; size: number; mtime: number }[] | null;
   vdiskStat(id: string): { id: string; name: string; kind: "file" | "folder"; size: number; mtime: number } | null;
   vdiskRead(id: string, off: number, len: number, cache: Map<string, Uint8Array>): Promise<Uint8Array>;
+  /** Writing (when the disk is writable): a closed file's local copy uploaded, folders, renames, the trash. */
+  vdiskUpload?(path: string, dirId: string, name: string): Promise<{ id: string }>;
+  vdiskMkdir?(dirId: string, name: string): Promise<{ id: string }>;
+  vdiskRename?(dirId: string, name: string, toDirId: string, toName: string): Promise<void>;
+  vdiskRemove?(dirId: string, name: string, folder: boolean): Promise<void>;
+  /** Throws (EINVAL / EISDIR / ENOENT …) when `name` cannot be written into `dirId`. */
+  vdiskCheckName?(dirId: string, name: string): void;
 }
 
 /**
@@ -128,6 +136,156 @@ export class FragDiskCache extends Map<string, Uint8Array> {
 }
 
 /** Serve the helper's requests on `socketPath` (0600 in a 0700 directory). */
+/**
+ * Files written into the disk, waiting for their upload (one at a time, in the background): each a local
+ * copy `q-<n>` in the outbox and its target `q-<n>.json`, so the queue survives a restart of the app. Until
+ * uploaded a file shows in its folder from the copy (id `out:<n>`), the file manager can open it again.
+ */
+/**
+ * Short-lived files of editors and file managers (a save's temporary file, a backup, a lock): kept on this
+ * computer only, never uploaded (they would end up in the account's trash after each save). Renamed to a
+ * normal name (a save renaming its temporary file) they are uploaded.
+ */
+export function localOnlyName(name: string): boolean {
+  return /^\.goutputstream-|^\.~lock\..*#$|~$|^\.#|^#.*#$|\.sw[px]$|^\.Trash/.test(name);
+}
+
+export class Outbox {
+  private items = new Map<string, { n: string; dir: string; name: string; size: number; mtime: number; trashed?: boolean }>();
+  private seq = Date.now();
+  private running: Promise<void> | null = null;
+  private wake: (() => void) | null = null;
+  /** After each upload (ok or not): the folder, the name, the pending id, an error. */
+  onDone: (dir: string, name: string, id: string, err: string | null) => void = () => {};
+  constructor(
+    readonly dir: string,
+    private readonly core: VdiskCore,
+    private readonly log: (m: string) => void = () => {},
+  ) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    for (const f of readdirSync(dir)) {
+      const m = /^q-(\d+)\.json$/.exec(f);
+      if (!m) {
+        // A writer's copy left by a crash (w-*), not queued: nothing to keep.
+        if (/^w-/.test(f)) rmSync(join(dir, f), { force: true });
+        continue;
+      }
+      try {
+        const j = JSON.parse(readFileSync(join(dir, f), "utf8")) as { dir: string; name: string; mtime: number };
+        // An editor's temporary file of an earlier run: not kept.
+        if (localOnlyName(j.name)) throw new Error("temporary");
+        const st = statSync(join(dir, `q-${m[1]}`));
+        this.items.set(m[1]!, { n: m[1]!, dir: j.dir, name: j.name, size: st.size, mtime: j.mtime, trashed: false });
+      } catch {
+        rmSync(join(dir, f), { force: true });
+      }
+    }
+  }
+  /** Take a closed file's copy (moved into the queue) for `dir`/`name`; the id it shows under until uploaded. */
+  add(path: string, dir: string, name: string): string {
+    const n = String(++this.seq);
+    const st = statSync(path);
+    renameSync(path, join(this.dir, `q-${n}`));
+    writeFileSync(join(this.dir, `q-${n}.json`), JSON.stringify({ dir, name, mtime: st.mtimeMs }), { mode: 0o600 });
+    // A newer copy of the same name replaces one not started yet (an editor saving often).
+    for (const [k, it] of this.items) if (it.dir === dir && it.name === name && k !== this.current) this.drop(k);
+    this.items.set(n, { n, dir, name, size: st.size, mtime: Date.now() });
+    this.kick();
+    return `out:${n}`;
+  }
+  private current: string | null = null;
+  private drop(k: string) {
+    this.items.delete(k);
+    rmSync(join(this.dir, `q-${k}`), { force: true });
+    rmSync(join(this.dir, `q-${k}.json`), { force: true });
+  }
+  /** What a folder shows from the queue (the newest copy of each name). */
+  entries(dir: string): { id: string; name: string; kind: "file"; size: number; mtime: number }[] {
+    const by = new Map<string, { id: string; name: string; kind: "file"; size: number; mtime: number }>();
+    for (const it of this.items.values()) if (it.dir === dir && !it.trashed) by.set(it.name, { id: `out:${it.n}`, name: it.name, kind: "file", size: it.size, mtime: it.mtime });
+    return [...by.values()];
+  }
+  pathOf(id: string): string | null {
+    const k = /^out:(\d+)$/.exec(id)?.[1];
+    return k && this.items.has(k) ? join(this.dir, `q-${k}`) : null;
+  }
+  /** A queued file renamed / moved / removed on the disk before its upload. */
+  renamePending(dir: string, name: string, toDir: string, toName: string): boolean {
+    let hit = false;
+    for (const [k, it] of this.items)
+      if (it.dir === dir && it.name === name && !it.trashed) {
+        it.dir = toDir;
+        it.name = toName;
+        writeFileSync(join(this.dir, `q-${k}.json`), JSON.stringify({ dir: toDir, name: toName, mtime: it.mtime }), { mode: 0o600 });
+        hit = true;
+      }
+    // A temporary file renamed to a normal name (an editor's save): to be uploaded now.
+    if (hit) this.kick();
+    return hit;
+  }
+  removePending(dir: string, name: string): boolean {
+    let hit = false;
+    for (const [k, it] of this.items)
+      if (it.dir === dir && it.name === name && !it.trashed) {
+        hit = true;
+        // The one uploading now goes to the trash once in the account; the others are just dropped.
+        if (k === this.current) it.trashed = true;
+        else this.drop(k);
+      }
+    return hit;
+  }
+  /** Resolves when the queue is empty (tests; quitting). */
+  async idle(): Promise<void> {
+    while (this.running) await this.running;
+  }
+  get size() {
+    return this.items.size;
+  }
+  kick() {
+    this.wake?.();
+    if (this.running) return;
+    this.running = this.loop().finally(() => (this.running = null));
+  }
+  private async loop() {
+    let delay = 2000;
+    for (;;) {
+      const first = [...this.items.values()].filter((x) => !localOnlyName(x.name)).sort((a, b) => Number(a.n) - Number(b.n))[0];
+      if (!first) return;
+      const next = { ...first };
+      this.current = next.n;
+      const path = join(this.dir, `q-${next.n}`);
+      try {
+        const at = { dir: next.dir, name: next.name };
+        await this.core.vdiskUpload!(path, at.dir, at.name);
+        const it = this.items.get(next.n);
+        this.drop(next.n);
+        // Renamed, moved or removed on the disk while it was uploading: the same in the account now.
+        if (it?.trashed) await this.core.vdiskRemove?.(at.dir, at.name, false).catch(() => {});
+        else if (it && (it.dir !== at.dir || it.name !== at.name)) await this.core.vdiskRename?.(at.dir, at.name, it.dir, it.name).catch((e) => this.log(`vdisk: rename after upload: ${e}`));
+        this.onDone(it?.dir ?? at.dir, it?.name ?? at.name, `out:${next.n}`, null);
+        delay = 2000;
+      } catch (e) {
+        const m = String((e as Error)?.message ?? e);
+        this.log(`vdisk: upload of ${next.name} failed: ${m}`);
+        this.onDone(next.dir, next.name, `out:${next.n}`, m);
+        // A name or folder the account refuses: never uploadable, dropped (the error is in the log).
+        if (/^(EINVAL|EISDIR|ENOENT)\b/.test(m)) this.drop(next.n);
+        else {
+          // No channel, no network: again later (the copy waits in the queue).
+          await new Promise<void>((r) => {
+            const t = setTimeout(r, delay);
+            this.wake = () => (clearTimeout(t), r());
+          });
+          this.wake = null;
+          delay = Math.min(delay * 2, 5 * 60_000);
+        }
+      } finally {
+        this.current = null;
+      }
+    }
+  }
+}
+
 export function serveVdisk(core: VdiskCore, socketPath: string, cache: FragDiskCache, hooks: Hooks = {}): Server & { conns: Set<Socket>; watchers: Set<Socket> } {
   const dir = join(socketPath, "..");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -157,6 +315,8 @@ export function serveVdisk(core: VdiskCore, socketPath: string, cache: FragDiskC
 interface Hooks {
   /** A folder was listed (the file manager opened it). */
   listed?: (id: string, entries: ReturnType<VdiskCore["vdiskList"]> & object) => Promise<void> | void;
+  /** The writable disk's queue of uploads (an upload's path must be inside its directory). */
+  outbox?: Outbox;
   watch?: () => void;
 }
 
@@ -171,29 +331,73 @@ function connection(core: VdiskCore, sock: Socket, cache: FragDiskCache, hooks: 
     h2.writeUInt32LE(data.byteLength);
     sock.write(Buffer.concat([h1, body, h2, Buffer.from(data.buffer, data.byteOffset, data.byteLength)]));
   };
-  const handle = async (q: { op?: string; id?: string; off?: number; len?: number }) => {
+  const handle = async (q: { op?: string; id?: string; off?: number; len?: number; dir?: string; name?: string; toDir?: string; toName?: string; path?: string; folder?: boolean }) => {
     try {
       // The helper's second connection: invalidations go out on it, nothing is answered.
       if (q.op === "watch") return hooks.watch?.();
       if (q.op === "list") {
-        const l = core.vdiskList(String(q.id));
+        let l = core.vdiskList(String(q.id));
+        // Files still in the upload queue show in their folder (over an older version of the same name).
+        const ob = l && hooks.outbox?.entries(String(q.id));
+        if (l && ob?.length) l = [...l.filter((e) => !ob.some((o) => o.name === e.name)), ...ob];
         // The folder's thumbnails first (up to 2 s): the file manager asks for them right after the listing,
         // and finds them ready instead of starting its own thumbnailers.
         if (l) await Promise.race([hooks.listed?.(String(q.id), l), new Promise((r) => setTimeout(r, 2000))]);
         return l ? send({ entries: l }) : send({ err: "ENOENT" });
       }
       if (q.op === "stat") {
+        if (String(q.id).startsWith("out:")) {
+          const p = hooks.outbox?.pathOf(String(q.id));
+          if (!p) return send({ err: "ENOENT" });
+          const st = statSync(p);
+          return send({ entry: { id: q.id, name: "", kind: "file", size: st.size, mtime: st.mtimeMs } });
+        }
         const e = core.vdiskStat(String(q.id));
         return e ? send({ entry: e }) : send({ err: "ENOENT" });
       }
       if (q.op === "read") {
         if (!Number.isSafeInteger(q.off) || !Number.isSafeInteger(q.len) || q.len! < 0 || q.len! > 64 << 20) return send({ err: "EIO" });
+        if (String(q.id).startsWith("out:")) {
+          const p = hooks.outbox?.pathOf(String(q.id));
+          if (!p) return send({ err: "ENOENT" });
+          const fh = await openFile(p, "r");
+          try {
+            const b = Buffer.alloc(q.len!);
+            const { bytesRead } = await fh.read(b, 0, q.len!, q.off!);
+            return send({}, b.subarray(0, bytesRead));
+          } finally {
+            await fh.close();
+          }
+        }
         return send({}, await core.vdiskRead(String(q.id), q.off!, q.len!, cache));
       }
       if (q.op === "statfs") return send({ total: cache.limit, free: Math.max(0, cache.limit - cache.bytes) });
+      if (q.op === "upload" && core.vdiskUpload && typeof q.path === "string" && hooks.outbox && q.path.startsWith(hooks.outbox.dir + "/") && !q.path.includes("/../")) {
+        const name = String(q.name);
+        // The name checked now (the close fails at once), the upload queued (cp does not wait for Discord).
+        core.vdiskCheckName?.(String(q.dir), name);
+        return send({ id: hooks.outbox.add(q.path, String(q.dir), name) });
+      }
+      if (q.op === "rename" && hooks.outbox?.renamePending(String(q.dir), String(q.name), String(q.toDir), String(q.toName))) {
+        core.vdiskCheckName?.(String(q.toDir), String(q.toName));
+        // Also in the account when an older version of it is there.
+        if (!core.vdiskList(String(q.dir))?.some((e) => e.name === q.name)) return send({});
+      }
+      if (q.op === "remove" && q.folder && hooks.outbox) {
+        const f = core.vdiskList(String(q.dir))?.find((e) => e.name === q.name && e.kind === "folder");
+        if (f && hooks.outbox.entries(f.id).length) return send({ err: "ENOTEMPTY" });
+      }
+      if (q.op === "remove" && !q.folder && hooks.outbox?.removePending(String(q.dir), String(q.name))) {
+        if (!core.vdiskList(String(q.dir))?.some((e) => e.name === q.name)) return send({});
+      }
+      if (q.op === "mkdir" && core.vdiskMkdir) return send(await core.vdiskMkdir(String(q.dir), String(q.name)));
+      if (q.op === "rename" && core.vdiskRename) return (await core.vdiskRename(String(q.dir), String(q.name), String(q.toDir), String(q.toName)), send({}));
+      if (q.op === "remove" && core.vdiskRemove) return (await core.vdiskRemove(String(q.dir), String(q.name), q.folder === true), send({}));
       send({ err: "EIO" });
     } catch (e) {
-      send({ err: /not a file|no such|gone/i.test(String((e as Error)?.message)) ? "ENOENT" : "EIO" });
+      const m = String((e as Error)?.message ?? e);
+      const code = /^(ENOENT|EEXIST|EINVAL|EISDIR|ENOTDIR|ENOTEMPTY|ENOSPC|EACCES)\b/.exec(m)?.[1];
+      send({ err: code ?? (/not a file|no such|gone/i.test(m) ? "ENOENT" : /need_channel|no channel/i.test(m) ? "ENOSPC" : "EIO") });
     }
   };
   sock.on("data", (d) => {
@@ -252,6 +456,8 @@ export class Vdisk {
   private srv: (Server & { conns: Set<Socket>; watchers: Set<Socket> }) | null = null;
   /** Thumbnails for the file manager (null without a helper that converts pictures, e.g. in tests). */
   thumbs: Thumbnails | null = null;
+  /** Files written into the disk, until uploaded (writable disk only). */
+  outbox: Outbox | null = null;
   /** What each folder listed (for the names an invalidation reports). */
   private readonly listedNow = new Map<string, { id: string; name: string }[]>();
 
@@ -263,11 +469,14 @@ export class Vdisk {
   invalidate(ids: string[] | "all") {
     const names: { dir: string; added: string[]; removed: { id: string; name: string }[] }[] = [];
     for (const [dir, before] of this.listedNow) {
-      const now = this.opts.core.vdiskList(dir) ?? [];
+      const acc = this.opts.core.vdiskList(dir) ?? [];
+      const ob = this.outbox?.entries(dir) ?? [];
+      const now = [...acc.filter((e) => !ob.some((o) => o.name === e.name)), ...ob];
       const was = new Map(before.map((e) => [e.name, e.id]));
       const is = new Map(now.map((e) => [e.name, e.id]));
       const added = [...is.keys()].filter((n) => was.get(n) !== is.get(n));
-      const removed = [...was].filter(([n, id]) => is.get(n) !== id).map(([name, id]) => ({ id, name }));
+      // Gone names only (a name whose node changed, a queued copy now uploaded, is just looked up again).
+      const removed = [...was].filter(([n]) => !is.has(n)).map(([name, id]) => ({ id, name }));
       if (added.length || removed.length) names.push({ dir, added, removed });
       this.listedNow.set(dir, now.map((e) => ({ id: e.id, name: e.name })));
     }
@@ -286,6 +495,8 @@ export class Vdisk {
       log?: (m: string) => void;
       fusermount?: string;
       onState?: (s: string) => void;
+      /** Writable: local copies of written files go here until uploaded (null / absent: read-only). */
+      outbox?: string;
       /** Where the freedesktop thumbnail cache is (default ~/.cache/thumbnails). */
       thumbnailDir?: string;
       noThumbnails?: boolean;
@@ -381,7 +592,14 @@ export class Vdisk {
     const core = this.opts.core;
     if (core.vdiskPreview && !this.opts.noThumbnails)
       this.thumbs ??= new Thumbnails({ helper: this.opts.helper, mountpoint: mp, core: core as ThumbCore, cacheDir: this.opts.thumbnailDir });
+    if (this.opts.outbox && !this.outbox) {
+      this.outbox = new Outbox(this.opts.outbox, core, this.opts.log);
+      // Uploaded: the folder shows the account's file instead of the queued copy.
+      this.outbox.onDone = (dir) => this.invalidate([dir]);
+      this.outbox.kick();
+    }
     this.srv = serveVdisk(core, this.opts.socket, this.opts.cache, {
+      outbox: this.outbox ?? undefined,
       listed: (id, entries) => {
         this.listedNow.set(id, entries.map((e) => ({ id: e.id, name: e.name })));
         const dir = core.vdiskPath?.(id);
@@ -393,9 +611,10 @@ export class Vdisk {
     // fusermount3 its helper mounts with. Then the helper starts from the user's service manager
     // (systemd-run --user: a fresh process tree without the flag); the helper exits when this agent goes.
     const viaSystemd = nnp;
+    const env = this.opts.outbox ? { ...process.env, DDN_FUSE_OUTBOX: this.opts.outbox } : process.env;
     this.child = viaSystemd
-      ? spawn("systemd-run", ["--user", "--quiet", "--collect", "--pipe", "--wait", `--unit=discordrive-disk-${process.pid}-${Date.now()}`, this.opts.helper, mp, this.opts.socket], { stdio: ["ignore", "ignore", "pipe"] })
-      : spawn(this.opts.helper, [mp, this.opts.socket], { stdio: ["ignore", "ignore", "pipe"] });
+      ? spawn("systemd-run", ["--user", "--quiet", "--collect", "--pipe", "--wait", `--unit=discordrive-disk-${process.pid}-${Date.now()}`, ...(this.opts.outbox ? [`--setenv=DDN_FUSE_OUTBOX=${this.opts.outbox}`] : []), this.opts.helper, mp, this.opts.socket], { stdio: ["ignore", "ignore", "pipe"] })
+      : spawn(this.opts.helper, [mp, this.opts.socket], { stdio: ["ignore", "ignore", "pipe"], env });
     this.viaSystemd = viaSystemd;
     this.child.stderr?.on("data", (d) => this.opts.log?.(`vdisk: ${String(d).trim()}`));
     const me = this.child;

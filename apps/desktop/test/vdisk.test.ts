@@ -135,6 +135,19 @@ describe.skipIf(why !== null)(`disk in the system (FUSE)${why ? ` — skipped: $
     expect(seen).toBe(true);
     // The folder's mtime moved (a file manager without inotify on FUSE refreshes on it).
     expect((await stat(dir)).mtimeMs).toBeGreaterThan(dirMtime0);
+    // A file manager sniffing a type reads the start (gio content-type reads 32 KiB): answered from the
+    // manifest, which carries the first 64 KiB. At most the manifest itself is fetched (one small object, the
+    // first time), never a fragment: the fragment cache stays as it was.
+    const cdnHead = fake.cdnGets;
+    const before0 = cache.bytes;
+    const fh = await (await import("node:fs/promises")).open(join(dir, "film duży.bin"));
+    const hb = Buffer.alloc(32 * 1024);
+    await fh.read(hb, 0, hb.length, 0);
+    await fh.close();
+    expect(sha(hb)).toBe(sha(big.subarray(0, hb.length)));
+    if (!spawnSync("gio", ["--version"]).error) await run("gio", ["info", "-a", "standard::content-type", join(dir, "film duży.bin")]);
+    expect(cache.bytes).toBe(before0);
+    expect(fake.cdnGets - cdnHead).toBeLessThanOrEqual(1);
     const off = 12 * 1024 * 1024 + 7;
     const part = (await run("dd", [`if=${join(dir, "film duży.bin")}`, "iflag=skip_bytes,count_bytes", `skip=${off}`, "count=4096", "status=none"], { encoding: "buffer" })).stdout;
     expect(sha(part)).toBe(sha(big.subarray(off, off + 4096)));

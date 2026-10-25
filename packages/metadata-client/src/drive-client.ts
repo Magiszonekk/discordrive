@@ -10,6 +10,7 @@
 //   fragments (lease renewed while they go) -> manifest blob ->
 //   blobs.finalize(U) -> group[upload_commit U, create(content)] [guard U] -> releaseLease(U).
 
+import { fromBase64, toBase64 } from "@ddv4/processing";
 import { DESCRIPTION_MAX_BYTES, descriptionNameOf, openDescription, type DescriptionRecord } from "./describe.js";
 import { NetControl } from "./net.js";
 import { createSHA256 } from "hash-wasm";
@@ -73,6 +74,8 @@ export const DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024 - 28;
  */
 export const BLOB_EXT = ".txt";
 export const MANIFEST_SCHEMA_VERSION = 1;
+/** How much of a file's start the manifest carries (ChunkManifest.head). */
+export const MANIFEST_HEAD_BYTES = 64 * 1024;
 /** A version found without previews is looked at again after this long (another device may add them). */
 export const PREVIEW_NONE_RECHECK_MS = 24 * 3600_000;
 const MANIFEST_REF_PREFIX = "ddn1:";
@@ -254,6 +257,11 @@ export interface UploadOptions {
   previews?: Promise<PreviewImage[] | null>;
   /** When the content was made (File.lastModified, a file's mtime, a photo's date), ms; kept in the manifest. */
   takenAt?: number;
+  /**
+   * A new version of this existing file instead of a new file (overwrite): committed as new_content_version
+   * on the version the caller saw (a concurrent change becomes a conflict copy, rule 7).
+   */
+  replace?: { nodeId: NodeId; baseVersionId: string | null };
 }
 
 export interface DownloadOptions {
@@ -513,9 +521,13 @@ export class DriveClient {
       // fragment's plaintext is dropped right after it is encrypted and hashed: memory follows the
       // fragments in flight, not the slowest post (30–60 in flight).
       let hashChain: Promise<unknown> = Promise.resolve();
+      let head: Uint8Array | null = null;
       const readInOrder = (i: number): Promise<{ data: Uint8Array; rd: number; ph: number }> => {
         const r0 = nowMs();
-        const read = src.read(i * this.chunkSize, this.chunkSize).then((data) => ({ data, rd: ms(r0) }));
+        const read = src.read(i * this.chunkSize, this.chunkSize).then((data) => {
+          if (i === 0) head = data.slice(0, MANIFEST_HEAD_BYTES);
+          return { data, rd: ms(r0) };
+        });
         const hashed = hashChain.then(() => read).then((x) => {
           const h0 = nowMs();
           hasher.update(x.data);
@@ -616,7 +628,13 @@ export class DriveClient {
       const plaintextSha256 = hasher.digest("hex");
 
       const taken = opts.takenAt !== undefined && Number.isFinite(opts.takenAt) && opts.takenAt > 0 ? Math.floor(opts.takenAt) : undefined;
-      const manifest: ChunkManifest = { schemaVersion: MANIFEST_SCHEMA_VERSION, chunkSizeBytes: this.chunkSize, chunks, ...(taken ? { takenAt: taken } : {}) };
+      const manifest: ChunkManifest = {
+        schemaVersion: MANIFEST_SCHEMA_VERSION,
+        chunkSizeBytes: this.chunkSize,
+        chunks,
+        ...(taken ? { takenAt: taken } : {}),
+        ...(head && (head as Uint8Array).byteLength ? { head: toBase64(head as Uint8Array) } : {}),
+      };
       const mct = await encryptManifest(key, manifest);
       throwIfAborted(signal);
       // Previews go with the manifest (same message): a failed or missing one never fails the upload.
@@ -646,7 +664,9 @@ export class DriveClient {
           type: "group",
           ops: [
             { type: "upload_commit", uploadId },
-            { type: "create", kind: "file", nodeId, parentId, name: nfc, content: version },
+            opts.replace
+              ? { type: "new_content_version", nodeId: opts.replace.nodeId, baseVersionId: opts.replace.baseVersionId, content: version, nameHint: nfc }
+              : { type: "create", kind: "file", nodeId, parentId, name: nfc, content: version },
           ],
         },
         "upload_commit+create",
@@ -659,7 +679,7 @@ export class DriveClient {
       }
       await forget();
       endLog(true);
-      return { nodeId, uploadId, version, chunks: count, posts: stats.posts, resumed };
+      return { nodeId: opts.replace?.nodeId ?? nodeId, uploadId, version, chunks: count, posts: stats.posts, resumed };
     } catch (e) {
       endLog(false, e);
       // Cancelled or failed before finalize: the store may drop what was sent (e2ee/plain: the server deletes).
@@ -735,6 +755,12 @@ export class DriveClient {
     if (!ex) return null;
     if (ex.size > DESCRIPTION_MAX_BYTES) return null;
     return openDescription(dn.k, await this.blobs.get(ex.placement, signal));
+  }
+
+  /** The first bytes of a version kept in its manifest (null: an older upload without them). */
+  async headOf(manifestRef: string): Promise<Uint8Array | null> {
+    const h = (await this.loadManifest(manifestRef)).manifest.head;
+    return typeof h === "string" && h ? fromBase64(h) : null;
   }
 
   /** When the content of a version was made, if its uploader stored it (manifest takenAt). */
