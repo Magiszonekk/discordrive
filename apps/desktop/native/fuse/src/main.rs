@@ -258,6 +258,15 @@ impl Filesystem for Fs {
     }
 }
 
+static MOUNTPOINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+extern "C" fn on_term(_: libc::c_int) {
+    if let Some(mp) = MOUNTPOINT.get() {
+        let _ = std::process::Command::new("fusermount3").args(["-u", "-z", mp]).status();
+    }
+    std::process::exit(0);
+}
+
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     if a.len() != 3 {
@@ -271,6 +280,11 @@ fn main() {
             std::process::exit(3);
         }
     };
+    // SIGTERM (the app stopping a helper it did not start itself): unmount like a gone agent.
+    unsafe {
+        libc::signal(libc::SIGTERM, on_term as usize);
+    }
+    MOUNTPOINT.set(a[1].clone()).ok();
     // A second connection that carries nothing: when the agent dies the socket closes and the read below
     // returns, even while no request is in flight (the kernel answers from its caches meanwhile).
     match UnixStream::connect(&a[2]) {

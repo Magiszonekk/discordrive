@@ -193,6 +193,15 @@ function connection(core: VdiskCore, sock: Socket, cache: FragDiskCache) {
   sock.on("error", () => {});
 }
 
+/** This process has no_new_privs (setuid programs it runs get no privileges). */
+export function noNewPrivs(): boolean {
+  try {
+    return /^NoNewPrivs:\s*1$/m.test(readFileSync("/proc/self/status", "utf8"));
+  } catch {
+    return false;
+  }
+}
+
 /** PIDs of ddn-fuse processes of this user serving `mountpoint` (from /proc: no pgrep needed). */
 export function helpersFor(mountpoint: string): number[] {
   const out: number[] = [];
@@ -245,6 +254,7 @@ export class Vdisk {
   }
 
   private stopping = false;
+  private viaSystemd = false;
   private restarts = 0;
 
   private async remount(): Promise<void> {
@@ -261,13 +271,27 @@ export class Vdisk {
     if (readdirSync(mp).length) throw new Error(`${mp} is not empty`);
     this.srv = serveVdisk(this.opts.core, this.opts.socket, this.opts.cache);
     await new Promise<void>((r) => this.srv!.once("listening", () => r()));
-    this.child = spawn(this.opts.helper, [mp, this.opts.socket], { stdio: ["ignore", "ignore", "pipe"] });
+    // A process with no_new_privs (Electron after app.relaunch, some sandboxes) cannot run the setuid
+    // fusermount3 its helper mounts with. Then the helper starts from the user's service manager
+    // (systemd-run --user: a fresh process tree without the flag); the helper exits when this agent goes.
+    const nnp = noNewPrivs();
+    const viaSystemd = nnp && !spawnSync("systemd-run", ["--version"]).error;
+    this.child = viaSystemd
+      ? spawn("systemd-run", ["--user", "--quiet", "--collect", "--pipe", "--wait", `--unit=discordrive-disk-${process.pid}-${Date.now()}`, this.opts.helper, mp, this.opts.socket], { stdio: ["ignore", "ignore", "pipe"] })
+      : spawn(this.opts.helper, [mp, this.opts.socket], { stdio: ["ignore", "ignore", "pipe"] });
+    this.viaSystemd = viaSystemd;
+    if (nnp && !viaSystemd) this.opts.log?.("vdisk: no_new_privs is set and systemd-run is missing: mounting will fail");
     this.child.stderr?.on("data", (d) => this.opts.log?.(`vdisk: ${String(d).trim()}`));
     const me = this.child;
     me.on("exit", (code, sig) => {
       this.opts.log?.(`vdisk: helper exited ${code ?? sig}`);
       if (this.child !== me) return;
       this.child = null;
+      // A mount the helper cannot make will not work the next time either: say why, do not loop.
+      if (code === 4 && !this.stopping) {
+        this.opts.onState?.(`error: ${noNewPrivs() && !this.viaSystemd ? "restart the app (it was started in a way that blocks mounting)" : "the system refused the mount (fusermount3)"}`);
+        return;
+      }
       // Killed or crashed while the disk should be there: clean up and mount again (a few tries).
       if (!this.stopping && this.restarts < 5) {
         this.restarts++;
@@ -307,10 +331,22 @@ export class Vdisk {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    // A helper started through systemd-run is not our child: it exits on the unmount (and on its socket).
+    for (const pid of this.viaSystemd ? helpersFor(this.opts.mountpoint) : []) {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        /* gone */
+      }
+    }
     spawnSync(this.opts.fusermount ?? "fusermount3", ["-u", "-z", this.opts.mountpoint]);
     this.child?.kill();
     this.child = null;
+    // The helper's own way out (it unmounts when its agent's connections close): needed where this
+    // process cannot run fusermount3 itself (no_new_privs).
+    for (const c of this.srv?.conns ?? []) c.destroy();
     await new Promise<void>((r) => (this.srv ? this.srv.close(() => r()) : r()));
     this.srv = null;
+    for (let i = 0; i < 40 && this.mounted(); i++) await new Promise((r) => setTimeout(r, 50));
   }
 }

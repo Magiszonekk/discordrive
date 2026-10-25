@@ -117,6 +117,30 @@ describe.skipIf(why !== null)(`disk in the system (FUSE)${why ? ` — skipped: $
     // 6. An old helper still running for this mount point (its agent died before it noticed) is stopped.
     await disk2.stop();
     expect(disk2.mounted()).toBe(false);
+
+    // 7. An agent with no_new_privs (Electron after app.relaunch): the setuid fusermount3 would be refused;
+    //    the helper starts through the user's service manager and mounts. A child process with the flag set
+    //    (setpriv) runs the same Vdisk, as the agent after a relaunch would.
+    if (!spawnSync("setpriv", ["--version"]).error && !spawnSync("systemd-run", ["--user", "--quiet", "--collect", "--wait", "true"]).status) {
+      const script = join(base, "nnp.mts");
+      const { writeFileSync } = await import("node:fs");
+      writeFileSync(
+        script,
+        `import { Vdisk, FragDiskCache, noNewPrivs } from ${JSON.stringify(fileURLToPath(new URL("../src/vdisk.ts", import.meta.url)))};
+const core = { vdiskList: (id: string) => (id === "root" ? [{ id: "f1", name: "a.txt", kind: "file", size: 3, mtime: 0 }] : null), vdiskStat: () => null, vdiskRead: async () => new Uint8Array([97, 98, 99]) };
+const d = new Vdisk({ helper: ${JSON.stringify(helper)}, mountpoint: ${JSON.stringify(join(base, "nnp-mnt"))}, socket: ${JSON.stringify(join(base, "run", "nnp.sock"))}, cache: new FragDiskCache(${JSON.stringify(join(base, "nnp-frags"))}, 1 << 20), core: core as never });
+await d.start();
+const { readFile } = await import("node:fs/promises");
+const txt = await readFile(${JSON.stringify(join(base, "nnp-mnt", "a.txt"))}, "utf8");
+await d.stop();
+console.log(JSON.stringify({ nnp: noNewPrivs(), txt, after: d.mounted() }));
+process.exit(0);
+`,
+      );
+      const tsx = fileURLToPath(new URL("../../../node_modules/.bin/tsx", import.meta.url));
+      const out = (await run("setpriv", ["--no-new-privs", tsx, script], { timeout: 60_000 })).stdout.trim().split("\n").at(-1)!;
+      expect(JSON.parse(out)).toEqual({ nnp: true, txt: "abc", after: false });
+    }
     expect(await exists(join(mp, "Zdjęcia Ż"))).toBe(false);
     core.close();
     console.log(JSON.stringify({ vdisk: { listedWithoutDiscord, readMBps: Math.round((big.byteLength / 1e6 / (ms / 1000)) * 10) / 10, cacheBytes: cache.bytes, cacheLimit: cache.limit } }));
