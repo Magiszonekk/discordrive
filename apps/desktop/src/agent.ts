@@ -16,6 +16,7 @@
 //   { type: "status", busy, up, down }       for the tray (what is running)
 //   { type: "notify", kind, name, bytes }    a large transfer finished
 //   { type: "range-result", id, ok, data, size, start, end | error }
+import { FragDiskCache, Vdisk } from "./vdisk.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -36,6 +37,53 @@ export interface AgentInit {
   tlsCa?: string;
   /** The instance built into the app: its address at this start (new port every time). */
   serverUrl?: string;
+  /** Linux: the disk in the system (FUSE helper, mount point, the cache of pieces). */
+  vdisk?: VdiskConfig;
+}
+export interface VdiskConfig {
+  on: boolean;
+  helper: string;
+  mountpoint: string;
+  socket: string;
+  cacheDir: string;
+  cacheBytes: number;
+}
+
+// ── the disk in the system ──
+let disk: Vdisk | null = null;
+let diskCache: FragDiskCache | null = null;
+let diskBusy: Promise<void> = Promise.resolve();
+function setVdisk(cfg: VdiskConfig | undefined) {
+  diskBusy = diskBusy.then(async () => {
+    if (!cfg) return;
+    const c = await (ready ?? Promise.reject(new Error("agent not initialised"))).catch(() => null);
+    if (!c) return;
+    if (diskCache) diskCache.limit = cfg.cacheBytes;
+    if (diskCache) diskCache.trim();
+    if (!cfg.on) {
+      if (disk) await disk.stop().catch(() => {});
+      disk = null;
+      // A mount left by an earlier run that was killed.
+      new Vdisk({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: null as never, core: c as never }).cleanStale();
+      return state("off");
+    }
+    if (disk && disk.mounted()) return state("mounted");
+    const why = Vdisk.unavailable(cfg.helper);
+    if (why) return state(`unavailable: ${why}`);
+    // The account must be open (the tree from its index).
+    for (let i = 0; i < 600 && !(await c.status()).signedIn; i++) await new Promise((r) => setTimeout(r, 500));
+    diskCache ??= new FragDiskCache(cfg.cacheDir, cfg.cacheBytes);
+    disk = new Vdisk({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, log: (m) => console.error(m), onState: state });
+    try {
+      await disk.start();
+      state("mounted");
+    } catch (e) {
+      state(`error: ${String((e as Error)?.message ?? e)}`);
+    }
+  });
+}
+function state(s: string) {
+  parent?.postMessage({ type: "vdisk-state", state: s });
 }
 
 const parent = process.parentPort;
@@ -193,7 +241,10 @@ function serve(port: Port) {
 
 parent?.on("message", (e) => {
   const m = e.data as { type?: string; id?: number; ok?: boolean; data?: Uint8Array; error?: string };
-  if (m?.type === "init" && !ready) ready = start(m as unknown as AgentInit);
+  if (m?.type === "init" && !ready) {
+    ready = start(m as unknown as AgentInit);
+    setVdisk((m as unknown as AgentInit).vdisk);
+  } else if (m?.type === "vdisk") setVdisk(m as unknown as VdiskConfig);
   else if (m?.type === "port" && e.ports[0]) serve(e.ports[0]);
   else if (m?.type === "sealed" && typeof m.id === "number") {
     const w = sealWait.get(m.id);
@@ -219,7 +270,10 @@ parent?.on("message", (e) => {
     // continue where they were; nothing is cancelled.
     void ready?.then((c) => c.setOnline(!(m as { on?: boolean }).on));
   } else if (m?.type === "quit") {
-    core?.close();
-    process.exit(0);
+    // The disk first: a mount left behind would show "not connected" in the file manager.
+    void (disk ? disk.stop().catch(() => {}) : Promise.resolve()).then(() => {
+      core?.close();
+      process.exit(0);
+    });
   }
 });

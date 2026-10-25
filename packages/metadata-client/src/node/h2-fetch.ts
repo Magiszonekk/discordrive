@@ -188,17 +188,30 @@ export function h2Fetch(o: H2FetchOptions = {}): H2Fetch {
       }
       let answered = false;
       let ctrl: ReadableStreamDefaultController<Uint8Array> | null = null;
+      // The body stream is done (closed, errored, cancelled): data still in flight from the stream is dropped.
+      // An enqueue after that throws ERR_INVALID_STATE inside the socket's "data" event: an uncaught
+      // exception that took the whole agent down (a reader cancelling a long read).
+      let finished = false;
+      const errorBody = (e: Error) => {
+        if (finished) return;
+        finished = true;
+        try {
+          ctrl?.error(e);
+        } catch {
+          /* closed meanwhile */
+        }
+      };
       const onAbort = () => {
         req.close(NGHTTP2_CANCEL);
         const e = abortErr(signal!);
         if (!answered) reject(e);
-        else ctrl?.error(e);
+        else errorBody(e);
       };
       signal?.addEventListener("abort", onAbort, { once: true });
       const fail = (e: Error) => {
         signal?.removeEventListener("abort", onAbort);
         if (!answered) reject(e);
-        else ctrl?.error(e);
+        else errorBody(e);
       };
       req.on("error", (e: NodeJS.ErrnoException) => {
         if (req.rstCode === NGHTTP2_REFUSED_STREAM || e.code === "ERR_HTTP2_GOAWAY_SESSION") return fail(new NotProcessed(`${e.code ?? e.message}`));
@@ -228,9 +241,20 @@ export function h2Fetch(o: H2FetchOptions = {}): H2Fetch {
         const stream = new ReadableStream<Uint8Array>({
           start(c) {
             ctrl = c;
-            req.on("data", (d: Buffer) => c.enqueue(new Uint8Array(d.buffer, d.byteOffset, d.byteLength)));
+            req.on("data", (d: Buffer) => {
+              if (finished) return;
+              try {
+                c.enqueue(new Uint8Array(d.buffer, d.byteOffset, d.byteLength));
+              } catch {
+                // Closed by the reader in the meantime: stop the stream, keep the process alive.
+                finished = true;
+                req.close(NGHTTP2_CANCEL);
+              }
+            });
             req.on("end", () => {
               signal?.removeEventListener("abort", onAbort);
+              if (finished) return;
+              finished = true;
               try {
                 c.close();
               } catch {
@@ -239,6 +263,7 @@ export function h2Fetch(o: H2FetchOptions = {}): H2Fetch {
             });
           },
           cancel() {
+            finished = true;
             req.close(NGHTTP2_CANCEL);
           },
         });

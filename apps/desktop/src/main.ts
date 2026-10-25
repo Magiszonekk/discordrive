@@ -8,6 +8,7 @@
 // with a CSP; it may not navigate anywhere else (http(s) links open in the system browser), may not open
 // windows or <webview>s, and gets no permissions. IPC: one channel for the agent's port (sent only to the
 // app's own main frame), and a few invoke handlers that check the sender frame and every argument.
+import { Vdisk } from "./vdisk.js";
 import { app, BrowserWindow, Menu, clipboard, MessageChannelMain, Notification, Tray, dialog, ipcMain, nativeImage, net, protocol, safeStorage, session, shell, utilityProcess, type IpcMainInvokeEvent, type UtilityProcess } from "electron";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -101,6 +102,7 @@ function startAgent(): UtilityProcess {
         ...(process.env.DDN_DESKTOP_TEST_DISCORD ? { discordApiOrigin: process.env.DDN_DESKTOP_TEST_DISCORD } : {}),
         ...(process.env.DDN_DESKTOP_TEST_CA ? { tlsCa: readFileSync(process.env.DDN_DESKTOP_TEST_CA, "utf8") } : {}),
         ...(server?.kind === "local" ? { serverUrl: server.url } : {}),
+        ...vdiskInit(),
       };
       a.postMessage(init);
       r();
@@ -120,7 +122,29 @@ function startAgent(): UtilityProcess {
   return a;
 }
 
+// ── the disk in the system (Linux) ──
+const VDISK_HELPER = () => (app.isPackaged ? join(process.resourcesPath, "ddn-fuse") : join(ROOT, "..", "native", "fuse", "target", "release", "ddn-fuse"));
+const VDISK_DIR = () => join(app.getPath("home"), "discordrive");
+let vdiskState = "off";
+function vdiskInit(): Partial<AgentInit> {
+  if (process.platform !== "linux") return {};
+  return {
+    vdisk: {
+      on: settings.vdisk === true,
+      helper: VDISK_HELPER(),
+      mountpoint: VDISK_DIR(),
+      socket: join(process.env.XDG_RUNTIME_DIR || join(DATA(), "run"), "discordrive", "fuse.sock"),
+      cacheDir: join(process.env.XDG_CACHE_HOME || join(app.getPath("home"), ".cache"), "discordrive", "frags"),
+      cacheBytes: settings.vdiskCacheBytes ?? 10 * 1024 ** 3,
+    },
+  };
+}
+
 async function onAgentMessage(a: UtilityProcess, m: { type?: string; id?: number; data?: Uint8Array; busy?: boolean; kind?: string; name?: string; bytes?: number } & Record<string, unknown>) {
+  if (m.type === "vdisk-state" && typeof m.state === "string") {
+    vdiskState = m.state;
+    return;
+  }
   if (m.type === "seal" || m.type === "unseal") {
     try {
       // Tests (DDN_DESKTOP_TEST_KEYSTORE_FILE): a stand-in key store that opens what it sealed (no real keyring
@@ -476,7 +500,16 @@ function wireUpdates() {
   // Settings → Desktop app: update checks, autostart, downloads folder (a folder picked in the system dialog).
   ipcMain.handle("ddn:app-settings", (e, patch: unknown) => {
     fromApp(e);
-    const p = (patch && typeof patch === "object" ? patch : {}) as { checkUpdates?: unknown; autostart?: unknown; downloadsDir?: unknown; keyring?: unknown };
+    const p = (patch && typeof patch === "object" ? patch : {}) as { checkUpdates?: unknown; autostart?: unknown; downloadsDir?: unknown; keyring?: unknown; vdisk?: unknown; vdiskCacheGb?: unknown };
+    if (process.platform === "linux" && typeof p.vdisk === "boolean" && p.vdisk !== (settings.vdisk === true)) {
+      settings.vdisk = p.vdisk;
+      vdiskState = p.vdisk ? "mounting" : "off";
+      agent?.postMessage({ type: "vdisk", ...vdiskInit().vdisk! });
+    }
+    if (process.platform === "linux" && typeof p.vdiskCacheGb === "number" && Number.isFinite(p.vdiskCacheGb) && p.vdiskCacheGb >= 1 && p.vdiskCacheGb <= 10_000) {
+      settings.vdiskCacheBytes = Math.round(p.vdiskCacheGb) * 1024 ** 3;
+      agent?.postMessage({ type: "vdisk", ...vdiskInit().vdisk! });
+    }
     if (typeof p.checkUpdates === "boolean") settings.checkUpdates = p.checkUpdates;
     // Keyring on again (used from the next start: the keys move into it then) or off.
     if (p.keyring === "ask" || p.keyring === "file") settings.keyring = p.keyring;
@@ -490,7 +523,16 @@ function wireUpdates() {
       agent?.postMessage({ type: "downloads-dir", dir: p.downloadsDir });
     }
     saveSettings(DATA(), settings);
-    return { checkUpdates: settings.checkUpdates, autostart: settings.autostart, downloadsDir: downloadsDir(), keyring: settings.keyring, platform: process.platform };
+    return {
+      checkUpdates: settings.checkUpdates,
+      autostart: settings.autostart,
+      downloadsDir: downloadsDir(),
+      keyring: settings.keyring,
+      platform: process.platform,
+      ...(process.platform === "linux"
+        ? { vdisk: { on: settings.vdisk === true, cacheGb: Math.round((settings.vdiskCacheBytes ?? 10 * 1024 ** 3) / 1024 ** 3), mountpoint: VDISK_DIR(), unavailable: Vdisk.unavailable(VDISK_HELPER()), state: vdiskState } }
+        : {}),
+    };
   });
   ipcMain.on("ddn:open-path", (e, p: unknown) => {
     // Only the installer this app just downloaded and checked.
