@@ -15,14 +15,9 @@ import type { StoredAccount } from "../../../web-mo/src/keystore.js";
 
 const POSIX = process.platform !== "win32";
 
-let tmpSeq = 0;
-/**
- * Write a file atomically (temp + rename) with owner-only permissions. Each write its own temp file: two
- * writes of the same file at once (a journal updated by two fragments landing together) must not share one
- * (on Windows the second then failed with ENOENT when the first renamed it away).
- */
+/** Write a file atomically (temp + rename) with owner-only permissions. */
 export function writePrivate(path: string, data: string | Uint8Array): void {
-  const tmp = `${path}.${process.pid}.${++tmpSeq}.tmp`;
+  const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, data, { mode: 0o600 });
   renameSync(tmp, path);
   if (POSIX) chmodSync(path, 0o600);
