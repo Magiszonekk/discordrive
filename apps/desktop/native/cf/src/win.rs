@@ -384,10 +384,19 @@ unsafe extern "system" fn on_fetch_data(info: *const CF_CALLBACK_INFO, p: *const
     // A little more than asked (a player reads on): up to AHEAD, on 4 KiB boundaries, never past the end.
     let want = req_end.max(opt_end.min(off + AHEAD));
     let end = ((want + 4095) / 4096 * 4096).min(size).max(req_end.min(size));
+    let trace = std::env::var_os("DDN_CF_TRACE").is_some();
+    let t0 = std::time::Instant::now();
+    if trace {
+        eprintln!("ddn-cf: fetch {id} req {off}+{} opt {}+{} -> to {end}", f.RequiredLength, f.OptionalFileOffset, f.OptionalLength);
+    }
     let mut o = off;
     while o < end {
         let n = PIECE.min(end - o);
+        let t1 = std::time::Instant::now();
         let r = agent(|a| a.call(json!({ "op": "read", "id": id, "off": o, "len": n })));
+        if trace && t1.elapsed().as_millis() > 500 {
+            eprintln!("ddn-cf: slow read {id} @{o}+{n}: {} ms", t1.elapsed().as_millis());
+        }
         match r {
             Ok((_, d)) if d.len() as u64 == n || (o + d.len() as u64 == size && !d.is_empty()) => {
                 if let Err(e) = transfer(info, STATUS_SUCCESS, o as i64, &d, d.len() as i64) {
@@ -395,9 +404,12 @@ unsafe extern "system" fn on_fetch_data(info: *const CF_CALLBACK_INFO, p: *const
                     return;
                 }
                 o += d.len() as u64;
+                if trace && o >= end {
+                    eprintln!("ddn-cf: fetched {id} {off}..{end} in {} ms", t0.elapsed().as_millis());
+                }
             }
             other => {
-                eprintln!("ddn-cf: read {id} @{o}+{n}: {:?}", other.err());
+                eprintln!("ddn-cf: read {id} @{o}+{n}: {:?} after {} ms", other.err(), t0.elapsed().as_millis());
                 // Only the part still owed of what was required (the rest was optional).
                 if o < req_end {
                     let _ = transfer(info, STATUS_CLOUD_FILE_UNSUCCESSFUL, o as i64, &[], (req_end - o) as i64);

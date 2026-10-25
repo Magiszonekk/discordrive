@@ -100,6 +100,7 @@ describe.skipIf(why !== null)(`disk in the system (Windows, Cloud Files)${why ? 
       log: (m) => console.log(m),
     });
     disks.push(disk);
+    process.env.DDN_CF_TRACE = "1";
     await disk.start();
 
     // 1. The tree: no request to Discord while listing; sizes and dates from the index.
