@@ -246,8 +246,29 @@ fn batch(entries: &[Entry]) -> Batch {
     Batch { infos, _names: names, _ids: ids, shown }
 }
 
+/// Where the helper keeps the list of what it made (for unregister): next to the root, not inside it.
+fn made_file(root: &Path) -> PathBuf {
+    let mut n = root.as_os_str().to_owned();
+    n.push(".ddn-made.json");
+    PathBuf::from(n)
+}
+
+/// Write the list of what the helper made (paths relative to the root, file sizes; folders 0).
+fn save_made() {
+    let s = st();
+    let list: Vec<(String, u64)> = s
+        .made
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|(p, (_, size, _))| p.strip_prefix(&s.root).ok().map(|r| (r.to_string_lossy().into_owned(), *size)))
+        .collect();
+    let _ = std::fs::write(made_file(&s.root), serde_json::to_vec(&list).unwrap_or_default());
+}
+
 /// Remember what a folder's placeholders were made from (folders: their path for later fills and syncs).
 fn remember(dir: &Path, shown: &[(String, Entry)]) {
+    {
     let mut made = st().made.lock().unwrap();
     for (n, e) in shown {
         let p = dir.join(n);
@@ -258,6 +279,8 @@ fn remember(dir: &Path, shown: &[(String, Entry)]) {
             made.insert(p, (e.id.clone(), e.size, e.mtime));
         }
     }
+    }
+    save_made();
 }
 
 // ── callbacks ──
@@ -418,8 +441,9 @@ fn reconcile() {
                 eprintln!("ddn-cf: remove {}: {e}", p.display());
             }
             st().removing.lock().unwrap().remove(&nid);
-            st().made.lock().unwrap().remove(&p);
+            st().made.lock().unwrap().retain(|q, _| !q.starts_with(&p));
             st().dirs.lock().unwrap().retain(|_, d| !d.starts_with(&p));
+            save_made();
         }
         // New: placeholders now.
         let new: Vec<Entry> = b.shown.iter().filter(|(n, _)| !have.contains(n)).map(|(_, e)| e.clone()).collect();
@@ -553,10 +577,16 @@ fn unregister(root: &Path) -> i32 {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
     }
-    let a = StorageProviderSyncRootManager::Unregister(&HSTRING::from(root_id()));
-    let w = wide_path(root);
-    let b = unsafe { CfUnregisterSyncRoot(PCWSTR(w.as_ptr())) };
-    eprintln!("ddn-cf: unregister: shell {:?}, cloud files {:?}", a.err().map(|e| e.code()), b.err().map(|e| e.code()));
+    // What the helper made (written while serving): removed after the registration is gone, when
+    // unchanged since (a file the user changed or put there stays).
+    let made: Vec<(PathBuf, u64)> = std::fs::read_to_string(made_file(root))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Vec<(String, u64)>>(&t).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(p, n)| (root.join(p), n))
+        .collect();
+    // Placeholders first, while they still are (the cloud reparse point goes with the registration).
     fn sweep(p: &Path) {
         let Ok(rd) = std::fs::read_dir(p) else { return };
         for d in rd.flatten() {
@@ -573,6 +603,25 @@ fn unregister(root: &Path) -> i32 {
         }
     }
     sweep(root);
+    let a = StorageProviderSyncRootManager::Unregister(&HSTRING::from(root_id()));
+    let w = wide_path(root);
+    let b = unsafe { CfUnregisterSyncRoot(PCWSTR(w.as_ptr())) };
+    eprintln!("ddn-cf: unregister: shell {:?}, cloud files {:?}", a.err().map(|e| e.code()), b.err().map(|e| e.code()));
+    // Then the helper's own files and folders still there (deepest first; a folder only when empty).
+    let mut left: Vec<&(PathBuf, u64)> = made.iter().collect();
+    left.sort_by_key(|(p, _)| std::cmp::Reverse(p.components().count()));
+    for (p, size) in left {
+        match std::fs::symlink_metadata(p) {
+            Ok(m) if m.is_dir() => {
+                let _ = std::fs::remove_dir(p);
+            }
+            Ok(m) if m.len() == *size => {
+                let _ = std::fs::remove_file(p);
+            }
+            _ => {}
+        }
+    }
+    let _ = std::fs::remove_file(made_file(root));
     // The folder itself when nothing of the user's is left in it.
     let _ = std::fs::remove_dir(root);
     0
