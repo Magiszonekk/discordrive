@@ -1717,6 +1717,20 @@ export class AppCore {
     const n = this.c().store.getNode(id === "root" ? ROOT_ID : id);
     return n && !n.trashed ? this.vdiskEntry(n as never) : null;
   }
+  /** The stored thumbnail / preview of a file for the disk's thumbnails (no download of the file). */
+  async vdiskPreview(id: string, kind: "t" | "p"): Promise<{ data: Uint8Array; mime: string } | null> {
+    const ref = this.c().store.getNode(id)?.content?.manifestRef;
+    if (!ref) return null;
+    const img = await this.c().readPreview(ref, kind).catch(() => null);
+    return img ? { data: img.data, mime: img.mime } : null;
+  }
+  /** A folder's path in the disk ("" = the root), null when it is not a current folder. */
+  vdiskPath(id: string): string | null {
+    if (id === "root") return "";
+    const p = this.folderPath(id);
+    return p ? p.map((x) => x.name).join("/") : null;
+  }
+
   /** Bytes [off, off+len) of a file, its fragments through `cache` (the disk's own, bounded). */
   async vdiskRead(id: string, off: number, len: number, cache: Map<string, Uint8Array>): Promise<Uint8Array> {
     const n = this.c().store.getNode(id);

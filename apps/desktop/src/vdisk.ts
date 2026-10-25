@@ -14,9 +14,14 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
+import { Thumbnails, type ThumbCore } from "./vdisk-thumbs.js";
 
 /** What the disk needs from the core (structural, so tests can give a fake). */
 export interface VdiskCore {
+  /** The stored picture of a file (thumbnails for the file manager), null when it has none. */
+  vdiskPreview?(id: string, kind: "t" | "p"): Promise<{ data: Uint8Array; mime: string } | null>;
+  /** The path of a folder in the mount ("" for the root), for the thumbnails' URIs. */
+  vdiskPath?(id: string): string | null;
   vdiskList(id: string): { id: string; name: string; kind: "file" | "folder"; size: number; mtime: number }[] | null;
   vdiskStat(id: string): { id: string; name: string; kind: "file" | "folder"; size: number; mtime: number } | null;
   vdiskRead(id: string, off: number, len: number, cache: Map<string, Uint8Array>): Promise<Uint8Array>;
@@ -123,18 +128,19 @@ export class FragDiskCache extends Map<string, Uint8Array> {
 }
 
 /** Serve the helper's requests on `socketPath` (0600 in a 0700 directory). */
-export function serveVdisk(core: VdiskCore, socketPath: string, cache: FragDiskCache): Server & { conns: Set<Socket> } {
+export function serveVdisk(core: VdiskCore, socketPath: string, cache: FragDiskCache, hooks: Hooks = {}): Server & { conns: Set<Socket>; watchers: Set<Socket> } {
   const dir = join(socketPath, "..");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (existsSync(socketPath)) rmSync(socketPath, { force: true });
   const conns = new Set<Socket>();
+  const watchers = new Set<Socket>();
   const srv = Object.assign(
     createServer((sock) => {
       conns.add(sock);
-      sock.on("close", () => conns.delete(sock));
-      connection(core, sock, cache);
+      sock.on("close", () => (conns.delete(sock), watchers.delete(sock)));
+      connection(core, sock, cache, { ...hooks, watch: () => watchers.add(sock) });
     }),
-    { conns },
+    { conns, watchers },
   );
   srv.listen(socketPath);
   // listen() creates the socket with the umask: owner only.
@@ -148,7 +154,13 @@ export function serveVdisk(core: VdiskCore, socketPath: string, cache: FragDiskC
   return srv;
 }
 
-function connection(core: VdiskCore, sock: Socket, cache: FragDiskCache) {
+interface Hooks {
+  /** A folder was listed (the file manager opened it). */
+  listed?: (id: string, entries: ReturnType<VdiskCore["vdiskList"]> & object) => void;
+  watch?: () => void;
+}
+
+function connection(core: VdiskCore, sock: Socket, cache: FragDiskCache, hooks: Hooks) {
   let buf = Buffer.alloc(0);
   let busy = Promise.resolve();
   const send = (j: unknown, data: Uint8Array = new Uint8Array(0)) => {
@@ -161,8 +173,11 @@ function connection(core: VdiskCore, sock: Socket, cache: FragDiskCache) {
   };
   const handle = async (q: { op?: string; id?: string; off?: number; len?: number }) => {
     try {
+      // The helper's second connection: invalidations go out on it, nothing is answered.
+      if (q.op === "watch") return hooks.watch?.();
       if (q.op === "list") {
         const l = core.vdiskList(String(q.id));
+        if (l) hooks.listed?.(String(q.id), l);
         return l ? send({ entries: l }) : send({ err: "ENOENT" });
       }
       if (q.op === "stat") {
@@ -191,6 +206,16 @@ function connection(core: VdiskCore, sock: Socket, cache: FragDiskCache) {
     }
   });
   sock.on("error", () => {});
+}
+
+let systemdUserOk: boolean | null = null;
+/** The user's service manager answers (systemd-run --user can start units). Checked once. */
+export function systemdUser(): boolean {
+  if (systemdUserOk === null) {
+    const r = spawnSync("systemd-run", ["--user", "--quiet", "--collect", "--wait", "true"], { timeout: 10_000 });
+    systemdUserOk = !r.error && r.status === 0;
+  }
+  return systemdUserOk;
 }
 
 /** This process has no_new_privs (setuid programs it runs get no privileges). */
@@ -222,9 +247,31 @@ export function helpersFor(mountpoint: string): number[] {
 /** The mount: the helper process, cleaning a stale mount first (a killed helper leaves one). */
 export class Vdisk {
   private child: ChildProcess | null = null;
-  private srv: (Server & { conns: Set<Socket> }) | null = null;
+  private srv: (Server & { conns: Set<Socket>; watchers: Set<Socket> }) | null = null;
+  /** Thumbnails for the file manager (null without a helper that converts pictures, e.g. in tests). */
+  thumbs: Thumbnails | null = null;
+
+  /** Drop what the kernel cached (after a sync: changes from other devices show in the file manager). */
+  invalidate(ids: string[] | "all") {
+    const body = Buffer.from(JSON.stringify({ inval: ids }));
+    const h = Buffer.alloc(4);
+    h.writeUInt32LE(body.length);
+    for (const w of this.srv?.watchers ?? []) w.write(Buffer.concat([h, body]));
+  }
   constructor(
-    readonly opts: { helper: string; mountpoint: string; socket: string; cache: FragDiskCache; core: VdiskCore; log?: (m: string) => void; fusermount?: string; onState?: (s: string) => void },
+    readonly opts: {
+      helper: string;
+      mountpoint: string;
+      socket: string;
+      cache: FragDiskCache;
+      core: VdiskCore;
+      log?: (m: string) => void;
+      fusermount?: string;
+      onState?: (s: string) => void;
+      /** Where the freedesktop thumbnail cache is (default ~/.cache/thumbnails). */
+      thumbnailDir?: string;
+      noThumbnails?: boolean;
+    },
   ) {}
 
   /** Can this computer mount it (FUSE device, fusermount3, the helper)? null = yes, else why not. */
@@ -250,7 +297,41 @@ export class Vdisk {
         /* gone */
       }
     }
-    spawnSync(this.opts.fusermount ?? "fusermount3", ["-u", "-z", "-q", mp]);
+    this.unmount();
+  }
+
+  /**
+   * fusermount3 -u -z on the mount point. With no_new_privs the setuid fusermount3 gets no privileges here:
+   * then it runs from the user's service manager, as the helper does.
+   */
+  private unmount() {
+    const fm = this.opts.fusermount ?? "fusermount3";
+    const args = ["-u", "-z", "-q", this.opts.mountpoint];
+    if (noNewPrivs() && systemdUser()) spawnSync("systemd-run", ["--user", "--quiet", "--collect", "--wait", fm, ...args]);
+    else spawnSync(fm, args);
+  }
+
+  /** Mounted and served: in the mount table and a helper alive for it (a killed one leaves a stale entry). */
+  serving(): boolean {
+    return this.mounted() && helpersFor(this.opts.mountpoint).length > 0;
+  }
+
+  private helperGone(code: number | null, sig: string | null) {
+    this.opts.log?.(`vdisk: helper exited ${code ?? sig}`);
+    if (this.stopping) return;
+    // A mount the helper cannot make will not work the next time either: say why, do not loop.
+    if (code === 4) return this.opts.onState?.(`error: ${noNewPrivs() && !systemdUser() ? "restart the app to turn on the disk" : "the system refused the mount (fusermount3)"}`);
+    // Killed or crashed while the disk should be there: clean up and mount again (a few tries).
+    if (this.restarts >= 5) return this.opts.onState?.(`error: the disk stopped (helper exited ${code ?? sig})`);
+    this.restarts++;
+    this.opts.onState?.("restarting");
+    setTimeout(() => {
+      if (this.stopping) return;
+      void this.remount().then(
+        () => this.opts.onState?.("mounted"),
+        (e) => this.opts.onState?.(`error: ${String((e as Error)?.message ?? e)}`),
+      );
+    }, 500);
   }
 
   private stopping = false;
@@ -266,51 +347,77 @@ export class Vdisk {
   async start(): Promise<void> {
     this.stopping = false;
     const mp = this.opts.mountpoint;
+    const nnp = noNewPrivs();
+    // no_new_privs without the user's service manager: no way to mount from this process.
+    if (nnp && !systemdUser()) throw new Error("restart the app to turn on the disk");
     this.cleanStale();
-    mkdirSync(mp, { recursive: true });
-    if (readdirSync(mp).length) throw new Error(`${mp} is not empty`);
-    this.srv = serveVdisk(this.opts.core, this.opts.socket, this.opts.cache);
+    for (let i = 0; i < 20 && this.mounted(); i++) await new Promise((r) => setTimeout(r, 50));
+    try {
+      mkdirSync(mp, { recursive: true });
+      if (readdirSync(mp).length) throw new Error(`${mp} is not empty`);
+    } catch (e) {
+      // A mount left behind that could not be taken down: say so in words.
+      if ((e as NodeJS.ErrnoException).code === "ENOTCONN") throw new Error(`${mp} is still mounted by an earlier run: run "fusermount3 -u -z ${mp}" or log out and in`);
+      throw e;
+    }
+    const core = this.opts.core;
+    if (core.vdiskPreview && !this.opts.noThumbnails)
+      this.thumbs ??= new Thumbnails({ helper: this.opts.helper, mountpoint: mp, core: core as ThumbCore, cacheDir: this.opts.thumbnailDir });
+    this.srv = serveVdisk(core, this.opts.socket, this.opts.cache, {
+      listed: (id, entries) => {
+        const dir = core.vdiskPath?.(id);
+        if (this.thumbs && dir !== null && dir !== undefined) void this.thumbs.folder(entries.map((e) => ({ id: e.id, kind: e.kind, mtime: e.mtime, path: join(dir, e.name) })));
+      },
+    });
     await new Promise<void>((r) => this.srv!.once("listening", () => r()));
     // A process with no_new_privs (Electron after app.relaunch, some sandboxes) cannot run the setuid
     // fusermount3 its helper mounts with. Then the helper starts from the user's service manager
     // (systemd-run --user: a fresh process tree without the flag); the helper exits when this agent goes.
-    const nnp = noNewPrivs();
-    const viaSystemd = nnp && !spawnSync("systemd-run", ["--version"]).error;
+    const viaSystemd = nnp;
     this.child = viaSystemd
       ? spawn("systemd-run", ["--user", "--quiet", "--collect", "--pipe", "--wait", `--unit=discordrive-disk-${process.pid}-${Date.now()}`, this.opts.helper, mp, this.opts.socket], { stdio: ["ignore", "ignore", "pipe"] })
       : spawn(this.opts.helper, [mp, this.opts.socket], { stdio: ["ignore", "ignore", "pipe"] });
     this.viaSystemd = viaSystemd;
-    if (nnp && !viaSystemd) this.opts.log?.("vdisk: no_new_privs is set and systemd-run is missing: mounting will fail");
     this.child.stderr?.on("data", (d) => this.opts.log?.(`vdisk: ${String(d).trim()}`));
     const me = this.child;
     me.on("exit", (code, sig) => {
-      this.opts.log?.(`vdisk: helper exited ${code ?? sig}`);
       if (this.child !== me) return;
       this.child = null;
-      // A mount the helper cannot make will not work the next time either: say why, do not loop.
-      if (code === 4 && !this.stopping) {
-        this.opts.onState?.(`error: ${noNewPrivs() && !this.viaSystemd ? "restart the app (it was started in a way that blocks mounting)" : "the system refused the mount (fusermount3)"}`);
+      this.helperGone(code, sig);
+    });
+    // Mounted when the helper serves it (the helper mounts in a few ms; through systemd-run a bit later).
+    for (let i = 0; i < 100; i++) {
+      if (this.serving()) {
+        this.watch();
         return;
       }
-      // Killed or crashed while the disk should be there: clean up and mount again (a few tries).
-      if (!this.stopping && this.restarts < 5) {
-        this.restarts++;
-        this.opts.onState?.("restarting");
-        setTimeout(() => {
-          if (this.stopping) return;
-          void this.remount().then(
-            () => this.opts.onState?.("mounted"),
-            (e) => this.opts.onState?.(`error: ${String((e as Error)?.message ?? e)}`),
-          );
-        }, 500);
-      } else if (!this.stopping) this.opts.onState?.(`error: helper exited ${code ?? sig}`);
-    });
-    // Mounted when the directory shows the root (the helper mounts in a few ms).
-    for (let i = 0; i < 100; i++) {
-      if (this.mounted()) return;
       await new Promise((r) => setTimeout(r, 50));
     }
     throw new Error("the disk did not mount");
+  }
+
+  /**
+   * While mounted: a helper that is gone (killed: its systemd unit may not report it to us the way a child
+   * does) is noticed within a second and the disk is mounted again, the same as a child's exit.
+   */
+  private watchTimer: ReturnType<typeof setInterval> | null = null;
+  private watch() {
+    if (this.watchTimer) clearInterval(this.watchTimer);
+    this.watchTimer = setInterval(() => {
+      if (this.stopping || this.child === null) return;
+      if (helpersFor(this.opts.mountpoint).length === 0) {
+        const c = this.child;
+        this.child = null;
+        c.removeAllListeners("exit");
+        try {
+          c.kill();
+        } catch {
+          /* gone */
+        }
+        this.helperGone(null, "gone");
+      }
+    }, 1000);
+    this.watchTimer.unref?.();
   }
 
   /** Tests: the agent "dies" (its connections to the helper close), the helper keeps running. */
@@ -331,6 +438,8 @@ export class Vdisk {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    if (this.watchTimer) clearInterval(this.watchTimer);
+    this.watchTimer = null;
     // A helper started through systemd-run is not our child: it exits on the unmount (and on its socket).
     for (const pid of this.viaSystemd ? helpersFor(this.opts.mountpoint) : []) {
       try {
@@ -339,7 +448,7 @@ export class Vdisk {
         /* gone */
       }
     }
-    spawnSync(this.opts.fusermount ?? "fusermount3", ["-u", "-z", this.opts.mountpoint]);
+    this.unmount();
     this.child?.kill();
     this.child = null;
     // The helper's own way out (it unmounts when its agent's connections close): needed where this

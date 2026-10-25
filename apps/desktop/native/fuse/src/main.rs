@@ -89,9 +89,9 @@ struct Fs {
     agent: Agent,
     uid: u32,
     gid: u32,
-    /// inode ↔ node ID, stable while mounted.
+    /// inode ↔ node ID, stable while mounted (inos shared with the invalidation thread).
     ids: HashMap<u64, String>,
-    inos: HashMap<String, u64>,
+    inos: std::sync::Arc<std::sync::Mutex<HashMap<String, u64>>>,
     next: u64,
     /// The last listing of each folder (lookup asks it again after TTL).
     lists: HashMap<u64, (Instant, Vec<Entry>)>,
@@ -104,13 +104,14 @@ impl Fs {
         if id == "root" {
             return ROOT;
         }
-        if let Some(i) = self.inos.get(id) {
+        let mut inos = self.inos.lock().unwrap();
+        if let Some(i) = inos.get(id) {
             return *i;
         }
         let i = self.next;
         self.next += 1;
         self.ids.insert(i, id.to_string());
-        self.inos.insert(id.to_string(), i);
+        inos.insert(id.to_string(), i);
         i
     }
 
@@ -267,8 +268,35 @@ extern "C" fn on_term(_: libc::c_int) {
     std::process::exit(0);
 }
 
+/// `ddn-fuse thumb <max>`: an image on stdin (WebP, JPEG or PNG) to a PNG on stdout whose longer side is
+/// at most <max> pixels (never enlarged). The agent adds the freedesktop tEXt chunks.
+fn thumb(max: u32) -> ! {
+    let mut input = Vec::new();
+    if std::io::stdin().read_to_end(&mut input).is_err() {
+        std::process::exit(2);
+    }
+    let img = match image::load_from_memory(&input) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("ddn-fuse thumb: {e}");
+            std::process::exit(3);
+        }
+    };
+    let (w, h) = (img.width(), img.height());
+    let img = if w.max(h) > max { img.resize(max, max, image::imageops::FilterType::Triangle) } else { img };
+    let mut out = std::io::Cursor::new(Vec::new());
+    if img.to_rgba8().write_to(&mut out, image::ImageFormat::Png).is_err() {
+        std::process::exit(4);
+    }
+    let _ = std::io::stdout().write_all(out.get_ref());
+    std::process::exit(0);
+}
+
 fn main() {
     let a: Vec<String> = std::env::args().collect();
+    if a.len() == 3 && a[1] == "thumb" {
+        thumb(a[2].parse().unwrap_or(256));
+    }
     if a.len() != 3 {
         eprintln!("usage: ddn-fuse <mountpoint> <socket>");
         std::process::exit(2);
@@ -285,39 +313,77 @@ fn main() {
         libc::signal(libc::SIGTERM, on_term as usize);
     }
     MOUNTPOINT.set(a[1].clone()).ok();
-    // A second connection that carries nothing: when the agent dies the socket closes and the read below
+    let inos = std::sync::Arc::new(std::sync::Mutex::new(HashMap::new()));
+    // A second connection, from the agent to here: invalidations after a sync (u32 LE length + JSON
+    // {"inval":"all"} or {"inval":[node IDs]}), and when the agent dies the socket closes and the read
     // returns, even while no request is in flight (the kernel answers from its caches meanwhile).
-    match UnixStream::connect(&a[2]) {
-        Ok(mut watch) => {
-            let mp = a[1].clone();
-            std::thread::spawn(move || {
-                let mut b = [0u8; 1];
-                loop {
-                    match watch.read(&mut b) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => continue,
-                    }
-                }
-                eprintln!("ddn-fuse: the agent is gone: unmounting");
-                let _ = std::process::Command::new("fusermount3").args(["-u", "-z", &mp]).status();
-                std::process::exit(5);
-            });
+    let watch = match UnixStream::connect(&a[2]) {
+        Ok(mut w) => {
+            // Tell the agent which connection this is.
+            let hello = br#"{"op":"watch"}"#;
+            let mut m = (hello.len() as u32).to_le_bytes().to_vec();
+            m.extend_from_slice(hello);
+            let _ = w.write_all(&m);
+            Some(w)
         }
-        Err(e) => eprintln!("ddn-fuse: no watch connection: {e}"),
-    }
+        Err(e) => {
+            eprintln!("ddn-fuse: no watch connection: {e}");
+            None
+        }
+    };
     let fs = Fs {
         agent: Agent { s, mountpoint: a[1].clone() },
         uid: unsafe { libc::getuid() },
         gid: unsafe { libc::getgid() },
         ids: HashMap::new(),
-        inos: HashMap::new(),
+        inos: inos.clone(),
         next: 2,
         lists: HashMap::new(),
         attrs: HashMap::new(),
     };
     let opts = [MountOption::RO, MountOption::FSName("discordrive".into()), MountOption::Subtype("discordrive".into()), MountOption::DefaultPermissions, MountOption::NoExec, MountOption::NoAtime];
-    if let Err(e) = fuser::mount2(fs, &a[1], &opts) {
-        eprintln!("ddn-fuse: mount failed: {e}");
-        std::process::exit(4);
+    let mut session = match fuser::Session::new(fs, &a[1], &opts) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("ddn-fuse: mount failed: {e}");
+            std::process::exit(4);
+        }
+    };
+    let notifier = session.notifier();
+    if let Some(mut w) = watch {
+        let mp = a[1].clone();
+        std::thread::spawn(move || {
+            loop {
+                let mut n = [0u8; 4];
+                if w.read_exact(&mut n).is_err() {
+                    break;
+                }
+                let mut j = vec![0u8; u32::from_le_bytes(n) as usize];
+                if w.read_exact(&mut j).is_err() {
+                    break;
+                }
+                let Ok(v) = serde_json::from_slice::<serde_json::Value>(&j) else { continue };
+                // The kernel drops what it cached for these inodes (attributes, directory pages, file pages):
+                // a file changed on another device is read afresh, a folder lists its new children.
+                let targets: Vec<u64> = {
+                    let map = inos.lock().unwrap();
+                    match v.get("inval") {
+                        Some(serde_json::Value::String(s)) if s == "all" => map.values().copied().chain(std::iter::once(ROOT)).collect(),
+                        Some(serde_json::Value::Array(ids)) => ids.iter().filter_map(|x| x.as_str()).filter_map(|id| if id == "root" { Some(ROOT) } else { map.get(id).copied() }).collect(),
+                        _ => vec![],
+                    }
+                };
+                for ino in targets {
+                    let _ = notifier.inval_inode(ino, 0, 0);
+                }
+            }
+            eprintln!("ddn-fuse: the agent is gone: unmounting");
+            let _ = std::process::Command::new("fusermount3").args(["-u", "-z", &mp]).status();
+            std::process::exit(5);
+        });
+    }
+    if let Err(e) = session.run() {
+        eprintln!("ddn-fuse: {e}");
+        std::process::exit(6);
     }
 }
