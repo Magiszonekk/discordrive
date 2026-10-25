@@ -132,7 +132,8 @@ class DdnBackupActivity : AppCompatActivity() {
         charging.setOnCheckedChangeListener { _, v -> DdnBackup.set(this, charging = v) }
         now.setOnClickListener {
             if (!hasMedia()) askMedia()
-            else if (DdnBackup.buckets(this).isEmpty()) Toast.makeText(this, R.string.ddn_backup_no_chosen, Toast.LENGTH_LONG).show()
+            else if (DdnBackup.buckets(this).let { chosen -> chosen.isEmpty() || runCatching { DdnBackup.allBuckets(this).keys.none { it in chosen } }.getOrDefault(false) })
+                Toast.makeText(this, R.string.ddn_backup_no_chosen, Toast.LENGTH_LONG).show()
             else { DdnBackup.runNow(this, manual = true); Toast.makeText(this, R.string.ddn_backup_started, Toast.LENGTH_SHORT).show() }
         }
 

@@ -57,7 +57,8 @@ class JoinActivity : AppCompatActivity() {
         val no = Button(this).apply { text = getString(R.string.ddn_sas_no); visibility = View.GONE }
         val kit = EditText(this).apply { hint = getString(R.string.ddn_kit_hint); minLines = 2 }
         val kitGo = Button(this).apply { text = getString(R.string.ddn_kit_go) }
-        listOf(server, name, start, qr, offerText, status, yes, no, kit, kitGo).forEach(root::addView)
+        ok = Button(this).apply { text = getString(android.R.string.ok); visibility = View.GONE; setOnClickListener { openAccount(0) } }
+        listOf(server, name, start, qr, offerText, status, ok, yes, no, kit, kitGo).forEach(root::addView)
         setContentView(android.widget.ScrollView(this).apply { addView(root) })
         Insets.apply(root)
 
@@ -87,7 +88,7 @@ class JoinActivity : AppCompatActivity() {
                     DdnAccount.save(this, acct)
                     joinNow(acct)
                 }
-                main.post { joined(out, yes) }
+                main.post { joined(out, listOf(yes, no)) }
             }
         }
         no.setOnClickListener {
@@ -107,7 +108,7 @@ class JoinActivity : AppCompatActivity() {
                     DdnAccount.save(this, acct)
                     joinNow(acct)
                 }
-                main.post { joined(out, kitGo) }
+                main.post { joined(out, listOf(kitGo)) }
             }
         }
     }
@@ -116,14 +117,21 @@ class JoinActivity : AppCompatActivity() {
      * After a join: the summary, then on to the files. A note the user must act on (the snapshot pointer was
      * unavailable: fix it on another device) stays until they tap OK instead of disappearing with the screen.
      */
-    private fun joined(out: Result<Pair<String, Boolean>>, button: Button) {
+    private fun joined(out: Result<Pair<String, Boolean>>, hide: List<Button>) {
         status.text = out.fold({ it.first }, { getString(R.string.ddn_error, it.message) })
         val (_, note) = out.getOrNull() ?: return
         if (!note) { openAccount(); return }
-        button.visibility = View.VISIBLE
-        button.text = getString(android.R.string.ok)
-        button.setOnClickListener { openAccount(0) }
+        // The pairing's buttons are done with: only OK, which opens the files.
+        for (b in hide) b.visibility = View.GONE
+        ok.visibility = View.VISIBLE
     }
+
+    /** Shown after a join with a note to read (OK opens the files). */
+    internal lateinit var ok: Button
+
+    /** Tests: the screen after a join that left a note (the snapshot pointer unavailable). */
+    internal fun joinedWithNoteForTest() = joined(Result.success("joined\n\n" + getString(R.string.ddn_join_snapshot_skipped) to true), emptyList())
+    internal fun okForTest(): Button = ok
 
     /** Joined: on to the account's files (a short pause so the summary can be read). */
     private fun openAccount(delayMs: Long = 1500) = main.postDelayed({
