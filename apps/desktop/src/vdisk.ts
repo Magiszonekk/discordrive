@@ -11,7 +11,7 @@
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { open as openFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { release as osRelease } from "node:os";
@@ -432,13 +432,34 @@ function parentAtPath(core: VdiskCore, root: string, path: string): { dir: strin
   if (i < 0) return null;
   const parent = p.slice(0, i);
   const norm = (x: string) => x.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
-  const dir = norm(parent) === norm(root) ? "root" : nodeAtPath(core, root, parent);
+  const dir = rootsOf(root).some((x) => norm(parent) === norm(x)) ? "root" : nodeAtPath(core, root, parent);
   if (!dir) return null;
   return { dir, name: [...p.slice(i + 1)].map((c) => WIN_LOOKALIKE[c] ?? c).join("") };
 }
 /** The node of a file at `path` under `root` (a path on this computer), or null. */
-function nodeAtPath(core: VdiskCore, root: string, path: string): string | null {
+/**
+ * The disk's root as the paths given to us may spell it: as configured and its long form (a root given with
+ * an 8.3 short name, like C:\\Users\\RUNNER~1, comes back from Windows' callbacks spelled out).
+ */
+const rootForms = new Map<string, string[]>();
+function rootsOf(root: string): string[] {
+  let r = rootForms.get(root);
+  if (!r) {
+    r = [root];
+    try {
+      const long = realpathSync.native(root);
+      if (long.toLowerCase() !== root.toLowerCase()) r.push(long);
+    } catch {
+      /* not there yet: asked again next time */
+      return r;
+    }
+    rootForms.set(root, r);
+  }
+  return r;
+}
+function nodeAtPath(core: VdiskCore, root0: string, path: string): string | null {
   const norm = (x: string) => x.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  const root = rootsOf(root0).find((x) => norm(path.replace(/\//g, "\\")).startsWith(norm(x) + "\\")) ?? root0;
   const r = norm(root);
   const p = path.replace(/\//g, "\\");
   if (!norm(p).startsWith(r + "\\")) return null;
