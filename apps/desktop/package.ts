@@ -22,6 +22,9 @@ const stage = join(here, ".stage");
 function targetsLinux() {
   return process.argv.includes("--linux") || (process.platform === "linux" && !process.argv.some((a) => a === "--win" || a === "--mac"));
 }
+function targetsWin() {
+  return process.argv.includes("--win") || (process.platform === "win32" && !process.argv.some((a) => a === "--linux" || a === "--mac"));
+}
 const out = join(here, "release");
 if (!existsSync(join(here, "dist", "main.cjs"))) throw new Error("run the build first (npm run build -w @ddv4/desktop)");
 
@@ -61,6 +64,10 @@ const config = {
   ...(existsSync(join(here, "native", "fuse", "target", "release", "ddn-fuse")) && targetsLinux()
     ? { extraResources: [{ from: join(here, "native", "fuse", "target", "release", "ddn-fuse"), to: "ddn-fuse" }] }
     : {}),
+  // Windows: the Cloud Files helper (native/cf), the same way.
+  ...(existsSync(join(here, "native", "cf", "target", "release", "ddn-cf.exe")) && targetsWin()
+    ? { extraResources: [{ from: join(here, "native", "cf", "target", "release", "ddn-cf.exe"), to: "ddn-cf.exe" }] }
+    : {}),
   asar: true,
   // Electron fuses (security checklist #18): no ELECTRON_RUN_AS_NODE, NODE_OPTIONS or --inspect for the
   // packaged app, app code only from the (integrity-checked where supported) asar, no extra file:// rights.
@@ -79,7 +86,9 @@ const config = {
   win: { target: [{ target: "nsis", arch: ["x64"] }], icon: join(here, "build-res", "icon.ico") },
   // createDesktopShortcut: true = only on a fresh install ("always" would re-create it at every update). The
   // in-app update runs this installer with --updated, which keeps the user's shortcuts (README: Updates).
-  nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, createDesktopShortcut: true, runAfterFinish: true },
+  // include: the uninstaller takes the disk's sync root down (a left-over registration would show an empty
+  // "discordrive" in Explorer's navigation pane).
+  nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, createDesktopShortcut: true, runAfterFinish: true, include: join(here, "build-res", "installer.nsh") },
   linux: {
     target: [
       { target: "AppImage", arch: ["x64"] },

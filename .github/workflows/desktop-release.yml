@@ -74,6 +74,12 @@ jobs:
         timeout-minutes: 8
         run: cargo build --release --manifest-path apps/desktop/native/fuse/Cargo.toml
 
+      - name: "Windows: the disk helper (ddn-cf) packed with the app"
+        if: runner.os == 'Windows'
+        timeout-minutes: 12
+        shell: bash
+        run: cargo build --release --manifest-path apps/desktop/native/cf/Cargo.toml
+
       - name: Installers
         run: npx tsx apps/desktop/package.ts ${{ matrix.target }}
 

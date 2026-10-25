@@ -16,7 +16,7 @@
 //   { type: "status", busy, up, down }       for the tray (what is running)
 //   { type: "notify", kind, name, bytes }    a large transfer finished
 //   { type: "range-result", id, ok, data, size, start, end | error }
-import { FragDiskCache, Vdisk } from "./vdisk.js";
+import { FragDiskCache, Vdisk, VdiskWin } from "./vdisk.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -49,10 +49,13 @@ export interface VdiskConfig {
   cacheBytes: number;
   /** Writable (files copied in are uploaded): the queue of uploads lives here. Absent: read-only. */
   outbox?: string;
+  /** Windows (Cloud Files): the sync root's icon and the app's version. */
+  windows?: { icon: string; version: string };
 }
 
 // ── the disk in the system ──
 let disk: Vdisk | null = null;
+let diskWin: VdiskWin | null = null;
 let diskCache: FragDiskCache | null = null;
 let diskBusy: Promise<void> = Promise.resolve();
 function setVdisk(cfg: VdiskConfig | undefined) {
@@ -62,6 +65,7 @@ function setVdisk(cfg: VdiskConfig | undefined) {
     if (!c) return;
     if (diskCache) diskCache.limit = cfg.cacheBytes;
     if (diskCache) diskCache.trim();
+    if (cfg.windows) return setVdiskWin(c, cfg, cfg.windows);
     if (!cfg.on) {
       if (disk) await disk.stop().catch(() => {});
       disk = null;
@@ -89,6 +93,27 @@ function setVdisk(cfg: VdiskConfig | undefined) {
       state(`error: ${String((e as Error)?.message ?? e)}`);
     }
   });
+}
+/** Windows: the sync root served by ddn-cf (read-only for now). Off = taken down with its placeholders. */
+async function setVdiskWin(c: AppCore, cfg: VdiskConfig, w: { icon: string; version: string }) {
+  if (!cfg.on) {
+    if (diskWin) await diskWin.stop().catch(() => {});
+    if (diskWin) diskWin.unregister();
+    diskWin = null;
+    return state("off");
+  }
+  if (diskWin?.mounted()) return state("mounted");
+  const why = VdiskWin.unavailable(cfg.helper);
+  if (why) return state(`unavailable: ${why}`);
+  for (let i = 0; i < 600 && !(await c.status()).signedIn; i++) await new Promise((r) => setTimeout(r, 500));
+  diskCache ??= new FragDiskCache(cfg.cacheDir, cfg.cacheBytes);
+  diskWin = new VdiskWin({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, icon: w.icon, version: w.version, log: (m) => console.error(m), onState: state });
+  try {
+    await diskWin.start();
+    state("mounted");
+  } catch (e) {
+    state(`error: ${String((e as Error)?.message ?? e)}`);
+  }
 }
 /** The disk's upload queue: one upload in the tray (so Quit warns too), and its numbers for Settings. */
 function diskQueue(left: number, done: number, total: number) {
@@ -206,7 +231,7 @@ async function start(init: AgentInit): Promise<AppCore> {
   c.onEvent = (e) => {
     track(e);
     // The tree changed (a sync, this device's own change): the file manager sees it without a restart.
-    if (e.type === "changed") disk?.invalidate("all");
+    if (e.type === "changed") (disk?.invalidate("all"), diskWin?.invalidate("all"));
     if (e.type === "net-baseline") keepNet({ baseline: e.data });
     else if (e.type === "net-tune") keepNet({ tune: e.data });
     broadcast(e);

@@ -8,7 +8,7 @@
 // with a CSP; it may not navigate anywhere else (http(s) links open in the system browser), may not open
 // windows or <webview>s, and gets no permissions. IPC: one channel for the agent's port (sent only to the
 // app's own main frame), and a few invoke handlers that check the sender frame and every argument.
-import { Vdisk } from "./vdisk.js";
+import { Vdisk, VdiskWin } from "./vdisk.js";
 import { app, BrowserWindow, Menu, clipboard, MessageChannelMain, Notification, Tray, dialog, ipcMain, nativeImage, net, protocol, safeStorage, session, shell, utilityProcess, type IpcMainInvokeEvent, type UtilityProcess } from "electron";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -123,12 +123,36 @@ function startAgent(): UtilityProcess {
 }
 
 // ── the disk in the system (Linux) ──
-const VDISK_HELPER = () => (app.isPackaged ? join(process.resourcesPath, "ddn-fuse") : join(ROOT, "..", "native", "fuse", "target", "release", "ddn-fuse"));
+const VDISK_WIN = process.platform === "win32";
+const VDISK_HELPER = () =>
+  VDISK_WIN
+    ? app.isPackaged
+      ? join(process.resourcesPath, "ddn-cf.exe")
+      : join(ROOT, "..", "native", "cf", "target", "release", "ddn-cf.exe")
+    : app.isPackaged
+      ? join(process.resourcesPath, "ddn-fuse")
+      : join(ROOT, "..", "native", "fuse", "target", "release", "ddn-fuse");
+/** The disk exists on Linux (FUSE) and Windows (Cloud Files; read-only for now). */
+const VDISK_OS = process.platform === "linux" || VDISK_WIN;
+const vdiskUnavailable = () => (VDISK_WIN ? VdiskWin.unavailable(VDISK_HELPER()) : Vdisk.unavailable(VDISK_HELPER()));
 const VDISK_DIR = () => join(app.getPath("home"), "discordrive");
 let vdiskState = "off";
 let vdiskQueue = { left: 0, done: 0, total: 0 };
 function vdiskInit(): Partial<AgentInit> {
-  if (process.platform !== "linux") return {};
+  if (!VDISK_OS) return {};
+  if (VDISK_WIN)
+    return {
+      vdisk: {
+        on: settings.vdisk === true,
+        helper: VDISK_HELPER(),
+        mountpoint: VDISK_DIR(),
+        // One pipe per user session (the helper proves itself with a secret it is started with).
+        socket: `\\\\.\\pipe\\discordrive-cf-${process.env.USERNAME ?? "user"}-${process.pid}`,
+        cacheDir: join(app.getPath("userData"), "disk-cache"),
+        cacheBytes: settings.vdiskCacheBytes ?? 10 * 1024 ** 3,
+        windows: { icon: process.execPath, version: app.getVersion() },
+      },
+    };
   return {
     vdisk: {
       on: settings.vdisk === true,
@@ -508,7 +532,7 @@ function wireUpdates() {
   ipcMain.handle("ddn:app-settings", (e, patch: unknown) => {
     fromApp(e);
     const p = (patch && typeof patch === "object" ? patch : {}) as { checkUpdates?: unknown; autostart?: unknown; downloadsDir?: unknown; keyring?: unknown; vdisk?: unknown; vdiskCacheGb?: unknown; vdiskWrite?: unknown };
-    if (process.platform === "linux" && typeof p.vdisk === "boolean" && p.vdisk !== (settings.vdisk === true)) {
+    if (VDISK_OS && typeof p.vdisk === "boolean" && p.vdisk !== (settings.vdisk === true)) {
       settings.vdisk = p.vdisk;
       vdiskState = p.vdisk ? "mounting" : "off";
       agent?.postMessage({ type: "vdisk", ...vdiskInit().vdisk! });
@@ -517,7 +541,7 @@ function wireUpdates() {
       settings.vdiskWrite = p.vdiskWrite;
       if (settings.vdisk === true) agent?.postMessage({ type: "vdisk", ...vdiskInit().vdisk! });
     }
-    if (process.platform === "linux" && typeof p.vdiskCacheGb === "number" && Number.isFinite(p.vdiskCacheGb) && p.vdiskCacheGb >= 1 && p.vdiskCacheGb <= 10_000) {
+    if (VDISK_OS && typeof p.vdiskCacheGb === "number" && Number.isFinite(p.vdiskCacheGb) && p.vdiskCacheGb >= 1 && p.vdiskCacheGb <= 10_000) {
       settings.vdiskCacheBytes = Math.round(p.vdiskCacheGb) * 1024 ** 3;
       agent?.postMessage({ type: "vdisk", ...vdiskInit().vdisk! });
     }
@@ -540,8 +564,8 @@ function wireUpdates() {
       downloadsDir: downloadsDir(),
       keyring: settings.keyring,
       platform: process.platform,
-      ...(process.platform === "linux"
-        ? { vdisk: { on: settings.vdisk === true, write: settings.vdiskWrite === true, queue: vdiskQueue, cacheGb: Math.round((settings.vdiskCacheBytes ?? 10 * 1024 ** 3) / 1024 ** 3), mountpoint: VDISK_DIR(), unavailable: Vdisk.unavailable(VDISK_HELPER()), state: vdiskState } }
+      ...(VDISK_OS
+        ? { vdisk: { on: settings.vdisk === true, write: settings.vdiskWrite === true, writable: !VDISK_WIN, queue: vdiskQueue, cacheGb: Math.round((settings.vdiskCacheBytes ?? 10 * 1024 ** 3) / 1024 ** 3), mountpoint: VDISK_DIR(), unavailable: vdiskUnavailable(), state: vdiskState } }
         : {}),
     };
   });

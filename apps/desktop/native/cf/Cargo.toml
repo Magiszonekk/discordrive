@@ -1,0 +1,37 @@
+[package]
+name = "ddn-cf"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The disk in the system on Windows: a sync root of the Cloud Files API, served by the discordrive agent"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Storage_CloudFilters",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Com",
+  "Win32_System_CorrelationVector",
+  "Win32_System_IO",
+  "Win32_System_Threading",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Storage",
+  "Storage_Provider",
+  "Storage_Streams",
+  "Storage_Search",
+  "Storage_FileProperties",
+  "Foundation",
+  "Foundation_Collections",
+  "Security_Cryptography",
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

@@ -66,7 +66,7 @@ interface DesktopBridge {
       downloadsDir: string;
       keyring?: "ask" | "file";
       platform?: string;
-      vdisk?: { on: boolean; write?: boolean; queue?: { left: number; done: number; total: number }; cacheGb: number; mountpoint: string; unavailable: string | null; state: string };
+      vdisk?: { on: boolean; write?: boolean; writable?: boolean; queue?: { left: number; done: number; total: number }; cacheGb: number; mountpoint: string; unavailable: string | null; state: string };
     }>;
     open(path: string): void;
     onProgress?(cb: (p: { done: number; total: number }) => void): void;
@@ -2734,6 +2734,8 @@ function wireSpeedTest() {
 }
 /** The agent's reasons for a disk that did not mount, in the UI's language where known. */
 function vdiskWhy(why: string): string {
+  if (/^no fusermount3|^no \/dev\/fuse/.test(why)) return t("app.vdisk.why.fuse");
+  if (/^Windows 10 1809/.test(why)) return t("app.vdisk.why.oldWindows");
   if (/^restart the app/.test(why)) return t("app.vdisk.why.restart");
   if (/still mounted by an earlier run/.test(why)) return t("app.vdisk.why.stale", { cmd: why.match(/"([^"]+)"/)?.[1] ?? "fusermount3 -u -z ~/discordrive" });
   if (/system refused the mount/.test(why)) return t("app.vdisk.why.refused");
@@ -2758,7 +2760,8 @@ async function renderDesktopApp() {
   const vd = st.vdisk;
   $("app-vdisk-row").hidden = !vd;
   $("app-vdisk-cache-row").hidden = !vd;
-  $("app-vdisk-write-row").hidden = !vd || !vd.on || !!vd.unavailable;
+  // Windows: read-only for now (no writing switch).
+  $("app-vdisk-write-row").hidden = !vd || !vd.on || !!vd.unavailable || vd.writable === false;
   if (vd) {
     const sw = $<HTMLInputElement>("app-vdisk");
     sw.checked = vd.on;
@@ -2770,7 +2773,7 @@ async function renderDesktopApp() {
     $("app-vdisk-write-hint").textContent = q && q.left > 0 ? tn("app.vdisk.queue", q.left, { done: fmt(q.done), total: fmt(q.total) }) : t("app.vdisk.write.hint");
     if (q && q.left > 0) setTimeout(() => void renderDesktopApp(), 2000);
     const stateText = vd.state === "mounted" ? t("app.vdisk.mounted", { dir: vd.mountpoint }) : vd.state === "mounting" || vd.state === "restarting" || vd.state === "off" ? t("app.vdisk.mounting") : t("app.vdisk.failed", { why: vdiskWhy(vd.state.replace(/^error: /, "")) });
-    $("app-vdisk-hint").textContent = vd.unavailable ? t("app.vdisk.unavailable", { why: vd.unavailable }) : vd.on ? stateText : t("app.vdisk.off");
+    $("app-vdisk-hint").textContent = vd.unavailable ? t("app.vdisk.unavailable", { why: vdiskWhy(vd.unavailable) }) : vd.on ? stateText : t("app.vdisk.off");
     // Mounting takes a moment: the state again shortly (until it is mounted or failed).
     if (vd.on && !vd.unavailable && vd.state !== "mounted" && !/^error/.test(vd.state)) setTimeout(() => void renderDesktopApp(), 1500);
   }
