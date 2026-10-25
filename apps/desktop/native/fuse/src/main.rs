@@ -697,10 +697,70 @@ fn thumb(max: u32) -> ! {
     std::process::exit(0);
 }
 
+/// `ddn-fuse preview`: a picture on stdin (JPEG, PNG, WebP; a video frame the agent got from ffmpeg) to the
+/// account's thumbnail and preview, both JPEG, turned as its EXIF says: on stdout, for each,
+/// u32 LE width, height, length, bytes. Sizes as the web client: thumbnail with the shorter side 320 px
+/// (the longer at most 640), preview with the longer side 1280 px, never enlarged, within their byte limits.
+fn preview() -> ! {
+    use image::ImageDecoder;
+    let mut input = Vec::new();
+    if std::io::stdin().take(80 << 20).read_to_end(&mut input).is_err() {
+        std::process::exit(2);
+    }
+    let fail = |c: i32, e: &dyn std::fmt::Display| -> ! {
+        eprintln!("ddn-fuse preview: {e}");
+        std::process::exit(c)
+    };
+    let rd = image::ImageReader::new(std::io::Cursor::new(&input)).with_guessed_format().unwrap_or_else(|e| fail(3, &e));
+    let mut dec = rd.into_decoder().unwrap_or_else(|e| fail(3, &e));
+    let (w0, h0) = dec.dimensions();
+    // Larger ones are not decoded (a 100 MP scan would need ~400 MB of pixels), as the web client.
+    if (w0 as u64) * (h0 as u64) > 80_000_000 {
+        fail(5, &"too many pixels");
+    }
+    let o = dec.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut img = image::DynamicImage::from_decoder(dec).unwrap_or_else(|e| fail(3, &e));
+    img.apply_orientation(o);
+    let (w, h) = (img.width(), img.height());
+    let mut out = std::io::stdout();
+    for (kind, max_bytes) in [("t", 48 * 1024usize), ("p", 400 * 1024usize)] {
+        let s = if kind == "t" {
+            let s = 320.0 / w.min(h) as f64;
+            if w.max(h) as f64 * s > 640.0 { 640.0 / w.max(h) as f64 } else { s }
+        } else {
+            1280.0 / w.max(h) as f64
+        }
+        .min(1.0);
+        let (mut tw, mut th) = (((w as f64 * s).round() as u32).max(1), ((h as f64 * s).round() as u32).max(1));
+        let mut done = None;
+        'fit: for _ in 0..4 {
+            let r = img.resize_exact(tw, th, image::imageops::FilterType::CatmullRom).to_rgb8();
+            for q in [80u8, 65, 50] {
+                let mut b = Vec::new();
+                if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut b, q).encode_image(&r).is_ok() && b.len() <= max_bytes {
+                    done = Some((tw, th, b));
+                    break 'fit;
+                }
+            }
+            tw = ((tw as f64 * 0.75).round() as u32).max(1);
+            th = ((th as f64 * 0.75).round() as u32).max(1);
+        }
+        let (tw, th, b) = done.unwrap_or((0, 0, Vec::new()));
+        for x in [tw, th, b.len() as u32] {
+            let _ = out.write_all(&x.to_le_bytes());
+        }
+        let _ = out.write_all(&b);
+    }
+    std::process::exit(0);
+}
+
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     if a.len() == 3 && a[1] == "thumb" {
         thumb(a[2].parse().unwrap_or(256));
+    }
+    if a.len() == 2 && a[1] == "preview" {
+        preview();
     }
     if a.len() != 3 {
         eprintln!("usage: ddn-fuse <mountpoint> <socket>");
