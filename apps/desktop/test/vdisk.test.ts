@@ -75,7 +75,8 @@ describe.skipIf(why !== null)(`disk in the system (FUSE)${why ? ` — skipped: $
     await disk.start();
     expect(disk.mounted()).toBe(true);
 
-    // 1. The tree: no request to Discord while listing.
+    // 1. The tree: no fragment of a file downloaded while listing (the stored pictures of the photo are,
+    //    for the thumbnails: its thumbnail and its preview, two small objects).
     const before = fake.cdnGets;
     expect(await readdir(mp)).toEqual(["Zdjęcia Ż"]);
     const dir = join(mp, "Zdjęcia Ż");
@@ -85,7 +86,7 @@ describe.skipIf(why !== null)(`disk in the system (FUSE)${why ? ` — skipped: $
     expect((await stat(dir)).isDirectory()).toBe(true);
     // ls -lR in another process, as a file manager does.
     expect((await run("ls", ["-lR", mp])).stdout).toContain("notatka.txt");
-    const listedWithoutDiscord = fake.cdnGets === before;
+    const listedWithoutDiscord = fake.cdnGets - before <= 2 && cache.bytes === 0;
 
     // Thumbnails for the file manager, written when the folder was listed: the photo's from its stored
     // preview (no fragment of the file read), "no thumbnail" markers for the others.
@@ -107,6 +108,19 @@ describe.skipIf(why !== null)(`disk in the system (FUSE)${why ? ` — skipped: $
     expect(await exists(thumbOf("film duży.bin", "fail"))).toBe(true);
     // Only the stored pictures were fetched (two small objects), no fragment of a file.
     expect(cache.bytes).toBe(0);
+    // The desktop's own thumbnailer reading a file on the disk is refused (no download); a user is not.
+    const cdn0 = fake.cdnGets;
+    if (!spawnSync("gdk-pixbuf-thumbnailer", ["--help"]).error) {
+      await expect(run("gdk-pixbuf-thumbnailer", ["-s", "128", fileUri(join(dir, "film duży.bin")), join(base, "x.png")])).rejects.toThrow();
+      expect(fake.cdnGets).toBe(cdn0);
+    }
+    // The thumbnail cache cleaned (a cleaner app): the next listing writes them again.
+    const { rm } = await import("node:fs/promises");
+    await rm(thumbDir, { recursive: true, force: true });
+    await new Promise((r) => setTimeout(r, 1100));
+    await readdir(dir);
+    expect(await exists(thumbOf("zdjęcie 1.jpg", "normal"))).toBe(true);
+    const dirMtime0 = (await stat(dir)).mtimeMs;
 
     // 2. Ranges (dd) and whole files.
     // A change from another device (a new file in the folder): visible after the agent invalidates, without
@@ -119,6 +133,8 @@ describe.skipIf(why !== null)(`disk in the system (FUSE)${why ? ` — skipped: $
       if (!seen) await new Promise((r) => setTimeout(r, 100));
     }
     expect(seen).toBe(true);
+    // The folder's mtime moved (a file manager without inotify on FUSE refreshes on it).
+    expect((await stat(dir)).mtimeMs).toBeGreaterThan(dirMtime0);
     const off = 12 * 1024 * 1024 + 7;
     const part = (await run("dd", [`if=${join(dir, "film duży.bin")}`, "iflag=skip_bytes,count_bytes", `skip=${off}`, "count=4096", "status=none"], { encoding: "buffer" })).stdout;
     expect(sha(part)).toBe(sha(big.subarray(off, off + 4096)));

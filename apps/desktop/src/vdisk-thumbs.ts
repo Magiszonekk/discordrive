@@ -105,16 +105,28 @@ export class Thumbnails {
    * The thumbnails of a folder's files (after the file manager listed it): written in the background, one
    * at a time, each file once per mtime. `entries` are the folder's children with their path in the mount.
    */
-  folder(entries: { id: string; path: string; kind: string; mtime: number }[]) {
+  folder(entries: { id: string; path: string; kind: string; mtime: number }[]): Promise<void> {
+    const todo: { id: string; uri: string; mt: number }[] = [];
     for (const e of entries) {
       if (e.kind !== "file") continue;
       const uri = fileUri(join(this.opts.mountpoint, e.path));
       const mt = Math.floor(e.mtime / 1000);
-      if (this.done.get(uri) === mt) continue;
+      // Done in this session and still on disk (the cache may have been cleaned meanwhile: written again).
+      if (this.done.get(uri) === mt && (existsSync(this.pathOf(uri, "normal")) || existsSync(this.pathOf(uri, "fail")))) continue;
       this.done.set(uri, mt);
-      this.queue = this.queue.then(() => this.one(e.id, uri, mt)).catch(() => {});
+      todo.push({ id: e.id, uri, mt });
     }
-    return this.queue;
+    // A few at a time: the file manager asks for the thumbnails right after listing.
+    let next = 0;
+    const lane = async () => {
+      while (next < todo.length) {
+        const t = todo[next++]!;
+        await this.one(t.id, t.uri, t.mt).catch(() => {});
+      }
+    };
+    const p = Promise.all(Array.from({ length: Math.min(6, todo.length) }, lane)).then(() => {});
+    this.queue = this.queue.then(() => p);
+    return p;
   }
 
   private async one(id: string, uri: string, mtime: number) {

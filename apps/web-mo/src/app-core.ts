@@ -1695,9 +1695,27 @@ export class AppCore {
 
   private vdiskEntry(n: { id: string; name: string; kind: string; content: { sizeBytes: number; createdAt: number; manifestRef: string } | null }) {
     const s = this.store;
-    // When the content was made (manifest takenAt, known in the index) else when it was written.
+    // Files: when the content was made (manifest takenAt, known in the index) else when it was written.
+    // Folders: when something in them last changed (a file manager without inotify on FUSE compares it to
+    // notice new files).
     const taken = s instanceof SqlIndexStore && n.content ? s.descInfo(n.content.manifestRef)?.taken : null;
-    return { id: n.id, name: n.name, kind: n.kind === "folder" ? ("folder" as const) : ("file" as const), size: n.content?.sizeBytes ?? 0, mtime: taken || n.content?.createdAt || 0 };
+    const mtime = n.kind === "folder" ? this.vdiskFolderTime(n.id) : taken || n.content?.createdAt || 0;
+    return { id: n.id, name: n.name, kind: n.kind === "folder" ? ("folder" as const) : ("file" as const), size: n.content?.sizeBytes ?? 0, mtime };
+  }
+  /** The newest change among a folder's children (added, renamed, a new version), ms; at least the folder's own. */
+  private vdiskFolderTime(id: string): number {
+    const tree = this.c().store;
+    const when = (n: { created: { seq: number }; nameChanged: { seq: number }; placed: { seq: number }; content: { createdAt: number; seq: number } | null }) =>
+      Math.max(this.serverTimes.get(n.placed.seq) ?? 0, this.serverTimes.get(n.nameChanged.seq) ?? 0, n.content ? (this.serverTimes.get(n.content.seq) ?? n.content.createdAt) : 0);
+    const self = tree.getNode(id);
+    let t = self ? when(self as never) : 0;
+    for (const cid of tree.childIds(id)) {
+      const c = tree.getNode(cid);
+      if (c && !c.trashed) t = Math.max(t, when(c as never));
+      // A child moved away or trashed changes the folder too: its trash time.
+      if (c?.trashed) t = Math.max(t, c.trashed.at);
+    }
+    return t || 1;
   }
   /** A folder's children for the disk (not in the trash; unavailable files hidden as in the lists). */
   vdiskList(id: string) {
@@ -1715,6 +1733,7 @@ export class AppCore {
   }
   vdiskStat(id: string) {
     const n = this.c().store.getNode(id === "root" ? ROOT_ID : id);
+    if (id === "root" && n) return { ...this.vdiskEntry(n as never), id: "root" };
     return n && !n.trashed ? this.vdiskEntry(n as never) : null;
   }
   /** The stored thumbnail / preview of a file for the disk's thumbnails (no download of the file). */

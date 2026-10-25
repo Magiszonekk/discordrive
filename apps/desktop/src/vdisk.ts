@@ -156,7 +156,7 @@ export function serveVdisk(core: VdiskCore, socketPath: string, cache: FragDiskC
 
 interface Hooks {
   /** A folder was listed (the file manager opened it). */
-  listed?: (id: string, entries: ReturnType<VdiskCore["vdiskList"]> & object) => void;
+  listed?: (id: string, entries: ReturnType<VdiskCore["vdiskList"]> & object) => Promise<void> | void;
   watch?: () => void;
 }
 
@@ -177,7 +177,9 @@ function connection(core: VdiskCore, sock: Socket, cache: FragDiskCache, hooks: 
       if (q.op === "watch") return hooks.watch?.();
       if (q.op === "list") {
         const l = core.vdiskList(String(q.id));
-        if (l) hooks.listed?.(String(q.id), l);
+        // The folder's thumbnails first (up to 2 s): the file manager asks for them right after the listing,
+        // and finds them ready instead of starting its own thumbnailers.
+        if (l) await Promise.race([hooks.listed?.(String(q.id), l), new Promise((r) => setTimeout(r, 2000))]);
         return l ? send({ entries: l }) : send({ err: "ENOENT" });
       }
       if (q.op === "stat") {
@@ -250,10 +252,26 @@ export class Vdisk {
   private srv: (Server & { conns: Set<Socket>; watchers: Set<Socket> }) | null = null;
   /** Thumbnails for the file manager (null without a helper that converts pictures, e.g. in tests). */
   thumbs: Thumbnails | null = null;
+  /** What each folder listed (for the names an invalidation reports). */
+  private readonly listedNow = new Map<string, { id: string; name: string }[]>();
 
-  /** Drop what the kernel cached (after a sync: changes from other devices show in the file manager). */
+  /**
+   * Drop what the kernel cached (after a sync: changes from other devices show in the file manager). The
+   * folders listed so far are compared with what they hold now: their added and removed names go along,
+   * so the kernel tells inotify watchers and an open file manager window refreshes.
+   */
   invalidate(ids: string[] | "all") {
-    const body = Buffer.from(JSON.stringify({ inval: ids }));
+    const names: { dir: string; added: string[]; removed: { id: string; name: string }[] }[] = [];
+    for (const [dir, before] of this.listedNow) {
+      const now = this.opts.core.vdiskList(dir) ?? [];
+      const was = new Map(before.map((e) => [e.name, e.id]));
+      const is = new Map(now.map((e) => [e.name, e.id]));
+      const added = [...is.keys()].filter((n) => was.get(n) !== is.get(n));
+      const removed = [...was].filter(([n, id]) => is.get(n) !== id).map(([name, id]) => ({ id, name }));
+      if (added.length || removed.length) names.push({ dir, added, removed });
+      this.listedNow.set(dir, now.map((e) => ({ id: e.id, name: e.name })));
+    }
+    const body = Buffer.from(JSON.stringify({ inval: ids, names }));
     const h = Buffer.alloc(4);
     h.writeUInt32LE(body.length);
     for (const w of this.srv?.watchers ?? []) w.write(Buffer.concat([h, body]));
@@ -365,8 +383,9 @@ export class Vdisk {
       this.thumbs ??= new Thumbnails({ helper: this.opts.helper, mountpoint: mp, core: core as ThumbCore, cacheDir: this.opts.thumbnailDir });
     this.srv = serveVdisk(core, this.opts.socket, this.opts.cache, {
       listed: (id, entries) => {
+        this.listedNow.set(id, entries.map((e) => ({ id: e.id, name: e.name })));
         const dir = core.vdiskPath?.(id);
-        if (this.thumbs && dir !== null && dir !== undefined) void this.thumbs.folder(entries.map((e) => ({ id: e.id, kind: e.kind, mtime: e.mtime, path: join(dir, e.name) })));
+        if (this.thumbs && dir !== null && dir !== undefined) return this.thumbs.folder(entries.map((e) => ({ id: e.id, kind: e.kind, mtime: e.mtime, path: join(dir, e.name) })));
       },
     });
     await new Promise<void>((r) => this.srv!.once("listening", () => r()));
