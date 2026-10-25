@@ -81,7 +81,7 @@ function setVdisk(cfg: VdiskConfig | undefined) {
     // The account must be open (the tree from its index).
     for (let i = 0; i < 600 && !(await c.status()).signedIn; i++) await new Promise((r) => setTimeout(r, 500));
     diskCache ??= new FragDiskCache(cfg.cacheDir, cfg.cacheBytes);
-    disk = new Vdisk({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, outbox: cfg.outbox, log: (m) => console.error(m), onState: state });
+    disk = new Vdisk({ helper: cfg.helper, mountpoint: cfg.mountpoint, socket: cfg.socket, cache: diskCache, core: c as never, outbox: cfg.outbox, log: (m) => console.error(m), onState: state, onQueue: diskQueue });
     try {
       await disk.start();
       state("mounted");
@@ -89,6 +89,13 @@ function setVdisk(cfg: VdiskConfig | undefined) {
       state(`error: ${String((e as Error)?.message ?? e)}`);
     }
   });
+}
+/** The disk's upload queue: one upload in the tray (so Quit warns too), and its numbers for Settings. */
+function diskQueue(left: number, done: number, total: number) {
+  if (left > 0) running.up.set("vdisk-queue", { done, total, name: "" });
+  else running.up.delete("vdisk-queue");
+  pushStatus();
+  parent?.postMessage({ type: "vdisk-queue", left, done, total });
 }
 function state(s: string) {
   parent?.postMessage({ type: "vdisk-state", state: s });

@@ -126,6 +126,7 @@ function startAgent(): UtilityProcess {
 const VDISK_HELPER = () => (app.isPackaged ? join(process.resourcesPath, "ddn-fuse") : join(ROOT, "..", "native", "fuse", "target", "release", "ddn-fuse"));
 const VDISK_DIR = () => join(app.getPath("home"), "discordrive");
 let vdiskState = "off";
+let vdiskQueue = { left: 0, done: 0, total: 0 };
 function vdiskInit(): Partial<AgentInit> {
   if (process.platform !== "linux") return {};
   return {
@@ -145,6 +146,10 @@ function vdiskInit(): Partial<AgentInit> {
 async function onAgentMessage(a: UtilityProcess, m: { type?: string; id?: number; data?: Uint8Array; busy?: boolean; kind?: string; name?: string; bytes?: number } & Record<string, unknown>) {
   if (m.type === "vdisk-state" && typeof m.state === "string") {
     vdiskState = m.state;
+    return;
+  }
+  if (m.type === "vdisk-queue") {
+    vdiskQueue = { left: Number(m.left) || 0, done: Number(m.done) || 0, total: Number(m.total) || 0 };
     return;
   }
   if (m.type === "seal" || m.type === "unseal") {
@@ -536,7 +541,7 @@ function wireUpdates() {
       keyring: settings.keyring,
       platform: process.platform,
       ...(process.platform === "linux"
-        ? { vdisk: { on: settings.vdisk === true, write: settings.vdiskWrite === true, cacheGb: Math.round((settings.vdiskCacheBytes ?? 10 * 1024 ** 3) / 1024 ** 3), mountpoint: VDISK_DIR(), unavailable: Vdisk.unavailable(VDISK_HELPER()), state: vdiskState } }
+        ? { vdisk: { on: settings.vdisk === true, write: settings.vdiskWrite === true, queue: vdiskQueue, cacheGb: Math.round((settings.vdiskCacheBytes ?? 10 * 1024 ** 3) / 1024 ** 3), mountpoint: VDISK_DIR(), unavailable: Vdisk.unavailable(VDISK_HELPER()), state: vdiskState } }
         : {}),
     };
   });

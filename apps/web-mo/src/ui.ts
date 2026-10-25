@@ -66,7 +66,7 @@ interface DesktopBridge {
       downloadsDir: string;
       keyring?: "ask" | "file";
       platform?: string;
-      vdisk?: { on: boolean; write?: boolean; cacheGb: number; mountpoint: string; unavailable: string | null; state: string };
+      vdisk?: { on: boolean; write?: boolean; queue?: { left: number; done: number; total: number }; cacheGb: number; mountpoint: string; unavailable: string | null; state: string };
     }>;
     open(path: string): void;
     onProgress?(cb: (p: { done: number; total: number }) => void): void;
@@ -2765,6 +2765,10 @@ async function renderDesktopApp() {
     sw.disabled = !!vd.unavailable;
     $<HTMLInputElement>("app-vdisk-cache").value = String(vd.cacheGb);
     $<HTMLInputElement>("app-vdisk-write").checked = vd.write === true;
+    // Files copied into the disk that are still being uploaded: how many and how far (safe to switch off?).
+    const q = vd.queue;
+    $("app-vdisk-write-hint").textContent = q && q.left > 0 ? tn("app.vdisk.queue", q.left, { done: fmt(q.done), total: fmt(q.total) }) : t("app.vdisk.write.hint");
+    if (q && q.left > 0) setTimeout(() => void renderDesktopApp(), 2000);
     const stateText = vd.state === "mounted" ? t("app.vdisk.mounted", { dir: vd.mountpoint }) : vd.state === "mounting" || vd.state === "restarting" || vd.state === "off" ? t("app.vdisk.mounting") : t("app.vdisk.failed", { why: vdiskWhy(vd.state.replace(/^error: /, "")) });
     $("app-vdisk-hint").textContent = vd.unavailable ? t("app.vdisk.unavailable", { why: vd.unavailable }) : vd.on ? stateText : t("app.vdisk.off");
     // Mounting takes a moment: the state again shortly (until it is mounted or failed).

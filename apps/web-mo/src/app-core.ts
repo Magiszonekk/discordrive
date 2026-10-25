@@ -1013,11 +1013,12 @@ export class AppCore {
     let last = 0;
     const ac = new AbortController();
     if (token) this.uploads.set(token, ac);
+    // A picked file's modification time: for a photo usually when it was taken (search by date).
+    const taken = (file as File).lastModified || undefined;
     const r = await this.c().upload(blobSource(file), name, parentId, {
       signal: ac.signal,
       resumeKey,
-      // A picked file's modification time: for a photo usually when it was taken (search by date).
-      takenAt: (file as File).lastModified || undefined,
+      takenAt: taken,
       previews: previews ? this.previewsFor(token) : undefined,
       onProgress: (done, total, stages) => {
         const t = Date.now();
@@ -1026,9 +1027,24 @@ export class AppCore {
         this.onEvent({ type: "upload-progress", token, done, total, stages });
       },
     }).finally(() => (this.uploads.delete(token), this.previewWaits.delete(token)));
+    this.rememberTaken(r.version.manifestRef, taken);
     this.version++;
     void this.snapshotSoon();
     return { nodeId: r.nodeId, chunks: r.chunks, sha256: r.version.plaintextSha256, resumed: r.resumed };
+  }
+
+  /**
+   * The content date of a version this device just uploaded, known in the index at once: a search by date
+   * finds the new file right away (else only after the background look at its manifest), and the disk shows
+   * it as the file's mtime.
+   */
+  private rememberTaken(manifestRef: string, taken: number | undefined) {
+    if (!taken) return;
+    const s = this.store;
+    if (s instanceof SqlIndexStore) {
+      const had = s.descInfo(manifestRef);
+      s.setDescInfo(manifestRef, had?.v ?? null, taken, had?.at ?? Date.now());
+    } else this.descMem.set(manifestRef, { v: this.descMem.get(manifestRef)?.v ?? null, taken });
   }
 
   // ── thumbnails and previews (made by the client at upload; see metadata-client/previews.ts) ──────────
@@ -1161,7 +1177,7 @@ export class AppCore {
       const r = await this.c().upload(src, src.name, into, {
         signal: ac.signal,
         resumeKey: diskResumeKey(into, path, src.size, src.mtimeMs),
-        takenAt: src.mtimeMs || undefined,
+        takenAt: Math.floor(src.mtimeMs) || undefined,
         previews: previews ? this.previewsFor(token) : undefined,
         onProgress: (done, total, stages) => {
           const t = Date.now();
@@ -1170,6 +1186,7 @@ export class AppCore {
           this.onEvent({ type: "upload-progress", token, done, total, stages, name: src.name });
         },
       });
+      this.rememberTaken(r.version.manifestRef, Math.floor(src.mtimeMs) || undefined);
       this.version++;
       void this.snapshotSoon();
       return { nodeId: r.nodeId, resumed: r.resumed, size: src.size };
@@ -1761,7 +1778,7 @@ export class AppCore {
    * file of that name gets a new version (on the version this device saw: a concurrent change elsewhere
    * becomes a conflict copy). The copy is read from `path` and left there (the caller removes it).
    */
-  async vdiskUpload(path: string, dirId: string, name: string, previews?: PreviewImage[] | null): Promise<{ id: string }> {
+  async vdiskUpload(path: string, dirId: string, name: string, previews?: PreviewImage[] | null, onProgress?: (done: number, total: number) => void): Promise<{ id: string }> {
     const dir = this.vdiskFolder(dirId);
     const nfc = this.vdiskName(name);
     const was = this.vdiskChild(dir, nfc);
@@ -1771,15 +1788,14 @@ export class AppCore {
       const taken = Math.floor(src.mtimeMs) || undefined;
       const r = await this.c().upload(src, nfc, dir, {
         takenAt: taken,
+        ...(onProgress ? { onProgress: (done: number, total: number) => onProgress(done, total) } : {}),
         // The thumbnail and preview the disk made from the local copy, stored with the file as by the web.
         ...(previews?.length ? { previews: Promise.resolve(previews) } : {}),
         ...(was ? { replace: { nodeId: was.id, baseVersionId: was.content?.versionId ?? null } } : {}),
       });
       // The content date known in the index at once (the disk shows it as the file's mtime: the same the
       // written copy had, so an editor does not see the file as changed by someone else).
-      const s = this.store;
-      if (taken && s instanceof SqlIndexStore) s.setDescInfo(r.version.manifestRef, null, taken, Date.now());
-      else if (taken) this.descMem.set(r.version.manifestRef, { v: null, taken });
+      this.rememberTaken(r.version.manifestRef, taken);
       this.version++;
       void this.snapshotSoon();
       return { id: r.nodeId };

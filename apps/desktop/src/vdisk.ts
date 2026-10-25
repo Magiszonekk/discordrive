@@ -27,7 +27,7 @@ export interface VdiskCore {
   vdiskStat(id: string): { id: string; name: string; kind: "file" | "folder"; size: number; mtime: number } | null;
   vdiskRead(id: string, off: number, len: number, cache: Map<string, Uint8Array>): Promise<Uint8Array>;
   /** Writing (when the disk is writable): a closed file's local copy uploaded, folders, renames, the trash. */
-  vdiskUpload?(path: string, dirId: string, name: string, previews?: { kind: "t" | "p"; mime: string; width: number; height: number; data: Uint8Array }[] | null): Promise<{ id: string }>;
+  vdiskUpload?(path: string, dirId: string, name: string, previews?: { kind: "t" | "p"; mime: string; width: number; height: number; data: Uint8Array }[] | null, onProgress?: (done: number, total: number) => void): Promise<{ id: string }>;
   vdiskMkdir?(dirId: string, name: string): Promise<{ id: string }>;
   vdiskRename?(dirId: string, name: string, toDirId: string, toName: string): Promise<void>;
   vdiskRemove?(dirId: string, name: string, folder: boolean): Promise<void>;
@@ -239,6 +239,30 @@ export class Outbox {
   private seq = Date.now();
   private running: Promise<void> | null = null;
   private wake: (() => void) | null = null;
+  /**
+   * The queue changed: files left, and the bytes of this burst of uploads (all queued since the queue was
+   * last empty) done / in total. For the app's window and tray: the user sees when it is safe to switch off.
+   */
+  onProgress: (left: number, done: number, total: number) => void = () => {};
+  private burst = { done: 0, total: 0 };
+  /** Previews already made for a queued copy (at close, for the file manager): reused by its upload. */
+  readonly made = new Map<string, Promise<Awaited<ReturnType<NonNullable<Outbox["previews"]>>>>>();
+  /** Bytes of the file uploading now (counted into the burst until it ends). */
+  private partial = 0;
+  private lastReport = 0;
+  private reported = 0;
+  private report(force = true) {
+    if (!this.items.size) this.burst = { done: 0, total: 0 };
+    const t = Date.now();
+    // At most twice a second while a file uploads (a fragment's post ends every few hundred ms), but the
+    // first bytes of a file always (the window must not stay on 0).
+    if (!force && t - this.lastReport < 500 && this.reported > 0) return;
+    this.reported = this.partial;
+    this.lastReport = t;
+    this.onProgress(this.items.size, Math.min(this.burst.total, this.burst.done + this.partial), this.burst.total);
+  }
+  /** A closed file entered the queue (its copy at `path`, the mtime it shows). */
+  onQueued: (dir: string, name: string, path: string, mtime: number) => void = () => {};
   /** Thumbnail and preview of a queued copy before its upload (pictures, videos); null: none. */
   previews: ((path: string, name: string) => Promise<{ kind: "t" | "p"; mime: string; width: number; height: number; data: Uint8Array }[] | null>) | null = null;
   /** After each upload (ok or not): the folder, the name, the pending id, an error. */
@@ -263,6 +287,7 @@ export class Outbox {
         if (localOnlyName(j.name)) throw new Error("temporary");
         const st = statSync(join(dir, `q-${m[1]}`));
         this.items.set(m[1]!, { n: m[1]!, dir: j.dir, name: j.name, size: st.size, mtime: j.mtime, trashed: false });
+        this.burst.total += st.size;
       } catch {
         rmSync(join(dir, f), { force: true });
       }
@@ -278,11 +303,17 @@ export class Outbox {
     for (const [k, it] of this.items) if (it.dir === dir && it.name === name && k !== this.current) this.drop(k);
     // The copy's own mtime (when it was written): the same the file shows once uploaded (its takenAt).
     this.items.set(n, { n, dir, name, size: st.size, mtime: Math.floor(st.mtimeMs) });
+    if (!localOnlyName(name)) this.burst.total += st.size;
+    this.report();
+    if (!localOnlyName(name)) this.onQueued(dir, name, join(this.dir, `q-${n}`), Math.floor(st.mtimeMs));
     this.kick();
     return `out:${n}`;
   }
   private current: string | null = null;
   private drop(k: string) {
+    const it = this.items.get(k);
+    // Dropped before its upload (replaced by a newer copy, removed): no longer part of the burst.
+    if (it && k !== this.current && !localOnlyName(it.name)) this.burst.total = Math.max(this.burst.done, this.burst.total - it.size);
     this.items.delete(k);
     rmSync(join(this.dir, `q-${k}`), { force: true });
     rmSync(join(this.dir, `q-${k}.json`), { force: true });
@@ -344,21 +375,35 @@ export class Outbox {
       const path = join(this.dir, `q-${next.n}`);
       try {
         const at = { dir: next.dir, name: next.name };
-        const pv = await this.previews?.(path, at.name).catch(() => null);
-        const up = await this.core.vdiskUpload!(path, at.dir, at.name, pv);
+        const pv = (await this.made.get(next.n)?.catch(() => null)) ?? (await this.previews?.(path, at.name).catch(() => null));
+        this.made.delete(next.n);
+        this.partial = 0;
+        this.reported = 0;
+        const up = await this.core.vdiskUpload!(path, at.dir, at.name, pv, (done) => {
+          this.partial = done;
+          this.report(false);
+        });
+        this.partial = 0;
         const it = this.items.get(next.n);
+        this.burst.done += next.size;
         this.drop(next.n);
+        this.report();
         // Renamed, moved or removed on the disk while it was uploading: the same in the account now.
         if (it?.trashed) await this.core.vdiskRemove?.(at.dir, at.name, false).catch(() => {});
         else if (it && (it.dir !== at.dir || it.name !== at.name)) await this.core.vdiskRename?.(at.dir, at.name, it.dir, it.name).catch((e) => this.log(`vdisk: rename after upload: ${e}`));
         this.onDone(it?.dir ?? at.dir, it?.name ?? at.name, `out:${next.n}`, null, up.id);
         delay = 2000;
       } catch (e) {
+        this.partial = 0;
         const m = String((e as Error)?.message ?? e);
         this.log(`vdisk: upload of ${next.name} failed: ${m}`);
         this.onDone(next.dir, next.name, `out:${next.n}`, m);
         // A name or folder the account refuses: never uploadable, dropped (the error is in the log).
-        if (/^(EINVAL|EISDIR|ENOENT)\b/.test(m)) this.drop(next.n);
+        if (/^(EINVAL|EISDIR|ENOENT)\b/.test(m)) {
+          this.burst.done += next.size;
+          this.drop(next.n);
+          this.report();
+        }
         else {
           // No channel, no network: again later (the copy waits in the queue).
           await new Promise<void>((r) => {
@@ -585,6 +630,8 @@ export class Vdisk {
       log?: (m: string) => void;
       fusermount?: string;
       onState?: (s: string) => void;
+      /** The upload queue of the writable disk: files left, bytes of this burst done / in total. */
+      onQueue?: (left: number, done: number, total: number) => void;
       /** Writable: local copies of written files go here until uploaded (null / absent: read-only). */
       outbox?: string;
       /** Where the freedesktop thumbnail cache is (default ~/.cache/thumbnails). */
@@ -684,10 +731,21 @@ export class Vdisk {
       this.thumbs ??= new Thumbnails({ helper: this.opts.helper, mountpoint: mp, core: core as ThumbCore, cacheDir: this.opts.thumbnailDir });
     if (this.opts.outbox && !this.outbox) {
       this.outbox = new Outbox(this.opts.outbox, core, this.opts.log);
+      this.outbox.onProgress = (left, done, total) => this.opts.onQueue?.(left, done, total);
       // Uploaded: the folder shows the account's file instead of the queued copy.
       // The uploaded node keeps the inode of its queued copy (editors compare it, and the mtime, to notice
       // a change by another program).
       this.outbox.previews = (path, name) => makeLocalPreviews(this.opts.helper, path, name);
+      // The file manager asks for a thumbnail as soon as the copy shows in the folder: written now from the
+      // local copy (same mtime as after the upload), so an open window never keeps a "none" for it.
+      this.outbox.onQueued = (dir, name, path, mtime) => {
+        const d = core.vdiskPath?.(dir);
+        if (d === null || d === undefined || !this.thumbs || !this.outbox) return;
+        const k = /q-(\d+)$/.exec(path)?.[1];
+        const pv = makeLocalPreviews(this.opts.helper, path, name).catch(() => null);
+        if (k) this.outbox.made.set(k, pv);
+        void pv.then((imgs) => this.thumbs?.fromImages(join(d, name), mtime, imgs));
+      };
       this.outbox.onDone = (dir, name, pending, err, nodeId) => {
         this.invalidate([dir], err || !nodeId ? [] : [[pending, nodeId]]);
         // Its thumbnail for the file manager now (a "none" marker written while it was queued is dropped:

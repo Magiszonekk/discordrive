@@ -129,6 +129,24 @@ export class Thumbnails {
     return p;
   }
 
+  /**
+   * A file written into the disk, still queued: its thumbnails from the pictures made from the local copy
+   * (none: nothing written, the file manager shows its icon and asks again after the upload).
+   */
+  async fromImages(path: string, mtime: number, imgs: { kind: "t" | "p"; data: Uint8Array }[] | null): Promise<void> {
+    const t = imgs?.find((x) => x.kind === "t");
+    if (!t) return;
+    const p = imgs!.find((x) => x.kind === "p") ?? t;
+    const uri = fileUri(join(this.opts.mountpoint, path));
+    const mt = Math.floor(mtime / 1000);
+    const text = { "Thumb::URI": uri, "Thumb::MTime": String(mt), Software: "discordrive" };
+    rmSync(this.pathOf(uri, "fail"), { force: true });
+    write(this.pathOf(uri, "normal"), withText(await toPng(this.opts.helper, t.data, 128), text));
+    write(this.pathOf(uri, "large"), withText(await toPng(this.opts.helper, p.data, 256), text));
+    this.done.set(uri, mt);
+    this.written++;
+  }
+
   /** A file just uploaded through the disk: its thumbnails written again (a "none" marker dropped). */
   async again(id: string, path: string, mtime: number): Promise<void> {
     const uri = fileUri(join(this.opts.mountpoint, path));
