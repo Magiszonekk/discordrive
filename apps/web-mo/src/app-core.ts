@@ -1778,7 +1778,7 @@ export class AppCore {
    * file of that name gets a new version (on the version this device saw: a concurrent change elsewhere
    * becomes a conflict copy). The copy is read from `path` and left there (the caller removes it).
    */
-  async vdiskUpload(path: string, dirId: string, name: string, previews?: PreviewImage[] | null): Promise<{ id: string }> {
+  async vdiskUpload(path: string, dirId: string, name: string, previews?: PreviewImage[] | null, onProgress?: (done: number, total: number) => void): Promise<{ id: string }> {
     const dir = this.vdiskFolder(dirId);
     const nfc = this.vdiskName(name);
     const was = this.vdiskChild(dir, nfc);
@@ -1788,6 +1788,7 @@ export class AppCore {
       const taken = Math.floor(src.mtimeMs) || undefined;
       const r = await this.c().upload(src, nfc, dir, {
         takenAt: taken,
+        ...(onProgress ? { onProgress: (done: number, total: number) => onProgress(done, total) } : {}),
         // The thumbnail and preview the disk made from the local copy, stored with the file as by the web.
         ...(previews?.length ? { previews: Promise.resolve(previews) } : {}),
         ...(was ? { replace: { nodeId: was.id, baseVersionId: was.content?.versionId ?? null } } : {}),

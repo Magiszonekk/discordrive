@@ -40,9 +40,10 @@ describe.skipIf(why !== null)("disk in the system, writing", () => {
     await core.createAccount(url, "vdisk write");
     await core.open();
     await core.addWebhook(fake.addWebhook("1550000000000000501").url);
+    const queue: [number, number, number][] = [];
     const mp = join(base, "discordrive");
     const outbox = join(base, "outbox");
-    const disk = new Vdisk({ helper, mountpoint: mp, socket: join(base, "run", "fuse.sock"), cache: new FragDiskCache(join(base, "frags"), 64 << 20), core: core as never, outbox, noThumbnails: true });
+    const disk = new Vdisk({ helper, mountpoint: mp, socket: join(base, "run", "fuse.sock"), cache: new FragDiskCache(join(base, "frags"), 64 << 20), core: core as never, outbox, noThumbnails: true, onQueue: (l, d, t) => queue.push([l, d, t]) });
     disks.push(disk);
     await disk.start();
     const tree = () => core.list().rows.map((r) => r.name).sort();
@@ -57,6 +58,9 @@ describe.skipIf(why !== null)("disk in the system, writing", () => {
     expect(await readdir(mp)).toEqual(["kopia ż.bin"]);
     expect((await stat(join(mp, "kopia ż.bin"))).size).toBe(data.byteLength);
     await disk.outbox!.idle();
+    // While the one file uploaded, the queue reported its bytes going up (not 0 until the end).
+    expect(queue.some(([l, d, t]) => l === 1 && d > 0 && d < t)).toBe(true);
+    expect(queue.at(-1)).toEqual([0, 0, 0]);
     const n1 = nodeOf("kopia ż.bin");
     expect(n1?.size).toBe(data.byteLength);
     expect(sha(new Uint8Array(await (await core.download(n1!.id)).arrayBuffer()))).toBe(sha(data));

@@ -27,7 +27,7 @@ export interface VdiskCore {
   vdiskStat(id: string): { id: string; name: string; kind: "file" | "folder"; size: number; mtime: number } | null;
   vdiskRead(id: string, off: number, len: number, cache: Map<string, Uint8Array>): Promise<Uint8Array>;
   /** Writing (when the disk is writable): a closed file's local copy uploaded, folders, renames, the trash. */
-  vdiskUpload?(path: string, dirId: string, name: string, previews?: { kind: "t" | "p"; mime: string; width: number; height: number; data: Uint8Array }[] | null): Promise<{ id: string }>;
+  vdiskUpload?(path: string, dirId: string, name: string, previews?: { kind: "t" | "p"; mime: string; width: number; height: number; data: Uint8Array }[] | null, onProgress?: (done: number, total: number) => void): Promise<{ id: string }>;
   vdiskMkdir?(dirId: string, name: string): Promise<{ id: string }>;
   vdiskRename?(dirId: string, name: string, toDirId: string, toName: string): Promise<void>;
   vdiskRemove?(dirId: string, name: string, folder: boolean): Promise<void>;
@@ -247,9 +247,19 @@ export class Outbox {
   private burst = { done: 0, total: 0 };
   /** Previews already made for a queued copy (at close, for the file manager): reused by its upload. */
   readonly made = new Map<string, Promise<Awaited<ReturnType<NonNullable<Outbox["previews"]>>>>>();
-  private report() {
+  /** Bytes of the file uploading now (counted into the burst until it ends). */
+  private partial = 0;
+  private lastReport = 0;
+  private reported = 0;
+  private report(force = true) {
     if (!this.items.size) this.burst = { done: 0, total: 0 };
-    this.onProgress(this.items.size, this.burst.done, this.burst.total);
+    const t = Date.now();
+    // At most twice a second while a file uploads (a fragment's post ends every few hundred ms), but the
+    // first bytes of a file always (the window must not stay on 0).
+    if (!force && t - this.lastReport < 500 && this.reported > 0) return;
+    this.reported = this.partial;
+    this.lastReport = t;
+    this.onProgress(this.items.size, Math.min(this.burst.total, this.burst.done + this.partial), this.burst.total);
   }
   /** A closed file entered the queue (its copy at `path`, the mtime it shows). */
   onQueued: (dir: string, name: string, path: string, mtime: number) => void = () => {};
@@ -367,7 +377,13 @@ export class Outbox {
         const at = { dir: next.dir, name: next.name };
         const pv = (await this.made.get(next.n)?.catch(() => null)) ?? (await this.previews?.(path, at.name).catch(() => null));
         this.made.delete(next.n);
-        const up = await this.core.vdiskUpload!(path, at.dir, at.name, pv);
+        this.partial = 0;
+        this.reported = 0;
+        const up = await this.core.vdiskUpload!(path, at.dir, at.name, pv, (done) => {
+          this.partial = done;
+          this.report(false);
+        });
+        this.partial = 0;
         const it = this.items.get(next.n);
         this.burst.done += next.size;
         this.drop(next.n);
@@ -378,6 +394,7 @@ export class Outbox {
         this.onDone(it?.dir ?? at.dir, it?.name ?? at.name, `out:${next.n}`, null, up.id);
         delay = 2000;
       } catch (e) {
+        this.partial = 0;
         const m = String((e as Error)?.message ?? e);
         this.log(`vdisk: upload of ${next.name} failed: ${m}`);
         this.onDone(next.dir, next.name, `out:${next.n}`, m);
