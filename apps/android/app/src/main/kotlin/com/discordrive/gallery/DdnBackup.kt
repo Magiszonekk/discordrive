@@ -114,13 +114,13 @@ object DdnBackup {
     }
 
     /** Run now (Copy now, a file queued): expedited, network only (the user asked for it). */
-    fun runNow(c: Context, autoCopy: Boolean = true) {
+    fun runNow(c: Context, autoCopy: Boolean = true, manual: Boolean = false) {
         WorkManager.getInstance(c).enqueueUniqueWork(
             WORK_NOW, ExistingWorkPolicy.APPEND_OR_REPLACE,
             OneTimeWorkRequestBuilder<DdnUploadWorker>()
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                .setInputData(Data.Builder().putBoolean("auto", autoCopy).build())
+                .setInputData(Data.Builder().putBoolean("auto", autoCopy).putBoolean("manual", manual).build())
                 .build(),
         )
     }
@@ -291,7 +291,8 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
     private suspend fun work(): Result = withContext(Dispatchers.IO) {
         val c = applicationContext
         val t0 = System.currentTimeMillis()
-        val auto = inputData.getBoolean("auto", true) && DdnBackup.enabled(c)
+        // "Copy now" copies the chosen folders also with the automatic copy off (the user asked for it).
+        val auto = inputData.getBoolean("auto", true) && (DdnBackup.enabled(c) || inputData.getBoolean("manual", false))
         val db = DdnBackup.Db(c)
         var copied = 0
         var err: String? = null

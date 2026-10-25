@@ -146,13 +146,29 @@ object DdnAi {
      * The language of descriptions and tags: the app's (its strings), not the phone's — a Polish app on an
      * English phone searches Polish words. Stored descriptions keep their language (Record.lang).
      */
-    fun lang(c: Context): String = c.getString(R.string.ddn_ai_lang)
+    fun lang(c: Context): String = prefs(c).getString("lang", null) ?: c.getString(R.string.ddn_ai_lang)
+    fun setLang(c: Context, l: String) = prefs(c).edit().putString("lang", l).apply()
+
+    /** Described files whose description is in another language than the chosen one. */
+    fun otherLang(c: Context, s: DdnSession): List<IndexReplica.Child> {
+        val l = lang(c)
+        val recs = Db(c).records(s.acct.accountId)
+        return candidates(c, s).filter { f -> recs[f.manifestRef]?.let { it.lang != l } == true }
+    }
+
+    /** Describe again (in the chosen language) the files described in another one. */
+    fun runRelang(c: Context) {
+        WorkManager.getInstance(c).enqueueUniqueWork(WORK_NOW, ExistingWorkPolicy.KEEP,
+            OneTimeWorkRequestBuilder<DdnAiWorker>().setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setInputData(androidx.work.Data.Builder().putBoolean("manual", true).putBoolean("relang", true).build()).build())
+    }
 
     // ── progress ──
 
-    data class Status(val at: Long, val done: Int, val total: Int, val error: String?)
-    fun status(c: Context): Status? = prefs(c).takeIf { it.contains("st_at") }?.let { Status(it.getLong("st_at", 0), it.getInt("st_done", 0), it.getInt("st_total", 0), it.getString("st_err", null)) }
-    internal fun setStatus(c: Context, s: Status) = prefs(c).edit().putLong("st_at", s.at).putInt("st_done", s.done).putInt("st_total", s.total).putString("st_err", s.error).apply()
+    /** The last run: [gone] files skipped because their channel was removed on Discord (not an error of the run). */
+    data class Status(val at: Long, val done: Int, val total: Int, val error: String?, val gone: Int = 0)
+    fun status(c: Context): Status? = prefs(c).takeIf { it.contains("st_at") }?.let { Status(it.getLong("st_at", 0), it.getInt("st_done", 0), it.getInt("st_total", 0), it.getString("st_err", null), it.getInt("st_gone", 0)) }
+    internal fun setStatus(c: Context, s: Status) = prefs(c).edit().putLong("st_at", s.at).putInt("st_done", s.done).putInt("st_total", s.total).putString("st_err", s.error).putInt("st_gone", s.gone).apply()
 
     // ── scheduling ──
 
@@ -273,14 +289,16 @@ object DdnAi {
      * Describe one file: a description already stored with it (another device) is taken as it is; otherwise
      * the endpoint describes it and the result is stored with the file. Returns the record (null: nothing to send).
      */
-    fun describeOne(c: Context, s: DdnSession, ai: AiDescriber, f: IndexReplica.Child, db: Db): Describe.Record? {
+    fun describeOne(c: Context, s: DdnSession, ai: AiDescriber, f: IndexReplica.Child, db: Db, relang: Boolean = false): Describe.Record? {
         val ref = f.manifestRef ?: return null
         val acct = s.acct.accountId
-        runCatching { s.files.description(ref) }.getOrNull()?.let { db.put(acct, ref, f.id, "ok", it); return it }
+        // Again in another language: the new description is kept on this phone (its search); the one stored
+        // with the file stays as it is for the other devices (one per file, the first one counts).
+        if (!relang) runCatching { s.files.description(ref) }.getOrNull()?.let { db.put(acct, ref, f.id, "ok", it); return it }
         val jpeg = picture(s, f) ?: run { db.put(acct, ref, f.id, "none", null); return null }
         val rec = ai.describe(jpeg, lang(c))
         val loc = FileFormat.decodeManifestRef(ref)
-        if (!s.addExtra(f, Describe.name(loc.fileKey), Describe.seal(loc.fileKey, rec))) {
+        if (!s.addExtra(f, Describe.name(loc.fileKey), Describe.seal(loc.fileKey, rec)) && !relang) {
             // Another device stored one meanwhile: that one counts (the same for every device).
             runCatching { s.files.description(ref) }.getOrNull()?.let { db.put(acct, ref, f.id, "ok", it); return it }
         }
@@ -361,7 +379,9 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
         val acct = s.acct.accountId
         val all = DdnAi.candidates(c, s)
         // Not described yet; a failed one again after a while (at most 3 tries).
-        val todo = all.filter { f -> db.state(acct, f.manifestRef!!).let { it == null || it.first == "absent" || (it.first == "err" && it.second < 3) } }
+        val relang = inputData.getBoolean("relang", false)
+        val todo = if (relang) DdnAi.otherLang(c, s)
+            else all.filter { f -> db.state(acct, f.manifestRef!!).let { it == null || it.first == "absent" || (it.first == "err" && it.second < 3) } }
         total = todo.size
         val t0 = System.currentTimeMillis()
         var err: String? = null
@@ -377,7 +397,7 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             // A 429 waits as asked and tries the same photo again (up to 3 times), it is not skipped.
             for (attempt in 0 until 3) {
                 try {
-                    DdnAi.describeOne(c, s, ai, f, db)
+                    DdnAi.describeOne(c, s, ai, f, db, relang)
                     done++
                     DdnAi.live = db.count(acct, "ok") to all.size
                     err = null
@@ -401,8 +421,7 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             if (done % 5 == 0) runCatching { setForeground(info()) }
         }
         DdnAi.live = null
-        if (gone > 0) err = listOfNotNull(c.resources.getQuantityString(R.plurals.ddn_ai_gone, gone, gone), err).joinToString("; ")
-        DdnAi.setStatus(c, DdnAi.Status(System.currentTimeMillis(), db.count(acct, "ok"), all.size, err))
+        DdnAi.setStatus(c, DdnAi.Status(System.currentTimeMillis(), db.count(acct, "ok"), all.size, err, gone))
         Result.success()
     }
 }

@@ -29,6 +29,14 @@ class DdnAiActivity : AppCompatActivity() {
     private lateinit var progress: TextView
     private lateinit var on: SwitchCompat
     @Volatile private var loaded = false
+    private lateinit var relang: Button
+
+    private fun paintRelang() {
+        thread {
+            val n = runCatching { DdnSession.get(this)?.let { DdnAi.otherLang(this, it).size } }.getOrNull() ?: 0
+            runOnUiThread { relang.text = plq(R.plurals.ddn_ai_relang, n, n); relang.isEnabled = n > 0 }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,6 +104,24 @@ class DdnAiActivity : AppCompatActivity() {
         progress = text("", dim = true).apply { tag = "ddn-ai-progress" }
         root.addView(progress)
 
+        // The language of new descriptions and tags (the app's by default); files described in another one
+        // can be described again (kept on this phone).
+        root.addView(text(getString(R.string.ddn_ai_lang_title)))
+        val langs = listOf("pl" to R.string.ddn_ai_lang_pl, "en" to R.string.ddn_ai_lang_en)
+        val group = android.widget.RadioGroup(this)
+        for ((i, l) in langs.withIndex()) group.addView(android.widget.RadioButton(this).apply {
+            id = 7100 + i; text = getString(l.second); setTextColor(getColor(R.color.text)); isChecked = DdnAi.lang(this@DdnAiActivity) == l.first
+        })
+        group.setOnCheckedChangeListener { _, id -> DdnAi.setLang(this, langs[id - 7100].first); paintRelang() }
+        root.addView(group)
+        relang = Button(this).apply { setOnClickListener {
+            if (current().let { it.url.isEmpty() || it.model.isEmpty() }) result.text = getString(R.string.ddn_ai_need_config)
+            else { DdnAi.runRelang(this@DdnAiActivity); result.text = getString(R.string.ddn_ai_started) }
+        } }
+        root.addView(relang)
+        root.addView(text(getString(R.string.ddn_ai_relang_note), dim = true))
+        paintRelang()
+
         setContentView(ScrollView(this).apply { addView(root) })
         Insets.apply(root)
     }
@@ -127,7 +153,9 @@ class DdnAiActivity : AppCompatActivity() {
             val n = DdnAi.Db(c).count(acct, "ok")
             val st = DdnAi.status(c)
             runOnUiThread {
-                progress.text = getString(R.string.ddn_ai_described, minOf(n, total), total) + (st?.error?.let { "\n" + getString(R.string.ddn_ai_last_error, it) } ?: "")
+                progress.text = getString(R.string.ddn_ai_described, minOf(n, total), total) +
+                    (st?.gone?.takeIf { it > 0 }?.let { "\n" + plq(R.plurals.ddn_ai_gone, it, it) } ?: "") +
+                    (st?.error?.let { "\n" + getString(R.string.ddn_ai_last_error, it) } ?: "")
             }
         }
     }

@@ -154,6 +154,23 @@ class BrowseUiTest {
             val z = s.children("root").firstOrNull { it.name == DdnUploads.SHARED_FOLDER }
             r["retrySends"] = DdnBackup.failed(ctx).isEmpty() && z != null && s.children(z.id).any { it.name == "nie dojdzie.txt" } && s.children(z.id).none { it.name == "do usunięcia.txt" }
 
+            // N16: the file sent while every webhook answered 404 is not there; a photo whose pieces are on a
+            // removed channel shows "unavailable" in the viewer (the webhooks off again for it).
+            run {
+                s.refresh()
+                val pic = s.media(50, null).firstOrNull { DdnSession.isImage(it.name) && (it.size ?: 0) > 0 }
+                if (pic != null) {
+                    sc.rpc("hooksOff")
+                    io.github.magiszonekk.discordrive.core.FileWriter.dead.clear()
+                    DdnSession.forget(ctx)
+                    DdnViewerActivity.pending = listOf(DdnSession.get(ctx)!!.media(50, null).first { it.id == pic.id })
+                    ActivityScenario.launch<DdnViewerActivity>(Intent(ctx, DdnViewerActivity::class.java).putExtra("id", pic.id)).use { v ->
+                        r["viewerSaysUnavailable"] = waitUntil(30_000) { var ok = false; v.onActivity { a -> ok = a.textForTest().contains(ctx.getString(R.string.ddn_file_unavailable).take(16)) }; ok }
+                        shot("13b-unavailable")
+                    }
+                    sc.rpc("hooksOn")
+                }
+            }
             // Two channels, one removed on Discord (the other works): the upload goes to the working one.
             io.github.magiszonekk.discordrive.core.FileWriter.dead.clear()
             val hooks = io.github.magiszonekk.discordrive.core.Vault.webhooks(s.sync.vault).filter { !it.retired }
@@ -393,6 +410,15 @@ class BrowseUiTest {
             Thread.sleep(1500)
             waitUntil(120_000) { wm.getWorkInfosForUniqueWork(DdnAi.WORK_NOW).get().all { it.state.isFinished } }
             r["aiSecondRunSendsNothing"] = sc.rpc("aiCalls").jsonPrimitive.content.toInt() == before
+            DdnAi.setLang(ctx, "en")
+            val other = DdnAi.otherLang(ctx, s)
+            DdnAi.runRelang(ctx)
+            Thread.sleep(1500)
+            waitUntil(240_000) { wm.getWorkInfosForUniqueWork(DdnAi.WORK_NOW).get().all { it.state.isFinished } }
+            r["aiRelang"] = other.isNotEmpty() && DdnAi.otherLang(ctx, s).isEmpty() &&
+                other.all { db.record(s.acct.accountId, it.manifestRef!!)?.lang == "en" } &&
+                s.files.description(other.first().manifestRef!!)?.lang == "pl"
+            DdnAi.setLang(ctx, ctx.getString(R.string.ddn_ai_lang))
             ActivityScenario.launch<DdnAiActivity>(Intent(ctx, DdnAiActivity::class.java)).use { a ->
                 val n = minOf(db.count(s.acct.accountId, "ok"), photos.size)
                 r["aiProgressShown"] = waitUntil { var t = ""; a.onActivity { x -> t = x.progressForTest() }; t.startsWith(ctx.getString(R.string.ddn_ai_described, n, photos.size)) }

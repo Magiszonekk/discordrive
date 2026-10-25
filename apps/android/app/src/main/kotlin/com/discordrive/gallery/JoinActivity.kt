@@ -87,10 +87,7 @@ class JoinActivity : AppCompatActivity() {
                     DdnAccount.save(this, acct)
                     joinNow(acct)
                 }
-                main.post {
-                    status.text = out.getOrElse { getString(R.string.ddn_error, it.message) }
-                    if (out.isSuccess) openAccount()
-                }
+                main.post { joined(out, yes) }
             }
         }
         no.setOnClickListener {
@@ -110,19 +107,29 @@ class JoinActivity : AppCompatActivity() {
                     DdnAccount.save(this, acct)
                     joinNow(acct)
                 }
-                main.post {
-                    status.text = out.getOrElse { getString(R.string.ddn_error, it.message) }
-                    if (out.isSuccess) openAccount()
-                }
+                main.post { joined(out, kitGo) }
             }
         }
     }
 
+    /**
+     * After a join: the summary, then on to the files. A note the user must act on (the snapshot pointer was
+     * unavailable: fix it on another device) stays until they tap OK instead of disappearing with the screen.
+     */
+    private fun joined(out: Result<Pair<String, Boolean>>, button: Button) {
+        status.text = out.fold({ it.first }, { getString(R.string.ddn_error, it.message) })
+        val (_, note) = out.getOrNull() ?: return
+        if (!note) { openAccount(); return }
+        button.visibility = View.VISIBLE
+        button.text = getString(android.R.string.ok)
+        button.setOnClickListener { openAccount(0) }
+    }
+
     /** Joined: on to the account's files (a short pause so the summary can be read). */
-    private fun openAccount() = main.postDelayed({
+    private fun openAccount(delayMs: Long = 1500) = main.postDelayed({
         startActivity(android.content.Intent(this, DdnActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP))
         finish()
-    }, 1500)
+    }, delayMs)
 
     /** Every 2 s until the other device answered (10 minutes at most). */
     private fun poll(url: String, deviceName: String, yes: Button, no: Button) {
@@ -155,7 +162,7 @@ class JoinActivity : AppCompatActivity() {
     }
 
     /** Join (vault, snapshot, log) in this phone's JS engine and describe what is there. Off the main thread. */
-    private fun joinNow(acct: AccountState): String {
+    private fun joinNow(acct: AccountState): Pair<String, Boolean> {
         val api = InstanceApi(acct.serverUrl, acct.accountId, acct.deviceId, acct.device, acct.instanceId)
         JsEngines.openSyncCore(this).use { core ->
             JsIndexReplica(core.engine).use { ix ->
@@ -165,7 +172,7 @@ class JoinActivity : AppCompatActivity() {
                 runCatching { sync.setOwnName(acct.deviceName) }
                 val top = ix.children("root")
                 val done = getString(R.string.ddn_joined, core.engine.name, j.headSeq, j.baseHeadSeq, j.ms, top.size, top.take(8).joinToString(", ") { it.name })
-                return if (j.snapshotSkipped != null) done + "\n\n" + getString(R.string.ddn_join_snapshot_skipped) else done
+                return if (j.snapshotSkipped != null) (done + "\n\n" + getString(R.string.ddn_join_snapshot_skipped)) to true else done to false
             }
         }
     }

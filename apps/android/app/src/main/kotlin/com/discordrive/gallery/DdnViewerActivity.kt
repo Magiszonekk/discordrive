@@ -94,9 +94,15 @@ class DdnViewerActivity : AppCompatActivity() {
                 // Low resolution first (stored preview, else the thumbnail), then the whole file if it is not too big.
                 DdnThumbs.into(s, ref, img, 1280, 'p') { DdnThumbs.into(s, ref, img, 640, 't') }
                 val size = c.size ?: 0
-                if (size in 1..FULL_IMAGE_MAX) thread {
-                    val b = runCatching { s.files.range(ref, size, 0, size - 1) }.getOrNull()?.let { DdnThumbs.decode(it, 4096) }
-                    main.post { if (my == seq && b != null) img.setImageBitmap(b) }
+                if (size > 0) thread {
+                    // A large photo stays on its preview; its first byte still says whether the file is there.
+                    val r = runCatching { if (size <= FULL_IMAGE_MAX) s.files.range(ref, size, 0, size - 1) else s.files.range(ref, size, 0, 0) }
+                    val b = r.getOrNull()?.takeIf { size <= FULL_IMAGE_MAX }?.let { DdnThumbs.decode(it, 4096) }
+                    main.post {
+                        if (my != seq) return@post
+                        if (b != null) img.setImageBitmap(b)
+                        else if (r.exceptionOrNull()?.let(::gone) == true) unavailable()
+                    }
                 }
             }
             else -> box.addView(TextView(this).apply { text = getString(R.string.ddn_no_preview); setTextColor(0xFF9C9CA6.toInt()); gravity = Gravity.CENTER }, FrameLayout.LayoutParams(-1, -1))
@@ -110,6 +116,12 @@ class DdnViewerActivity : AppCompatActivity() {
         val p = ExoPlayer.Builder(this).build()
         val source = ProgressiveMediaSource.Factory { DdnDataSource(s, ref, size) }.createMediaSource(MediaItem.fromUri(Uri.parse("ddn://file/${c.id}")))
         p.setMediaSource(source)
+        val my = seq
+        p.addListener(object : androidx.media3.common.Player.Listener {
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                if (my == seq && gone(error)) unavailable()
+            }
+        })
         p.prepare()
         p.playWhenReady = true
         view.player = p
@@ -148,6 +160,22 @@ class DdnViewerActivity : AppCompatActivity() {
         }
     }
 
+    /** The file's pieces are on a channel removed on Discord (its webhook answers 401 / 404). */
+    private fun gone(e: Throwable): Boolean {
+        var x: Throwable? = e
+        while (x != null) {
+            if (x is io.github.magiszonekk.discordrive.core.ServerException && (x.status == 404 || x.status == 401)) return true
+            x = x.cause
+        }
+        return false
+    }
+
+    private fun unavailable() {
+        releasePlayer()
+        box.removeAllViews()
+        box.addView(TextView(this).apply { text = getString(R.string.ddn_file_unavailable); setTextColor(0xFF9C9CA6.toInt()); gravity = Gravity.CENTER; setPadding(dp(24), 0, dp(24), 0) }, FrameLayout.LayoutParams(-1, -1))
+    }
+
     private fun releasePlayer() {
         player?.release()
         player = null
@@ -165,6 +193,7 @@ class DdnViewerActivity : AppCompatActivity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
+    internal fun textForTest(): String = (box.getChildAt(0) as? TextView)?.text?.toString() ?: ""
     internal fun hasPictureForTest(): Boolean = (box.getChildAt(0) as? android.widget.ImageView)?.drawable is android.graphics.drawable.BitmapDrawable
 
     companion object {
