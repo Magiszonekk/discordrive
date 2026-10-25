@@ -90,6 +90,40 @@ export async function makeLocalPreviews(helper: string, path: string, name: stri
   return imgs.length ? imgs : null;
 }
 
+/**
+ * The last few fragments in memory in front of the cache on disk: a player reads a fragment in thousands of
+ * small pieces (4 KiB), each of which would otherwise read the whole fragment (10 MiB) from the disk.
+ */
+class MemFront extends Map<string, Uint8Array> {
+  private readonly mem = new Map<string, Uint8Array>();
+  constructor(
+    private readonly back: Map<string, Uint8Array>,
+    private readonly keep = 4,
+  ) {
+    super();
+  }
+  private hold(k: string, v: Uint8Array) {
+    this.mem.delete(k);
+    this.mem.set(k, v);
+    while (this.mem.size > this.keep) this.mem.delete(this.mem.keys().next().value!);
+  }
+  override get(k: string): Uint8Array | undefined {
+    const m = this.mem.get(k);
+    if (m) return this.hold(k, m), m;
+    const v = this.back.get(k);
+    if (v) this.hold(k, v);
+    return v;
+  }
+  override has(k: string): boolean {
+    return this.mem.has(k) || this.back.has(k);
+  }
+  override set(k: string, v: Uint8Array): this {
+    this.hold(k, v);
+    this.back.set(k, v);
+    return this;
+  }
+}
+
 export class FragDiskCache extends Map<string, Uint8Array> {
   private used = 0;
   private readonly meta = new Map<string, { size: number; at: number }>();
@@ -375,7 +409,8 @@ interface Hooks {
   watch?: () => void;
 }
 
-function connection(core: VdiskCore, sock: Socket, cache: FragDiskCache, hooks: Hooks) {
+function connection(core: VdiskCore, sock: Socket, disk: FragDiskCache, hooks: Hooks) {
+  const cache = new MemFront(disk);
   let buf = Buffer.alloc(0);
   let busy = Promise.resolve();
   const send = (j: unknown, data: Uint8Array = new Uint8Array(0)) => {
@@ -426,7 +461,7 @@ function connection(core: VdiskCore, sock: Socket, cache: FragDiskCache, hooks: 
         }
         return send({}, await core.vdiskRead(String(q.id), q.off!, q.len!, cache));
       }
-      if (q.op === "statfs") return send({ total: cache.limit, free: Math.max(0, cache.limit - cache.bytes) });
+      if (q.op === "statfs") return send({ total: disk.limit, free: Math.max(0, disk.limit - disk.bytes) });
       if (q.op === "upload" && core.vdiskUpload && typeof q.path === "string" && hooks.outbox && q.path.startsWith(hooks.outbox.dir + "/") && !q.path.includes("/../")) {
         const name = String(q.name);
         // The name checked now (the close fails at once), the upload queued (cp does not wait for Discord).

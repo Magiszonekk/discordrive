@@ -1850,9 +1850,28 @@ export class AppCore {
       const head = await this.c().headOf(n.content.manifestRef).catch(() => null);
       if (head && head.byteLength > end) return head.slice(off, end + 1);
     }
+    // A fragment being fetched ahead for this reader: waited for, not fetched a second time.
+    const m = (await this.c().loadManifest(n.content.manifestRef)).manifest;
+    const cs = m.chunkSizeBytes;
+    const vid = n.content.versionId;
+    for (let i = Math.floor(off / cs); i <= Math.floor(end / cs); i++) await this.vdiskAhead.get(`${vid}:${i}`);
     const r = await this.c().readRange(id, off, end, cache);
+    // A player reads on: the next fragments are fetched now (two ahead), so playback does not stop at
+    // each fragment's end to wait for Discord.
+    const last = Math.floor(end / cs);
+    for (let i = last + 1; i <= Math.min(last + 2, m.chunks.length - 1); i++) {
+      const k = `${vid}:${i}`;
+      if (cache.has(k) || this.vdiskAhead.has(k)) continue;
+      const p = this.c()
+        .readRange(id, i * cs, i * cs, cache)
+        .then(() => {}, () => {})
+        .finally(() => this.vdiskAhead.delete(k));
+      this.vdiskAhead.set(k, p);
+    }
     return r.data;
   }
+  /** Fragments of files on the disk being fetched ahead of their reader (version:index). */
+  private readonly vdiskAhead = new Map<string, Promise<void>>();
 
   /**
    * Decrypted fragments of the last ranges (players read windows that overlap, seeking goes back): a few,

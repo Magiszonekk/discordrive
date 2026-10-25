@@ -148,6 +148,22 @@ describe.skipIf(why !== null)(`disk in the system (FUSE)${why ? ` — skipped: $
     if (!spawnSync("gio", ["--version"]).error) await run("gio", ["info", "-a", "standard::content-type", join(dir, "film duży.bin")]);
     expect(cache.bytes).toBe(before0);
     expect(fake.cdnGets - cdnHead).toBeLessThanOrEqual(1);
+    // A player reading on (small reads in order, as GStreamer does): the next fragments are fetched ahead,
+    // so crossing into a fragment does not wait for Discord (each CDN read takes 400 ms here).
+    {
+      fake.cdnDelayMs = 400;
+      const fh2 = await (await import("node:fs/promises")).open(join(dir, "film duży.bin"));
+      const b = Buffer.alloc(64 * 1024);
+      const cs = 10 * 1024 * 1024;
+      await fh2.read(b, 0, b.length, cs - 2 * b.length); // inside fragment 0: fragments 1 and 2 go ahead
+      await new Promise((r) => setTimeout(r, 1500));
+      const t1 = Date.now();
+      for (let o = cs - b.length; o < cs + 4 * b.length; o += b.length) await fh2.read(b, 0, b.length, o);
+      const crossing = Date.now() - t1;
+      await fh2.close();
+      fake.cdnDelayMs = 0;
+      expect(crossing).toBeLessThan(300);
+    }
     const off = 12 * 1024 * 1024 + 7;
     const part = (await run("dd", [`if=${join(dir, "film duży.bin")}`, "iflag=skip_bytes,count_bytes", `skip=${off}`, "count=4096", "status=none"], { encoding: "buffer" })).stdout;
     expect(sha(part)).toBe(sha(big.subarray(off, off + 4096)));
