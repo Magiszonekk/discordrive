@@ -470,6 +470,7 @@ export const pl: Record<string, string> = {
   "app.vdisk.cache": "Pamięć podręczna dysku na tym komputerze (GB)",
   "app.vdisk.off": "Pliki konta jako folder w menedżerze plików; pobierane fragmentami dopiero przy otwarciu.",
   "app.vdisk.write": "Zapis na dysku",
+  "app.vdisk.queue": "Wysyłanie plików z dysku: {n}, {done} z {total}. Nie zamykaj aplikacji do końca.",
   "app.vdisk.write.hint": "Pliki skopiowane do folderu są wysyłane do konta w tle; usunięte trafiają do kosza.",
   "app.vdisk.mounted": "Zamontowany w {dir}.",
   "app.vdisk.mounting": "Montowanie…",

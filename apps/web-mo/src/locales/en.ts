@@ -418,6 +418,7 @@ export const en: Record<string, string> = {
   "app.vdisk.cache": "Disk cache on this computer (GB)",
   "app.vdisk.off": "The account's files as a folder in the file manager; pieces are downloaded only when a file is opened.",
   "app.vdisk.write": "Writing to the disk",
+  "app.vdisk.queue": "Uploading {n} files from the disk: {done} of {total}. Keep the app running until it ends.",
   "app.vdisk.write.hint": "Files copied into the folder are uploaded to the account in the background; deleted ones go to the trash.",
   "app.vdisk.mounted": "Mounted at {dir}.",
   "app.vdisk.mounting": "Mounting…",

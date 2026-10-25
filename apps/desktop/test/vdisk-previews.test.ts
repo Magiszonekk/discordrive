@@ -42,7 +42,12 @@ describe.skipIf(why !== null || !hasFfmpeg)("disk in the system, previews of wri
     await core.addWebhook(fake.addWebhook("1550000000000000701").url);
     const mp = join(base, "discordrive");
     const thumbDir = join(base, "thumbnails");
-    const disk = new Vdisk({ helper, mountpoint: mp, socket: join(base, "run", "fuse.sock"), cache: new FragDiskCache(join(base, "frags"), 64 << 20), core: core as never, outbox: join(base, "outbox"), thumbnailDir: thumbDir });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const up0 = core.vdiskUpload.bind(core);
+    (core as unknown as { vdiskUpload: typeof up0 }).vdiskUpload = async (...a) => (await gate, up0(...a));
+    const queue: [number, number, number][] = [];
+    const disk = new Vdisk({ helper, mountpoint: mp, socket: join(base, "run", "fuse.sock"), cache: new FragDiskCache(join(base, "frags"), 64 << 20), core: core as never, outbox: join(base, "outbox"), thumbnailDir: thumbDir, onQueue: (l, d, t) => queue.push([l, d, t]) });
     disks.push(disk);
     await disk.start();
     // Sources: a 1200x800 JPEG marked "rotate 90" in EXIF (shown 800x1200), a PNG, a 4 s MP4.
@@ -59,7 +64,19 @@ describe.skipIf(why !== null || !hasFfmpeg)("disk in the system, previews of wri
     await run("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=25", "-t", "4", "-pix_fmt", "yuv420p", join(src, "film.mp4")]);
     await writeFile(join(src, "tekst.txt"), "abc");
     for (const n of ["obrót.jpg", "b.png", "film.mp4", "tekst.txt"]) await copyFile(join(src, n), join(mp, n));
+    const md5 = (p: string) => createHash("md5").update(fileUri(join(mp, p))).digest("hex") + ".png";
+    // Still queued (nothing uploaded yet): the file manager's thumbnails are there already, from the local
+    // copies, for the same mtime the files show.
+    for (let i = 0; i < 100 && !existsSync(join(thumbDir, "normal", md5("film.mp4"))); i++) await new Promise((r) => setTimeout(r, 100));
+    expect(core.list().rows.length).toBe(0);
+    for (const n of ["obrót.jpg", "b.png", "film.mp4"]) expect(existsSync(join(thumbDir, "normal", md5(n)))).toBe(true);
+    // The queue's progress: 4 files waiting, their bytes in total, none done yet.
+    const total = (await Promise.all(["obrót.jpg", "b.png", "film.mp4", "tekst.txt"].map((n) => readFile(join(src, n))))).reduce((a, b) => a + b.length, 0);
+    expect(queue.at(-1)).toEqual([4, 0, total]);
+    release();
     await disk.outbox!.idle();
+    expect(queue.at(-1)).toEqual([0, 0, 0]);
+    expect(queue.some(([l, d]) => l === 1 && d > 0)).toBe(true);
 
     const row = (n: string) => core.list().rows.find((r) => r.name === n)!;
     const pic = async (n: string, kind: "t" | "p") => (core as unknown as { vdiskPreview(id: string, k: "t" | "p"): Promise<{ data: Uint8Array; mime: string } | null> }).vdiskPreview(row(n).id, kind);
@@ -76,7 +93,6 @@ describe.skipIf(why !== null || !hasFfmpeg)("disk in the system, previews of wri
     expect((await pic("film.mp4", "p"))?.mime).toBe("image/jpeg");
     expect(await pic("tekst.txt", "t")).toBeNull();
     // The file manager's thumbnails: written for the pictures and the video, a "none" marker only for text.
-    const md5 = (p: string) => createHash("md5").update(fileUri(join(mp, p))).digest("hex") + ".png";
     for (let i = 0; i < 50 && !existsSync(join(thumbDir, "normal", md5("film.mp4"))); i++) await new Promise((r) => setTimeout(r, 100));
     for (const n of ["obrót.jpg", "b.png", "film.mp4"]) {
       expect(existsSync(join(thumbDir, "normal", md5(n)))).toBe(true);
