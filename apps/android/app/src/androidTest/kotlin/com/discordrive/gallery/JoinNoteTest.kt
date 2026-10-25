@@ -33,7 +33,10 @@ class JoinNoteTest {
             }
             assertTrue("OK shown and enabled", shown)
             assertTrue("no pairing button left next to OK", others)
-            assertTrue("OK opens the files", InstrumentationRegistry.getInstrumentation().waitForMonitorWithTimeout(mon, 5_000) != null)
+            // A blocking monitor stops the start (no activity is made): its hit count says it was asked for.
+            val until = System.currentTimeMillis() + 5_000
+            while (mon.hits == 0 && System.currentTimeMillis() < until) Thread.sleep(100)
+            assertTrue("OK opens the files", mon.hits > 0)
         }
     }
 }
