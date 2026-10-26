@@ -44,8 +44,12 @@
         <item name="materialButtonStyle">@style/Widget.Cobalt.Button</item>
         <item name="materialButtonOutlinedStyle">@style/Widget.Cobalt.Button.Secondary</item>
         <item name="textInputStyle">@style/Widget.Cobalt.TextInput</item>
-        <item name="materialCardViewStyle">@style/Widget.Cobalt.Card</item>
         <item name="materialAlertDialogTheme">@style/ThemeOverlay.Cobalt.Dialog</item>
+        <!-- Section cards of the screens made in code: filled a step lighter than the page, no frame (the join
+             screen sets Widget.Cobalt.Card itself and keeps its hairline). -->
+        <item name="materialCardViewStyle">@style/Widget.Cobalt.Card.Section</item>
+        <item name="checkboxStyle">@style/Widget.Cobalt.CheckBox</item>
+        <item name="linearProgressIndicatorStyle">@style/Widget.Cobalt.Progress</item>
     </style>
 
     <!-- Dialogs: paper, 10dp, Space Grotesk title, Inter text, accent text buttons (no caps). -->
@@ -151,7 +155,46 @@
     </style>
     <style name="TextAppearance.Cobalt.SectionHead" parent="">
         <item name="android:fontFamily">@font/inter_semibold</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:letterSpacing">0.01</item>
+    </style>
+
+    <!-- Rows (settings rows, file rows, trash rows): title 15sp ink, sub 13sp muted, mono for sizes and counts. -->
+    <style name="TextAppearance.Cobalt.RowTitle" parent="">
+        <item name="android:fontFamily">@font/inter_medium</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:textColor">@color/cobalt_ink</item>
+    </style>
+    <style name="TextAppearance.Cobalt.RowSub" parent="">
+        <item name="android:fontFamily">@font/inter_regular</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:lineSpacingMultiplier">1.1</item>
+        <item name="android:textColor">@color/cobalt_muted</item>
+    </style>
+    <style name="TextAppearance.Cobalt.Meta" parent="">
+        <item name="android:fontFamily">@font/jetbrains_mono_regular</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">@color/cobalt_muted</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <!-- The brand in the main bar: "discor" ink + "drive" accent (set by the view), like "DiscorDrive Gallery". -->
+    <style name="TextAppearance.Cobalt.Brand" parent="">
+        <item name="android:fontFamily">@font/space_grotesk_semibold</item>
+        <item name="android:textSize">22sp</item>
+        <item name="android:letterSpacing">-0.01</item>
+        <item name="android:textColor">@color/cobalt_ink</item>
+    </style>
+    <!-- The viewer's action labels under the icons (on the dark scrim, both modes). -->
+    <style name="TextAppearance.Cobalt.ActionLabel" parent="">
+        <item name="android:fontFamily">@font/inter_medium</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">@color/cobalt_on_scrim</item>
+    </style>
+    <!-- An album tile's name and count. -->
+    <style name="TextAppearance.Cobalt.TileTitle" parent="">
+        <item name="android:fontFamily">@font/inter_semibold</item>
         <item name="android:textSize">14sp</item>
+        <item name="android:textColor">@color/cobalt_ink</item>
     </style>
 
     <!-- Buttons: rounded-md (6dp), 48dp tall (the web's h-11 + a touch target), no pill, no caps. -->
@@ -236,6 +279,43 @@
         <item name="android:paddingBottom">12dp</item>
         <item name="android:paddingStart">12dp</item>
         <item name="android:paddingEnd">12dp</item>
+    </style>
+
+    <!-- Tonal (Choose accent, Restore, Set PIN): the accent at 12% with ink text and an accent icon; it stays
+         visible on a dark card (paper-2 on paper did not). Ripple in the accent. -->
+    <style name="Widget.Cobalt.Button.Tonal" parent="Widget.Cobalt.Button">
+        <item name="backgroundTint">@color/cobalt_button_tonal_bg</item>
+        <item name="android:textColor">@color/cobalt_button_tonal_text</item>
+        <item name="iconTint">@color/cobalt_button_tonal_icon</item>
+        <item name="rippleColor">@color/cobalt_ripple_accent</item>
+    </style>
+    <!-- Danger (Leave the account, Delete for good, Remove PIN): the error colour at 10%, red text and icon. -->
+    <style name="Widget.Cobalt.Button.Danger" parent="Widget.Cobalt.Button">
+        <item name="backgroundTint">@color/cobalt_button_danger_bg</item>
+        <item name="android:textColor">@color/cobalt_button_danger_text</item>
+        <item name="iconTint">@color/cobalt_button_danger_text</item>
+        <item name="rippleColor">@color/cobalt_ripple_danger</item>
+    </style>
+
+    <style name="Widget.Cobalt.CheckBox" parent="Widget.Material3.CompoundButton.CheckBox">
+        <item name="buttonTint">@color/cobalt_check_tint</item>
+    </style>
+    <!-- The loading bar under a list's note: 3dp, rounded, the accent on a faint track. -->
+    <style name="Widget.Cobalt.Progress" parent="Widget.Material3.LinearProgressIndicator">
+        <item name="trackThickness">3dp</item>
+        <item name="trackCornerRadius">2dp</item>
+        <item name="indicatorColor">?attr/colorPrimary</item>
+        <item name="trackColor">@color/cobalt_paper_3</item>
+    </style>
+
+    <!-- A section card (Settings, the other screens made in code): 14dp, filled card colour, no frame. -->
+    <style name="Widget.Cobalt.Card.Section" parent="Widget.Material3.CardView.Filled">
+        <item name="cardCornerRadius">14dp</item>
+        <item name="cardElevation">0dp</item>
+        <item name="strokeWidth">0dp</item>
+        <item name="strokeColor">@color/cobalt_error_rule</item>
+        <item name="cardBackgroundColor">@color/cobalt_card</item>
+        <item name="contentPadding">0dp</item>
     </style>
 
     <!-- .auth-card / code card: 10dp, hairline rule, flat on paper -->

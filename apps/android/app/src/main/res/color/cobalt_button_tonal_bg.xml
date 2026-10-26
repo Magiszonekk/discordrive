@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tonal button: the accent (the account's choice) at 12% over the card; disabled fainter. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:alpha="0.06" android:color="?attr/colorPrimary" android:state_enabled="false" />
+    <item android:alpha="0.12" android:color="?attr/colorPrimary" />
+</selector>
