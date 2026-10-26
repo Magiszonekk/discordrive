@@ -186,6 +186,8 @@ class DdnSettingsActivity : AppCompatActivity() {
                 // This phone's entry on the account goes too (no stale device left in the list). Offline or the
                 // instance refusing: the phone still forgets the account, and says the entry stayed.
                 val acct = DdnAccount.load(this)
+                // The join screen offers this address again (the same preference it keeps).
+                acct?.let { getSharedPreferences("ddn-join", MODE_PRIVATE).edit().putString("server", it.serverUrl).apply() }
                 kotlin.concurrent.thread {
                     val revoked = acct == null || runCatching { DdnLeave.revokeSelf(acct) }.isSuccess
                     runOnUiThread {
