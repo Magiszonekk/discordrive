@@ -18,4 +18,14 @@
     <color name="cobalt_qr_paper">#FFFFFF</color>
     <!-- The danger zone's frame (error over paper, faint). -->
     <color name="cobalt_error_rule">#4A2224</color>
+    <!-- Screens made in code (CobaltUi): the page under the section cards, the cards a step lighter (filled, no
+         frame, like the old Gallery's cards), the scrim under the viewer's bars. -->
+    <color name="cobalt_page">#080B10</color>
+    <color name="cobalt_card">#11161D</color>
+    <color name="cobalt_scrim">#B3000000</color>
+    <color name="cobalt_on_scrim">#F2F4F7</color>
+    <!-- A menu-like button's well inside a card, a field's fill inside a card, a list row's icon tile on paper. -->
+    <color name="cobalt_well">#1A2029</color>
+    <color name="cobalt_field">#0B0F14</color>
+    <color name="cobalt_tile">#171C23</color>
 </resources>
