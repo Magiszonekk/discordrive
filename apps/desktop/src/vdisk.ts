@@ -11,7 +11,7 @@
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { open as openFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { release as osRelease } from "node:os";
@@ -237,7 +237,9 @@ export function localOnlyName(name: string): boolean {
 }
 
 export class Outbox {
-  private items = new Map<string, { n: string; dir: string; name: string; size: number; mtime: number; trashed?: boolean }>();
+  private items = new Map<string, { n: string; dir: string; name: string; size: number; mtime: number; trashed?: boolean; added?: number }>();
+  /** A queued copy waits this long before its upload (a program setting its time right after the close). */
+  settleMs = 1000;
   private seq = Date.now();
   private running: Promise<void> | null = null;
   private wake: (() => void) | null = null;
@@ -305,12 +307,26 @@ export class Outbox {
     // A newer copy of the same name replaces one not started yet (an editor saving often).
     for (const [k, it] of this.items) if (it.dir === dir && it.name === name && k !== this.current) this.drop(k);
     // The copy's own mtime (when it was written): the same the file shows once uploaded (its takenAt).
-    this.items.set(n, { n, dir, name, size: st.size, mtime: Math.floor(st.mtimeMs) });
+    this.items.set(n, { n, dir, name, size: st.size, mtime: Math.floor(st.mtimeMs), added: Date.now() });
     if (!localOnlyName(name)) this.burst.total += st.size;
     this.report();
     if (!localOnlyName(name)) this.onQueued(dir, name, join(this.dir, `q-${n}`), Math.floor(st.mtimeMs));
     this.kick();
     return `out:${n}`;
+  }
+  /**
+   * A new modification time for a queued copy (`out:<n>`): set on the copy, which the upload reads as the
+   * content date. False when it is not in the queue any more.
+   */
+  touch(id: string, mtime: number): boolean {
+    const k = id.replace(/^out:/, "");
+    const it = this.items.get(k);
+    if (!it || !Number.isFinite(mtime) || mtime < 0) return false;
+    const t = new Date(mtime);
+    utimesSync(join(this.dir, `q-${k}`), t, t);
+    it.mtime = Math.floor(mtime);
+    writeFileSync(join(this.dir, `q-${k}.json`), JSON.stringify({ dir: it.dir, name: it.name, mtime: it.mtime }), { mode: 0o600 });
+    return true;
   }
   private current: string | null = null;
   private drop(k: string) {
@@ -373,6 +389,12 @@ export class Outbox {
     for (;;) {
       const first = [...this.items.values()].filter((x) => !localOnlyName(x.name)).sort((a, b) => Number(a.n) - Number(b.n))[0];
       if (!first) return;
+      // Just closed: a moment for the program to set its time (rsync -t, touch -d) before it is read.
+      const wait = (first.added ?? 0) + this.settleMs - Date.now();
+      if (wait > 0) {
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
       const next = { ...first };
       this.current = next.n;
       const path = join(this.dir, `q-${next.n}`);
@@ -620,6 +642,8 @@ function connection(core: VdiskCore, sock: Socket, disk: FragDiskCache, hooks: H
         core.vdiskCheckName?.(String(q.dir), name);
         return send({ id: hooks.outbox.add(q.path, String(q.dir), name) });
       }
+      // The modification time of a queued file (rsync -t, touch -d after the close): its content date.
+      if (q.op === "touch" && hooks.outbox && typeof q.id === "string") return send(hooks.outbox.touch(q.id, Number((q as { mtime?: unknown }).mtime)) ? {} : { err: "ENOENT" });
       if (q.op === "rename" && hooks.outbox?.renamePending(String(q.dir), String(q.name), String(q.toDir), String(q.toName))) {
         core.vdiskCheckName?.(String(q.toDir), String(q.toName));
         // Also in the account when an older version of it is there.

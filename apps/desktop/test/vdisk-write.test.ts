@@ -157,6 +157,28 @@ os.close(fd)`]);
     if (!spawnSync("gio", ["--version"]).error) await run("gio", ["trash", join(mp, "nowa-nazwa.txt")]).catch(() => {});
     expect(tree().some((n) => n.startsWith(".Trash"))).toBe(false);
 
+    // 8b. Times set by programs (N42): cp -p (set on the open file before its close) and touch -d (after the
+    //     close, the file in the queue): the file shows that time, uploaded as its content date.
+    {
+      const old = new Date("2020-01-02T03:04:05Z");
+      const srcP = join(base, "stary.txt");
+      writeFileSync(srcP, "stara treść");
+      await run("touch", ["-d", old.toISOString(), srcP]);
+      await run("cp", ["-p", srcP, join(mp, "cp-p.txt")]);
+      await writeFile(join(mp, "touch-d.txt"), "nowa treść");
+      await run("touch", ["-d", "2019-05-06T07:08:09Z", join(mp, "touch-d.txt")]);
+      expect((await stat(join(mp, "cp-p.txt"))).mtimeMs).toBe(old.getTime());
+      expect((await stat(join(mp, "touch-d.txt"))).mtimeMs).toBe(Date.parse("2019-05-06T07:08:09Z"));
+      await disk.outbox!.idle();
+      await new Promise((r) => setTimeout(r, 1500));
+      const taken = (n: string) => core.vdiskList("root")?.find((e) => e.name === n)?.mtime;
+      expect([taken("cp-p.txt"), taken("touch-d.txt")]).toEqual([old.getTime(), Date.parse("2019-05-06T07:08:09Z")]);
+      expect((await stat(join(mp, "cp-p.txt"))).mtimeMs).toBe(old.getTime());
+      await rm(join(mp, "cp-p.txt"));
+      await rm(join(mp, "touch-d.txt"));
+      await disk.outbox!.idle();
+    }
+
     // 9. Written, then uploaded from the queue: the same mtime and inode as right after the write (an
     //    editor comparing them would report the file as changed by another program).
     await writeFile(join(mp, "mt.txt"), "abc");
