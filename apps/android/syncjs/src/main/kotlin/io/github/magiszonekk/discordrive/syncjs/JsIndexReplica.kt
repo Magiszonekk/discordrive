@@ -28,7 +28,8 @@ class JsIndexReplica(private val engine: JsEngine) : IndexReplica {
 
     private fun call(expr: String): String = engine.evaluate(expr) ?: throw JsEngineException("no answer from ${engine.name}")
 
-    override val rulesVersion: Int get() = call("String(SyncCore.RULES_VERSION)").toInt()
+    /** The rules version this phone writes (it lags what it replays while a new version rolls out). */
+    override val rulesVersion: Int get() = call("String(SyncCore.WRITE_RULES_VERSION)").toInt()
     override val headSeq: Long get() = call("__ddnIx.head()").toLong()
 
     override fun reset() {

@@ -3,7 +3,7 @@
 
 import { nameKey, validateName } from "./names.js";
 import type { IndexStore } from "./store.js";
-import { RECOVERED_ID, ROOT_ID, SYSTEM_IDS, type NodeRecord } from "./types.js";
+import { GALLERY_ID, RECOVERED_ID, ROOT_ID, SYSTEM_IDS, type NodeRecord } from "./types.js";
 
 export interface InvariantViolation {
   code:
@@ -40,7 +40,8 @@ export function checkInvariants(store: IndexStore): InvariantViolation[] {
   const nodes = new Map<string, NodeRecord>();
   for (const n of store.allNodes()) nodes.set(n.id, n);
 
-  for (const id of [ROOT_ID, RECOVERED_ID]) {
+  // The Gallery's root (rules 4) is optional, but a root folder never trashed when present.
+  for (const id of [ROOT_ID, RECOVERED_ID, ...(nodes.has(GALLERY_ID) ? [GALLERY_ID] : [])]) {
     const n = nodes.get(id);
     if (!n || n.parentId !== null || n.kind !== "folder" || n.trashed) {
       out.push({ code: "missing_system_node", nodeId: id });
@@ -51,7 +52,7 @@ export function checkInvariants(store: IndexStore): InvariantViolation[] {
   const uploadUse = new Map<string, string>();
   for (const n of nodes.values()) {
     if (n.parentId === null) {
-      if (!SYSTEM_IDS.has(n.id)) out.push({ code: "orphan", nodeId: n.id, detail: "non-system root" });
+      if (!SYSTEM_IDS.has(n.id) && n.id !== GALLERY_ID) out.push({ code: "orphan", nodeId: n.id, detail: "non-system root" });
     } else {
       const p = nodes.get(n.parentId);
       if (!p) out.push({ code: "orphan", nodeId: n.id, detail: n.parentId });
@@ -90,7 +91,7 @@ export function checkInvariants(store: IndexStore): InvariantViolation[] {
   }
 
   // Cycles / reachability: walk up from every node with memoization.
-  const ok = new Set<string>([ROOT_ID, RECOVERED_ID]);
+  const ok = new Set<string>([ROOT_ID, RECOVERED_ID, ...(nodes.has(GALLERY_ID) ? [GALLERY_ID] : [])]);
   for (const start of nodes.keys()) {
     const path: string[] = [];
     const onPath = new Set<string>();

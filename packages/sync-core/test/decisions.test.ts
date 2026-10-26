@@ -23,7 +23,7 @@ import { checkNoSilentLoss, checkTrashSawContent } from "./oracles.js";
 
 describe("rules version", () => {
   it("decisions bumped the rules version; v1 logs are no longer replayable", () => {
-    expect(RULES_VERSION).toBe(3);
+    expect(RULES_VERSION).toBe(4);
     expect(MIN_REPLAY_RULES_VERSION).toBe(2);
     const st = initIndex(new MemoryIndexStore());
     const e: LogEntry = {
@@ -45,11 +45,12 @@ describe("rules version", () => {
     expect(() => loadSnapshot(snap)).toThrow(/rules version 1/);
   });
 
-  it("the default server accepts only the current version", () => {
+  it("the default server accepts what clients write now up to the current version", () => {
     const server = new Sequencer();
     const env = { opId: "op-v1-00002", baseSeq: 0, device: A, createdAt: 0, op: { type: "trash" as const, nodeId: "fold0001" } };
     expect(server.submit({ ...env, rulesVersion: 1 }).status).toBe("rules_version_rejected");
     expect(server.submit({ ...env, rulesVersion: RULES_VERSION }).status).toBe("accepted");
+    expect(server.submit({ ...env, opId: "op-v3-00003", rulesVersion: 3 }).status).toBe("accepted");
   });
 });
 

@@ -5,7 +5,7 @@
 // encrypted in metadata-only mode. This class is the reference behaviour the
 // server must implement, and the in-memory server used by tests.
 
-import { RULES_VERSION } from "./types.js";
+import { RULES_VERSION, WRITE_RULES_VERSION } from "./types.js";
 import type { OpEnvelope, UploadId } from "./types.js";
 
 /**
@@ -65,7 +65,7 @@ export class Sequencer<E extends SequencedEnvelope = OpEnvelope> {
   readonly leaseMs: number;
 
   constructor(opts: SequencerOptions<E> = {}) {
-    this.minRulesVersion = opts.minRulesVersion ?? RULES_VERSION;
+    this.minRulesVersion = opts.minRulesVersion ?? WRITE_RULES_VERSION;
     this.maxRulesVersion = opts.maxRulesVersion ?? RULES_VERSION;
     this.now = opts.now ?? (() => Date.now());
     this.leaseMs = opts.leaseMs ?? 10 * 60_000;

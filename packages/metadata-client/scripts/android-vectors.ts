@@ -7,7 +7,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { RULES_VERSION } from "@ddv4/sync-core";
+import { WRITE_RULES_VERSION } from "@ddv4/sync-core";
 import {
   OpCodec,
   accountKeyFromRaw,
@@ -81,7 +81,7 @@ if (!(await verifySignature(device.publicKey, loginMsg, ed.loginSignature))) thr
 const codec = new OpCodec(key, ACCT);
 const env = {
   opId: "op-EEEEEEEEEEEEEEEEEEEEEE",
-  rulesVersion: RULES_VERSION,
+  rulesVersion: WRITE_RULES_VERSION,
   baseSeq: 4,
   device: { id: "dev-DDDDDDDDDDDDDDDDDDDDDD", name: "Łódź laptop" },
   createdAt: 1792600000000,

@@ -24,6 +24,7 @@ import {
 import { OverlayStore, type IndexStore } from "./store.js";
 import {
   MIN_REPLAY_RULES_VERSION,
+  GALLERY_ID,
   RECOVERED_ID,
   ROOT_ID,
   RULES_VERSION,
@@ -50,6 +51,7 @@ import {
   type UploadBeginOp,
   type UploadCommitOp,
   type UploadRecord,
+  type Space,
 } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -196,6 +198,29 @@ function systemNode(id: NodeId, name: string): NodeRecord {
   };
 }
 
+/** Rules 4: the Gallery's root, made by the first rules-4 entry. Idempotent. */
+function ensureGalleryRoot(store: IndexStore): void {
+  if (!store.getNode(GALLERY_ID)) store.putNode(systemNode(GALLERY_ID, ""));
+}
+
+/**
+ * A system node: the fixed roots, and the Gallery's root once it exists. ("gallery" is checked by
+ * presence, so in a log of rules 2-3, where it never exists, an op on that ID is what it was then.)
+ */
+function isSystem(s: IndexStore, id: NodeId): boolean {
+  return SYSTEM_IDS.has(id) || (id === GALLERY_ID && s.getNode(GALLERY_ID)?.parentId === null);
+}
+
+/** The space a node is in: the root its parent chain ends in. Unknown or broken chain = Drive. */
+export function spaceOf(s: IndexStore, id: NodeId): Space {
+  let cur = s.getNode(id);
+  for (let guard = 0; cur && guard < 1_000_000; guard++) {
+    if (cur.parentId === null) return cur.id === GALLERY_ID ? "gallery" : "drive";
+    cur = s.getNode(cur.parentId);
+  }
+  return "drive";
+}
+
 /** Put the system roots into an empty store. Idempotent. */
 export function initIndex(store: IndexStore): IndexStore {
   if (!store.getNode(ROOT_ID)) store.putNode(systemNode(ROOT_ID, ""));
@@ -230,6 +255,11 @@ export function applyEntry(store: IndexStore, entry: LogEntry): ApplyResult {
   // validateContent, toVersion), so a rules-2 entry gives exactly its old result.
 
   const ov = new OverlayStore(store);
+  // Rules 4: the Gallery's root is there for the op (it may target it); it stays only if the entry is
+  // applied, so an entry that is not applied still changes nothing (the root is made by the first
+  // applied rules-4 entry, the same on every replica).
+  const madeRoot = entry.rulesVersion >= 4 && !store.getNode(GALLERY_ID);
+  if (madeRoot) ensureGalleryRoot(ov);
   const ctx = new Ctx(ov, entry);
   let outcome: Outcome;
   const envErr = validateEnvelope(entry);
@@ -242,7 +272,7 @@ export function applyEntry(store: IndexStore, entry: LogEntry): ApplyResult {
     outcome = applySingle(ctx, entry.op, 0);
   }
 
-  const ok = outcome === "applied" || outcome === "noop";
+  const ok = outcome === "applied" || (outcome === "noop" && !madeRoot);
   const target = ok ? ov : new OverlayStore(store);
   target.setMeta({ headSeq: entry.seq, rulesVersion: Math.max(meta.rulesVersion, entry.rulesVersion) });
   target.commit();
@@ -421,6 +451,15 @@ function validateContent(c: unknown, rulesVersion: number): string | null {
   return null;
 }
 
+/**
+ * Rules 4: an op's optional space. A rules-4 entry with a bad value is invalid; entries of older rules
+ * never fail on the field (unknown then) and use it only when valid.
+ */
+function opSpace(ctx: Ctx, v: unknown): { ok: true; space?: Space } | { ok: false } {
+  if (v === "drive" || v === "gallery") return { ok: true, space: v };
+  return v === undefined || ctx.e.rulesVersion < 4 ? { ok: true } : { ok: false };
+}
+
 /** Piece locations (rules v3): sorted by loc, unique, at most 64 entries, counts and bytes non-negative integers. */
 function validPieces(p: unknown): p is PieceLoc[] {
   if (!Array.isArray(p) || p.length > 64) return false;
@@ -523,12 +562,17 @@ function placeLive(ctx: Ctx, rec: NodeRecord, parentId: NodeId, wantedName: stri
   return out;
 }
 
-/** Put a node into „Odzyskane” (rules 3, 3b, 4), live, with the intended target recorded. */
+/**
+ * Put a node into „Odzyskane” (rules 3, 3b, 4), live, with the intended target recorded. Rules 4: a
+ * node of the Gallery goes to the Gallery's root instead (space: the intended parent's when it still
+ * exists, else `hint`, the op's space).
+ */
 function placeRecovered(
   ctx: Ctx,
   rec: NodeRecord,
   intendedParentId: NodeId | null,
   reason: string,
+  hint?: Space,
 ): NodeRecord {
   const targetPath = intendedParentId === null ? null : pathOf(ctx.s, intendedParentId);
   const base: NodeRecord = {
@@ -536,7 +580,12 @@ function placeRecovered(
     placed: ctx.mark,
     recoveredFrom: { parentId: intendedParentId, path: targetPath, seq: ctx.e.seq },
   };
-  const out = placeLive(ctx, base, RECOVERED_ID, rec.name);
+  let place: NodeId = RECOVERED_ID;
+  if (ctx.s.getNode(GALLERY_ID)?.parentId === null) {
+    const space = intendedParentId !== null && ctx.s.getNode(intendedParentId) ? spaceOf(ctx.s, intendedParentId) : (hint ?? "drive");
+    if (space === "gallery") place = GALLERY_ID;
+  }
+  const out = placeLive(ctx, base, place, rec.name);
   ctx.notice({ code: "moved_to_recovered", nodeId: rec.id, reason, targetPath });
   return out;
 }
@@ -581,6 +630,8 @@ function opCreate(ctx: Ctx, op: CreateOp): Outcome {
   const nameErr = validateName(op.name);
   if (nameErr) return ctx.reject(nameErr, op.nodeId);
   if (!isRef(op.parentId)) return ctx.reject("bad_parent_id", op.nodeId);
+  const sp = opSpace(ctx, op.space);
+  if (!sp.ok) return ctx.reject("bad_space", op.nodeId);
 
   let content: FileVersion | null = null;
   if (op.kind === "file") {
@@ -609,7 +660,7 @@ function opCreate(ctx: Ctx, op: CreateOp): Outcome {
   if (parent && parent.kind !== "folder") return ctx.reject("parent_not_folder", op.nodeId);
   if (!parent) {
     // Rule 4 with a purged target folder (unknown ID = purged, rule 3b).
-    placeRecovered(ctx, rec, op.parentId, "parent_purged");
+    placeRecovered(ctx, rec, op.parentId, "parent_purged", sp.space);
   } else if (inTrash(ctx.s, op.parentId)) {
     // Rule 4: added to a deleted folder.
     placeRecovered(ctx, rec, op.parentId, "parent_in_trash");
@@ -622,7 +673,7 @@ function opCreate(ctx: Ctx, op: CreateOp): Outcome {
 
 function opRename(ctx: Ctx, op: RenameOp): Outcome {
   if (!isRef(op.nodeId)) return ctx.reject("bad_node_id");
-  if (SYSTEM_IDS.has(op.nodeId)) return ctx.reject("system_node", op.nodeId);
+  if (isSystem(ctx.s, op.nodeId)) return ctx.reject("system_node", op.nodeId);
   const nameErr = validateName(op.name);
   if (nameErr) return ctx.reject(nameErr, op.nodeId);
   const node = ctx.s.getNode(op.nodeId);
@@ -648,7 +699,7 @@ function opRename(ctx: Ctx, op: RenameOp): Outcome {
 
 function opMove(ctx: Ctx, op: MoveOp): Outcome {
   if (!isRef(op.nodeId) || !isRef(op.parentId)) return ctx.reject("bad_node_id");
-  if (SYSTEM_IDS.has(op.nodeId)) return ctx.reject("system_node", op.nodeId);
+  if (isSystem(ctx.s, op.nodeId)) return ctx.reject("system_node", op.nodeId);
   const node = ctx.s.getNode(op.nodeId);
   if (!node) {
     ctx.notice({ code: "node_purged", nodeId: op.nodeId, reason: "move" });
@@ -685,7 +736,7 @@ function opMove(ctx: Ctx, op: MoveOp): Outcome {
 
 function opTrash(ctx: Ctx, op: TrashOp): Outcome {
   if (!isRef(op.nodeId)) return ctx.reject("bad_node_id");
-  if (SYSTEM_IDS.has(op.nodeId)) return ctx.reject("system_node", op.nodeId);
+  if (isSystem(ctx.s, op.nodeId)) return ctx.reject("system_node", op.nodeId);
   const node = ctx.s.getNode(op.nodeId);
   if (!node) {
     ctx.notice({ code: "node_purged", nodeId: op.nodeId, reason: "trash" });
@@ -758,7 +809,7 @@ function notifyUnseenTrashed(ctx: Ctx, folderId: NodeId): void {
 
 function opRestore(ctx: Ctx, op: RestoreOp): Outcome {
   if (!isRef(op.nodeId)) return ctx.reject("bad_node_id");
-  if (SYSTEM_IDS.has(op.nodeId)) return ctx.reject("system_node", op.nodeId);
+  if (isSystem(ctx.s, op.nodeId)) return ctx.reject("system_node", op.nodeId);
   const node = ctx.s.getNode(op.nodeId);
   if (!node) {
     ctx.notice({ code: "node_purged", nodeId: op.nodeId, reason: "restore" });
@@ -778,7 +829,7 @@ function opRestore(ctx: Ctx, op: RestoreOp): Outcome {
 
 function opPurge(ctx: Ctx, op: PurgeOp): Outcome {
   if (!isRef(op.nodeId)) return ctx.reject("bad_node_id");
-  if (SYSTEM_IDS.has(op.nodeId)) return ctx.reject("system_node", op.nodeId);
+  if (isSystem(ctx.s, op.nodeId)) return ctx.reject("system_node", op.nodeId);
   const node = ctx.s.getNode(op.nodeId);
   if (!node) return "noop";
   if (!inTrash(ctx.s, node.id)) {
@@ -838,7 +889,9 @@ function opPurge(ctx: Ctx, op: PurgeOp): Outcome {
 
 function opNewContent(ctx: Ctx, op: NewContentVersionOp): Outcome {
   if (!isRef(op.nodeId)) return ctx.reject("bad_node_id");
-  if (SYSTEM_IDS.has(op.nodeId)) return ctx.reject("system_node", op.nodeId);
+  if (isSystem(ctx.s, op.nodeId)) return ctx.reject("system_node", op.nodeId);
+  const sp = opSpace(ctx, op.space);
+  if (!sp.ok) return ctx.reject("bad_space", op.nodeId);
   if (op.baseVersionId !== null && !isRef(op.baseVersionId)) return ctx.reject("bad_base_version", op.nodeId);
   const cErr = validateContent(op.content, ctx.e.rulesVersion) ?? checkUploadUsable(ctx, op.content.uploadId);
   if (cErr) return ctx.reject(cErr, op.nodeId);
@@ -862,7 +915,7 @@ function opNewContent(ctx: Ctx, op: NewContentVersionOp): Outcome {
       recoveredFrom: null,
       conflictOf: null,
     };
-    placeRecovered(ctx, rec, null, "content_for_purged_file");
+    placeRecovered(ctx, rec, null, "content_for_purged_file", sp.space);
     ctx.notice({ code: "content_for_purged_file", nodeId: op.nodeId, relatedNodeId: id });
     bindUpload(ctx, version.uploadId, id, version.versionId);
     return "applied";

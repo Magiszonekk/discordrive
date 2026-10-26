@@ -74,7 +74,7 @@ export class Scenario {
   /** upload_begin + group[upload_commit, create]. Returns the create result. */
   file(dev: DeviceInfo, nodeId: string, parentId: string, name: string, o: AddOpts = {}): ApplyResult {
     const c = this.newContent(o.hash);
-    this.add(dev, { type: "upload_begin", uploadId: c.uploadId }, { baseSeq: o.baseSeq ?? this.seq });
+    this.add(dev, { type: "upload_begin", uploadId: c.uploadId }, { baseSeq: o.baseSeq ?? this.seq, ...(o.rulesVersion !== undefined ? { rulesVersion: o.rulesVersion } : {}) });
     return this.add(
       dev,
       {
@@ -95,7 +95,7 @@ export class Scenario {
   /** New content version for nodeId based on baseVersionId. */
   edit(dev: DeviceInfo, nodeId: string, baseVersionId: string | null, o: AddOpts & { nameHint?: string } = {}): ApplyResult {
     const c = this.newContent(o.hash);
-    this.add(dev, { type: "upload_begin", uploadId: c.uploadId }, { baseSeq: o.baseSeq ?? this.seq });
+    this.add(dev, { type: "upload_begin", uploadId: c.uploadId }, { baseSeq: o.baseSeq ?? this.seq, ...(o.rulesVersion !== undefined ? { rulesVersion: o.rulesVersion } : {}) });
     return this.add(
       dev,
       {
