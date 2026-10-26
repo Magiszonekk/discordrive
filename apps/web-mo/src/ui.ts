@@ -765,6 +765,8 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
   acts.append(more);
   const when = r.kind === "file" && r.modifiedAt ? fmtDate(r.modifiedAt, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
   tr.append(sel, name, h("td", { class: "size" }, r.kind === "folder" ? "" : fmt(r.size)), h("td", { class: "c-date" }, when), h("td", { class: "c-acts" }, acts));
+  // In the Gallery a folder is an album: a cover and the number of photos instead of the folder icon.
+  if (r.kind === "folder" && underGallery && !searchQ) decorateAlbum(tr, r.id);
   return tr;
 }
 
@@ -1230,13 +1232,25 @@ async function renderNow() {
     paintView();
     all<HTMLAnchorElement>("a[data-nav]").forEach((a) => (a.dataset.nav === (underGallery ? "gallery" : "files") ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current")));
   }
+  // The look of the Gallery hangs on these (photo grid, album cards, its own empty state and labels).
+  const filesPage = document.querySelector<HTMLElement>("[data-page=files]")!;
+  if (underGallery) filesPage.dataset.space = "gallery";
+  else delete filesPage.dataset.space;
+  if (underGallery) filesPage.dataset.galleryAt = path.length === 1 ? "root" : "album";
+  else delete filesPage.dataset.galleryAt;
   renderCrumbs(path);
   const last = path.at(-1);
   ui("folder-title").textContent = last ? (last.id === "recovered" ? t("nav.recovered") : last.id === "gallery" ? t("nav.gallery") : last.name) : t("files.root");
   if (underGallery && path.length === 1) document.title = `${t("nav.gallery")} · ${t("app.title")}`;
   if (searchQ) return renderSearch();
   const [stats, pg] = await Promise.all([core.folderStats(folder), core.list(folder, cursorStack.at(-1), PAGE, sort)]);
-  ui("folder-meta").textContent = [tn("files.meta.folders", stats.folders), tn("files.meta.files", stats.files), stats.bytes > 0 ? fmt(stats.bytes) : ""].filter(Boolean).join(" · ");
+  ui("folder-meta").textContent = (underGallery ? [stats.folders ? tn("gal.meta.albums", stats.folders) : "", tn("gal.photos", stats.files), stats.bytes > 0 ? fmt(stats.bytes) : ""] : [tn("files.meta.folders", stats.folders), tn("files.meta.files", stats.files), stats.bytes > 0 ? fmt(stats.bytes) : ""]).filter(Boolean).join(" · ");
+  if (underGallery) {
+    const atRoot = path.length === 1;
+    ui("gallery-empty-b").textContent = t(atRoot ? "gal.empty.b" : "gal.album.empty.b");
+    ui("gallery-empty-s").textContent = t(atRoot ? "gal.empty.s" : "gal.album.empty.s");
+    ui("gallery-empty-hint").hidden = !atRoot;
+  }
   ui("need-channel").hidden = channelsOk;
   ui("upload-btn").setAttribute("aria-disabled", String(!channelsOk));
   $<HTMLInputElement>("file").disabled = !channelsOk;
@@ -1250,7 +1264,9 @@ async function renderNow() {
   const here = new Set(rows.map((x) => x.id));
   for (const id of [...selected.keys()]) if (!here.has(id)) selected.delete(id);
   const hadFocus = $("list").contains(document.activeElement) ? focusKey(document.activeElement) : null;
-  $("list").replaceChildren(...rows.map((row, i) => fileRow(row, i, enter)));
+  // The Gallery: its root is a timeline (albums, then photos newest first) under month and day headings; an
+  // album gets the headings too when it is sorted by date.
+  $("list").replaceChildren(...(underGallery ? galleryRows(rows, enter, path.length === 1 || sort.by === "date") : rows.map((row, i) => fileRow(row, i, enter))));
   refocus(hadFocus);
   paintBulk();
   ui("empty").hidden = pg.total > 0;
@@ -1275,6 +1291,71 @@ async function renderNow() {
     if (cursorStack.length > 1) cursorStack.pop();
     void render().then(toTop);
   };
+}
+
+/** Header rows of the Gallery grid (a full-width cell): "Albums", the month, the day. */
+function galleryHead(kind: "albums" | "month" | "day", text: string) {
+  return h("tr", { class: `g-h g-${kind}`, "data-ddn-ui": `gallery-${kind}` }, h("th", { colspan: "5", scope: "colgroup" }, text));
+}
+const capFirst = (x: string) => x.charAt(0).toLocaleUpperCase() + x.slice(1);
+function galleryDay(ms: number) {
+  const d = new Date(ms);
+  const day0 = new Date();
+  day0.setHours(0, 0, 0, 0);
+  const diff = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - day0.getTime()) / 86_400_000);
+  if (diff === 0) return t("gal.today");
+  if (diff === -1) return t("gal.yesterday");
+  return capFirst(fmtDate(ms, { weekday: "long", day: "numeric", month: "long" }));
+}
+function galleryRows(rows: Parameters<typeof fileRow>[0][], enter: boolean, dated: boolean): Node[] {
+  const out: Node[] = [];
+  let month = "";
+  let day = "";
+  let albums = false;
+  rows.forEach((r, i) => {
+    if (r.kind === "folder" && !albums) ((albums = true), out.push(galleryHead("albums", t("gal.albums"))));
+    if (r.kind === "file" && dated && r.modifiedAt) {
+      const d = new Date(r.modifiedAt);
+      const mk = `${d.getFullYear()}-${d.getMonth()}`;
+      if (mk !== month) ((month = mk), (day = ""), out.push(galleryHead("month", capFirst(fmtDate(r.modifiedAt, { month: "long", year: "numeric" })))));
+      const dk = d.toDateString();
+      if (dk !== day) ((day = dk), out.push(galleryHead("day", galleryDay(r.modifiedAt))));
+    }
+    out.push(fileRow(r, i, enter));
+  });
+  return out;
+}
+/** An album card: the newest photo in it as the cover (its thumbnail), the number of photos under the name. */
+const albumCovers = new Map<string, { n: number; cover: { id: string; at: number } | null }>();
+function decorateAlbum(tr: HTMLElement, id: string) {
+  tr.classList.add("album");
+  const cover = h("span", { class: "cover", "data-ddn-ui": "album-cover" }, icon("images"));
+  tr.querySelector(".nm > svg.i")?.replaceWith(cover);
+  // Known from the last render: painted at once (sync re-renders do not flash the icon).
+  const paint = (x: { n: number; cover: { id: string; at: number } | null }) => {
+    const sub = tr.querySelector(".sub");
+    if (sub) sub.textContent = tn("gal.photos", x.n);
+    if (!x.cover) {
+      delete cover.dataset.key;
+      return cover.replaceChildren(icon("images"));
+    }
+    const key = `${x.cover.id}@${x.cover.at}`;
+    if (cover.dataset.key === key) return;
+    cover.dataset.key = key;
+    const b = h("span", { class: "badge media" });
+    cover.replaceChildren(b);
+    showThumb(b, x.cover.id, x.cover.at);
+  };
+  const known = albumCovers.get(id);
+  if (known) paint(known);
+  void (async () => {
+    const [st, pg] = await Promise.all([core.folderStats(id), core.list(id, undefined, 24, { by: "date", desc: true })]);
+    if (!tr.isConnected) return;
+    const f = pg.rows.find((x: { kind: string; name: string; unavailable?: string[] }) => x.kind === "file" && typeOf(x.name)[2] === "media" && !x.unavailable?.length);
+    const x = { n: st.files, cover: f ? { id: f.id, at: f.modifiedAt ?? 0 } : null };
+    albumCovers.set(id, x);
+    if (!known || known.n !== x.n || known.cover?.id !== x.cover?.id || known.cover?.at !== x.cover?.at) paint(x);
+  })().catch(() => {});
 }
 
 /** Search results in the file table (one page, up to 500), best first. */
@@ -1625,6 +1706,7 @@ function wireFilesPage() {
     if (desktop) void uploadPathsFromDrop(desktop.pathsOf(files), files);
     else void uploadAll(files);
   });
+  $("gallery-add").onclick = () => zone.click();
   zone.onclick = () => {
     if (channelsOk) $<HTMLInputElement>("file").click();
     else toast(t("err.need_channel"), "err");
@@ -1969,6 +2051,11 @@ function paintBulk() {
   $("bulk-count").textContent = tn("bulk.count", n);
   // Download is for files only (folders would need a ZIP, not in this app yet).
   $<HTMLButtonElement>("bulk-download").hidden = ![...selected.values()].some((x) => x.kind === "file");
+  // "Move to the Drive" in the Gallery, "Move to the Gallery" in the Drive (not in „Recovered”).
+  const space = $<HTMLButtonElement>("bulk-space");
+  space.hidden = !galleryOn || inRecovered() || n === 0;
+  ui("bulk-space-t").textContent = t(underGallery ? "act.toDrive" : "act.toGallery");
+  space.querySelector("use")?.setAttribute("href", underGallery ? "#i-files" : "#i-images");
   const all = $<HTMLInputElement>("select-all");
   const rows = all.closest("table")!.querySelectorAll<HTMLInputElement>("tbody [data-ddn=select]");
   const on = [...rows].filter((b) => b.checked).length;
@@ -2117,7 +2204,7 @@ function rowEntries(r: MenuRow): MenuEntry[] {
 function otherSpaceEntry(ids: string[], label: string): MenuEntry[] {
   if (!galleryOn || inRecovered()) return [];
   const to = underGallery ? "root" : "gallery";
-  return [{ ic: underGallery ? "files" : "grid", label: t(underGallery ? "act.toDrive" : "act.toGallery"), key: underGallery ? "to-drive" : "to-gallery", run: () => void openMove(ids, label, to) }];
+  return [{ ic: underGallery ? "files" : "images", label: t(underGallery ? "act.toDrive" : "act.toGallery"), key: underGallery ? "to-drive" : "to-gallery", run: () => void openMove(ids, label, to) }];
 }
 /** View and sort entries (both pages' empty area). */
 function viewEntries(withSort: boolean): MenuEntry[] {
@@ -2359,19 +2446,24 @@ async function paintMove() {
   };
   const rootLabel = m.root === "gallery" ? t("nav.gallery") : t("files.root");
   const parts: Node[] = [];
-  // With the Gallery: both spaces as the first crumb (the other one switches the picker there).
+  // With the Gallery: both spaces as the first crumb, a two-way switch (the other one moves the picker
+  // there; the current one goes back to its top). Without it: the Drive's root as before.
   if (galleryOn) {
     const other = m.root === "gallery" ? "root" : "gallery";
-    const sw = h("button", { type: "button", class: "link", "data-ddn": "move-space", "data-space": other }, other === "gallery" ? t("nav.gallery") : t("files.root"));
-    sw.onclick = () => {
-      m.root = other;
-      m.at = other;
-      m.path = [];
-      void paintMove();
-    };
-    parts.push(sw, document.createTextNode(" · "));
-  }
-  parts.push(m.path.length ? link(m.root, rootLabel, 0) : h("span", { "aria-current": "page" }, rootLabel));
+    const seg = h("span", { class: "space-seg", role: "group", "aria-label": t("mv.space") });
+    for (const sp of ["root", "gallery"] as const) {
+      const here = sp === m.root;
+      const b = h("button", { type: "button", "aria-pressed": String(here), "data-space": sp, ...(here ? { "data-ddn-ui": "move-space-here" } : { "data-ddn": "move-space" }) }, icon(sp === "gallery" ? "images" : "files"), sp === "gallery" ? t("nav.gallery") : t("files.root"));
+      b.onclick = () => {
+        m.root = here ? m.root : other;
+        m.at = m.root;
+        m.path = [];
+        void paintMove();
+      };
+      seg.append(b);
+    }
+    parts.push(seg);
+  } else parts.push(m.path.length ? link(m.root, rootLabel, 0) : h("span", { "aria-current": "page" }, rootLabel));
   m.path.forEach((p, i) => parts.push(icon("right"), i === m.path.length - 1 ? h("span", { "aria-current": "page" }, p.name) : link(p.id, p.name, i + 1)));
   crumbs.replaceChildren(...parts);
   const kids = (await core.subfolders(m.at)).filter((f) => !m.ids.includes(f.id));
@@ -2455,6 +2547,11 @@ function wireSelection() {
   $("bulk-clear").onclick = () => clearSelection();
   $("bulk-trash").onclick = (e) => void act(e.currentTarget as HTMLElement, bulkTrash);
   $("bulk-move").onclick = () => bulkMove();
+  $("bulk-space").onclick = () => {
+    const ids = [...selected.keys()];
+    const e = otherSpaceEntry(ids, selected.get(ids[0]!)?.name ?? "")[0];
+    if (e && typeof e === "object" && "run" in e) e.run();
+  };
   $("bulk-download").onclick = (e) => void act(e.currentTarget as HTMLElement, bulkDownload);
   // Drag and drop of rows onto folder rows and breadcrumb links.
   const target = (e: DragEvent) => (e.dataTransfer?.types.includes(DRAG_TYPE) ? (e.target as Element | null)?.closest<HTMLElement>("[data-drop]") : null);
