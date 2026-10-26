@@ -55,12 +55,14 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
         override fun leaseGuard(op: JsonObject): List<String> = rpc("guard", op).jsonArray.map { it.jsonPrimitive.content }
         override fun stateSha256(): String = rpc("sha").jsonPrimitive.content
         override fun children(parentId: String): List<IndexReplica.Child> = rows(rpc("children", JsonPrimitive(parentId)))
-        override fun media(extensions: List<String>, limit: Int, after: Pair<Long, String>?): List<IndexReplica.Child> =
-            rows(rpc("media", JsonArray(extensions.map { JsonPrimitive(it) })))
+        override fun media(extensions: List<String>, limit: Int, after: Pair<Long, String>?, space: String?): List<IndexReplica.Child> =
+            rows(rpc("media", buildJsonObject { put("e", JsonArray(extensions.map { JsonPrimitive(it) })); space?.let { put("s", it) } }))
+        override fun rulesVersionFor(op: JsonObject): Int = rpc("rulesFor", op).jsonPrimitive.int
+        override fun spaceOf(id: String): String = rpc("space", JsonPrimitive(id)).jsonPrimitive.content
         override fun trash(): List<IndexReplica.Child> = rows(rpc("trash"))
         override fun node(id: String): IndexReplica.Child? = runCatching { rows(rpc("node", JsonPrimitive(id))).firstOrNull() }.getOrNull()
         override fun released(afterSeq: Long): List<Triple<String, Long, Long>> = rpc("released", JsonPrimitive(afterSeq)).jsonArray.map { val x = it.jsonArray; Triple(x[0].jsonPrimitive.content, x[1].jsonPrimitive.long, x[2].jsonPrimitive.long) }
-        override fun albums(extensions: List<String>): List<IndexReplica.Album> = rpc("albums", JsonArray(extensions.map { JsonPrimitive(it) })).jsonArray.map {
+        override fun albums(extensions: List<String>, space: String?): List<IndexReplica.Album> = rpc("albums", buildJsonObject { put("e", JsonArray(extensions.map { JsonPrimitive(it) })); space?.let { put("s", it) } }).jsonArray.map {
             val o = it.jsonObject
             IndexReplica.Album(o.str("id"), o.str("name"), o.getValue("count").jsonPrimitive.int, rows(JsonArray(listOf(o.getValue("cover")))).first())
         }
@@ -208,6 +210,21 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
         results["q4PhoneWaits"] = TrashPolicy.decide(sync.replica.expiredTrash(nowS + TrashPolicy.RETENTION_MS + 1), nowS + TrashPolicy.RETENTION_MS + 1, false, true, false, nowS, gc.firstEntryAt) is TrashPolicy.Decision.Clean &&
             TrashPolicy.decide(listOf("x"), nowS, false, true, false, nowS - 1000, gc.firstEntryAt) == TrashPolicy.Decision.Skip("primary_cleans") &&
             TrashPolicy.decide(listOf("x"), nowS, false, true, true, null, 0) == TrashPolicy.Decision.Skip("metered")
+
+        // 3d. The Gallery (rules 4): the phone makes an album in the Gallery and uploads a photo into it (rules 4,
+        // with `space`), its Drive work stays rules 3; the TS device sees the photo in the Gallery, not in Files.
+        results["galleryAvailable"] = sync.galleryAvailable()
+        val album = sync.folder("Wakacje Galeria", GALLERY_ID)
+        val gdata = randomBytes(40_001)
+        val gup = fw.upload({ gdata.inputStream() }, gdata.size.toLong(), "IMG_G1.jpg", album, takenAt = 1_600_000_000_000)
+        results["galleryUploadApplied"] = gup.outcome == "applied" && sync.replica.spaceOf(gup.nodeId) == "gallery"
+        results["phoneGalleryLists"] = sync.replica.media(listOf(".jpg"), 100, null, "gallery").any { it.id == gup.nodeId } &&
+            sync.replica.media(listOf(".jpg"), 100, null, "drive").none { it.id == gup.nodeId } &&
+            sync.replica.albums(listOf(".jpg"), "gallery").any { it.id == album && it.count == 1 }
+        results["driveOpsStayRules3"] = sync.replica.rulesVersionFor(buildJsonObject { put("type", "rename"); put("nodeId", phoneFolder); put("name", "x") }) == 3 &&
+            sync.replica.rulesVersionFor(buildJsonObject { put("type", "move"); put("nodeId", phoneFolder); put("parentId", GALLERY_ID) }) == 4
+        val gs = rpc("gallery", buildJsonObject { put("name", "IMG_G1.jpg"); put("album", "Wakacje Galeria") }).jsonObject
+        results["webSeesPhoneGallery"] = gs.getValue("inGallery").jsonPrimitive.boolean && gs.getValue("notUnderFiles").jsonPrimitive.boolean && gs.getValue("rules4").jsonPrimitive.int >= 2
 
         // A rollback by the server is refused.
         val stale = AccountSync(acct, api, Discord(apiOrigin = discordOrigin.takeUnless { it.isEmpty() || it == "none" }), newReplica(), vaultRevision = sync.vaultRevision + 5)

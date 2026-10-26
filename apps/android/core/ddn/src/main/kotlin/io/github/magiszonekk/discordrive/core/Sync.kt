@@ -26,6 +26,9 @@ interface JsEngine : AutoCloseable {
 
 class JsEngineException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
+/** Rules 4: the root of the account's Gallery (a second space next to the Drive, "root"). */
+const val GALLERY_ID = "gallery"
+
 /** The local index: the sync core's tree, fed with a snapshot and log entries (implemented in the JS engine). */
 interface IndexReplica : AutoCloseable {
     /** Rules version of the operations this device writes. */
@@ -50,7 +53,16 @@ interface IndexReplica : AutoCloseable {
      * Files whose name ends with one of `extensions` (lower case, with the dot), anywhere outside the
      * trash, newest version first: the Gallery. `limit` per call, `after` = the createdAt/id of the last one.
      */
-    fun media(extensions: List<String>, limit: Int, after: Pair<Long, String>? = null): List<Child> = emptyList()
+    fun media(extensions: List<String>, limit: Int, after: Pair<Long, String>? = null, space: String? = null): List<Child> = emptyList()
+
+    /**
+     * Rules 4 (the Gallery): the rules version an operation is written with: 4 when it touches the Gallery (its
+     * root, a node in it, a `space` field), else what this device writes ([rulesVersion]).
+     */
+    fun rulesVersionFor(op: JsonObject): Int = rulesVersion
+
+    /** The space a node is in: "gallery" (under the Gallery's root) or "drive" (also for an unknown node). */
+    fun spaceOf(id: String): String = "drive"
 
     /** The whole index as a sync-core IndexSnapshot in JSON text slices (a local copy for a fast start). */
     fun snapshotText(): Sequence<String> = throw UnsupportedOperationException("snapshotText")
@@ -68,7 +80,7 @@ interface IndexReplica : AutoCloseable {
      * Albums: folders with media files (by `extensions`) right inside them, outside the trash, the newest
      * first; with the count and the newest file (the cover).
      */
-    fun albums(extensions: List<String>): List<Album> = emptyList()
+    fun albums(extensions: List<String>, space: String? = null): List<Album> = emptyList()
 
     data class Album(val id: String, val name: String, val count: Int, val cover: Child)
 
@@ -216,13 +228,14 @@ class AccountSync(
      * Submit one operation (rule 10: after catching up) and pull until it is applied. Returns its result
      * (outcome + notices). Names in operations are NFC (the rules compare them as they are).
      */
-    fun commit(op: JsonObject): JsonObject {
+    fun commit(op0: JsonObject): JsonObject {
         pull()
+        val op = withSpace(op0)
         val createdAt = now()
         val lg = replica.leaseGuard(op)
         val env = buildJsonObject {
             put("opId", OpCodec.newId())
-            put("rulesVersion", replica.rulesVersion)
+            put("rulesVersion", replica.rulesVersionFor(op))
             put("baseSeq", replica.headSeq)
             put("device", buildJsonObject { put("id", acct.deviceId); put("name", acct.deviceName) })
             put("createdAt", createdAt)
@@ -300,6 +313,26 @@ class AccountSync(
 
     /** The account's webhooks that take new pieces (not retired, not being drained). */
     fun writableWebhooks(): List<Vault.Webhook> = Vault.webhooks(vault).filter { !it.retired }
+
+    /**
+     * Rules 4: a file created in the Gallery (or a new version of one) carries `space: "gallery"`, so that if its
+     * album is deleted for good meanwhile it lands in the Gallery's root instead of „Odzyskane”. Drive ops stay
+     * as they were (rules 3).
+     */
+    private fun withSpace(op: JsonObject): JsonObject {
+        fun one(o: JsonObject): JsonObject {
+            val at = when (o.strOrNull("type")) { "create" -> o.strOrNull("parentId"); "new_content_version" -> o.strOrNull("nodeId"); else -> null } ?: return o
+            if (o.containsKey("space") || (at != GALLERY_ID && replica.spaceOf(at) != "gallery")) return o
+            return JsonObject(o + ("space" to JsonPrimitive("gallery")))
+        }
+        if (op.strOrNull("type") != "group") return one(op)
+        return JsonObject(op + ("ops" to JsonArray(op.getValue("ops").jsonArray.map { one(it.jsonObject) })))
+    }
+
+    /** The instance replays rules 4 (its /v1/health): only then the phone writes into the Gallery. Asked once. */
+    @Volatile private var galleryKnown: Boolean? = null
+    fun galleryAvailable(): Boolean = galleryKnown ?: runCatching { (api.health()["rulesVersion"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0) >= 4 }
+        .getOrElse { return false }.also { galleryKnown = it }
 
     /** A folder named `name` in `parentId` (outside the trash), made when there is none. Returns its ID. */
     fun folder(name: String, parentId: String = "root"): String {

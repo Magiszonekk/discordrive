@@ -21,7 +21,7 @@ import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { canonicalState, ROOT_ID, applyEntry, expiredTrash, initIndex, inTrash, loadSnapshot, MemoryIndexStore, uploadsTouched, RULES_VERSION, type IndexSnapshot, type LogEntry, type NodeRecord } from "@ddv4/sync-core";
+import { canonicalState, ROOT_ID, GALLERY_ID, applyEntry, expiredTrash, initIndex, inTrash, loadSnapshot, MemoryIndexStore, uploadsTouched, rulesVersionFor, spaceOf, WRITE_RULES_VERSION, type IndexSnapshot, type LogEntry, type NodeRecord } from "@ddv4/sync-core";
 import {
   ChannelPacer,
   DiscordWebhookTransport,
@@ -137,7 +137,9 @@ let store = initIndex(new MemoryIndexStore());
 function core(q: Req): unknown {
   switch (q.m) {
     case "reset": store = initIndex(new MemoryIndexStore()); return null;
-    case "rules": return RULES_VERSION;
+    case "rules": return WRITE_RULES_VERSION;
+    case "rulesFor": return rulesVersionFor(store, q.a as never, WRITE_RULES_VERSION);
+    case "space": return store.getNode(q.a as string) ? spaceOf(store, q.a as string) : "drive";
     case "head": return store.getMeta().headSeq;
     case "load": store = loadSnapshot(q.a as IndexSnapshot, new MemoryIndexStore()); return null;
     case "apply": return (q.a as LogEntry[]).map((e) => applyEntry(store, e));
@@ -145,8 +147,8 @@ function core(q: Req): unknown {
     case "sha": return sha(canonicalState(store));
     case "children": return [...store.childIds(q.a as string)].map((id) => store.getNode(id)!).filter((n) => !n.trashed).map(row);
     case "media": {
-      const ex = q.a as string[];
-      return [...store.allNodes()].filter((n) => n.kind === "file" && n.content && !inTrash(store, n.id) && ex.some((e) => n.name.toLowerCase().endsWith(e))).sort((a, b) => b.content!.createdAt - a.content!.createdAt).map(row);
+      const { e: ex, s: sp } = Array.isArray(q.a) ? { e: q.a as string[], s: undefined } : (q.a as { e: string[]; s?: string });
+      return [...store.allNodes()].filter((n) => n.kind === "file" && n.content && !inTrash(store, n.id) && ex.some((e) => n.name.toLowerCase().endsWith(e)) && (!sp || spaceOf(store, n.id) === sp)).sort((a, b) => b.content!.createdAt - a.content!.createdAt).map(row);
     }
     case "trash":
       return [...store.allNodes()]
@@ -157,8 +159,10 @@ function core(q: Req): unknown {
     case "node": { const n = store.getNode(q.a as string); return n ? [{ ...row(n), ...(inTrash(store, n.id) ? { tat: n.trashed?.at ?? 0 } : {}) }] : []; }
     case "released": return [...store.allUploads()].filter((u) => u.status === "released" && u.ended && u.ended.seq > (q.a as number)).map((u) => [u.id, u.ended!.at, u.ended!.seq]).sort((a, b) => (a[2] as number) - (b[2] as number));
     case "albums": {
-      const ex = q.a as string[];
-      const files = [...store.allNodes()].filter((n) => n.kind === "file" && n.content && !inTrash(store, n.id) && ex.some((e) => n.name.toLowerCase().endsWith(e))).sort((a, b) => b.content!.createdAt - a.content!.createdAt || (a.id < b.id ? -1 : 1));
+      const { e: ex, s: sp } = Array.isArray(q.a) ? { e: q.a as string[], s: undefined } : (q.a as { e: string[]; s?: string });
+      const files = [...store.allNodes()]
+        .filter((n) => n.kind === "file" && n.content && !inTrash(store, n.id) && ex.some((e) => n.name.toLowerCase().endsWith(e)) && (!sp || spaceOf(store, n.id) === sp) && !(sp === "gallery" && n.parentId === GALLERY_ID))
+        .sort((a, b) => b.content!.createdAt - a.content!.createdAt || (a.id < b.id ? -1 : 1));
       const by = new Map<string, { id: string; name: string; count: number; cover: ReturnType<typeof row> }>();
       for (const n of files) {
         const f = store.getNode(n.parentId!);
@@ -207,6 +211,29 @@ async function handle(q: Req): Promise<unknown> {
     };
   }
   if (q.m === "bigMb") return Number(process.env.DDN_INTEROP_BIG_MB ?? 0);
+  // The phone used the Gallery: the TS device sees the photo in the Gallery (not under Files) and the rules
+  // versions it was written with.
+  if (q.m === "gallery") {
+    const t2 = await mk();
+    await t2.pull();
+    const a = q.a as { name: string; album: string };
+    const s = t2.store;
+    const hit = [...s.allNodes()].find((n) => n.name === a.name && n.content && !inTrash(s, n.id));
+    const album = [...s.childIds(GALLERY_ID)].map((id) => s.getNode(id)!).find((n) => n.name === a.album && n.kind === "folder");
+    // The envelope's rules version is in clear for the server: read it from the raw log.
+    const raw: { rulesVersion: number }[] = [];
+    for (let after = 0; ; ) {
+      const b = await api.read(after, 1000);
+      if (!b.length) break;
+      raw.push(...b);
+      after = b.at(-1)!.seq;
+    }
+    return {
+      inGallery: !!hit && spaceOf(s, hit.id) === "gallery" && hit.parentId === album?.id,
+      notUnderFiles: !!hit && ![...s.childIds(ROOT_ID)].some((id) => id === hit.id),
+      rules4: raw.filter((e) => e.rulesVersion === 4).length,
+    };
+  }
   if (q.m === "speed") {
     const x = q.a as { mb: number; ms: number; chunks: number; r429: number };
     step(`phone upload: ${x.mb} MiB in ${x.chunks} fragments, ${(x.ms / 1000).toFixed(1)} s = ${((x.mb * 1.048576 * 1000) / x.ms).toFixed(1)} MB/s, 429: ${x.r429}`);
