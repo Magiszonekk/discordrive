@@ -7,6 +7,15 @@
     <string name="ddn_server">Adres instancji (https://…)</string>
     <string name="ddn_device_name">Nazwa tego urządzenia</string>
     <string name="ddn_join_start">Pokaż kod do sparowania</string>
+    <string name="ddn_join_title">Dołącz ten telefon</string>
+    <string name="ddn_join_again">Pokaż nowy kod</string>
+    <string name="ddn_copy_code">Kopiuj kod</string>
+    <string name="ddn_share_code">Udostępnij</string>
+    <string name="ddn_copied">Skopiowano</string>
+    <string name="ddn_code_ttl">Kod ważny jeszcze %1$d:%2$02d</string>
+    <string name="ddn_code_expired">Kod wygasł — pokaż nowy.</string>
+    <string name="ddn_qr_desc">Kod QR do sparowania</string>
+    <string name="ddn_have_kit">Mam zestaw ratunkowy</string>
     <string name="ddn_join_wait">Na zalogowanym urządzeniu: Urządzenia → zeskanuj kod albo wklej tekst → Paruj. Kod jest ważny 10 minut.</string>
     <string name="ddn_sas">Kod do porównania: %1$s (od: %2$s). Czy drugie urządzenie pokazuje dokładnie ten sam kod?</string>
     <string name="ddn_sas_yes">Tak, ten sam</string>
