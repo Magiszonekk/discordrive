@@ -140,6 +140,10 @@ struct State {
     dirty_files: Mutex<HashMap<PathBuf, u64>>,
     /// Copies queued, until the agent says they are uploaded: pending id → (path, size and mtime copied).
     pending: Mutex<HashMap<String, (PathBuf, u64, std::time::SystemTime)>>,
+    /// Deleted placeholders, into the account's trash a moment later: path key → (node ID, when). A file
+    /// written at the same path meanwhile (a save through ReplaceFile: the original deleted, a temp file
+    /// renamed into its place) cancels it: that file becomes a new version of the same node.
+    trash_later: Mutex<HashMap<String, (String, u64)>>,
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
@@ -434,13 +438,11 @@ unsafe extern "system" fn on_delete(info: *const CF_CALLBACK_INFO, _p: *const CF
     let id = identity(info);
     let mut ok = st().removing.lock().unwrap().remove(&id);
     if !ok && st().outbox.is_some() && id != "root" {
-        ok = match agent(|a| a.call(json!({ "op": "w-trash", "id": id }))) {
-            Ok(_) => true,
-            Err(e) => {
-                eprintln!("ddn-cf: trash {id}: {e}");
-                false
-            }
-        };
+        // Into the trash a moment later (a file written at the same path meanwhile takes its place instead).
+        if let Some(k) = full_path(info).as_deref().and_then(rel_key) {
+            st().trash_later.lock().unwrap().insert(k, (id.clone(), now_ms()));
+            ok = true;
+        }
         if ok {
             if let Some(p) = full_path(info) {
                 st().made.lock().unwrap().retain(|q, _| !q.starts_with(&p));
@@ -683,6 +685,45 @@ fn trim() {
 
 // ── writing ──
 
+/// A path under the root as a key: relative, lowercase (the callbacks spell the root out in full, the
+/// watcher as configured, which may be an 8.3 short name).
+fn rel_key(p: &Path) -> Option<String> {
+    static LONG: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    let long = LONG.get_or_init(|| {
+        std::fs::canonicalize(&st().root).ok().map(|c| {
+            let s = c.to_string_lossy().into_owned();
+            PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s).to_string())
+        })
+    });
+    let lower = |x: &Path| x.to_string_lossy().to_lowercase().trim_end_matches('\\').to_string();
+    let lp = lower(p);
+    for r in [Some(st().root.clone()), long.clone()].into_iter().flatten() {
+        let lr = lower(&r);
+        if let Some(rest) = lp.strip_prefix(&(lr.clone() + "\\")) {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Deleted placeholders whose moment passed: into the account's trash now.
+fn trash_due() {
+    let now = now_ms();
+    let due: Vec<(String, String)> = {
+        let mut t = st().trash_later.lock().unwrap();
+        let d: Vec<(String, String)> = t.iter().filter(|(_, (_, at))| now - *at > 3000).map(|(k, (id, _))| (k.clone(), id.clone())).collect();
+        for (k, _) in &d {
+            t.remove(k);
+        }
+        d
+    };
+    for (k, id) in due {
+        if let Err(e) = agent(|a| a.call(json!({ "op": "w-trash", "id": id }))) {
+            eprintln!("ddn-cf: trash {k}: {e}");
+        }
+    }
+}
+
 /// Short-lived files of programs (Office's owner files, temp files of a save), never uploaded.
 fn local_only(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
@@ -699,6 +740,15 @@ fn note_written(p: &Path) {
         return;
     }
     let Ok(m) = std::fs::symlink_metadata(p) else { return };
+    // Written where a placeholder was just deleted (a save through ReplaceFile): the same node, a new version.
+    if !m.is_dir() {
+        if let Some(k) = rel_key(p) {
+            if st().trash_later.lock().unwrap().remove(&k).is_some() {
+                st().dirty_files.lock().unwrap().insert(p.to_path_buf(), now_ms());
+                return;
+            }
+        }
+    }
     // A folder made here: in the account now (its files follow).
     if m.is_dir() {
         if m.file_attributes() & ATTR_REPARSE == 0 && !st().made.lock().unwrap().contains_key(p) {
@@ -1126,6 +1176,7 @@ pub fn main() {
         outbox: std::env::var_os("DDN_CF_OUTBOX").map(PathBuf::from).filter(|p| p.is_dir()),
         dirty_files: Mutex::new(HashMap::new()),
         pending: Mutex::new(HashMap::new()),
+        trash_later: Mutex::new(HashMap::new()),
     });
     let table: &'static [CF_CALLBACK_REGISTRATION] = Box::leak(Box::new([
         CF_CALLBACK_REGISTRATION { Type: CF_CALLBACK_TYPE_FETCH_PLACEHOLDERS, Callback: Some(on_fetch_placeholders) },
@@ -1182,6 +1233,7 @@ pub fn main() {
         std::thread::spawn(|| loop {
             std::thread::sleep(Duration::from_millis(500));
             flush_written();
+            trash_due();
         });
     }
     eprintln!("ddn-cf: serving {} ({how})", root.display());

@@ -90,6 +90,20 @@ describe.skipIf(why !== null)(`disk in the system (Windows), writing${why ? ` �
     expect(nodeOf("kopia ż.bin")!.id).toBe(n1.id);
     expect(sha(new Uint8Array(await (await core.download(n1.id)).arrayBuffer()))).toBe(sha(data2));
 
+    // 2b. Saved as Office and many editors do it: a temp file, then ReplaceFile over the original (the
+    //     original placeholder deleted, the temp renamed into its place): still a new version of the same node.
+    await new Promise((r) => setTimeout(r, 1500));
+    const data3 = new Uint8Array(randomBytes(12_345));
+    await writeFile(join(root, "kopia ż.tmp"), data3);
+    const q = (x: string) => x.replace(/'/g, "''");
+    await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", `[IO.File]::Replace('${q(join(root, "kopia ż.tmp"))}', '${q(join(root, "kopia ż.bin"))}', [NullString]::Value)`], { timeout: 60_000 });
+    expect(await until(() => nodeOf("kopia ż.bin")?.size === data3.byteLength)).toBe(true);
+    await disk.outbox!.idle();
+    await new Promise((r) => setTimeout(r, 4000));
+    expect(rows().filter((r) => r.name.startsWith("kopia ż")).map((r) => [r.name, r.id])).toEqual([["kopia ż.bin", n1.id]]);
+    expect(core.trashList().some((t) => t.id === n1.id)).toBe(false);
+    expect(sha(new Uint8Array(await (await core.download(n1.id)).arrayBuffer()))).toBe(sha(data3));
+
     // 3. A folder made here, a file in it.
     await mkdir(join(root, "Nowy folder"));
     expect(await until(() => nodeOf("Nowy folder")?.kind === "folder")).toBe(true);
@@ -123,7 +137,6 @@ describe.skipIf(why !== null)(`disk in the system (Windows), writing${why ? ` �
 
     // 7. The outbox empty at the end.
     expect(disk.outbox!.size).toBe(0);
-    void run;
     await disk.stop();
     core.close();
   });
