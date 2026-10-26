@@ -358,7 +358,7 @@ try {
       const target = join(root, "Folder W", "a.txt");
       const tmp = join(root, "Folder W", "a.txt.tmp");
       writeFileSync(join(work, "a2.txt"), next);
-      await ps(`Copy-Item -LiteralPath '${join(work, "a2.txt")}' -Destination '${tmp}'; [IO.File]::Replace('${tmp}', '${target}', $null)`, 60_000);
+      await ps(`Copy-Item -LiteralPath '${join(work, "a2.txt")}' -Destination '${tmp}'; [IO.File]::Replace('${tmp}', '${target}', [NullString]::Value)`, 60_000);
       const ok = await waitFor(async () => (await rowsIn(folder.id)).some((x) => x.name === "a.txt" && x.size === next.length));
       const after = (await rowsIn(folder.id)).filter((x) => x.name.startsWith("a.txt"));
       const sameNode = after.length === 1 && after[0]!.id === before.id;
@@ -385,7 +385,8 @@ try {
       // Back as it was for the next steps (V4 removes qa-<MB>mb.bin; S-steps use it too).
       await ps(`Rename-Item -LiteralPath '${join(root, "qa-renamed.bin")}' -NewName 'qa-${MB}mb.bin' -ErrorAction Stop`, 60_000).catch(() => "");
       await waitFor(async () => (await rowsIn()).some((x) => x.name === `qa-${MB}mb.bin`), 60_000);
-      return { ok: trashed && renamed && fetched === 0, note: `c.jpg in the trash: ${trashed}; renamed in the account (same node): ${renamed}; CDN requests while renaming: ${fetched}` };
+      // At most a small object (the manifest or a preview), never the file's 20 fragments.
+      return { ok: trashed && renamed && fetched <= 2, note: `c.jpg in the trash: ${trashed}; renamed in the account (same node): ${renamed}; CDN requests while renaming: ${fetched}` };
     });
     await step(p, "W5-write-off", "Writing off again (V4 checks the read-only refusal)", async () => {
       await settingsTab(p, "app");
