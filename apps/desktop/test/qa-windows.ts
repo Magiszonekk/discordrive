@@ -293,6 +293,108 @@ try {
       await explorerShot("V3-explorer-after-read", root);
       return { ok: h === sha(big), note: `${h ? h.slice(0, 16) + "…" : "no hash"} vs ${sha(big).slice(0, 16)}…; CDN requests while reading: ${fetched}${err ? `; error: ${err}` : ""}` };
     });
+    // Writing (W1–W4): the switch on, files and a folder copied in, a save as editors do it, delete and rename.
+    type Row = { id: string; name: string; kind: string; size: number | null };
+    const rowsIn = async (parent?: string) => (await core<{ rows: Row[] }>("list", parent)).rows;
+    const waitFor = async (f: () => Promise<boolean>, ms = 180_000) => {
+      for (let t = 0; t < ms; t += 1000) {
+        if (await f().catch(() => false)) return true;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      return false;
+    };
+    // The account's bytes of a node, read by the app (not from the disk), hashed in the page.
+    const accountSha = (id: string) =>
+      p.evaluate(async (id) => {
+        const c = (window as unknown as { ddnCore: { download(id: string): Promise<Blob> } }).ddnCore;
+        const b = await (await c.download(id)).arrayBuffer();
+        return [...new Uint8Array(await crypto.subtle.digest("SHA-256", b))].map((x) => x.toString(16).padStart(2, "0")).join("");
+      }, id);
+    const wsrc = join(work, "w-src");
+    const wfiles = [
+      { n: "a.txt", b: Buffer.from("pierwszy plik\n".repeat(100)) },
+      { n: "b ż.bin", b: randomBytes(3 * 1024 * 1024 + 7) },
+      { n: "c.jpg", b: randomBytes(200_000) },
+    ];
+    mkdirSync(join(wsrc, "Folder W"), { recursive: true });
+    for (const f of wfiles) writeFileSync(join(wsrc, "Folder W", f.n), f.b);
+    await step(p, "W1-write-on", "Settings → App → Writing to the disk on (shown under the disk's switch)", async () => {
+      await settingsTab(p, "app");
+      const row = p.locator("[data-ddn=app-vdisk-write-row]");
+      await row.waitFor({ state: "visible", timeout: 30_000 });
+      await row.scrollIntoViewIfNeeded().catch(() => {});
+      const sw = p.locator("[data-ddn=app-vdisk-write]");
+      if (!(await sw.isChecked())) await sw.evaluate((el) => (el as HTMLInputElement).click());
+      // The disk starts again writable: mounted again.
+      const ok = await waitFor(async () => /Mounted|Zamontowany/.test((await p.locator("[data-ddn=app-vdisk-hint]").textContent()) ?? "") && (await sw.isChecked()), 90_000);
+      return { ok, note: (await p.locator("[data-ddn=app-vdisk-hint]").textContent()) ?? "" };
+    });
+    await step(p, "W2-copy-folder", "Copy-Item of a folder with 3 files into the disk: in the account with the same bytes (read back by the app)", async () => {
+      await ps(`Copy-Item -LiteralPath '${join(wsrc, "Folder W")}' -Destination '${root}' -Recurse -ErrorAction Stop`, 120_000);
+      let folder: Row | undefined;
+      const all = await waitFor(async () => {
+        folder = (await rowsIn()).find((r) => r.name === "Folder W" && r.kind === "folder");
+        if (!folder) return false;
+        const r = await rowsIn(folder.id);
+        return wfiles.every((f) => r.some((x) => x.name === f.n && x.size === f.b.length));
+      });
+      const notes: string[] = [];
+      let same = all;
+      if (all && folder) {
+        for (const f of wfiles) {
+          const id = (await rowsIn(folder.id)).find((x) => x.name === f.n)!.id;
+          const h = await accountSha(id);
+          if (h !== sha(f.b)) same = false;
+          notes.push(`${f.n} ${h === sha(f.b) ? "ok" : "differs"}`);
+        }
+      }
+      await explorerShot("W2-explorer-folder", join(root, "Folder W"));
+      return { ok: all && same, note: all ? notes.join(", ") : "not all files in the account within 3 min" };
+    });
+    await step(p, "W3-save-replace", "A save as Notepad / Office do it ([IO.File]::Replace of a temp file): a new version of the same node", async () => {
+      const folder = (await rowsIn()).find((r) => r.name === "Folder W")!;
+      const before = (await rowsIn(folder.id)).find((x) => x.name === "a.txt")!;
+      const next = Buffer.from("druga wersja\n".repeat(50));
+      const target = join(root, "Folder W", "a.txt");
+      const tmp = join(root, "Folder W", "a.txt.tmp");
+      writeFileSync(join(work, "a2.txt"), next);
+      await ps(`Copy-Item -LiteralPath '${join(work, "a2.txt")}' -Destination '${tmp}'; [IO.File]::Replace('${tmp}', '${target}', $null)`, 60_000);
+      const ok = await waitFor(async () => (await rowsIn(folder.id)).some((x) => x.name === "a.txt" && x.size === next.length));
+      const after = (await rowsIn(folder.id)).filter((x) => x.name.startsWith("a.txt"));
+      const sameNode = after.length === 1 && after[0]!.id === before.id;
+      const h = ok ? await accountSha(before.id) : "";
+      return { ok: ok && sameNode && h === sha(next), note: `rows: ${after.map((x) => `${x.name} ${x.size}`).join(", ")}; same node: ${sameNode}; bytes ${h === sha(next) ? "ok" : "differ"}` };
+    });
+    await step(p, "W4-delete-rename", "Remove-Item of a file: into the app's trash; Rename-Item of a file not on this computer: the new name in the account", async () => {
+      const folder = (await rowsIn()).find((r) => r.name === "Folder W")!;
+      const c = (await rowsIn(folder.id)).find((x) => x.name === "c.jpg")!;
+      await ps(`Remove-Item -LiteralPath '${join(root, "Folder W", "c.jpg")}' -ErrorAction Stop`, 60_000);
+      const trashed = await waitFor(async () => (await core<{ id: string }[]>("trashList")).some((t) => t.id === c.id), 60_000);
+      // The big file of the first steps is only a placeholder here (a cloud): renamed without its content.
+      const big0 = (await rowsIn()).find((x) => x.name === `qa-${MB}mb.bin`)!;
+      await ps(`attrib -P +U '${join(root, `qa-${MB}mb.bin`)}'`, 60_000).catch(() => "");
+      await new Promise((r) => setTimeout(r, 3000));
+      const g0 = fake.cdnGets;
+      await ps(`Rename-Item -LiteralPath '${join(root, `qa-${MB}mb.bin`)}' -NewName 'qa-renamed.bin' -ErrorAction Stop`, 60_000);
+      const renamed = await waitFor(async () => (await rowsIn()).some((x) => x.name === "qa-renamed.bin" && x.id === big0.id), 60_000);
+      const fetched = fake.cdnGets - g0;
+      await p.click("a[data-nav=trash]").catch(() => {});
+      await p.waitForSelector("[data-page=trash]:not([hidden])", { timeout: 30_000 }).catch(() => {});
+      await new Promise((r) => setTimeout(r, 1500));
+      await shot(p, "W4-app-trash");
+      // Back as it was for the next steps (V4 removes qa-<MB>mb.bin; S-steps use it too).
+      await ps(`Rename-Item -LiteralPath '${join(root, "qa-renamed.bin")}' -NewName 'qa-${MB}mb.bin' -ErrorAction Stop`, 60_000).catch(() => "");
+      await waitFor(async () => (await rowsIn()).some((x) => x.name === `qa-${MB}mb.bin`), 60_000);
+      return { ok: trashed && renamed && fetched === 0, note: `c.jpg in the trash: ${trashed}; renamed in the account (same node): ${renamed}; CDN requests while renaming: ${fetched}` };
+    });
+    await step(p, "W5-write-off", "Writing off again (V4 checks the read-only refusal)", async () => {
+      await settingsTab(p, "app");
+      const sw = p.locator("[data-ddn=app-vdisk-write]");
+      if (await sw.isChecked()) await sw.evaluate((el) => (el as HTMLInputElement).click());
+      const ok = await waitFor(async () => !(await sw.isChecked()) && /Mounted|Zamontowany/.test((await p.locator("[data-ddn=app-vdisk-hint]").textContent()) ?? ""), 90_000);
+      return { ok, note: ok ? "read only again" : "still writable" };
+    });
+
     await step(p, "V4-delete-refused", "Remove-Item on a file of the disk: refused (read only), the file stays", async () => {
       let msg = "";
       try {
