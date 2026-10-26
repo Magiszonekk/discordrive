@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Join screen copy added by the Cobalt pass (static labels only; the screen's logic sets the rest). -->
+<resources>
+    <string name="ddn_brand" translatable="false">DiscorDrive</string>
+    <string name="ddn_join_sub">Dodaj ten telefon do konta, którego używasz już na innym urządzeniu.</string>
+    <string name="ddn_join_server_label">Adres instancji</string>
+    <string name="ddn_join_code_label">Kod parowania</string>
+    <string name="ddn_join_kit_label">Zestaw ratunkowy</string>
+</resources>

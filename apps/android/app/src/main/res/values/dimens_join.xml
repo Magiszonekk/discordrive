@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Side padding of the join screen; on a wide screen the column stays about the web's 28rem card. -->
+    <dimen name="join_pad_h">20dp</dimen>
+</resources>
