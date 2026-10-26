@@ -19,8 +19,20 @@ export type NodeKind = "file" | "folder";
  *      to other storage locations: new manifestRef, no conflict, no content change)
  *      and optional piece locations (`pieces`) in content. Entries of rules 2 replay
  *      exactly as before (applyEntry branches on entry.rulesVersion).
+ *  4 - spaces: a third system root `gallery` (the account's photo space, apart from the
+ *      Drive). It is made by the first applied entry of rules 4. A node's space is the root its
+ *      parent chain ends in; a move between spaces is a plain move. Where rules 3, 3b and
+ *      4 put a node into „Odzyskane”, a node of the Gallery goes to the Gallery's root
+ *      instead (the intended parent's space, else the op's optional `space`). Logs of
+ *      rules 2 and 3 replay exactly as before ("gallery" is never a client ID: 7 chars).
  */
-export const RULES_VERSION = 3;
+export const RULES_VERSION = 4;
+/**
+ * Rules version clients write. Lags RULES_VERSION while a new version rolls out: every reader
+ * (web, desktop, phone, the plain server) learns to replay it first, writers switch later, so a
+ * client that has not updated yet stops with "update the client" only once data needs it.
+ */
+export const WRITE_RULES_VERSION = 3;
 /**
  * Oldest rules version this build can still replay. Version 1 logs are not
  * replayable: no v1 log exists outside tests (stage 1 never ran against a
@@ -34,6 +46,13 @@ export const ROOT_ID: NodeId = "root";
 /** System folder „Odzyskane” (rule 3b/4). Separate root, so its name never collides with user folders. */
 export const RECOVERED_ID: NodeId = "recovered";
 export const SYSTEM_IDS: ReadonlySet<NodeId> = new Set([ROOT_ID, RECOVERED_ID]);
+/**
+ * Rules 4: root of the Gallery space. Made by the first applied rules-4 entry (not by initIndex, so a log
+ * of rules 2-3 keeps its exact state); a system node from then on. Not a valid client ID (too short).
+ */
+export const GALLERY_ID: NodeId = "gallery";
+/** The two spaces of an account: the Drive (Files, the disk in the system) and the Gallery. */
+export type Space = "drive" | "gallery";
 
 export interface DeviceInfo {
   /** Stable device ID (random). */
@@ -174,6 +193,11 @@ export interface CreateOp {
   name: string;
   /** Required for files, forbidden for folders. */
   content?: ContentRef;
+  /**
+   * Rules 4: the space the author meant (default "drive"). Read only when the parent is gone
+   * (purged): rule 4 then puts the node into that space's recovery place.
+   */
+  space?: Space;
 }
 export interface RenameOp {
   type: "rename";
@@ -205,6 +229,8 @@ export interface NewContentVersionOp {
   content: ContentRef;
   /** Name the author knew; used when the file was purged meanwhile (rule 3b). */
   nameHint: string;
+  /** Rules 4: the space of the file as the author knew it (rule 3b, default "drive"). */
+  space?: Space;
 }
 export interface UploadBeginOp {
   type: "upload_begin";

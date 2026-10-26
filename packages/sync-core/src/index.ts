@@ -11,6 +11,7 @@ export {
   isTzOffset,
   SILENT_NOTICE_CODES,
   pathOf,
+  spaceOf,
   uploadsTouched,
   LogGapError,
   UnsupportedRulesVersionError,

@@ -28,6 +28,7 @@ class JsEngineException(message: String, cause: Throwable? = null) : RuntimeExce
 
 /** The local index: the sync core's tree, fed with a snapshot and log entries (implemented in the JS engine). */
 interface IndexReplica : AutoCloseable {
+    /** Rules version of the operations this device writes. */
     val rulesVersion: Int
     val headSeq: Long
     fun reset()

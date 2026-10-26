@@ -11,7 +11,7 @@ import { applyEntry, initIndex, uploadsTouched, type ApplyResult } from "./apply
 import type { Sequencer, SubmitResult } from "./sequencer.js";
 import { loadSnapshot, takeSnapshot, type IndexSnapshot } from "./snapshot.js";
 import { MemoryIndexStore, type IndexStore } from "./store.js";
-import { RULES_VERSION, type DeviceInfo, type LogEntry, type OpEnvelope, type Operation } from "./types.js";
+import { WRITE_RULES_VERSION, type DeviceInfo, type LogEntry, type OpEnvelope, type Operation } from "./types.js";
 
 export interface ReplicaOptions {
   device: DeviceInfo;
@@ -20,6 +20,7 @@ export interface ReplicaOptions {
   now?: () => number;
   /** Op ID generator (random in production). */
   newOpId: () => string;
+  /** Rules version of the ops this replica writes (default WRITE_RULES_VERSION). */
   rulesVersion?: number;
   /**
    * Device UTC offset in minutes at a given instant (CEST = 120); goes into
@@ -51,7 +52,7 @@ export class Replica {
     this.store = initIndex(opts.store ?? new MemoryIndexStore());
     this.now = opts.now ?? (() => Date.now());
     this.newOpId = opts.newOpId;
-    this.rulesVersion = opts.rulesVersion ?? RULES_VERSION;
+    this.rulesVersion = opts.rulesVersion ?? WRITE_RULES_VERSION;
     this.tzOffsetMin = opts.tzOffsetMin ?? localTzOffsetMin;
   }
 

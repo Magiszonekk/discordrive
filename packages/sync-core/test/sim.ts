@@ -22,6 +22,10 @@
 //  I5 no file points at physically deleted fragments,
 //  I6 snapshot + log tail == full log (also through JSON serialization).
 //
+// Rules 4 (the Gallery space): devices switch to writing rules 4 at a random point (a mixed log of 3
+// then 4, as during a rollout); from then on the Gallery's root is a target like any folder, so
+// albums, photos and moves between the spaces (and recovery into the Gallery's root) get covered.
+//
 // FUZZ_RUNS (default 300; `npm run test:fuzz` uses 20000) and FUZZ_SEED control the run.
 
 import fc from "fast-check";
@@ -34,9 +38,12 @@ import {
   loadSnapshot,
   applyEntry,
   MemoryIndexStore,
+  GALLERY_ID,
   RECOVERED_ID,
   Replica,
   ROOT_ID,
+  RULES_VERSION,
+  WRITE_RULES_VERSION,
   Sequencer,
   takeSnapshot,
   type ApplyResult,
@@ -172,6 +179,10 @@ export function runCase(actions: Action[], stats: Stats): void {
   const server = new Sequencer({ now: () => now, leaseMs: LEASE_MS });
   let opCounter = 0;
   const devs: Dev[] = [];
+  // Rules 4 from a point in the case on (index of the first action that writes 4; never in some cases).
+  const switchAt = actions.length === 0 ? 0 : (actions[0]!.z % 3 === 0 ? Number.POSITIVE_INFINITY : actions[0]!.y % actions.length);
+  let step = 0;
+  const v4 = () => step >= switchAt;
   const mkDev = (i: number, snap?: IndexSnapshot): Dev => {
     const info = { id: `dev-${i}`, name: `urządzenie ${i}` };
     // Devices in different zones (Q6): CEST, US east, India, UTC.
@@ -182,7 +193,9 @@ export function runCase(actions: Action[], stats: Stats): void {
       newOpId: () => `op-${i}-${pad(++opCounter)}`,
       tzOffsetMin: () => tz,
     };
+    // Each device writes per the current step (a replica's version is fixed, so two per device).
     const r = snap ? Replica.fromSnapshot(snap, opts) : new Replica(opts);
+    (r as unknown as { rulesVersion: number }).rulesVersion = WRITE_RULES_VERSION;
     return { info, r, nodeN: 0, upN: 0, myUploads: [] };
   };
   for (let i = 0; i < 3; i++) devs.push(mkDev(i));
@@ -190,7 +203,9 @@ export function runCase(actions: Action[], stats: Stats): void {
 
   const nodesOf = (d: Dev) => [...d.r.store.allNodes()].sort((a, b) => (a.id < b.id ? -1 : 1));
   const userNodes = (d: Dev) => nodesOf(d).filter((n) => n.parentId !== null);
-  const folders = (d: Dev) => nodesOf(d).filter((n) => n.kind === "folder" && n.id !== RECOVERED_ID);
+  const folders = (d: Dev) => nodesOf(d).filter((n) => n.kind === "folder" && n.id !== RECOVERED_ID && n.id !== GALLERY_ID);
+  /** Where new things go: a folder, the Drive's root, or (once there) the Gallery's root. */
+  const anyRoot = (d: Dev, n: number) => (d.r.store.getNode(GALLERY_ID) && n % 3 === 0 ? GALLERY_ID : ROOT_ID);
   const files = (d: Dev) => nodesOf(d).filter((n) => n.kind === "file");
   const newNodeId = (d: Dev) => `n${d.info.id.slice(4)}-${pad(++d.nodeN)}`;
 
@@ -201,8 +216,8 @@ export function runCase(actions: Action[], stats: Stats): void {
   const metaOp = (d: Dev, a: Action, kind: number): SingleOp | undefined => {
     switch (kind % 4) {
       case 0: {
-        const parent = pickNode(d, folders(d), a.x) ?? ROOT_ID;
-        return { type: "create", kind: "folder", nodeId: newNodeId(d), parentId: parent, name: pick(NAMES, a.y)! };
+        const parent = pickNode(d, folders(d), a.x) ?? anyRoot(d, a.z);
+        return { type: "create", kind: "folder", nodeId: newNodeId(d), parentId: parent, name: pick(NAMES, a.y)!, ...(v4() && a.z % 5 === 0 ? { space: a.z % 2 ? ("gallery" as const) : ("drive" as const) } : {}) };
       }
       case 1: {
         const id = pickNode(d, userNodes(d), a.x);
@@ -210,7 +225,8 @@ export function runCase(actions: Action[], stats: Stats): void {
       }
       case 2: {
         const id = pickNode(d, userNodes(d), a.x);
-        const target = pickNode(d, folders(d), a.y) ?? ROOT_ID;
+        // Now and then straight to the other space's root (Drive <-> Gallery).
+        const target = a.z % 4 === 1 && d.r.store.getNode(GALLERY_ID) ? (a.z % 8 === 1 ? GALLERY_ID : ROOT_ID) : (pickNode(d, folders(d), a.y) ?? anyRoot(d, a.z));
         return id ? { type: "move", nodeId: id, parentId: target } : undefined;
       }
       default: {
@@ -268,10 +284,11 @@ export function runCase(actions: Action[], stats: Stats): void {
         baseVersionId: a.z % 11 === 0 ? null : (local?.content?.versionId ?? null),
         content,
         nameHint: local?.name ?? pick(NAMES, a.y)!,
+        ...(v4() && a.x % 2 === 0 ? { space: "gallery" as const } : {}),
       };
     } else {
-      const parent = pickNode(d, folders(d), a.y) ?? ROOT_ID;
-      op = { type: "create", kind: "file", nodeId: newNodeId(d), parentId: parent, name: pick(NAMES, a.z)!, content };
+      const parent = pickNode(d, folders(d), a.y) ?? anyRoot(d, a.x);
+      op = { type: "create", kind: "file", nodeId: newNodeId(d), parentId: parent, name: pick(NAMES, a.z)!, content, ...(v4() && a.x % 3 === 0 ? { space: "gallery" as const } : {}) };
     }
     d.r.enqueue({ type: "group", ops: [{ type: "upload_commit", uploadId: u }, op] });
   };
@@ -286,6 +303,8 @@ export function runCase(actions: Action[], stats: Stats): void {
 
   let joined = false;
   for (const a of actions) {
+    if (v4()) for (const x of devs) (x.r as unknown as { rulesVersion: number }).rulesVersion = RULES_VERSION;
+    step++;
     const d = devs[a.who % devs.length]!;
     switch (KIND_TABLE[a.what]) {
       case "mkdir": {
@@ -393,6 +412,8 @@ export function runCase(actions: Action[], stats: Stats): void {
           { type: "rename", nodeId: pick(userNodes(d), a.x)?.id ?? "zzzzzzzz", name: "" },
           { type: "rename", nodeId: pick(userNodes(d), a.x)?.id ?? "zzzzzzzz", name: "a/b" },
           { type: "move", nodeId: RECOVERED_ID, parentId: ROOT_ID },
+          { type: "move", nodeId: GALLERY_ID, parentId: ROOT_ID },
+          { type: "trash", nodeId: GALLERY_ID },
           { type: "create", kind: "folder", nodeId: "short", parentId: ROOT_ID, name: "x" },
           { type: "create", kind: "folder", nodeId: newNodeId(d), parentId: pick(files(d), a.x)?.id ?? ROOT_ID, name: "in-file" },
           { type: "upload_commit", uploadId: `up-9-${pad(a.y % 100)}` },
