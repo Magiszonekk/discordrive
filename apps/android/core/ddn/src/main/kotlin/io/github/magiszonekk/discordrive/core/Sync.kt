@@ -332,8 +332,12 @@ class AccountSync(
         return JsonObject(op + ("ops" to JsonArray(op.getValue("ops").jsonArray.map { one(it.jsonObject) })))
     }
 
-    /** The instance replays rules 4 (its /v1/health): only then the phone writes into the Gallery. Asked once. */
-    @Volatile private var galleryKnown: Boolean? = null
+    /**
+     * The instance replays rules 4 (its /v1/health): only then the phone writes into the Gallery. Asked once (a
+     * network call: never on the main thread; [galleryKnown] is what the UI reads). A failure is not remembered.
+     */
+    @Volatile var galleryKnown: Boolean? = null
+        private set
     fun galleryAvailable(): Boolean = galleryKnown ?: runCatching { (api.health()["rulesVersion"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0) >= 4 }
         .getOrElse { return false }.also { galleryKnown = it }
 

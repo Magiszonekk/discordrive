@@ -7,6 +7,7 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import io.github.magiszonekk.discordrive.core.IndexReplica
 import io.github.magiszonekk.discordrive.core.AccountSync
 import io.github.magiszonekk.discordrive.core.Ed25519Key
 import io.github.magiszonekk.discordrive.core.InstanceApi
@@ -555,6 +556,13 @@ class BrowseUiTest {
             s.onActivity { a -> a.openFolderForTest("fold-0000000001", "Zdjęcia 1") }
             r["photoFolder"] = waitUntil { items(s) == 3 }
             shot("2-folder")
+            // Started in Files (never in the Gallery): a photo's long-press menu offers Move to the Gallery once the
+            // first refresh has asked the instance (built on the main thread, as the real menu).
+            r["filesMenuHasToGallery"] = waitUntil(30_000) {
+                var ok = false
+                s.onActivity { a -> ok = a.rowMenuForTest(IndexReplica.Child("x0000001", "IMG.jpg", "file", 1)).contains(a.getString(R.string.ddn_to_gallery)) }
+                ok
+            }
             // The account has the Gallery space: the Gallery tab shows only it (nothing there yet); the photo
             // folder moved into the Gallery (Move to the Gallery) becomes its album with its 2 media.
             val sess0 = DdnSession.get(ctx)!!

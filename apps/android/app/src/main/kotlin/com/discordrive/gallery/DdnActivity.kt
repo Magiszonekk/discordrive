@@ -134,7 +134,7 @@ open class DdnActivity : AppCompatActivity() {
     private val pick = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@registerForActivityResult
         val folder = when {
-            albumsTab && album != null && session?.gallerySpace == true -> album!!.first
+            albumsTab && album != null && session?.gallerySpaceKnown == true -> album!!.first
             gallery || albumsTab -> null
             else -> path.last().first
         }
@@ -338,6 +338,17 @@ open class DdnActivity : AppCompatActivity() {
 
     private fun toast(m: String) = android.widget.Toast.makeText(this, m, android.widget.Toast.LENGTH_SHORT).show()
 
+    /** The long-press entries of a row. The main thread: what refresh() learned about the instance (no network here). */
+    private fun rowMenuItems(s: DdnSession, c: IndexReplica.Child, inGallery: Boolean): List<Pair<String, () -> Unit>> {
+        val items = ArrayList<Pair<String, () -> Unit>>()
+        if (s.gallerySpaceKnown) {
+            if (inGallery) items += getString(R.string.ddn_to_drive) to { pickDriveFolder { to -> move(c, to, getString(R.string.ddn_moved_to_drive)) } }
+            else if (c.isFolder || DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) items += getString(R.string.ddn_to_gallery) to { move(c, s.galleryRoot, getString(R.string.ddn_moved_to_gallery)) }
+        }
+        items += getString(R.string.ddn_to_trash) to { askTrash(c) }
+        return items
+    }
+
     /** A line under the bar (empty folder / Gallery): shown with the status line. */
     private fun note(t: String) {
         status.text = if (status.text.isNullOrEmpty()) t else "${status.text} · $t"
@@ -351,12 +362,7 @@ open class DdnActivity : AppCompatActivity() {
     private fun rowMenu(c: IndexReplica.Child) {
         val s = session ?: return
         val inGallery = gallery || albumsTab
-        val items = ArrayList<Pair<String, () -> Unit>>()
-        if (s.gallerySpace) {
-            if (inGallery) items += getString(R.string.ddn_to_drive) to { pickDriveFolder { to -> move(c, to, getString(R.string.ddn_moved_to_drive)) } }
-            else if (c.isFolder || DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) items += getString(R.string.ddn_to_gallery) to { move(c, s.galleryRoot, getString(R.string.ddn_moved_to_gallery)) }
-        }
-        items += getString(R.string.ddn_to_trash) to { askTrash(c) }
+        val items = rowMenuItems(s, c, inGallery)
         com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle(c.name)
             .setItems(items.map { it.first }.toTypedArray()) { _, i -> items[i].second() }.show()
     }
@@ -365,7 +371,7 @@ open class DdnActivity : AppCompatActivity() {
         val s = session ?: return
         val items = ArrayList<Pair<String, () -> Unit>>()
         items += getString(if (priv) R.string.album_private_unmark_action else R.string.album_private_mark_action) to { togglePrivate(a, priv) }
-        if (s.gallerySpace) items += getString(R.string.ddn_to_drive) to { pickDriveFolder { to -> move(IndexReplica.Child(a.id, a.name, "folder", null), to, getString(R.string.ddn_moved_to_drive)) } }
+        if (s.gallerySpaceKnown) items += getString(R.string.ddn_to_drive) to { pickDriveFolder { to -> move(IndexReplica.Child(a.id, a.name, "folder", null), to, getString(R.string.ddn_moved_to_drive)) } }
         com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle(a.name)
             .setItems(items.map { it.first }.toTypedArray()) { _, i -> items[i].second() }.show()
     }
@@ -430,6 +436,8 @@ open class DdnActivity : AppCompatActivity() {
     internal fun showAlbumsForTest() { nav.selectedItemId = 3 }
     internal fun openAlbumForTest(id: String, name: String) { album = id to name; show() }
     internal fun isDrawn(): Boolean = list.isLaidOut && list.childCount > 0
+    /** The long-press menu of a row, as it would be shown (labels), built on the main thread like the real one. */
+    internal fun rowMenuForTest(c: IndexReplica.Child): List<String> = session?.let { s -> rowMenuItems(s, c, gallery || albumsTab).map { it.first } } ?: emptyList()
 
     /** A cell of the grid shows a decoded picture (a thumbnail, not the type icon). */
     internal fun firstCellHasPicture(): Boolean = (0 until list.childCount).any { i ->

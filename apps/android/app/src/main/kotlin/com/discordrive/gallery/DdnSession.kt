@@ -104,6 +104,8 @@ class DdnSession private constructor(private val app: Context, val acct: Account
             headSeq = replica.headSeq
             saveCopy()
             lastError = null
+            // Whether the account has the Gallery space: asked here (off the main thread), read by the menus.
+            sync.galleryAvailable()
         } catch (e: Exception) {
             lastError = e.message
             Log.w(TAG, "refresh: ${e.message}")
@@ -162,6 +164,12 @@ class DdnSession private constructor(private val app: Context, val acct: Account
      * from the Gallery, Share of photos and the automatic copy go there. Older instance: everything as before.
      */
     val gallerySpace: Boolean get() = sync.galleryAvailable()
+
+    /**
+     * The same for the UI thread: only what is known already (no network call there; [refresh] asks the
+     * instance). False until then, so a menu never offers a Gallery action an older instance would refuse.
+     */
+    val gallerySpaceKnown: Boolean get() = sync.galleryKnown == true
 
     /** An album (a folder right in the Gallery) named `name`, made where missing. */
     fun galleryAlbum(name: String): String = ix { _ -> sync.folder(name, io.github.magiszonekk.discordrive.core.GALLERY_ID) }
