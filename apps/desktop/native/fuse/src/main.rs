@@ -457,8 +457,12 @@ impl Filesystem for Fs {
             let ms = t.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
             let h = fh.filter(|h| self.open_w.contains_key(h)).or_else(|| self.open_w.iter().find(|(_, w)| w.ino == ino).map(|(h, _)| *h));
             // The open local copy (a later upload reads it) and, once closed, the copy in the queue (the handle
-            // may outlive the close: its release comes later).
-            let mut kept = h.and_then(|h| self.open_w.get_mut(&h)).map(|w| w.file.set_modified(t).is_ok()).unwrap_or(false);
+            // may outlive the close: its release comes later). Only a copy that is uploaded keeps it: one written
+            // here, or a file not in the account yet. A file of the account opened without a write (touch opens
+            // it for writing) keeps its date: a version's date is part of the version, and a new version just
+            // for a date would upload the whole file again.
+            let in_account = self.attrs.get(&ino).map(|e| !e.id.starts_with("new:") && !e.id.starts_with("out:")).unwrap_or(false);
+            let mut kept = h.and_then(|h| self.open_w.get_mut(&h)).filter(|w| w.dirty || !in_account).map(|w| w.file.set_modified(t).is_ok()).unwrap_or(false);
             if let Some(id) = self.attrs.get(&ino).map(|e| e.id.clone()).filter(|id| id.starts_with("out:")) {
                 kept |= self.agent.call(json!({ "op": "touch", "id": id, "mtime": ms })).is_ok();
             }
