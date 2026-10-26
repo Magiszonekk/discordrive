@@ -1,5 +1,9 @@
 package com.discordrive.gallery
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Build
@@ -10,7 +14,6 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
-import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.google.zxing.BarcodeFormat
@@ -37,7 +40,12 @@ class JoinActivity : AppCompatActivity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var status: TextView
     private lateinit var qr: ImageView
-    private lateinit var offerText: EditText
+    private lateinit var codeText: TextView
+    private lateinit var codeCard: View
+    private lateinit var ttl: TextView
+    private lateinit var sas: TextView
+    private var link: String? = null
+    private var shownAt = 0L
     private var pending: Pairing.Pending? = null
     private var device: Ed25519Key? = null
     private var result: Pairing.Result? = null
@@ -45,37 +53,52 @@ class JoinActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val pad = (16 * resources.displayMetrics.density).toInt()
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad, pad, pad) }
-        val server = EditText(this).apply { hint = getString(R.string.ddn_server); setText(intent.getStringExtra("server") ?: "") ; isSingleLine = true }
-        val name = EditText(this).apply { hint = getString(R.string.ddn_device_name); setText("${Build.MANUFACTURER} ${Build.MODEL}".trim()); isSingleLine = true }
-        status = TextView(this).apply { setPadding(0, pad, 0, pad) }
-        qr = ImageView(this).apply { adjustViewBounds = true; visibility = View.GONE }
-        offerText = EditText(this).apply { isFocusable = false; textSize = 11f; visibility = View.GONE }
-        val start = Button(this).apply { text = getString(R.string.ddn_join_start) }
-        val yes = Button(this).apply { text = getString(R.string.ddn_sas_yes); visibility = View.GONE }
-        val no = Button(this).apply { text = getString(R.string.ddn_sas_no); visibility = View.GONE }
-        val kit = EditText(this).apply { hint = getString(R.string.ddn_kit_hint); minLines = 2 }
-        val kitGo = Button(this).apply { text = getString(R.string.ddn_kit_go) }
-        ok = Button(this).apply { text = getString(android.R.string.ok); visibility = View.GONE; setOnClickListener { openAccount(0) } }
-        listOf(server, name, start, qr, offerText, status, ok, yes, no, kit, kitGo).forEach(root::addView)
-        setContentView(android.widget.ScrollView(this).apply { addView(root) })
-        Insets.apply(root)
+        setContentView(R.layout.activity_join)
+        Insets.apply(findViewById(R.id.joinRoot))
+        val server = findViewById<EditText>(R.id.joinServer)
+        val name = findViewById<EditText>(R.id.joinName)
+        status = findViewById(R.id.joinStatus)
+        qr = findViewById(R.id.joinQr)
+        codeText = findViewById(R.id.joinCode)
+        codeCard = findViewById(R.id.joinCodeCard)
+        ttl = findViewById(R.id.joinTtl)
+        sas = findViewById(R.id.joinSas)
+        val start = findViewById<Button>(R.id.joinStart)
+        val yes = findViewById<Button>(R.id.joinYes)
+        val no = findViewById<Button>(R.id.joinNo)
+        val kit = findViewById<EditText>(R.id.joinKit)
+        val kitGo = findViewById<Button>(R.id.joinKitGo)
+        ok = findViewById<Button>(R.id.joinOk).apply { setOnClickListener { openAccount(0) } }
+        // The address: from the link that opened this screen, else the one used last time.
+        server.setText(intent.getStringExtra("server") ?: lastServer())
+        name.setText("${Build.MANUFACTURER} ${Build.MODEL}".trim())
+        findViewById<Button>(R.id.joinCopy).setOnClickListener { copyCode() }
+        findViewById<Button>(R.id.joinShare).setOnClickListener { shareCode() }
+        findViewById<Button>(R.id.joinKitToggle).setOnClickListener {
+            val box = findViewById<View>(R.id.joinKitBox)
+            box.visibility = if (box.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        }
 
-        DdnAccount.load(this)?.let { status.text = getString(R.string.ddn_already, it.deviceName, it.serverUrl) }
+        DdnAccount.load(this)?.let {
+            findViewById<TextView>(R.id.joinAlready).apply { text = getString(R.string.ddn_already, it.deviceName, it.serverUrl); visibility = View.VISIBLE }
+        }
 
         start.setOnClickListener {
             val url = server.text.toString().trim().trimEnd('/')
             if (!url.startsWith("http")) return@setOnClickListener toast(getString(R.string.ddn_bad_server))
+            rememberServer(url)
             val d = Ed25519Key.generate()
             val p = Pairing.start(d.publicKey)
             device = d
             pending = p
-            offerText.setText(p.offer)
-            offerText.visibility = View.VISIBLE
-            qr.setImageBitmap(qrBitmap("$url/#pair=${p.offer}"))
-            qr.visibility = View.VISIBLE
-            status.text = getString(R.string.ddn_join_wait)
+            link = "$url/#pair=${p.offer}"
+            codeText.text = p.offer
+            qr.setImageBitmap(qrBitmap(link!!))
+            codeCard.visibility = View.VISIBLE
+            start.text = getString(R.string.ddn_join_again)
+            status.text = ""
+            shownAt = System.currentTimeMillis()
+            tick()
             poll(url, name.text.toString().trim(), yes, no)
         }
         yes.setOnClickListener {
@@ -96,6 +119,7 @@ class JoinActivity : AppCompatActivity() {
             pending = null
             yes.visibility = View.GONE
             no.visibility = View.GONE
+            sas.visibility = View.GONE
             status.text = getString(R.string.ddn_sas_rejected)
         }
         kitGo.setOnClickListener {
@@ -139,6 +163,39 @@ class JoinActivity : AppCompatActivity() {
         finish()
     }, delayMs)
 
+    /** The pairing code (the offer, as text) to the clipboard: to paste it on the computer. */
+    private fun copyCode() {
+        val p = pending ?: return
+        (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(getString(R.string.ddn_copy_code), p.offer))
+        // Android 13+ shows its own confirmation of a copy.
+        if (Build.VERSION.SDK_INT < 33) toast(getString(R.string.ddn_copied))
+    }
+
+    /** The pairing link through the system's Share (send it to yourself, open it on the computer). */
+    private fun shareCode() {
+        val l = link ?: return
+        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, l).putExtra(Intent.EXTRA_SUBJECT, getString(R.string.ddn_join_title))
+        startActivity(Intent.createChooser(send, getString(R.string.ddn_share_code)))
+    }
+
+    /** Time left of the code, every second while it is shown and nobody answered. */
+    private fun tick() {
+        if (pending == null || result != null || codeCard.visibility != View.VISIBLE) return
+        val left = (Pairing.TTL_MS - (System.currentTimeMillis() - shownAt)).coerceAtLeast(0) / 1000
+        ttl.text = if (left > 0) getString(R.string.ddn_code_ttl, left / 60, left % 60) else getString(R.string.ddn_code_expired)
+        if (left > 0) main.postDelayed({ tick() }, 1000)
+    }
+
+    private fun lastServer(): String = getSharedPreferences("ddn-join", Context.MODE_PRIVATE).getString("server", "") ?: ""
+    private fun rememberServer(url: String) = getSharedPreferences("ddn-join", Context.MODE_PRIVATE).edit().putString("server", url).apply()
+
+    /** Tests: the code shown and what Copy put on the clipboard. */
+    internal fun codeForTest(): String? = pending?.offer
+    internal fun copyForTest(): String? {
+        copyCode()
+        return (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.getItemAt(0)?.text?.toString()
+    }
+
     /** Every 2 s until the other device answered (10 minutes at most). */
     private fun poll(url: String, deviceName: String, yes: Button, no: Button) {
         if (polling) return
@@ -154,8 +211,10 @@ class JoinActivity : AppCompatActivity() {
                     main.post {
                         r.onSuccess {
                             result = it
-                            qr.visibility = View.GONE
-                            offerText.visibility = View.GONE
+                            codeCard.visibility = View.GONE
+                            // The 6 digits large (compared at a glance with the other screen).
+                            sas.text = it.sas
+                            sas.visibility = View.VISIBLE
                             status.text = getString(R.string.ddn_sas, it.sas, it.fromDevice)
                             yes.visibility = View.VISIBLE
                             no.visibility = View.VISIBLE
