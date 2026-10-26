@@ -174,6 +174,22 @@ os.close(fd)`]);
       const taken = (n: string) => core.vdiskList("root")?.find((e) => e.name === n)?.mtime;
       expect([taken("cp-p.txt"), taken("touch-d.txt")]).toEqual([old.getTime(), Date.parse("2019-05-06T07:08:09Z")]);
       expect((await stat(join(mp, "cp-p.txt"))).mtimeMs).toBe(old.getTime());
+      // A file already in the account: its date is part of its version (the manifest), a time set on it alone
+      // cannot be kept. The file keeps showing its date (stat = the account), the call does not fail (rsync -t
+      // and backup tools set times on every file they leave as it is).
+      const r = await run("touch", ["-d", "2018-01-01T00:00:00Z", join(mp, "cp-p.txt")]).then(() => "ok", (e) => String(e));
+      expect(r).toBe("ok");
+      expect((await stat(join(mp, "cp-p.txt"))).mtimeMs).toBe(old.getTime());
+      expect(taken("cp-p.txt")).toBe(old.getTime());
+      // Overwritten with cp -p (new content: a new version) keeps the source's time.
+      const src2 = join(base, "stary2.txt");
+      writeFileSync(src2, "inna treść");
+      await run("touch", ["-d", "2017-03-04T05:06:07Z", src2]);
+      await run("cp", ["-p", src2, join(mp, "cp-p.txt")]);
+      await disk.outbox!.idle();
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(taken("cp-p.txt")).toBe(Date.parse("2017-03-04T05:06:07Z"));
+      expect((await stat(join(mp, "cp-p.txt"))).mtimeMs).toBe(Date.parse("2017-03-04T05:06:07Z"));
       await rm(join(mp, "cp-p.txt"));
       await rm(join(mp, "touch-d.txt"));
       await disk.outbox!.idle();
