@@ -1,17 +1,13 @@
 package com.discordrive.gallery
 
 import android.content.Context
-import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.format.DateUtils
 import android.text.format.Formatter
-import android.view.Gravity
 import android.view.ViewGroup
-import android.widget.Button
 import android.widget.CheckBox
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -33,9 +29,10 @@ class DdnTrashActivity : AppCompatActivity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var list: RecyclerView
     private lateinit var status: TextView
-    private lateinit var restore: Button
-    private lateinit var purge: Button
-    private lateinit var loading: android.widget.ProgressBar
+    private lateinit var restore: com.google.android.material.button.MaterialButton
+    private lateinit var purge: com.google.android.material.button.MaterialButton
+    private lateinit var ui: CobaltUi
+    private lateinit var loading: android.view.View
     @Volatile private var loaded = false
     /** Tests: the screen opened in its loading state (a load may be done before a test can look). */
     @Volatile private var loadingAtStart = false
@@ -44,33 +41,30 @@ class DdnTrashActivity : AppCompatActivity() {
     private var serverNow = System.currentTimeMillis()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        keepOpenForTest = intent.getBooleanExtra(KEEP_OPEN_FOR_TEST, false)
+        CobaltUi.theme(this)
         super.onCreate(savedInstanceState)
-        val pad = dp(16)
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(getColor(R.color.bg)) }
-        root.addView(TextView(this).apply { text = getString(R.string.ddn_trash); textSize = 20f; setTypeface(typeface, Typeface.BOLD); setTextColor(getColor(R.color.text)); setPadding(pad, pad, pad, dp(4)) })
-        status = TextView(this).apply { textSize = 12f; setTextColor(getColor(R.color.text_dim)); setPadding(pad, 0, pad, dp(8)); text = getString(R.string.ddn_trash_note) }
-        root.addView(status)
+        ui = CobaltUi(this)
+        // One heading (the bar), the note, the list, the actions at the bottom.
+        val root = ui.screen(R.string.ddn_trash, scroll = false)
+        status = ui.note(getString(R.string.ddn_trash_loading))
+        root.addView(status, ui.lp(top = 4))
         // Loading (the account is synced first): not an empty trash.
-        loading = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true }
-        root.addView(loading, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
-        status.text = getString(R.string.ddn_trash_loading)
+        loading = com.google.android.material.progressindicator.LinearProgressIndicator(this).apply { isIndeterminate = true }
+        root.addView(loading, ui.lp(top = 8))
         loadingAtStart = loading.visibility == android.view.View.VISIBLE
-        list = RecyclerView(this).apply { layoutManager = LinearLayoutManager(this@DdnTrashActivity) }
-        root.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
-        val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END; setPadding(dp(8), dp(4), dp(8), dp(8)) }
-        restore = Button(this).apply { text = getString(R.string.ddn_trash_restore); isEnabled = false; setOnClickListener { act(restore = true) } }
-        purge = Button(this).apply { text = getString(R.string.ddn_trash_purge); isEnabled = false; setOnClickListener { confirmPurge() } }
-        bar.addView(restore)
-        bar.addView(purge)
-        root.addView(bar)
-        setContentView(root)
-        Insets.apply(root)
+        list = RecyclerView(this).apply { layoutManager = LinearLayoutManager(this@DdnTrashActivity); clipToPadding = false }
+        root.addView(list, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(8) })
+        restore = ui.button(R.string.ddn_trash_restore, CobaltUi.Kind.TONAL) { act(restore = true) }.apply { isEnabled = false }
+        purge = ui.button(R.string.ddn_trash_purge, CobaltUi.Kind.DANGER) { confirmPurge() }.apply { isEnabled = false }
+        ui.actionBar(root, restore, purge)
         load()
     }
 
     private fun load() {
         thread {
-            val s = DdnSession.get(this) ?: run { main.post { finish() }; return@thread }
+            // No account: nothing to show (tests of the screen's look keep it open, empty).
+            val s = DdnSession.get(this) ?: run { main.post { if (keepOpenForTest) { loaded = true; show() } else finish() }; return@thread }
             runCatching { s.refresh() }
             serverNow = runCatching { s.sync.api.gcStatus().now }.getOrDefault(System.currentTimeMillis())
             val t = s.trash()
@@ -85,19 +79,21 @@ class DdnTrashActivity : AppCompatActivity() {
         purge.isEnabled = selected.isNotEmpty()
         list.adapter = object : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             override fun getItemCount() = items.size
-            override fun onCreateViewHolder(p: ViewGroup, t: Int) = object : RecyclerView.ViewHolder(row()) {}
+            override fun onCreateViewHolder(p: ViewGroup, t: Int): RecyclerView.ViewHolder {
+                val r = ui.listRow(com.google.android.material.checkbox.MaterialCheckBox(this@DdnTrashActivity))
+                return object : RecyclerView.ViewHolder(r.view) {}.also { it.itemView.tag = r }
+            }
             override fun onBindViewHolder(h: RecyclerView.ViewHolder, i: Int) {
                 val c = items[i]
-                val v = h.itemView as LinearLayout
+                val r = h.itemView.tag as CobaltUi.ListRow
+                val v = r.view
                 val box = v.getChildAt(0) as CheckBox
-                val icon = v.getChildAt(1) as ImageView
-                val text = v.getChildAt(2) as LinearLayout
-                icon.setImageResource(if (c.isFolder) R.drawable.ic_cloud_done else R.drawable.ic_photo)
-                (text.getChildAt(0) as TextView).text = c.name
+                r.icon.setImageResource(if (c.isFolder) R.drawable.ic_albums else R.drawable.ic_photo)
+                r.title.text = c.name
                 val left = TrashPolicy.daysLeft(c.trashedAt ?: serverNow, serverNow)
                 val what = if (c.isFolder) getString(R.string.ddn_folder) else Formatter.formatShortFileSize(this@DdnTrashActivity, c.size ?: 0)
                 val whenTrashed = c.trashedAt?.let { DateUtils.getRelativeTimeSpanString(it, serverNow, DateUtils.MINUTE_IN_MILLIS) } ?: ""
-                (text.getChildAt(1) as TextView).text = getString(R.string.ddn_trash_row, what, whenTrashed, plq(R.plurals.ddn_trash_days, left, left))
+                r.sub.text = getString(R.string.ddn_trash_row, what, whenTrashed, plq(R.plurals.ddn_trash_days, left, left))
                 box.setOnCheckedChangeListener(null)
                 box.isChecked = c.id in selected
                 box.setOnCheckedChangeListener { _, on -> if (on) selected += c.id else selected -= c.id; restore.isEnabled = selected.isNotEmpty(); purge.isEnabled = selected.isNotEmpty() }
@@ -135,24 +131,11 @@ class DdnTrashActivity : AppCompatActivity() {
         }
     }
 
-    private fun row(): LinearLayout {
-        val v = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(6), dp(16), dp(6))
-            layoutParams = ViewGroup.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT); isClickable = true
-            setBackgroundResource(android.R.drawable.list_selector_background)
-        }
-        v.addView(CheckBox(this))
-        v.addView(ImageView(this).apply { setColorFilter(getColor(R.color.text_dim)) }, LinearLayout.LayoutParams(dp(36), dp(36)))
-        val t = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), 0, 0, 0) }
-        t.addView(TextView(this).apply { textSize = 15f; setTextColor(getColor(R.color.text)); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE })
-        t.addView(TextView(this).apply { textSize = 12f; setTextColor(getColor(R.color.text_dim)) })
-        v.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        return v
-    }
-
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     // ── for the instrumentation test ──
+    /** Tests of the look: without an account the screen stays open (empty) instead of closing. */
+    internal var keepOpenForTest = false
     internal fun countForTest(): Int = items.size
     internal fun loadingShownForTest(): Boolean = loading.visibility == android.view.View.VISIBLE
     internal fun openedLoadingForTest(): Boolean = loadingAtStart && status.text.isNotEmpty()
@@ -160,6 +143,7 @@ class DdnTrashActivity : AppCompatActivity() {
     internal fun actForTest(restore: Boolean) = act(restore)
 
     companion object {
+        internal const val KEEP_OPEN_FOR_TEST = "keepOpenForTest"
         fun open(c: Context) = c.startActivity(android.content.Intent(c, DdnTrashActivity::class.java))
     }
 }

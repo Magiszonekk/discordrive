@@ -7,15 +7,12 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.text.format.Formatter
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.widget.SwitchCompat
 import io.github.magiszonekk.discordrive.core.AppUpdates
 import kotlin.concurrent.thread
 
@@ -27,12 +24,12 @@ import kotlin.concurrent.thread
 class DdnSettingsActivity : AppCompatActivity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var updState: TextView
-    private lateinit var updButton: Button
+    private lateinit var updButton: com.google.android.material.button.MaterialButton
     private lateinit var updProgress: ProgressBar
     private var found: AppUpdates.Build? = null
     @Volatile private var downloading = false
-    private lateinit var pinButton: Button
-    private lateinit var removePin: Button
+    private lateinit var pinButton: com.google.android.material.button.MaterialButton
+    private lateinit var removePin: com.google.android.material.button.MaterialButton
     /** The user was sent to allow "install unknown apps": continue the install when back with it allowed. */
     private var installAfterPermission = false
 
@@ -46,73 +43,92 @@ class DdnSettingsActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        CobaltUi.theme(this)
         super.onCreate(savedInstanceState)
-        title = getString(R.string.ddn_settings)
-        val pad = dp(16)
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad, pad, pad); setBackgroundColor(getColor(R.color.bg)) }
-        fun head(s: Int) = TextView(this).apply { text = getString(s); textSize = 13f; setTextColor(getColor(R.color.accent)); setPadding(0, dp(18), 0, dp(6)) }
-        fun text(s: CharSequence, dim: Boolean = false) = TextView(this).apply { text = s; textSize = if (dim) 13f else 15f; setTextColor(getColor(if (dim) R.color.text_dim else R.color.text)); setPadding(0, dp(4), 0, dp(4)) }
-        fun button(s: Int, f: () -> Unit) = Button(this).apply { text = getString(s); setOnClickListener { f() } }
-
+        val ui = CobaltUi(this)
+        val page = ui.screen(R.string.ddn_settings)
         val acct = DdnAccount.load(this)
-        root.addView(head(R.string.ddn_set_account))
-        root.addView(text(if (acct != null) getString(R.string.ddn_set_device, acct.deviceName, Uri.parse(acct.serverUrl).host ?: acct.serverUrl) else getString(R.string.ddn_up_no_account)))
+
+        // Account and this device.
+        ui.section(page, R.string.ddn_set_account).also { c ->
+            ui.add(c, ui.text(if (acct != null) getString(R.string.ddn_set_device, acct.deviceName, Uri.parse(acct.serverUrl).host ?: acct.serverUrl) else getString(R.string.ddn_up_no_account)), top = 6)
+        }
+
+        // Look: the accent colour (the same choice as the gallery's, applied to every screen).
+        ui.section(page, R.string.ddn_set_look, getString(R.string.ddn_set_look_note)).also { c ->
+            ui.add(c, ui.button(R.string.accent_picker_title, icon = R.drawable.ic_palette) { pickAccent() })
+        }
+
+        // Copies, AI, trash, freeing space.
+        ui.section(page, R.string.ddn_set_more, getString(R.string.ddn_set_trash_note) + (DdnApp.lastClean(this)?.let { "\n" + getString(R.string.ddn_set_trash_last, cleanText(it)) } ?: "")).also { c ->
+            ui.add(c, ui.button(R.string.ddn_backup, icon = R.drawable.ic_sync) { startActivity(Intent(this, DdnBackupActivity::class.java)) })
+            ui.add(c, ui.button(R.string.ddn_ai_title, icon = R.drawable.ic_ai) { startActivity(Intent(this, DdnAiActivity::class.java)) }, top = 8)
+            ui.add(c, ui.button(R.string.ddn_trash, icon = R.drawable.ic_delete) { DdnTrashActivity.open(this) }, top = 8)
+            ui.add(c, ui.button(R.string.ddn_free, icon = R.drawable.ic_cloud_done) { startActivity(Intent(this, DdnFreeUpActivity::class.java)) }, top = 8)
+        }
+
+        // Private folders: the PIN (set, change, remove) and fingerprint — here, not the gallery's old screen.
+        ui.section(page, R.string.private_title, getString(R.string.ddn_private_note)).also { c ->
+            pinButton = ui.button(if (PrivateAlbums.hasPin(this)) R.string.private_change_pin else R.string.private_set_pin, icon = R.drawable.ic_lock) { setPinDialog() }
+            removePin = ui.button(R.string.ddn_pin_remove, CobaltUi.Kind.DANGER) { removePinDialog() }.apply { visibility = if (PrivateAlbums.hasPin(this@DdnSettingsActivity)) android.view.View.VISIBLE else android.view.View.GONE }
+            ui.add(c, pinButton)
+            ui.add(c, removePin, top = 8)
+            ui.switchRow(c, R.string.private_biometric_switch, PrivateAlbums.biometricsEnabled(this)) { v, on ->
+                when {
+                    on && !PrivateAlbums.hasPin(this) -> { v.isChecked = false; Toast.makeText(this, R.string.private_need_pin_first, Toast.LENGTH_SHORT).show() }
+                    on && !PrivateUnlock.biometricsAvailable(this) -> { v.isChecked = false; Toast.makeText(this, R.string.private_biometric_unavailable, Toast.LENGTH_LONG).show() }
+                    else -> PrivateAlbums.setBiometricsEnabled(this, on)
+                }
+            }
+        }
+
+        // Opening photos and videos from other apps (Files, a messenger): the system's "Open with" / default app.
+        ui.section(page, R.string.ddn_set_open_with, getString(R.string.ddn_set_open_with_note)).also { c ->
+            ui.add(c, ui.button(R.string.ddn_set_default_gallery) { openDefaults() })
+        }
 
         // Version and updates.
         val (code, name) = DdnApp.installedVersion(this)
-        root.addView(head(R.string.ddn_set_updates))
-        root.addView(text(getString(R.string.ddn_set_version, name, code)).apply { tag = "ddn-version" })
-        root.addView(SwitchCompat(this).apply {
-            text = getString(R.string.ddn_set_check_updates); isChecked = DdnApp.checkUpdates(this@DdnSettingsActivity)
-            textSize = 15f; setTextColor(getColor(R.color.text)); setPadding(0, dp(4), 0, dp(4))
-            setOnCheckedChangeListener { _, v -> DdnApp.setCheckUpdates(this@DdnSettingsActivity, v) }
-        })
-        updState = text("", dim = true)
-        updProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 1000; visibility = android.view.View.GONE }
-        updButton = button(R.string.ddn_upd_check) { onUpdateButton() }
-        root.addView(updState)
-        root.addView(updProgress)
-        root.addView(updButton)
+        ui.section(page, R.string.ddn_set_updates).also { c ->
+            ui.add(c, ui.text(getString(R.string.ddn_set_version, name, code)).apply { tag = "ddn-version" }, top = 6)
+            ui.switchRow(c, R.string.ddn_set_check_updates, DdnApp.checkUpdates(this)) { _, v -> DdnApp.setCheckUpdates(this, v) }
+            updState = ui.note("")
+            ui.add(c, updState, top = 4)
+            updProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 1000; visibility = android.view.View.GONE }
+            ui.add(c, updProgress, top = 4)
+            updButton = ui.button(R.string.ddn_upd_check, CobaltUi.Kind.PRIMARY) { onUpdateButton() }
+            ui.add(c, updButton)
+        }
 
-        // Automatic copy, trash.
-        root.addView(head(R.string.ddn_set_more))
-        root.addView(button(R.string.ddn_backup) { startActivity(Intent(this, DdnBackupActivity::class.java)) })
-        root.addView(button(R.string.ddn_trash) { DdnTrashActivity.open(this) })
-        root.addView(button(R.string.ddn_free) { startActivity(Intent(this, DdnFreeUpActivity::class.java)) })
-        root.addView(button(R.string.ddn_ai_title) { startActivity(Intent(this, DdnAiActivity::class.java)) })
-
-        // Private albums: the PIN (set, change, remove) and fingerprint.
-        root.addView(head(R.string.private_title))
-        root.addView(text(getString(R.string.ddn_private_note), dim = true))
-        pinButton = button(if (PrivateAlbums.hasPin(this)) R.string.private_change_pin else R.string.private_set_pin) { setPinDialog() }
-        removePin = button(R.string.ddn_pin_remove) { removePinDialog() }.apply { visibility = if (PrivateAlbums.hasPin(this@DdnSettingsActivity)) android.view.View.VISIBLE else android.view.View.GONE }
-        root.addView(pinButton)
-        root.addView(removePin)
-        root.addView(SwitchCompat(this).apply {
-            text = getString(R.string.private_biometric_switch); textSize = 15f; setTextColor(getColor(R.color.text)); setPadding(0, dp(4), 0, dp(4))
-            isChecked = PrivateAlbums.biometricsEnabled(this@DdnSettingsActivity)
-            setOnCheckedChangeListener { v, on ->
-                when {
-                    on && !PrivateAlbums.hasPin(this@DdnSettingsActivity) -> { v.isChecked = false; Toast.makeText(this@DdnSettingsActivity, R.string.private_need_pin_first, Toast.LENGTH_SHORT).show() }
-                    on && !PrivateUnlock.biometricsAvailable(this@DdnSettingsActivity) -> { v.isChecked = false; Toast.makeText(this@DdnSettingsActivity, R.string.private_biometric_unavailable, Toast.LENGTH_LONG).show() }
-                    else -> PrivateAlbums.setBiometricsEnabled(this@DdnSettingsActivity, on)
-                }
+        // Diagnostics: the technical state (moved here from the files' top bar).
+        DdnSession.get(this)?.let { sess ->
+            ui.section(page, R.string.ddn_set_diag).also { c ->
+                ui.add(c, ui.note(getString(R.string.ddn_status, sess.acct.deviceName, sess.headSeq, sess.engineName)), top = 6)
             }
-        })
-        root.addView(text(getString(R.string.ddn_set_trash_note) + (DdnApp.lastClean(this)?.let { "\n" + getString(R.string.ddn_set_trash_last, cleanText(it)) } ?: ""), dim = true))
+        }
 
-        // Opening photos and videos from other apps (Files, a messenger): the system's "Open with" / default app.
-        root.addView(head(R.string.ddn_set_open_with))
-        root.addView(text(getString(R.string.ddn_set_open_with_note), dim = true))
-        root.addView(button(R.string.ddn_set_default_gallery) { openDefaults() })
+        // Danger zone: leave the account on this phone (only when there is one).
+        if (acct != null) ui.section(page, R.string.ddn_set_danger, getString(R.string.ddn_set_leave_ask), danger = true).also { c ->
+            ui.add(c, ui.button(R.string.ddn_set_leave, CobaltUi.Kind.DANGER) { confirmLeave() })
+        }
 
-        // Leave the account on this phone.
-        root.addView(head(R.string.ddn_set_leave_h))
-        root.addView(button(R.string.ddn_set_leave) { confirmLeave() })
-
-        setContentView(ScrollView(this).apply { addView(root) })
-        Insets.apply(root)
+        ui.footer(page, getString(R.string.ddn_set_version, name, code))
         checkUpdate(manual = false)
+    }
+
+    /** The accent colour (the gallery's list); applies at once (the screen is made again). */
+    private fun pickAccent() {
+        val labels = com.discordrive.gallery.Settings.ACCENTS.map { getString(it.labelRes) }.toTypedArray()
+        val current = com.discordrive.gallery.Settings.ACCENTS.indexOfFirst { it.key == com.discordrive.gallery.Settings.accentKey(this) }.coerceAtLeast(0)
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.accent_picker_title)
+            .setSingleChoiceItems(labels, current) { d, which ->
+                com.discordrive.gallery.Settings.setAccent(this, com.discordrive.gallery.Settings.ACCENTS[which].key)
+                d.dismiss()
+                recreate()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun onUpdateButton() {

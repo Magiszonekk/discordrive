@@ -16,4 +16,6 @@
     <color name="cobalt_success">#54B66E</color>
     <color name="cobalt_warning">#DCA744</color>
     <color name="cobalt_qr_paper">#FFFFFF</color>
+    <!-- The danger zone's frame (error over paper, faint). -->
+    <color name="cobalt_error_rule">#4A2224</color>
 </resources>
