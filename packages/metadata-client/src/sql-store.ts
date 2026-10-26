@@ -343,16 +343,18 @@ export class SqlIndexStore implements IndexStore {
    * was taken (manifest takenAt, known in descs) or else when its version was written. Keyset paging on
    * (date, id); cursor JSON [1, date, "", id] (the shape of listChildren's, files group).
    */
-  listTimeline(rootId: NodeId, opts: { after?: string; limit?: number; hideUnavailable?: boolean } = {}): ChildRow[] {
+  listTimeline(rootId: NodeId, opts: { after?: string; limit?: number; hideUnavailable?: boolean; direct?: boolean; asc?: boolean } = {}): ChildRow[] {
     this.refreshTrash();
     const cur = parseCursor(opts.after);
     const after = cur && cur.fo === 1 ? cur : null;
+    // direct: only the folder's own files (an album sorted by date), else the whole subtree (the timeline).
+    const scope = opts.direct ? "SELECT id FROM nodes WHERE parent_id = ?" : "WITH RECURSIVE t(id) AS (SELECT id FROM nodes WHERE parent_id = ? UNION SELECT n.id FROM nodes n JOIN t ON n.parent_id = t.id) SELECT id FROM t";
+    const dir = opts.asc ? "ASC" : "DESC";
     const rows = this.sql.all<{ id: string; rec: string; t: number; unav: string | null }>(
-      `WITH RECURSIVE t(id) AS (SELECT id FROM nodes WHERE parent_id = ? UNION SELECT n.id FROM nodes n JOIN t ON n.parent_id = t.id),
-       x AS (SELECT n.id, n.rec, coalesce(nullif(d.taken, 0), n.mt) AS t, u.locs AS unav FROM files f JOIN nodes n ON n.id = f.node_id
+      `WITH x AS (SELECT n.id, n.rec, coalesce(nullif(d.taken, 0), n.mt) AS t, u.locs AS unav FROM files f JOIN nodes n ON n.id = f.node_id
              LEFT JOIN descs d ON d.manifest_ref = f.manifest_ref LEFT JOIN unavail u ON u.upload_id = f.upload_id
-             WHERE f.trashed = 0 AND f.node_id IN (SELECT id FROM t) AND (? = 0 OR u.upload_id IS NULL))
-       SELECT * FROM x${after ? " WHERE (t, id) < (?, ?)" : ""} ORDER BY t DESC, id DESC LIMIT ?`,
+             WHERE f.trashed = 0 AND f.node_id IN (${scope}) AND (? = 0 OR u.upload_id IS NULL))
+       SELECT * FROM x${after ? ` WHERE (t, id) ${opts.asc ? ">" : "<"} (?, ?)` : ""} ORDER BY t ${dir}, id ${dir} LIMIT ?`,
       [rootId, opts.hideUnavailable ? 1 : 0, ...(after ? [after.key ?? 0, after.id] : []), opts.limit ?? 200],
     );
     return rows.map((r) => {

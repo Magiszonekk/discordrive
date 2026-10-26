@@ -51,6 +51,7 @@
   <symbol id="i-recovered" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v4M12 17h.01"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
   <symbol id="i-list" viewBox="0 0 24 24"><path d="M3 12h.01M3 18h.01M3 6h.01M8 12h13M8 18h13M8 6h13"/></symbol>
+  <symbol id="i-images" viewBox="0 0 24 24"><path d="M18 22H4a2 2 0 0 1-2-2V6"/><path d="m22 13-1.3-1.3a2.4 2.4 0 0 0-3.4 0L11 18"/><circle cx="12" cy="8" r="2"/><rect width="16" height="16" x="6" y="2" rx="2"/></symbol>
   <symbol id="i-grid" viewBox="0 0 24 24"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></symbol>
   <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></symbol>
@@ -201,7 +202,7 @@
     </div>
     <nav class="nav" data-i18n-attr="aria-label=nav.label">
       <a href="/" data-nav="files" data-link><svg class="i"><use href="#i-files"/></svg><span data-i18n="nav.files">Files</span></a>
-      <a href="/gallery" data-nav="gallery" data-ddn="nav-gallery" data-link hidden><svg class="i"><use href="#i-grid"/></svg><span data-i18n="nav.gallery">Gallery</span></a>
+      <a href="/gallery" data-nav="gallery" data-ddn="nav-gallery" data-link hidden><svg class="i"><use href="#i-images"/></svg><span data-i18n="nav.gallery">Gallery</span></a>
       <a href="/folder/recovered" data-nav="recovered" data-ddn-ui="nav-recovered" data-link hidden><svg class="i"><use href="#i-recovered"/></svg><span data-i18n="nav.recovered">Recovered</span></a>
       <a href="/trash" data-nav="trash" data-ddn="nav-trash" data-link><svg class="i"><use href="#i-trash"/></svg><span data-i18n="nav.trash">Trash</span></a>
       <a href="/devices" data-nav="devices" data-link><svg class="i"><use href="#i-phone"/></svg><span data-i18n="nav.devices">Devices</span></a>
@@ -230,12 +231,12 @@
         </div>
         <div class="acts">
           <div class="langs view-toggle" role="group" data-ddn="view" data-i18n-attr="aria-label=view.label"><button type="button" data-view="list" aria-pressed="true" data-i18n-attr="aria-label=view.list, title=view.list"><svg class="i"><use href="#i-list"/></svg></button><button type="button" data-view="tiles" aria-pressed="false" data-i18n-attr="aria-label=view.tiles, title=view.tiles"><svg class="i"><use href="#i-grid"/></svg></button></div>
-          <button class="btn" type="button" data-ddn="new-folder"><svg class="i"><use href="#i-folder-plus"/></svg><span class="lbl-md" data-i18n="files.newFolder">New folder</span></button>
-          <label class="btn primary upload-btn" data-ddn-ui="upload-btn"><span data-i18n="files.upload">Upload files</span><input type="file" multiple data-ddn="file" data-i18n-attr="aria-label=files.upload.aria"></label>
+          <button class="btn" type="button" data-ddn="new-folder"><svg class="i"><use href="#i-folder-plus"/></svg><span class="lbl-md d-only" data-i18n="files.newFolder">New folder</span><span class="lbl-md g-only" data-i18n="gal.newAlbum">New album</span></button>
+          <label class="btn primary upload-btn" data-ddn-ui="upload-btn"><span class="d-only" data-i18n="files.upload">Upload files</span><span class="g-only" data-i18n="gal.add">Add photos</span><input type="file" multiple data-ddn="file" data-i18n-attr="aria-label=files.upload.aria"></label>
         </div>
       </div>
       <div class="note warn need-channel" data-ddn-ui="need-channel" hidden><svg class="i"><use href="#i-info"/></svg><p><span data-i18n="files.needChannel"></span> <a class="link" href="/settings/channels" data-link data-i18n="files.needChannel.link">Settings → Channels</a></p></div>
-      <div class="dropzone" role="button" tabindex="0" data-ddn-ui="dropzone"><svg class="i"><use href="#i-cloud"/></svg><span data-i18n="files.drop">Drop files here to upload</span></div>
+      <div class="dropzone" role="button" tabindex="0" data-ddn-ui="dropzone"><svg class="i"><use href="#i-cloud"/></svg><span class="d-only" data-i18n="files.drop">Drop files here to upload</span><span class="g-only" data-i18n="gal.drop">Drop photos to add them to the Gallery</span></div>
 
       <section class="uploads" data-ddn-ui="queue" hidden aria-live="polite">
         <div class="uploads-h">
@@ -288,6 +289,7 @@
         <div class="bulk-l"><button class="iconbtn" type="button" data-ddn="bulk-clear" data-i18n-attr="aria-label=bulk.clear, title=bulk.clear"><svg class="i"><use href="#i-x"/></svg></button><span class="bulk-n" data-ddn="bulk-count"></span></div>
         <div class="row-btns">
           <button class="btn" type="button" data-ddn="bulk-move"><svg class="i"><use href="#i-move"/></svg><span data-i18n="act.move">Move to…</span></button>
+          <button class="btn" type="button" data-ddn="bulk-space" hidden><svg class="i"><use href="#i-images"/></svg><span data-ddn-ui="bulk-space-t"></span></button>
           <button class="btn" type="button" data-ddn="bulk-download"><svg class="i"><use href="#i-download"/></svg><span data-i18n="files.download">Download</span></button>
           <button class="btn danger" type="button" data-ddn="bulk-trash"><svg class="i"><use href="#i-trash"/></svg><span data-i18n="act.trash">Move to trash</span></button>
         </div>
@@ -298,7 +300,15 @@
           <thead><tr><th class="c-sel"><input type="checkbox" data-ddn="select-all" data-i18n-attr="aria-label=bulk.all"></th><th aria-sort="ascending"><button type="button" class="th-sort" data-ddn="sort" data-sort="name"><span data-i18n="files.col.name">Name</span><svg class="i"><use href="#i-sort"/></svg></button></th><th class="r" aria-sort="none"><button type="button" class="th-sort" data-ddn="sort" data-sort="size"><span data-i18n="files.col.size">Size</span><svg class="i"><use href="#i-sort"/></svg></button></th><th aria-sort="none"><button type="button" class="th-sort" data-ddn="sort" data-sort="date"><span data-i18n="files.col.date">Date</span><svg class="i"><use href="#i-sort"/></svg></button></th><th><span class="sr" data-i18n="files.col.actions">Actions</span></th></tr></thead>
           <tbody data-ddn="list" data-i18n-attr="aria-label=files.list"></tbody>
         </table>
-        <div class="empty" data-ddn-ui="empty" hidden><span class="ic"><svg class="i"><use href="#i-folder"/></svg></span><b data-i18n="files.empty.b"></b><span data-i18n="files.empty.s"></span></div>
+        <div class="empty" data-ddn-ui="empty" hidden><span class="ic d-only"><svg class="i"><use href="#i-folder"/></svg></span><b class="d-only" data-i18n="files.empty.b"></b><span class="d-only" data-i18n="files.empty.s"></span>
+          <!-- The Gallery's own empty state (its root and an album): a small stack of frames, what goes here, Add photos. -->
+          <div class="g-empty g-only" data-ddn-ui="gallery-empty">
+            <span class="g-art" aria-hidden="true"><i></i><i></i><i><svg class="i"><use href="#i-images"/></svg></i></span>
+            <b data-ddn-ui="gallery-empty-b"></b><span data-ddn-ui="gallery-empty-s"></span>
+            <button class="btn primary" type="button" data-ddn="gallery-add"><svg class="i"><use href="#i-upload"/></svg><span data-i18n="gal.add">Add photos</span></button>
+            <p class="g-hint" data-ddn-ui="gallery-empty-hint" data-i18n="gal.empty.hint"></p>
+          </div>
+        </div>
         <div class="empty" data-ddn-ui="search-empty" hidden><span class="ic"><svg class="i"><use href="#i-search"/></svg></span><b data-i18n="search.none"></b><span data-i18n="search.none.s"></span></div>
       </div>
       <div class="pager" data-ddn-ui="pager-btns">

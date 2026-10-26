@@ -94,6 +94,7 @@ export const CORE_METHODS: Record<string, string[]> = {
   trashList: [],
   recoveredCount: [],
   galleryAvailable: [],
+  albumCovers: ["s[]"],
   subfolders: ["s?"],
   pairAccept: ["s"],
   pairStart: ["s", "s"],
