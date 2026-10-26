@@ -134,7 +134,8 @@ class DdnSession private constructor(private val app: Context, val acct: Account
     fun children(folderId: String): List<IndexReplica.Child> = ix { it.children(folderId) }
     /** The Gallery: media outside the trash, without those inside private folders of this phone (`locked`). */
     fun media(limit: Int, after: Pair<Long, String>?, locked: Set<String> = emptySet()): List<IndexReplica.Child> = ix { r ->
-        val all = r.media(MEDIA_EXT, if (locked.isEmpty()) limit else limit * 2, after)
+        // With the Gallery space (rules 4): the Gallery shows only its own photos (the Drive's stay in Files).
+        val all = r.media(MEDIA_EXT, if (locked.isEmpty()) limit else limit * 2, after, if (gallerySpace) "gallery" else null)
         if (locked.isEmpty()) all else {
             val parents = HashMap<String, String?>()
             val up = { id: String -> parents.getOrPut(id) { r.node(id)?.parentId } }
@@ -154,7 +155,19 @@ class DdnSession private constructor(private val app: Context, val acct: Account
     }
 
     /** Albums (folders with photos or videos), newest first. */
-    fun albums(): List<IndexReplica.Album> = ix { it.albums(MEDIA_EXT) }
+    fun albums(): List<IndexReplica.Album> = ix { it.albums(MEDIA_EXT, if (gallerySpace) "gallery" else null) }
+
+    /**
+     * The account has the Gallery space (the instance replays rules 4): the Gallery tab shows only it, uploads
+     * from the Gallery, Share of photos and the automatic copy go there. Older instance: everything as before.
+     */
+    val gallerySpace: Boolean get() = sync.galleryAvailable()
+
+    /** An album (a folder right in the Gallery) named `name`, made where missing. */
+    fun galleryAlbum(name: String): String = ix { _ -> sync.folder(name, io.github.magiszonekk.discordrive.core.GALLERY_ID) }
+
+    /** Where photos go without an album: the Gallery's root (made by the first rules-4 entry). */
+    val galleryRoot: String get() = io.github.magiszonekk.discordrive.core.GALLERY_ID
 
     /** The media files right inside a folder, newest first. */
     fun albumMedia(folderId: String): List<IndexReplica.Child> = ix { r ->
@@ -184,6 +197,8 @@ class DdnSession private constructor(private val app: Context, val acct: Account
         (r["outcome"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: "?"
     }
     fun moveToTrash(ids: List<String>): String = op { sync.trash(ids) }
+    /** Move into a folder; into [galleryRoot] / an album = "Move to the Gallery", into a Drive folder = "Move to the Drive". */
+    fun move(ids: List<String>, parentId: String): String = op { sync.move(ids, parentId) }
     fun restore(ids: List<String>): String = op { sync.restore(ids) }
     fun purge(ids: List<String>): String = op { sync.purge(ids) }
 

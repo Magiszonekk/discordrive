@@ -16,7 +16,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { canonicalState, applyEntry, expiredTrash, initIndex, inTrash, loadSnapshot, MemoryIndexStore, uploadsTouched, RULES_VERSION, ROOT_ID, type IndexSnapshot, type LogEntry, type NodeRecord } from "@ddv4/sync-core";
+import { canonicalState, applyEntry, expiredTrash, initIndex, inTrash, loadSnapshot, MemoryIndexStore, uploadsTouched, ROOT_ID, type IndexSnapshot, type LogEntry, type NodeRecord, WRITE_RULES_VERSION, rulesVersionFor, spaceOf } from "@ddv4/sync-core";
 import { AccountSettingsStore, DiscordWebhookTransport, DriveClient, EncryptedArbiter, HttpApi, OpCodec, acceptPairing, createAccountHttp, generateDeviceKey, memorySource, newAccountKey } from "@ddv4/metadata-client";
 import { PlainArbiter, PlainOpCodec } from "@ddv4/metadata-client/plain-ops";
 import { ServerBlobStore } from "@ddv4/metadata-client/server-blobs";
@@ -73,7 +73,9 @@ let paired: { sas: string; deviceId: string } | null = null;
 function core(q: Req): unknown {
   switch (q.m) {
     case "reset": store = initIndex(new MemoryIndexStore()); return null;
-    case "rules": return RULES_VERSION;
+    case "rules": return WRITE_RULES_VERSION;
+    case "rulesFor": return rulesVersionFor(store, q.a as never, WRITE_RULES_VERSION);
+    case "space": return store.getNode(q.a as string) ? spaceOf(store, q.a as string) : "drive";
     case "head": return store.getMeta().headSeq;
     case "load": store = loadSnapshot(q.a as IndexSnapshot, new MemoryIndexStore()); return null;
     case "apply": return (q.a as LogEntry[]).map((e) => applyEntry(store, e));
@@ -81,7 +83,10 @@ function core(q: Req): unknown {
     case "sha": return sha(canonicalState(store));
     case "children": return [...store.childIds(q.a as string)].map((id) => store.getNode(id)!).filter((n) => !n.trashed).map(row);
     case "node": { const n = store.getNode(q.a as string); return n ? [{ ...row(n), ...(inTrash(store, n.id) ? { tat: n.trashed?.at ?? 0 } : {}) }] : []; }
-    case "media": return [...store.allNodes()].filter((n) => n.kind === "file" && n.content && !inTrash(store, n.id)).sort((a, b) => b.content!.createdAt - a.content!.createdAt).map(row);
+    case "media": {
+      const sp = Array.isArray(q.a) ? undefined : (q.a as { s?: string } | undefined)?.s;
+      return [...store.allNodes()].filter((n) => n.kind === "file" && n.content && !inTrash(store, n.id) && (!sp || spaceOf(store, n.id) === sp)).sort((a, b) => b.content!.createdAt - a.content!.createdAt).map(row);
+    }
     case "trash": return [...store.allNodes()].filter((n) => n.trashed && !(n.parentId !== null && inTrash(store, n.parentId))).map((n) => ({ ...row(n), tat: n.trashed!.at }));
     case "expired": return expiredTrash(store, q.a as number);
     case "released": return [...store.allUploads()].filter((u) => u.status === "released" && u.ended && u.ended.seq > (q.a as number)).map((u) => [u.id, u.ended!.at, u.ended!.seq]);

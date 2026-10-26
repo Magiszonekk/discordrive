@@ -73,20 +73,26 @@ class JsIndexReplica(private val engine: JsEngine) : IndexReplica {
     override fun children(parentId: String): List<IndexReplica.Child> =
         rows(call("__ddnIx.children(${json.encodeToString(JsonElement.serializer(), JsonPrimitive(parentId))})"))
 
-    override fun media(extensions: List<String>, limit: Int, after: Pair<Long, String>?): List<IndexReplica.Child> {
+    override fun media(extensions: List<String>, limit: Int, after: Pair<Long, String>?, space: String?): List<IndexReplica.Child> {
         val ext = json.encodeToString(JsonElement.serializer(), JsonArray(extensions.map { JsonPrimitive(it) }))
         val a = if (after == null) "null" else "[${after.first}, ${json.encodeToString(JsonElement.serializer(), JsonPrimitive(after.second))}]"
-        return rows(call("__ddnIx.media($ext, $limit, $a)"))
+        return rows(call("__ddnIx.media($ext, $limit, $a, ${str(space)})"))
     }
+
+    override fun rulesVersionFor(op: JsonObject): Int = call("__ddnIx.rulesFor(${json.encodeToString(JsonElement.serializer(), op)})").toInt()
+
+    override fun spaceOf(id: String): String = call("__ddnIx.space(${str(id)})")
+
+    private fun str(v: String?): String = if (v == null) "null" else json.encodeToString(JsonElement.serializer(), JsonPrimitive(v))
 
     override fun node(id: String): IndexReplica.Child? =
         rows(call("__ddnIx.node(${json.encodeToString(JsonElement.serializer(), JsonPrimitive(id))})")).firstOrNull()
 
     override fun trash(): List<IndexReplica.Child> = rows(call("__ddnIx.trash()"))
 
-    override fun albums(extensions: List<String>): List<IndexReplica.Album> {
+    override fun albums(extensions: List<String>, space: String?): List<IndexReplica.Album> {
         val ext = json.encodeToString(JsonElement.serializer(), JsonArray(extensions.map { JsonPrimitive(it) }))
-        return json.parseToJsonElement(call("__ddnIx.albums($ext)")).jsonArray.map {
+        return json.parseToJsonElement(call("__ddnIx.albums($ext, ${str(space)})")).jsonArray.map {
             val o = it.jsonObject
             IndexReplica.Album(o.getValue("id").jsonPrimitive.content, o.getValue("name").jsonPrimitive.content, o.getValue("count").jsonPrimitive.int, rows("[" + o.getValue("cover").toString() + "]").first())
         }
@@ -186,11 +192,13 @@ globalThis.__ddnIx = (function () {
       out.sort(function (a, b) { return a.kind === b.kind ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0) : a.kind === "folder" ? -1 : 1; });
       return JSON.stringify(out);
     },
-    // Albums: the media list (built and kept by media()) grouped by folder; newest first.
-    albums: function (exts) {
-      this.media(exts, 0, null);
+    // Albums: the media list (built and kept by media()) grouped by folder; newest first. In the Gallery the
+    // photos right in its root have no album.
+    albums: function (exts, space) {
+      this.media(exts, 0, null, space || null);
       var by = {}, order = [];
       for (var n of mediaCache.list) {
+        if (space === "gallery" && n.parentId === S.GALLERY_ID) continue;
         var a = by[n.parentId];
         if (!a) { var f = st.getNode(n.parentId); if (!f) continue; a = by[n.parentId] = { id: f.id, name: f.name, count: 0, cover: row(n) }; order.push(a); }
         a.count++;
@@ -214,20 +222,25 @@ globalThis.__ddnIx = (function () {
       out.sort(function (a, b) { return a[2] - b[2]; });
       return JSON.stringify(out);
     },
-    // The Gallery: media files outside the trash, newest first. Built once per head and kept (sorted).
-    media: function (exts, limit, after) {
-      var head = st.getMeta().headSeq;
-      if (!mediaCache || mediaCache.head !== head || mediaCache.key !== exts.join(",")) {
+    // Rules 4: the version an op is written with, the space of a node.
+    rulesFor: function (op) { return String(S.rulesVersionFor(st, op, S.WRITE_RULES_VERSION)); },
+    space: function (id) { return st.getNode(id) ? S.spaceOf(st, id) : "drive"; },
+    // Media files outside the trash (of one space: "gallery" / "drive", or all), newest first. Built once per
+    // head and kept (sorted).
+    media: function (exts, limit, after, space) {
+      var head = st.getMeta().headSeq, key = exts.join(",") + "|" + (space || "");
+      if (!mediaCache || mediaCache.head !== head || mediaCache.key !== key) {
         var list = [];
         for (var n of st.allNodes()) {
           if (n.kind !== "file" || !n.content) continue;
           var lower = n.name.toLowerCase(), ok = false;
           for (var i = 0; i < exts.length; i++) if (lower.endsWith(exts[i])) { ok = true; break; }
           if (!ok || S.inTrash(st, n.id)) continue;
+          if (space && S.spaceOf(st, n.id) !== space) continue;
           list.push(n);
         }
         list.sort(function (a, b) { return b.content.createdAt - a.content.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0); });
-        mediaCache = { head: head, key: exts.join(","), list: list };
+        mediaCache = { head: head, key: key, list: list };
       }
       var l = mediaCache.list, from = 0;
       if (after) { while (from < l.length && (l[from].content.createdAt > after[0] || (l[from].content.createdAt === after[0] && l[from].id <= after[1]))) from++; }

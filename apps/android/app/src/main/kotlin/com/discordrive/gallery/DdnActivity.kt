@@ -121,10 +121,14 @@ open class DdnActivity : AppCompatActivity() {
         if (started) show() else started = true
     }
 
-    /** Files picked with "Upload": into the open folder (Files) or "Z telefonu" (Gallery). */
+    /** Files picked with "Upload": into the open folder (Files), the open album, or the Gallery (photos; else "Z telefonu"). */
     private val pick = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@registerForActivityResult
-        val folder = if (gallery) null else path.last().first
+        val folder = when {
+            albumsTab && album != null && session?.gallerySpace == true -> album!!.first
+            gallery || albumsTab -> null
+            else -> path.last().first
+        }
         thread {
             val r = runCatching { DdnUploads.queue(this, uris, folder) }
             main.post {

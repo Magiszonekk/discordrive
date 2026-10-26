@@ -88,9 +88,14 @@ object DdnUploads {
     fun markSent(c: android.content.Context, u: Uri, name: String) = sentPrefs(c).edit().putLong(sentKey(c, u, name), System.currentTimeMillis()).apply()
 
     /** Queue `uris` into `folderId` (null: "Z telefonu" in the root, made when missing); starts the job. */
+    /**
+     * Queue `uris` into `folderId`; null: photos and videos only → the Gallery (when the account has it),
+     * anything else → "Z telefonu" in the Drive's root (made when missing). Starts the job.
+     */
     fun queue(c: android.content.Context, uris: List<Uri>, folderId: String?): Int {
         val s = DdnSession.get(c) ?: throw IllegalStateException("no account")
-        val folder = folderId ?: s.folderPath(listOf(SHARED_FOLDER))
+        val media = folderId == null && uris.isNotEmpty() && uris.all { u -> displayName(c, u).let { DdnSession.isImage(it) || DdnSession.isVideo(it) } }
+        val folder = folderId ?: if (media && runCatching { s.gallerySpace }.getOrDefault(false)) s.galleryRoot else s.folderPath(listOf(SHARED_FOLDER))
         var n = 0
         for (u in uris) {
             val name = displayName(c, u)

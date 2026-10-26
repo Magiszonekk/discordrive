@@ -37,7 +37,9 @@ import java.util.concurrent.TimeUnit
  *
  * Triggers: a new photo or video in MediaStore (content URI trigger), every [PERIOD_H] hours, "Copy now",
  * a file added to the queue. Constraints from the settings: Wi-Fi only, while charging only.
- * Copies go to "<root>/<camera folder>" of the account, root = "Telefon – <device name>"; a file is copied
+ * Copies go to the Gallery when the account has it: the camera's photos without an album (the timeline), other
+ * folders (Screenshots, WhatsApp Images…) into the album of that name (shared by phones with the same folder).
+ * Older instance: "<root>/<camera folder>" of the account, root = "Telefon – <device name>". A file is copied
  * once (remembered by its MediaStore ID, size and date; and skipped when the folder already has the same
  * name with the same size, e.g. after a reinstall).
  */
@@ -55,6 +57,8 @@ object DdnBackup {
     const val NOTIF_CHANNEL_FAILED = "ddn-upload-failed"
     /** Folders offered by default: the camera's. */
     val DEFAULT_BUCKETS = setOf("Camera")
+    /** Camera folders: their photos go to the Gallery without an album (the timeline). */
+    val CAMERA_BUCKETS = setOf("Camera", "DCIM", "100MEDIA", "100ANDRO")
 
     // ── settings ──
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -329,12 +333,19 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             }
             if (media.isNotEmpty()) {
                 val root = DdnBackup.rootName(s.acct.deviceName)
+                val toGallery = s.gallerySpace
                 val folders = HashMap<String, String>()
                 for (m in media) {
                     if (isStopped || System.currentTimeMillis() - t0 > DdnBackup.RUN_BUDGET_MS) break
                     show(m.name)
                     try {
-                        val folder = folders.getOrPut(m.bucket) { s.folderPath(listOf(root, m.bucket)) }
+                        val folder = folders.getOrPut(m.bucket) {
+                            when {
+                                !toGallery -> s.folderPath(listOf(root, m.bucket))
+                                m.bucket in DdnBackup.CAMERA_BUCKETS -> s.galleryRoot
+                                else -> s.galleryAlbum(m.bucket)
+                            }
+                        }
                         // Already there (a reinstall, another copy of the app): the same name with the same size.
                         val have = s.children(folder).firstOrNull { !it.isFolder && it.name == m.name && it.size == m.size }
                         if (have != null) {
