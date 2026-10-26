@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark status / navigation bar icons on the light Cobalt paper; values-night flips them. -->
+    <bool name="cobalt_light_bars">true</bool>
+</resources>

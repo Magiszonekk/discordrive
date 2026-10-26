@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cobalt dark mode (tokens.css [data-theme="dark"]). -->
+<resources>
+    <color name="cobalt_paper">#080B10</color>
+    <color name="cobalt_paper_2">#10141A</color>
+    <color name="cobalt_paper_3">#1B2027</color>
+    <color name="cobalt_ink">#E8EBEF</color>
+    <color name="cobalt_ink_2">#C7CBD0</color>
+    <color name="cobalt_rule">#252930</color>
+    <color name="cobalt_rule_2">#353B43</color>
+    <color name="cobalt_muted">#7A8189</color>
+    <color name="cobalt_accent">#0076ED</color>
+    <color name="cobalt_accent_ink">#FAFCFE</color>
+    <color name="cobalt_accent_soft">#062341</color>
+    <color name="cobalt_error">#F3625D</color>
+    <color name="cobalt_success">#54B66E</color>
+    <color name="cobalt_warning">#DCA744</color>
+    <color name="cobalt_qr_paper">#FFFFFF</color>
+</resources>

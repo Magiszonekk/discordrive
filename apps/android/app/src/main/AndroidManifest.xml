@@ -122,7 +122,7 @@
         </activity>
 
         <activity android:name=".LoginActivity" android:exported="false" />
-        <activity android:name=".JoinActivity" android:exported="false" android:label="@string/ddn_join_menu" />
+        <activity android:name=".JoinActivity" android:exported="false" android:label="@string/ddn_join_menu" android:theme="@style/Theme.Ddn.Cobalt" />
         <activity android:name=".AlbumActivity" android:exported="false" />
         <activity android:name=".TrashActivity" android:exported="false" />
         <activity android:name=".SearchActivity" android:exported="false" />
