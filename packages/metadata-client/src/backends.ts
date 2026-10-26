@@ -541,7 +541,8 @@ export class DiscordWebhooks {
           continue;
         }
         if (e instanceof RateLimitedError) {
-          await this.sleep(e.retryAfterMs);
+          // Spread out: every request waiting on this bucket would come back at the same instant.
+          await this.sleep(e.retryAfterMs + Math.floor(Math.random() * 1500));
           continue;
         }
         if (retryFree(e)) continue;

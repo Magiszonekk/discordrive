@@ -289,6 +289,32 @@ class InstanceApi(
 }
 
 /**
+ * How long a Discord 429 asks to wait, in seconds. Discord answers a webhook's per-route bucket with
+ * contradicting values (production 2026-10-26: header retry-after 1812, body retry_after 0.3,
+ * x-ratelimit-reset-after 2, scope user): the header retry-after counts only for the global limit. A bucket's
+ * 429 waits the body's retry_after, else x-ratelimit-reset-after (at least 0.25 s).
+ */
+object DiscordRateLimit {
+    data class Wait(val seconds: Double, val global: Boolean, val cloudflare: Boolean)
+
+    fun wait(header: (String) -> String?, body: String): Wait {
+        val j = runCatching { json.parseToJsonElement(body) as? JsonObject }.getOrNull()
+        val fromBody = j?.get("retry_after")?.jsonPrimitive?.content?.toDoubleOrNull()
+        val discordHeaders = listOf("x-ratelimit-scope", "x-ratelimit-remaining", "x-ratelimit-reset-after", "x-ratelimit-limit", "x-ratelimit-bucket", "x-ratelimit-global").any { header(it) != null }
+        val hdr = header("retry-after")?.toDoubleOrNull()
+        // Cloudflare: no Discord headers, no Discord JSON (an HTML page or "error code: 1015").
+        if (!discordHeaders && fromBody == null) return Wait(hdr ?: 60.0, global = false, cloudflare = true)
+        val global = j?.get("global")?.jsonPrimitive?.content == "true" || header("x-ratelimit-global") == "true" || header("x-ratelimit-scope") == "global"
+        val reset = header("x-ratelimit-reset-after")?.toDoubleOrNull()
+        val s = if (global) fromBody ?: hdr ?: 1.0 else fromBody ?: reset ?: minOf(hdr ?: 1.0, 60.0)
+        return Wait(maxOf(0.25, s), global, false)
+    }
+
+    /** Random 0–1.5 s added to a 429 wait: the requests waiting on one bucket must not all return at once. */
+    fun jitterMs(): Long = (Math.random() * 1500).toLong()
+}
+
+/**
  * Reads from Discord through the account's own webhooks (metadata only: nothing passes through the
  * instance): GET the message through the webhook for a fresh CDN link, then the CDN. `apiOrigin` replaces
  * https://discord.com in tests (a local fake); never set in the app.
@@ -317,18 +343,35 @@ open class Discord(private val http: OkHttpClient = defaultHttp(), private val a
     open fun download(cdnUrl: String): ByteArray = get(cdnUrl)
 
     private fun get(url: String): ByteArray {
-        for (attempt in 0..4) {
-            http.newCall(Request.Builder().url(map(url)).get().build()).execute().use { res ->
-                if (res.code == 429) {
-                    val wait = (res.header("retry-after")?.toDoubleOrNull() ?: 1.0).coerceIn(0.1, 30.0)
-                    Thread.sleep((wait * 1000).toLong())
-                    return@use
+        // Short 429s of a webhook's bucket have their own pool (they are normal when reading many fragments)
+        // and do not use up the retries of other errors; each waits what Discord asks (not its header
+        // retry-after) plus a little jitter.
+        var short429 = 0
+        var attempt = 0
+        while (true) {
+            try {
+                http.newCall(Request.Builder().url(map(url)).get().build()).execute().use { res ->
+                    if (res.code == 429) {
+                        val w = DiscordRateLimit.wait({ res.header(it) }, res.body?.string().orEmpty())
+                        if (w.cloudflare || w.seconds > 60) throw ServerException(429, if (w.cloudflare) "discord_blocked" else "rate_limited")
+                        if (++short429 > 12) throw ServerException(429, "rate_limited")
+                        Thread.sleep((w.seconds * 1000).toLong() + DiscordRateLimit.jitterMs())
+                        return@use
+                    }
+                    if (res.code >= 500 || res.code == 408) {
+                        if (++attempt > 4) throw ServerException(res.code, "discord")
+                        Thread.sleep((1000L shl (attempt - 1)) + DiscordRateLimit.jitterMs())
+                        return@use
+                    }
+                    if (!res.isSuccessful) throw ServerException(res.code, "discord")
+                    return res.body!!.bytes()
                 }
-                if (!res.isSuccessful) throw ServerException(res.code, "discord")
-                return res.body!!.bytes()
+            } catch (e: java.io.IOException) {
+                // No answer (network): again, as for a 5xx.
+                if (++attempt > 4) throw e
+                Thread.sleep((1000L shl (attempt - 1)) + DiscordRateLimit.jitterMs())
             }
         }
-        throw ServerException(429, "rate_limited")
     }
 
     companion object {

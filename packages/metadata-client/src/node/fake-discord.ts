@@ -57,6 +57,8 @@ export class FakeDiscord {
    * more than this many in any 1 s window answer 429 scope `user`. 0 = off.
    */
   getPerSecPerHook = 0;
+  /** Tests: the Cloudflare block as plain text ("error code: 1015") instead of an HTML page. */
+  cloudflarePlain = false;
   /** GETs of messages per webhook: [start, end] times (tests: rate and concurrency). */
   readonly getLog = new Map<string, { t0: number; t1: number; st: number }[]>();
   /**
@@ -232,6 +234,10 @@ export class FakeDiscord {
     if (m && this.cloudflareUntil > Date.now()) {
       for await (const _ of req) void _;
       const ra = Math.ceil((this.cloudflareUntil - Date.now()) / 1000);
+      if (this.cloudflarePlain) {
+        res.writeHead(429, { "content-type": "text/plain; charset=UTF-8", "retry-after": String(ra) });
+        return void res.end("error code: 1015");
+      }
       res.writeHead(429, { "content-type": "text/html; charset=UTF-8", "retry-after": String(ra) });
       return void res.end("<!DOCTYPE html><title>Access denied | discord.com used Cloudflare to restrict access</title>");
     }
@@ -315,7 +321,8 @@ export class FakeDiscord {
       this.getLog.set(webhookId, log);
       if (this.getPerSecPerHook && log.filter((g) => g.st === 200 && g.t0 > t0 - 1000).length >= this.getPerSecPerHook) {
         log.push({ t0, t1: t0, st: 429 });
-        return this.send(res, 429, { message: "You are being rate limited.", retry_after: 0.3, global: false }, { ...cors, "x-ratelimit-scope": "user" });
+        // As Discord answers it (production 2026-10-26): the header retry-after contradicts the rest.
+        return this.send(res, 429, { message: "You are being rate limited.", retry_after: 0.3, global: false }, { ...cors, "x-ratelimit-scope": "user", "x-ratelimit-limit": "5", "x-ratelimit-remaining": "0", "x-ratelimit-reset-after": "2", "retry-after": "1812", via: "1.1 google" });
       }
       const g = { t0, t1: t0, st: 200 };
       log.push(g);
