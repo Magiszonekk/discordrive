@@ -927,7 +927,9 @@ export class AppCore {
    * replica (secondary tab), so paging behaves the same in every tab.
    */
   list(parentId = ROOT_ID, after?: string, limit = 200, sort?: ListSort): { rows: ChildRow[]; total: number } {
-    if (parentId === GALLERY_ID) return this.galleryList(after, limit);
+    if (parentId === GALLERY_ID) return this.galleryList(GALLERY_ID, after, limit);
+    // An album sorted by date: by the date taken, like the timeline (not when the version was written).
+    if (sort?.by === "date" && this.c().store.getNode(parentId) && spaceOf(this.c().store, parentId) === "gallery") return this.galleryList(parentId, after, limit, !sort.desc);
     const s = this.store;
     const hide = !this.showUnavailable;
     if (s instanceof SqlIndexStore) return { rows: s.listChildren(parentId, { after, limit, hideUnavailable: hide, sort }), total: s.countChildren(parentId, hide) };
@@ -956,7 +958,9 @@ export class AppCore {
    * The Gallery's root: its albums (folders, by name), then every photo of the Gallery, in albums too, newest
    * first by the date taken (the timeline). Same keyset cursor shape as list().
    */
-  private galleryList(after: string | undefined, limit: number): { rows: ChildRow[]; total: number } {
+  private galleryList(root: string, after: string | undefined, limit: number, asc = false): { rows: ChildRow[]; total: number } {
+    // The Gallery's root: the whole space's timeline; an album: only its own photos (sub-folders by name first).
+    const direct = root !== GALLERY_ID;
     // The date taken is in each file's manifest, known here only once looked at (the uploading device knows
     // it at once): photos synced from another device get theirs in the background, the view then re-sorts.
     void this.descSync(200, "gallery");
@@ -965,30 +969,51 @@ export class AppCore {
     const hide = !this.showUnavailable;
     const cur = parseCursor(after);
     const rows: ChildRow[] = [];
-    const albums = this.subfolders(GALLERY_ID);
+    const albums = this.subfolders(root);
     if (!cur || cur.fo === 0) {
       const from = cur ? albums.findIndex((a) => a.id === cur.id) + 1 : 0;
       for (const a of albums.slice(from, from + limit)) rows.push({ id: a.id, name: a.name, kind: "folder", size: null, modifiedAt: null, trashed: false, cursor: JSON.stringify([0, null, nameKey(a.name), a.id]) });
     }
     let photos = 0;
     if (s instanceof SqlIndexStore) {
-      photos = s.subtreeTotals(GALLERY_ID).files;
-      if (rows.length < limit) rows.push(...s.listTimeline(GALLERY_ID, { after: cur?.fo === 1 ? after : undefined, limit: limit - rows.length, hideUnavailable: hide }));
+      photos = direct ? s.folderStats(root, hide).files : s.subtreeTotals(GALLERY_ID).files;
+      if (rows.length < limit) rows.push(...s.listTimeline(root, { after: cur?.fo === 1 ? after : undefined, limit: limit - rows.length, hideUnavailable: hide, direct, asc }));
     } else if (tree.getNode(GALLERY_ID)) {
       const all: ChildRow[] = [];
-      for (const n of tree.allNodes()) {
+      const pool = direct ? [...tree.childIds(root)].map((id) => tree.getNode(id)!).filter(Boolean) : [...tree.allNodes()];
+      for (const n of pool) {
         if (n.kind !== "file" || !n.content || inTrash(tree, n.id) || spaceOf(tree, n.id) !== "gallery") continue;
         if (hide && this.unavailableInfo(n.id)) continue;
         const at = this.descMem.get(n.content.manifestRef)?.taken || n.content.createdAt;
         all.push({ id: n.id, name: n.name, kind: "file", size: n.content.sizeBytes, modifiedAt: at, trashed: false, cursor: JSON.stringify([1, at, "", n.id]) });
       }
       const key = (r: ChildRow) => JSON.parse(r.cursor) as [number, number, string, string];
-      all.sort((a, b) => key(b)[1] - key(a)[1] || (key(b)[3] < key(a)[3] ? -1 : 1));
+      const sg = asc ? -1 : 1;
+      all.sort((a, b) => sg * (key(b)[1] - key(a)[1]) || sg * (key(b)[3] < key(a)[3] ? -1 : 1));
       photos = all.length;
-      const from = cur?.fo === 1 ? all.findIndex((r) => key(r)[1] < (cur.key ?? 0) || (key(r)[1] === cur.key && key(r)[3] < cur.id)) : 0;
+      const past = (r: ChildRow) => (asc ? key(r)[1] > (cur!.key ?? 0) || (key(r)[1] === cur!.key && key(r)[3] > cur!.id) : key(r)[1] < (cur!.key ?? 0) || (key(r)[1] === cur!.key && key(r)[3] < cur!.id));
+      const from = cur?.fo === 1 ? all.findIndex(past) : 0;
       if (rows.length < limit && from >= 0) rows.push(...all.slice(from, from + limit - rows.length));
     }
     return { rows, total: albums.length + photos };
+  }
+
+  /**
+   * Album cards of the Gallery's root in one call: per album its photo count and the newest picture (by the
+   * date taken) as the cover. One round trip for the whole page instead of two per album.
+   */
+  albumCovers(ids: string[]): Record<string, { n: number; cover: { id: string; at: number } | null }> {
+    const media = /\.(webm|mp4|m4v|mov|mkv|ogv|avi|jpe?g|png|gif|webp|avif|heic|bmp|svg)$/i;
+    const out: Record<string, { n: number; cover: { id: string; at: number } | null }> = {};
+    for (const id of ids.slice(0, 500)) {
+      const n = this.c().store.getNode(id);
+      if (!n || n.kind !== "folder" || spaceOf(this.c().store, id) !== "gallery") continue;
+      const st = this.folderStats(id);
+      const pg = this.list(id, undefined, 24, { by: "date", desc: true });
+      const f = pg.rows.find((x) => x.kind === "file" && media.test(x.name) && !x.unavailable?.length);
+      out[id] = { n: st.files, cover: f ? { id: f.id, at: f.modifiedAt ?? 0 } : null };
+    }
+    return out;
   }
 
   /** Counters for the folder heading ("3 folders · 8 files · 72 GB"); the Gallery's root counts every photo of the space. */

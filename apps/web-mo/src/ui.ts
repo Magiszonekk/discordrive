@@ -1348,14 +1348,28 @@ function decorateAlbum(tr: HTMLElement, id: string) {
   };
   const known = albumCovers.get(id);
   if (known) paint(known);
-  void (async () => {
-    const [st, pg] = await Promise.all([core.folderStats(id), core.list(id, undefined, 24, { by: "date", desc: true })]);
-    if (!tr.isConnected) return;
-    const f = pg.rows.find((x: { kind: string; name: string; unavailable?: string[] }) => x.kind === "file" && typeOf(x.name)[2] === "media" && !x.unavailable?.length);
-    const x = { n: st.files, cover: f ? { id: f.id, at: f.modifiedAt ?? 0 } : null };
-    albumCovers.set(id, x);
-    if (!known || known.n !== x.n || known.cover?.id !== x.cover?.id || known.cover?.at !== x.cover?.at) paint(x);
-  })().catch(() => {});
+  void coverOf(id)
+    .then((x) => {
+      if (!tr.isConnected || !x) return;
+      albumCovers.set(id, x);
+      if (!known || known.n !== x.n || known.cover?.id !== x.cover?.id || known.cover?.at !== x.cover?.at) paint(x);
+    })
+    .catch(() => {});
+}
+/** Album cards asked in one batch per render (core.albumCovers), not two calls per album. */
+type AlbumCover = { n: number; cover: { id: string; at: number } | null };
+let coverBatch: { ids: string[]; done: Promise<Record<string, AlbumCover>> } | null = null;
+function coverOf(id: string): Promise<AlbumCover | undefined> {
+  if (!coverBatch) {
+    const b = { ids: [] as string[], done: null as unknown as Promise<Record<string, AlbumCover>> };
+    b.done = Promise.resolve().then(() => {
+      coverBatch = null;
+      return core.albumCovers(b.ids) as Promise<Record<string, AlbumCover>>;
+    });
+    coverBatch = b;
+  }
+  coverBatch.ids.push(id);
+  return coverBatch.done.then((m) => m[id]);
 }
 
 /** Search results in the file table (one page, up to 500), best first. */
