@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Danger button (Leave, Delete for good, Remove PIN): the error colour at 10%, red text; disabled fainter. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:alpha="0.05" android:color="@color/cobalt_error" android:state_enabled="false" />
+    <item android:alpha="0.10" android:color="@color/cobalt_error" />
+</selector>

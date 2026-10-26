@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- A list row's icon well: paper-2, 8dp. -->
+<!-- A list row's icon tile: 10dp, the tile colour (a folder / a settings row tints it with the accent). -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="@color/cobalt_paper_2" />
-    <corners android:radius="8dp" />
+    <solid android:color="@color/cobalt_tile" />
+    <corners android:radius="10dp" />
 </shape>
