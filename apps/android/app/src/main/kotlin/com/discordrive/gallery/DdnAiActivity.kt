@@ -172,7 +172,7 @@ class DdnAiActivity : AppCompatActivity() {
                 r.onSuccess { list ->
                     if (list.isEmpty()) { result.text = getString(R.string.ddn_ai_no_models); return@onSuccess }
                     result.text = ""
-                    AlertDialog.Builder(this).setTitle(R.string.ddn_ai_model).setItems(list.toTypedArray()) { _, i -> model.setText(list[i]) }.show()
+                    com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle(R.string.ddn_ai_model).setItems(list.toTypedArray()) { _, i -> model.setText(list[i]) }.show()
                 }.onFailure { result.text = getString(R.string.ddn_ai_models_failed, DdnAi.reason(this, it)) }
             }
         }

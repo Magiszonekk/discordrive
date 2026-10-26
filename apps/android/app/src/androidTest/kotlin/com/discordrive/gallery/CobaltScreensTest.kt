@@ -72,4 +72,39 @@ class CobaltScreensTest {
             InstrumentationRegistry.getArguments().getString("holdMs")?.toLongOrNull()?.let { Thread.sleep(it) }
         }
     }
+
+    @Test
+    fun autoCopyInCards() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        ActivityScenario.launch<DdnBackupActivity>(Intent(ctx, DdnBackupActivity::class.java)).use { s ->
+            var cards = 0
+            var switches = 0
+            var checkBoxes = 0
+            var caps = 0
+            s.onActivity { a ->
+                val v = all(a.window.decorView)
+                cards = v.count { it is MaterialCardView }
+                switches = v.count { it is MaterialSwitch }
+                checkBoxes = v.count { it is CheckBox }
+                caps = v.filterIsInstance<Button>().count { it.isAllCaps }
+            }
+            assertTrue("cards: $cards", cards >= 3)
+            assertTrue("switches: $switches", switches >= 3)
+            assertTrue("no check boxes: $checkBoxes", checkBoxes == 0)
+            assertTrue("no upper-cased buttons", caps == 0)
+            InstrumentationRegistry.getArguments().getString("holdMs")?.toLongOrNull()?.let { Thread.sleep(it) }
+        }
+    }
+
+    /** The PIN dialog in the Cobalt look, "Anuluj" in Polish whatever the system language. */
+    @Test
+    fun pinDialogCobalt() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        ActivityScenario.launch<DdnSettingsActivity>(Intent(ctx, DdnSettingsActivity::class.java)).use { s ->
+            var cancel = ""
+            s.onActivity { a -> a.openPinDialogForTest()?.let { d -> cancel = d.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).text.toString() } }
+            assertTrue("Anuluj: $cancel", cancel == ctx.getString(R.string.cobalt_cancel))
+            InstrumentationRegistry.getArguments().getString("holdMs")?.toLongOrNull()?.let { Thread.sleep(it) }
+        }
+    }
 }

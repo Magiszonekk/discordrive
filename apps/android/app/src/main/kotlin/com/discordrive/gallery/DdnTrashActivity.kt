@@ -47,7 +47,7 @@ class DdnTrashActivity : AppCompatActivity() {
         ui = CobaltUi(this)
         // One heading (the bar), the note, the list, the actions at the bottom.
         val root = ui.screen(R.string.ddn_trash, scroll = false)
-        status = ui.note(getString(R.string.ddn_trash_loading))
+        status = ui.note(getString(R.string.ddn_trash_loading)).apply { setPadding(ui.dp(4), 0, ui.dp(4), 0) }
         root.addView(status, ui.lp(top = 4))
         // Loading (the account is synced first): not an empty trash.
         loading = com.google.android.material.progressindicator.LinearProgressIndicator(this).apply { isIndeterminate = true }
@@ -88,11 +88,11 @@ class DdnTrashActivity : AppCompatActivity() {
                 val r = h.itemView.tag as CobaltUi.ListRow
                 val v = r.view
                 val box = v.getChildAt(0) as CheckBox
-                r.icon.setImageResource(if (c.isFolder) R.drawable.ic_albums else R.drawable.ic_photo)
+                r.icon.setImageResource(FileIcons.of(c.name, c.isFolder))
                 r.title.text = c.name
                 val left = TrashPolicy.daysLeft(c.trashedAt ?: serverNow, serverNow)
                 val what = if (c.isFolder) getString(R.string.ddn_folder) else Formatter.formatShortFileSize(this@DdnTrashActivity, c.size ?: 0)
-                val whenTrashed = c.trashedAt?.let { DateUtils.getRelativeTimeSpanString(it, serverNow, DateUtils.MINUTE_IN_MILLIS) } ?: ""
+                val whenTrashed = c.trashedAt?.let { Ago.of(this@DdnTrashActivity, it, serverNow) } ?: ""
                 r.sub.text = getString(R.string.ddn_trash_row, what, whenTrashed, plq(R.plurals.ddn_trash_days, left, left))
                 box.setOnCheckedChangeListener(null)
                 box.isChecked = c.id in selected
@@ -104,11 +104,11 @@ class DdnTrashActivity : AppCompatActivity() {
 
     private fun confirmPurge() {
         val n = selected.size
-        AlertDialog.Builder(this)
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
             .setTitle(R.string.ddn_trash_purge)
             .setMessage(plq(R.plurals.ddn_trash_purge_ask, n, n))
             .setPositiveButton(R.string.ddn_trash_purge) { _, _ -> act(restore = false) }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .show()
     }
 

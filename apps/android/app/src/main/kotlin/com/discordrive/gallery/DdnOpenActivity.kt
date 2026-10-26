@@ -92,9 +92,9 @@ class DdnOpenActivity : AppCompatActivity() {
         }
         // Sent from here before (this session or earlier): ask, a second copy would be "name (2)".
         if (DdnUploads.sentBefore(this, uri, name)) {
-            androidx.appcompat.app.AlertDialog.Builder(this).setMessage(getString(R.string.ddn_open_again, name))
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setMessage(getString(R.string.ddn_open_again, name))
                 .setPositiveButton(R.string.ddn_open_send) { _, _ -> queue(uri) }
-                .setNegativeButton(android.R.string.cancel, null).show()
+                .setNegativeButton(R.string.cobalt_cancel, null).show()
             return
         }
         queue(uri)

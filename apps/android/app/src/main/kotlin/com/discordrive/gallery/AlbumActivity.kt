@@ -167,7 +167,7 @@ class AlbumActivity : SessionActivity() {
                     .setPositiveButton(R.string.action_settings) { _, _ ->
                         startActivity(Intent(this, SettingsActivity::class.java))
                     }
-                    .setNegativeButton(android.R.string.cancel, null)
+                    .setNegativeButton(R.string.cobalt_cancel, null)
                     .show()
                 return
             }
@@ -180,7 +180,7 @@ class AlbumActivity : SessionActivity() {
                     inflateAlbumMenuRefresh()
                     Snackbar.make(findViewById(R.id.albumRoot), R.string.album_private_marked, Snackbar.LENGTH_LONG).show()
                 }
-                .setNegativeButton(android.R.string.cancel, null)
+                .setNegativeButton(R.string.cobalt_cancel, null)
                 .show()
         }
     }
@@ -237,7 +237,7 @@ class AlbumActivity : SessionActivity() {
                         }
                 }
             }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .show()
     }
 
@@ -362,7 +362,7 @@ class AlbumActivity : SessionActivity() {
                 ),
             )
             .setPositiveButton(R.string.action_delete_cloud) { _, _ -> trashSelection(assets, alsoLocal) }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .show()
     }
 
@@ -514,7 +514,7 @@ class AlbumActivity : SessionActivity() {
                     }
                 }
             }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .show()
     }
 
@@ -570,7 +570,7 @@ class AlbumActivity : SessionActivity() {
                     }
                 }
             }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .show()
     }
 

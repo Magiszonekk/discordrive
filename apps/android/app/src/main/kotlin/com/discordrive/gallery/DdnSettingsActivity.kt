@@ -127,7 +127,7 @@ class DdnSettingsActivity : AppCompatActivity() {
                 d.dismiss()
                 recreate()
             }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .show()
     }
 
@@ -136,12 +136,12 @@ class DdnSettingsActivity : AppCompatActivity() {
         when {
             downloading -> return
             b == null -> checkUpdate(manual = true)
-            !DdnApp.canInstall(this) -> AlertDialog.Builder(this).setMessage(getString(R.string.update_need_permission) + "\n\n" + getString(R.string.ddn_upd_play_protect))
-                .setPositiveButton(android.R.string.ok) { _, _ -> installAfterPermission = true; startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))) }
-                .setNegativeButton(android.R.string.cancel, null).show()
-            else -> AlertDialog.Builder(this).setTitle(getString(R.string.ddn_upd_available, b.versionName)).setMessage(R.string.ddn_upd_play_protect)
+            !DdnApp.canInstall(this) -> com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setMessage(getString(R.string.update_need_permission) + "\n\n" + getString(R.string.ddn_upd_play_protect))
+                .setPositiveButton(R.string.cobalt_ok) { _, _ -> installAfterPermission = true; startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))) }
+                .setNegativeButton(R.string.cobalt_cancel, null).show()
+            else -> com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle(getString(R.string.ddn_upd_available, b.versionName)).setMessage(R.string.ddn_upd_play_protect)
                 .setPositiveButton(R.string.ddn_upd_install) { _, _ -> downloadAndInstall(b) }
-                .setNegativeButton(android.R.string.cancel, null).show()
+                .setNegativeButton(R.string.cobalt_cancel, null).show()
         }
     }
 
@@ -197,7 +197,7 @@ class DdnSettingsActivity : AppCompatActivity() {
     }
 
     private fun confirmLeave() {
-        AlertDialog.Builder(this).setTitle(R.string.ddn_set_leave).setMessage(R.string.ddn_set_leave_ask)
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle(R.string.ddn_set_leave).setMessage(R.string.ddn_set_leave_ask)
             .setPositiveButton(R.string.ddn_set_leave) { _, _ ->
                 // This phone's entry on the account goes too (no stale device left in the list). Offline or the
                 // instance refusing: the phone still forgets the account, and says the entry stayed.
@@ -216,12 +216,12 @@ class DdnSettingsActivity : AppCompatActivity() {
                     }
                 }
             }
-            .setNegativeButton(android.R.string.cancel, null).show()
+            .setNegativeButton(R.string.cobalt_cancel, null).show()
     }
 
     /** "<time> purged N" / "<time> <reason>" (the background job's note) in words. */
     private fun cleanText(note: String): String {
-        val at = note.substringBefore(' ').toLongOrNull()?.let { android.text.format.DateUtils.getRelativeTimeSpanString(it).toString() } ?: ""
+        val at = note.substringBefore(' ').toLongOrNull()?.let { Ago.of(this, it) } ?: ""
         val what = note.substringAfter(' ')
         val words = when {
             what.startsWith("purged ") -> getString(R.string.ddn_clean_purged, what.removePrefix("purged ").toIntOrNull() ?: 0)
@@ -239,13 +239,14 @@ class DdnSettingsActivity : AppCompatActivity() {
         fun field(hint: Int) = android.widget.EditText(this).apply {
             setHint(hint); inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
             importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+            typeface = androidx.core.content.res.ResourcesCompat.getFont(this@DdnSettingsActivity, R.font.inter_regular)
         }
         val old = field(R.string.private_pin_old)
         val new1 = field(R.string.private_pin_new)
         val new2 = field(R.string.private_pin_repeat)
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0); if (has) addView(old); addView(new1); addView(new2) }
-        val d = AlertDialog.Builder(this).setTitle(if (has) R.string.private_change_pin else R.string.private_set_pin).setView(box)
-            .setPositiveButton(android.R.string.ok, null).setNegativeButton(android.R.string.cancel, null).create()
+        val d = com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle(if (has) R.string.private_change_pin else R.string.private_set_pin).setView(box)
+            .setPositiveButton(R.string.cobalt_ok, null).setNegativeButton(R.string.cobalt_cancel, null).create()
         d.setOnShowListener {
             d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 when {
@@ -263,12 +264,15 @@ class DdnSettingsActivity : AppCompatActivity() {
             }
         }
         d.show()
+        lastDialog = d
     }
+    private var lastDialog: androidx.appcompat.app.AlertDialog? = null
+    internal fun openPinDialogForTest(): androidx.appcompat.app.AlertDialog? { setPinDialog(); return lastDialog }
 
     /** Remove the PIN (after it): every private album becomes public again, nothing stays locked without a PIN. */
     private fun removePinDialog() {
         PrivateUnlock.unlock(this) {
-            AlertDialog.Builder(this).setMessage(R.string.ddn_pin_remove_ask)
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setMessage(R.string.ddn_pin_remove_ask)
                 .setPositiveButton(R.string.ddn_pin_remove) { _, _ ->
                     SecureStore(this).remove(SecureStore.PRIVATE_PIN)
                     PrivateAlbums.setBiometricsEnabled(this, false)
@@ -277,7 +281,7 @@ class DdnSettingsActivity : AppCompatActivity() {
                     removePin.visibility = android.view.View.GONE
                     Toast.makeText(this, R.string.ddn_pin_removed, Toast.LENGTH_SHORT).show()
                 }
-                .setNegativeButton(android.R.string.cancel, null).show()
+                .setNegativeButton(R.string.cobalt_cancel, null).show()
         }
     }
 

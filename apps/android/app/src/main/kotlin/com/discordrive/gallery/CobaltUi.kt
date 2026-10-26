@@ -71,10 +71,13 @@ class CobaltUi(private val a: AppCompatActivity) {
     }
 
     /** A section: a card with a heading (accent) and an optional note; returns its body (rows go into it). */
-    fun section(parent: ViewGroup, @StringRes heading: Int, note: CharSequence? = null, danger: Boolean = false): LinearLayout {
+    fun section(parent: ViewGroup, @StringRes heading: Int, note: CharSequence? = null, danger: Boolean = false): LinearLayout =
+        sectionText(parent, a.getString(heading), note, danger)
+
+    fun sectionText(parent: ViewGroup, heading: CharSequence, note: CharSequence? = null, danger: Boolean = false): LinearLayout {
         val body = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(14), dp(16), dp(16)) }
         body.addView(TextView(a).apply {
-            setText(heading)
+            text = heading
             TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_SectionHead)
             setTextColor(if (danger) color(R.color.cobalt_error) else accent())
         })
@@ -127,11 +130,14 @@ class CobaltUi(private val a: AppCompatActivity) {
     }
 
     /** A row added to `parent`: a label (and a note under it) on the left, a Material switch on the right. */
-    fun switchRow(parent: ViewGroup, @StringRes label: Int, checked: Boolean, note: CharSequence? = null, onChange: (MaterialSwitch, Boolean) -> Unit): MaterialSwitch {
+    fun switchRow(parent: ViewGroup, @StringRes label: Int, checked: Boolean, note: CharSequence? = null, onChange: (MaterialSwitch, Boolean) -> Unit): MaterialSwitch =
+        switchRowText(parent, a.getString(label), checked, note, onChange)
+
+    fun switchRowText(parent: ViewGroup, label: CharSequence, checked: Boolean, note: CharSequence? = null, onChange: (MaterialSwitch, Boolean) -> Unit): MaterialSwitch {
         val sw = MaterialSwitch(a).apply { isChecked = checked }
         val texts = LinearLayout(a).apply {
             orientation = LinearLayout.VERTICAL
-            addView(TextView(a).apply { setText(label); TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_Label) })
+            addView(TextView(a).apply { text = label; TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_Label) })
             if (note != null) addView(note(note))
         }
         val row = LinearLayout(a).apply {

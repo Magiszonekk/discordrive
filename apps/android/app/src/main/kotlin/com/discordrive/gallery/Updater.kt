@@ -85,12 +85,12 @@ object Updater {
         } else {
             MaterialAlertDialogBuilder(activity)
                 .setMessage(R.string.update_need_permission)
-                .setPositiveButton(android.R.string.ok) { _, _ ->
+                .setPositiveButton(R.string.cobalt_ok) { _, _ ->
                     activity.startActivity(
                         Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}")),
                     )
                 }
-                .setNegativeButton(android.R.string.cancel, null)
+                .setNegativeButton(R.string.cobalt_cancel, null)
                 .show()
         }
     }

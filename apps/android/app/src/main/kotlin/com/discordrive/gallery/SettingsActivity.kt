@@ -154,7 +154,7 @@ class SettingsActivity : SessionActivity() {
                 val msg = if (which == 0) R.string.download_started_bg else R.string.previews_started_bg
                 Snackbar.make(findViewById(R.id.settingsRoot), msg, Snackbar.LENGTH_LONG).show()
             }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .show()
     }
 
@@ -187,7 +187,7 @@ class SettingsActivity : SessionActivity() {
                             target.setText(models[which])
                             dialog.dismiss()
                         }
-                        .setNegativeButton(android.R.string.cancel, null)
+                        .setNegativeButton(R.string.cobalt_cancel, null)
                         .show()
                 }.onFailure { e ->
                     AppLog.w("Settings", "fetch models failed", e)
@@ -209,7 +209,7 @@ class SettingsActivity : SessionActivity() {
                 backupSettings()
                 Snackbar.make(findViewById(R.id.settingsRoot), R.string.settings_saved, Snackbar.LENGTH_SHORT).show()
             }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .show()
     }
 
@@ -259,7 +259,7 @@ class SettingsActivity : SessionActivity() {
             .setIcon(R.drawable.ic_lock)
             .setView(view)
             .setPositiveButton(R.string.settings_save, null) // validated below, stays open on error
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .create()
         dialog.setOnShowListener {
             dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -302,7 +302,7 @@ class SettingsActivity : SessionActivity() {
                 Snackbar.make(findViewById(R.id.settingsRoot), R.string.accent_changed, Snackbar.LENGTH_SHORT).show()
                 recreate() // re-inflate with the new accent overlay
             }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .show()
     }
 
@@ -324,7 +324,7 @@ class SettingsActivity : SessionActivity() {
             .setTitle(R.string.danger_wipe_cloud_title)
             .setMessage(R.string.danger_wipe_cloud_msg)
             .setPositiveButton(R.string.danger_wipe_cloud_confirm) { _, _ -> wipeCloud() }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .show()
     }
 
@@ -372,7 +372,7 @@ class SettingsActivity : SessionActivity() {
                     .setTitle(R.string.danger_wipe_local_title)
                     .setMessage(getString(R.string.danger_wipe_local_msg, assets.size))
                     .setPositiveButton(R.string.danger_wipe_local_confirm) { _, _ -> wipeLocal(assets) }
-                    .setNegativeButton(android.R.string.cancel, null)
+                    .setNegativeButton(R.string.cobalt_cancel, null)
                     .show()
             }
         }
@@ -411,7 +411,7 @@ class SettingsActivity : SessionActivity() {
                     }
                 }
             }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .show()
     }
 
