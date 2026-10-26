@@ -70,7 +70,9 @@ class JoinActivity : AppCompatActivity() {
         val kitGo = findViewById<Button>(R.id.joinKitGo)
         ok = findViewById<Button>(R.id.joinOk).apply { setOnClickListener { openAccount(0) } }
         // The address: from the link that opened this screen, else the one used last time.
-        server.setText(intent.getStringExtra("server") ?: lastServer())
+        server.setText(intent.getStringExtra("server")?.let { JoinAddress.normalize(it) } ?: JoinAddress.last(this))
+        // A pasted pairing link or a page of the instance: only its address stays (https://host[:port]).
+        server.setOnFocusChangeListener { _, has -> if (!has) JoinAddress.normalize(server.text.toString())?.let { if (it != server.text.toString()) server.setText(it) } }
         name.setText("${Build.MANUFACTURER} ${Build.MODEL}".trim())
         findViewById<Button>(R.id.joinCopy).setOnClickListener { copyCode() }
         findViewById<Button>(R.id.joinShare).setOnClickListener { shareCode() }
@@ -84,9 +86,9 @@ class JoinActivity : AppCompatActivity() {
         }
 
         start.setOnClickListener {
-            val url = server.text.toString().trim().trimEnd('/')
-            if (!url.startsWith("http")) return@setOnClickListener toast(getString(R.string.ddn_bad_server))
-            rememberServer(url)
+            val url = JoinAddress.normalize(server.text.toString()) ?: return@setOnClickListener toast(getString(R.string.ddn_bad_server))
+            server.setText(url)
+            JoinAddress.remember(this, url)
             val d = Ed25519Key.generate()
             val p = Pairing.start(d.publicKey)
             device = d
@@ -103,7 +105,7 @@ class JoinActivity : AppCompatActivity() {
         }
         yes.setOnClickListener {
             val r = result ?: return@setOnClickListener
-            val url = server.text.toString().trim().trimEnd('/')
+            val url = JoinAddress.normalize(server.text.toString()) ?: return@setOnClickListener toast(getString(R.string.ddn_bad_server))
             yes.isEnabled = false
             thread {
                 val out = runCatching {
@@ -123,7 +125,8 @@ class JoinActivity : AppCompatActivity() {
             status.text = getString(R.string.ddn_sas_rejected)
         }
         kitGo.setOnClickListener {
-            val url = server.text.toString().trim().trimEnd('/')
+            val url = JoinAddress.normalize(server.text.toString()) ?: return@setOnClickListener toast(getString(R.string.ddn_bad_server))
+            JoinAddress.remember(this, url)
             val text = kit.text.toString()
             kit.setText("")
             thread {
@@ -186,8 +189,6 @@ class JoinActivity : AppCompatActivity() {
         if (left > 0) main.postDelayed({ tick() }, 1000)
     }
 
-    private fun lastServer(): String = getSharedPreferences("ddn-join", Context.MODE_PRIVATE).getString("server", "") ?: ""
-    private fun rememberServer(url: String) = getSharedPreferences("ddn-join", Context.MODE_PRIVATE).edit().putString("server", url).apply()
 
     /** Tests: the code shown and what Copy put on the clipboard. */
     internal fun codeForTest(): String? = pending?.offer

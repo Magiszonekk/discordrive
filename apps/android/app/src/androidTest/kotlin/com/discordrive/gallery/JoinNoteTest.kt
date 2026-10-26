@@ -58,4 +58,23 @@ class JoinNoteTest {
             assertTrue("clipboard = the code", copied == code)
         }
     }
+
+    /** The address field: a pasted pairing link, a page or a bare host give the address; run-together text none. */
+    @Test
+    fun addressFromWhatWasPasted() {
+        assertTrue(JoinAddress.normalize("https://example.com/#pair=ddn-pair1:abc") == "https://example.com")
+        assertTrue(JoinAddress.normalize("example.com/devices") == "https://example.com")
+        assertTrue(JoinAddress.normalize(" https://example.com:8443/ ") == "https://example.com:8443")
+        assertTrue(JoinAddress.normalize("http://localhost:3020") == "http://localhost:3020")
+        assertTrue(JoinAddress.normalize("https://example.comGoogle Pixel 7") == null)
+        assertTrue(JoinAddress.normalize("") == null)
+        // Used last: offered again on the next visit.
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        JoinAddress.remember(ctx, "https://example.org")
+        ActivityScenario.launch<JoinActivity>(Intent(ctx, JoinActivity::class.java)).use { s ->
+            var shown = ""
+            s.onActivity { a -> shown = a.findViewById<android.widget.EditText>(R.id.joinServer).text.toString() }
+            assertTrue("last address offered: $shown", shown == "https://example.org")
+        }
+    }
 }
