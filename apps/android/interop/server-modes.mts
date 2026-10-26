@@ -118,6 +118,8 @@ async function handle(q: Req): Promise<unknown> {
     const row = srv.db.prepare("SELECT state FROM s_uploads WHERE account_id = ? AND upload_id = ?").get(r0.accountId, q.a as string) as { state: string } | undefined;
     return row?.state ?? null;
   }
+  // The account's devices as the web sees them (after the phone left: its own entry gone).
+  if (q.m === "deviceIds") return (await api.listDevices()).map((d) => d.deviceId);
   // The account's settings (every mode): read what the phone stored, then change the model.
   if (q.m === "settingsRoundTrip") {
     const st = new AccountSettingsStore(api, key, r0.accountId);
