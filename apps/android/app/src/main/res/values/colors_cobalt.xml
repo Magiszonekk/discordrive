@@ -20,4 +20,6 @@
     <color name="cobalt_warning">#CE9200</color>
     <!-- The QR code is always dark modules on white, like .qr on the web. -->
     <color name="cobalt_qr_paper">#FFFFFF</color>
+    <!-- The danger zone's frame (error over paper, faint). -->
+    <color name="cobalt_error_rule">#F2C4C5</color>
 </resources>

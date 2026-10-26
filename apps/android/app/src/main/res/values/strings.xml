@@ -544,4 +544,9 @@ Tekst: %3$s</string>
     <string name="ddn_fail_too_large">Plik jest za duży.</string>
     <string name="ddn_fail_other">Nie udało się wysłać (szczegóły w logu aplikacji). Ponów później.</string>
     <string name="ddn_open_send">Wyślij do discordrive</string>
+    <string name="cobalt_back">Wstecz</string>
+    <string name="ddn_set_look">Wygląd</string>
+    <string name="ddn_set_look_note">Kolor akcentu w przyciskach, przełącznikach i nagłówkach.</string>
+    <string name="ddn_set_diag">Diagnostyka</string>
+    <string name="ddn_set_danger">Strefa niebezpieczna</string>
 </resources>
