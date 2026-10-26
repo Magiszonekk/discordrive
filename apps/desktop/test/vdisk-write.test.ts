@@ -179,6 +179,30 @@ os.close(fd)`]);
       await disk.outbox!.idle();
     }
 
+    // 8c. A file whose upload keeps failing (N46: a storage answer the app could not use) does not hold the
+    //     queue: the files after it are uploaded; it goes too once the storage takes it.
+    {
+      const orig = core.vdiskUpload.bind(core);
+      let refuse = true;
+      (core as unknown as { vdiskUpload: typeof core.vdiskUpload }).vdiskUpload = async (path, dir, name, pv, prog) => {
+        if (name === "zly.bin" && refuse) throw new Error("webhook post: an attachment is missing in the response");
+        return orig(path, dir, name, pv, prog);
+      };
+      await writeFile(join(mp, "zly.bin"), "a");
+      for (const n of ["po1.txt", "po2.txt", "po3.txt"]) await writeFile(join(mp, n), n);
+      const t0 = Date.now();
+      for (let i = 0; i < 60 && !["po1.txt", "po2.txt", "po3.txt"].every((n) => nodeOf(n)); i++) await new Promise((r) => setTimeout(r, 250));
+      expect(["po1.txt", "po2.txt", "po3.txt"].map((n) => !!nodeOf(n))).toEqual([true, true, true]);
+      expect(Date.now() - t0).toBeLessThan(15_000);
+      expect(nodeOf("zly.bin")).toBeUndefined();
+      refuse = false;
+      await disk.outbox!.idle();
+      expect(nodeOf("zly.bin")).toBeTruthy();
+      (core as unknown as { vdiskUpload: typeof core.vdiskUpload }).vdiskUpload = orig;
+      for (const n of ["zly.bin", "po1.txt", "po2.txt", "po3.txt"]) await rm(join(mp, n));
+      await disk.outbox!.idle();
+    }
+
     // 9. Written, then uploaded from the queue: the same mtime and inode as right after the write (an
     //    editor comparing them would report the file as changed by another program).
     await writeFile(join(mp, "mt.txt"), "abc");

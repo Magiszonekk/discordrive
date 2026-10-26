@@ -261,7 +261,8 @@ export class FakeDiscord {
         const headEnd = body.indexOf("\r\n\r\n", at);
         const end = body.indexOf(sep, headEnd);
         if (headEnd < 0 || end < 0) return null;
-        const filename = /filename="([^"]*)"/.exec(body.subarray(at, headEnd).toString("utf8"))?.[1] || "blob";
+        // Like Discord (measured 2026-10-26): leading underscores are dropped from attachment names.
+        const filename = (/filename="([^"]*)"/.exec(body.subarray(at, headEnd).toString("utf8"))?.[1] || "blob").replace(/^_+(?=[^.])/, "");
         files.push({ filename, data: new Uint8Array(body.buffer, body.byteOffset + headEnd + 4, end - headEnd - 4) });
       }
       let keep: string[] = [];

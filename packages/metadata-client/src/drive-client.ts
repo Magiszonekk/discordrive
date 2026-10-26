@@ -32,7 +32,7 @@ import {
 } from "@ddv4/sync-core";
 import type { ArbiterApi } from "./arbiter.js";
 import { AbortedError, throwIfAborted, type BlobStore, type ExtraPlacement } from "./blob-store.js";
-import { PREVIEW_KINDS, matchExtras, openPreview, previewKeys, sealPreview, type PreviewImage, type PreviewKind } from "./previews.js";
+import { PREVIEW_KINDS, extraKey, matchExtras, openPreview, previewKeys, sealPreview, type PreviewImage, type PreviewKind } from "./previews.js";
 import {
   FRAGMENT_FORMAT_VERSION,
   decryptFragment,
@@ -751,7 +751,7 @@ export class DriveClient {
     const dn = await descriptionNameOf(manifestRef);
     if (!dn || !this.blobs.extrasOf) return null;
     const loc = decodeManifestRef(manifestRef);
-    const ex = (await this.blobs.extrasOf(loc.at, signal)).find((x) => x.name.replace(/\.[^.]*$/, "") === dn.name);
+    const ex = (await this.blobs.extrasOf(loc.at, signal)).find((x) => extraKey(x.name) === extraKey(dn.name));
     if (!ex) return null;
     if (ex.size > DESCRIPTION_MAX_BYTES) return null;
     return openDescription(dn.k, await this.blobs.get(ex.placement, signal));

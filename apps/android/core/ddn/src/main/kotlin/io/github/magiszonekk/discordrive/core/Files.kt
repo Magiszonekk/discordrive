@@ -80,6 +80,13 @@ object FileFormat {
     /** Attachment names carry the extension every blob gets; the stored name is without it. */
     fun stripExt(name: String): String = name.lastIndexOf('.').let { if (it > 0) name.substring(0, it) else name }
 
+    /**
+     * The name an extra is found by: no extension, no leading underscores. Discord drops leading underscores
+     * from attachment names (the names are base64url: about one file in 32 has one); compared this way on both
+     * sides, an extra stored under either form is found.
+     */
+    fun extraKey(name: String): String = stripExt(name).trimStart('_')
+
     fun openPreview(keys: PreviewKeys, kind: Char, data: ByteArray): Preview {
         require(data.size in (12 + 16 + 12)..PREVIEW_READ_MAX) { "preview: bad size" }
         val p = Aes.decrypt(keys.key, data, null, "preview")
@@ -116,7 +123,7 @@ class WebhookSource(private val discord: Discord, private val webhookUrl: (Strin
     override fun fetch(webhookId: String, channelId: String, messageId: String, attachmentId: String) = discord.fetch(webhookUrl(webhookId), messageId, attachmentId)
     override fun extras(webhookId: String, channelId: String, messageId: String, manifestAttachmentId: String): Map<String, Pair<Long, () -> ByteArray>> =
         discord.attachments(webhookUrl(webhookId), messageId).filter { it.id != manifestAttachmentId }
-            .associate { a -> FileFormat.stripExt(a.filename) to (a.size to { discord.download(a.url) }) }
+            .associate { a -> FileFormat.extraKey(a.filename) to (a.size to { discord.download(a.url) }) }
 }
 
 /**
@@ -141,7 +148,7 @@ class InstanceSource(private val api: InstanceApi, private val discord: Discord)
     override fun fetch(webhookId: String, channelId: String, messageId: String, attachmentId: String) = read(placement(webhookId, channelId, messageId, attachmentId))
 
     override fun extras(webhookId: String, channelId: String, messageId: String, manifestAttachmentId: String): Map<String, Pair<Long, () -> ByteArray>> =
-        api.extras(manifestAttachmentId).mapValues { (_, p) -> (p.longOrNull("size") ?: 0L) to { read(p) } }
+        api.extras(manifestAttachmentId).entries.associate { (k, p) -> FileFormat.extraKey(k) to ((p.longOrNull("size") ?: 0L) to { read(p) }) }
 }
 
 class FileReader(private val src: BlobSource, private val parallel: Int = 4) {
@@ -164,7 +171,7 @@ class FileReader(private val src: BlobSource, private val parallel: Int = 4) {
         val loc = FileFormat.decodeManifestRef(manifestRef)
         val keys = FileFormat.PreviewKeys(loc.fileKey)
         val name = keys.name(kind)
-        val (size, get) = src.extras(loc.webhookId, loc.channelId, loc.messageId, loc.attachmentId)[name] ?: return null
+        val (size, get) = src.extras(loc.webhookId, loc.channelId, loc.messageId, loc.attachmentId)[FileFormat.extraKey(name)] ?: return null
         if (size > FileFormat.PREVIEW_READ_MAX) return null
         return FileFormat.openPreview(keys, kind, get())
     }
@@ -172,7 +179,7 @@ class FileReader(private val src: BlobSource, private val parallel: Int = 4) {
     /** The AI description stored with the version (Describe), or null when it has none. */
     fun description(manifestRef: String): Describe.Record? {
         val loc = FileFormat.decodeManifestRef(manifestRef)
-        val (size, get) = src.extras(loc.webhookId, loc.channelId, loc.messageId, loc.attachmentId)[Describe.name(loc.fileKey)] ?: return null
+        val (size, get) = src.extras(loc.webhookId, loc.channelId, loc.messageId, loc.attachmentId)[FileFormat.extraKey(Describe.name(loc.fileKey))] ?: return null
         if (size > Describe.MAX_BYTES) return null
         return Describe.open(loc.fileKey, get())
     }

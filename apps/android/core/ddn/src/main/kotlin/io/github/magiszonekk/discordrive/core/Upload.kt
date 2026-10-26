@@ -145,9 +145,13 @@ class DiscordWriter(
                                 val o = it.jsonObject
                                 Discord.Attachment(o.str("id"), o.str("url"), o["size"]?.jsonPrimitive?.long ?: 0, o.strOrNull("filename") ?: "")
                             }
-                            // Discord answers in the order sent; matched by name to be sure.
-                            val first = atts.firstOrNull { it.filename == filename } ?: atts.firstOrNull() ?: throw IllegalStateException("webhook post: no attachment in the answer")
-                            val ex = extras.map { e -> atts.firstOrNull { it.filename == e.first && it !== first } ?: throw IllegalStateException("webhook post: an attachment is missing in the answer") }
+                            // Discord answers in the order sent; matched by name to be sure (Discord drops leading
+                            // underscores from names: compared without them), else by position. An extra the answer
+                            // does not show is left out (previews are optional; the blob itself is stored).
+                            val key = { n: String -> n.trimStart('_') }
+                            val first = atts.firstOrNull { key(it.filename) == key(filename) } ?: atts.firstOrNull() ?: throw IllegalStateException("webhook post: no attachment in the answer")
+                            val rest = atts.filter { it !== first }
+                            val ex = extras.mapIndexedNotNull { i, e -> rest.firstOrNull { key(it.filename) == key(e.first) } ?: rest.getOrNull(i).takeIf { rest.size == extras.size } }
                             return Posted(hook.id, j.strOrNull("channel_id") ?: hook.channelId, j.str("id"), first.id, first.size, ex)
                         }
                     }

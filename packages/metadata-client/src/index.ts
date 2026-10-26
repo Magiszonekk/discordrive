@@ -46,6 +46,7 @@ export {
   previewKeys,
   sealPreview,
   stripExt,
+  extraKey,
   type PreviewImage,
   type PreviewKind,
   type PreviewKeys,
