@@ -293,14 +293,14 @@ open class DdnActivity : AppCompatActivity() {
             return
         }
         if (!PrivateAlbums.hasPin(this)) {
-            androidx.appcompat.app.AlertDialog.Builder(this).setMessage(R.string.private_need_pin_msg)
+            com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setMessage(R.string.private_need_pin_msg)
                 .setPositiveButton(R.string.private_set_pin) { _, _ -> startActivity(Intent(this, DdnSettingsActivity::class.java)) }
-                .setNegativeButton(android.R.string.cancel, null).show()
+                .setNegativeButton(R.string.cobalt_cancel, null).show()
             return
         }
-        androidx.appcompat.app.AlertDialog.Builder(this).setMessage(getString(R.string.ddn_album_private_ask, a.name))
-            .setPositiveButton(android.R.string.ok) { _, _ -> DdnPrivate.set(this, a.id, true); toast(getString(R.string.album_private_marked)); show() }
-            .setNegativeButton(android.R.string.cancel, null).show()
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setMessage(getString(R.string.ddn_album_private_ask, a.name))
+            .setPositiveButton(R.string.cobalt_ok) { _, _ -> DdnPrivate.set(this, a.id, true); toast(getString(R.string.album_private_marked)); show() }
+            .setNegativeButton(R.string.cobalt_cancel, null).show()
     }
 
     private fun toast(m: String) = android.widget.Toast.makeText(this, m, android.widget.Toast.LENGTH_SHORT).show()
@@ -308,7 +308,7 @@ open class DdnActivity : AppCompatActivity() {
     /** Long press: to the trash (30 days to restore, the trash is in Settings). */
     private fun askTrash(c: IndexReplica.Child) {
         val s = session ?: return
-        androidx.appcompat.app.AlertDialog.Builder(this)
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
             .setTitle(R.string.ddn_to_trash)
             .setMessage(getString(R.string.ddn_to_trash_ask, c.name))
             .setPositiveButton(R.string.ddn_to_trash) { _, _ ->
@@ -321,7 +321,7 @@ open class DdnActivity : AppCompatActivity() {
                     }
                 }
             }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .show()
     }
 

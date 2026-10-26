@@ -549,4 +549,17 @@ Tekst: %3$s</string>
     <string name="ddn_set_look_note">Kolor akcentu w przyciskach, przełącznikach i nagłówkach.</string>
     <string name="ddn_set_diag">Diagnostyka</string>
     <string name="ddn_set_danger">Strefa niebezpieczna</string>
+    <string name="cobalt_cancel">Anuluj</string>
+    <string name="cobalt_ok">OK</string>
+    <string name="ago_now">przed chwilą</string>
+    <string name="ago_min">%1$d min temu</string>
+    <string name="ago_hours">%1$d godz. temu</string>
+    <string name="ago_yesterday">wczoraj</string>
+    <plurals name="ago_days">
+        <item quantity="one">%1$d dzień temu</item>
+        <item quantity="few">%1$d dni temu</item>
+        <item quantity="many">%1$d dni temu</item>
+        <item quantity="other">%1$d dni temu</item>
+    </plurals>
+    <string name="ddn_backup_state_h">Stan</string>
 </resources>

@@ -68,8 +68,8 @@ object PrivateUnlock {
             .setTitle(R.string.private_unlock_title)
             .setIcon(R.drawable.ic_lock)
             .setView(view)
-            .setPositiveButton(android.R.string.ok, null) // validated below, dialog stays open on error
-            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.cobalt_ok, null) // validated below, dialog stays open on error
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .create()
         dialog.setOnShowListener {
             val submit = {

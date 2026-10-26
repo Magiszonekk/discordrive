@@ -111,36 +111,36 @@ class DdnBackupActivity : AppCompatActivity() {
     private lateinit var folders: LinearLayout
     private lateinit var failedBox: LinearLayout
 
+    private lateinit var ui: CobaltUi
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        CobaltUi.theme(this)
         super.onCreate(savedInstanceState)
-        title = getString(R.string.ddn_backup)
-        val pad = (16 * resources.displayMetrics.density).toInt()
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad, pad, pad) }
-        fun text(s: CharSequence, size: Float = 14f) = TextView(this).apply { text = s; textSize = size; setTextColor(getColor(R.color.text)); setPadding(0, pad / 2, 0, pad / 2) }
-
-        val on = SwitchCompat(this).apply { text = getString(R.string.ddn_backup_on); isChecked = DdnBackup.enabled(this@DdnBackupActivity); textSize = 16f; setTextColor(getColor(R.color.text)) }
-        val wifi = CheckBox(this).apply { text = getString(R.string.ddn_backup_wifi); isChecked = DdnBackup.wifiOnly(this@DdnBackupActivity); setTextColor(getColor(R.color.text)) }
-        val charging = CheckBox(this).apply { text = getString(R.string.ddn_backup_charging); isChecked = DdnBackup.chargingOnly(this@DdnBackupActivity); setTextColor(getColor(R.color.text)) }
-        val where = text(getString(R.string.ddn_backup_where, DdnBackup.rootName(DdnAccount.load(this)?.deviceName ?: "?")), 13f).apply { setTextColor(getColor(R.color.text_dim)) }
-        folders = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val now = Button(this).apply { text = getString(R.string.ddn_backup_now) }
-        state = text("", 13f).apply { setTextColor(getColor(R.color.text_dim)) }
-        val partial = text(getString(R.string.ddn_backup_partial), 13f).apply { setTextColor(getColor(R.color.text_dim)) }
-
-        on.setOnCheckedChangeListener { _, v -> if (v && !hasMedia()) askMedia() else DdnBackup.set(this, on = v) }
-        wifi.setOnCheckedChangeListener { _, v -> DdnBackup.set(this, wifi = v) }
-        charging.setOnCheckedChangeListener { _, v -> DdnBackup.set(this, charging = v) }
-        now.setOnClickListener {
-            if (!hasMedia()) askMedia()
-            else if (DdnBackup.buckets(this).let { chosen -> chosen.isEmpty() || runCatching { DdnBackup.allBuckets(this).keys.none { it in chosen } }.getOrDefault(false) })
-                Toast.makeText(this, R.string.ddn_backup_no_chosen, Toast.LENGTH_LONG).show()
-            else { DdnBackup.runNow(this, manual = true); Toast.makeText(this, R.string.ddn_backup_started, Toast.LENGTH_SHORT).show() }
-        }
-
+        ui = CobaltUi(this)
+        val page = ui.screen(R.string.ddn_backup)
+        // Files that could not be sent: first, when there are any.
         failedBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        for (v in listOf(failedBox, on, where, wifi, charging, text(getString(R.string.ddn_backup_folders), 15f), folders, now, state, partial)) root.addView(v)
-        setContentView(ScrollView(this).apply { addView(root) })
-        Insets.apply(root)
+        page.addView(failedBox)
+
+        ui.section(page, R.string.ddn_backup, getString(R.string.ddn_backup_where, DdnBackup.rootName(DdnAccount.load(this)?.deviceName ?: "?"))).also { c ->
+            ui.switchRow(c, R.string.ddn_backup_on, DdnBackup.enabled(this)) { v, on -> if (on && !hasMedia()) { v.isChecked = false; askMedia() } else DdnBackup.set(this, on = on) }
+            ui.switchRow(c, R.string.ddn_backup_wifi, DdnBackup.wifiOnly(this)) { _, v -> DdnBackup.set(this, wifi = v) }
+            ui.switchRow(c, R.string.ddn_backup_charging, DdnBackup.chargingOnly(this)) { _, v -> DdnBackup.set(this, charging = v) }
+        }
+        ui.section(page, R.string.ddn_backup_folders).also { c ->
+            folders = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            c.addView(folders, ui.lp(top = 4))
+        }
+        ui.section(page, R.string.ddn_backup_state_h, getString(R.string.ddn_backup_partial)).also { c ->
+            state = ui.text("")
+            ui.add(c, state, top = 6)
+            ui.add(c, ui.button(R.string.ddn_backup_now, CobaltUi.Kind.PRIMARY, R.drawable.ic_sync) {
+                if (!hasMedia()) askMedia()
+                else if (DdnBackup.buckets(this).let { chosen -> chosen.isEmpty() || runCatching { DdnBackup.allBuckets(this).keys.none { it in chosen } }.getOrDefault(false) })
+                    Toast.makeText(this, R.string.ddn_backup_no_chosen, Toast.LENGTH_LONG).show()
+                else { DdnBackup.runNow(this, manual = true); Toast.makeText(this, R.string.ddn_backup_started, Toast.LENGTH_SHORT).show() }
+            })
+        }
         WorkManager.getInstance(this).getWorkInfosForUniqueWorkLiveData(DdnBackup.WORK_NOW).observe(this) { paintState(it) }
         paintFolders()
         paintState(emptyList())
@@ -167,12 +167,9 @@ class DdnBackupActivity : AppCompatActivity() {
             runOnUiThread {
                 folders.removeAllViews()
                 val chosen = DdnBackup.buckets(this).toMutableSet()
-                for ((b, n) in all) folders.addView(CheckBox(this).apply {
-                    setTextColor(getColor(R.color.text))
-                    text = "$b ($n)"; isChecked = b in chosen
-                    setOnCheckedChangeListener { _, v -> if (v) chosen += b else chosen -= b; DdnBackup.set(this@DdnBackupActivity, buckets = chosen.toSet()) }
-                }, ViewGroup.LayoutParams(-1, -2))
-                if (all.isEmpty()) folders.addView(TextView(this).apply { text = getString(R.string.ddn_backup_no_folders); setTextColor(getColor(R.color.text_dim)) })
+                // One switch per phone folder (Camera, Screenshots…) with its count.
+                for ((b, n) in all) ui.switchRowText(folders, "$b ($n)", b in chosen) { _, v -> if (v) chosen += b else chosen -= b; DdnBackup.set(this@DdnBackupActivity, buckets = chosen.toSet()) }
+                if (all.isEmpty()) folders.addView(ui.note(getString(R.string.ddn_backup_no_folders)))
             }
         }
     }
@@ -182,18 +179,16 @@ class DdnBackupActivity : AppCompatActivity() {
         val items = DdnBackup.failed(this)
         failedBox.removeAllViews()
         if (items.isEmpty()) return
-        val pad = (8 * resources.displayMetrics.density).toInt()
-        failedBox.addView(TextView(this).apply { text = plq(R.plurals.ddn_fail_title, items.size, items.size); textSize = 16f; setTextColor(getColor(R.color.danger)); setPadding(0, pad, 0, pad / 2) })
+        val c = ui.sectionText(failedBox, plq(R.plurals.ddn_fail_title, items.size, items.size), danger = true)
         for (q in items) {
-            failedBox.addView(TextView(this).apply { text = "${q.name}\n${DdnBackup.reason(this@DdnBackupActivity, q.error!!)}"; textSize = 13f; setTextColor(getColor(R.color.text)) })
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            row.addView(Button(this).apply { text = getString(R.string.ddn_fail_retry); setOnClickListener {
+            ui.add(c, ui.text("${q.name}\n${DdnBackup.reason(this@DdnBackupActivity, q.error!!)}"))
+            val retry = ui.button(R.string.ddn_fail_retry, CobaltUi.Kind.TONAL) {
                 thread { DdnBackup.Db(this@DdnBackupActivity).retry(q.id); runOnUiThread { DdnBackup.runNow(this@DdnBackupActivity, autoCopy = false); paintFailed() } }
-            } })
-            row.addView(Button(this).apply { text = getString(R.string.ddn_fail_remove); setOnClickListener {
+            }
+            val drop = ui.button(R.string.ddn_fail_remove, CobaltUi.Kind.DANGER) {
                 thread { DdnBackup.Db(this@DdnBackupActivity).drop(q.id); runOnUiThread { DdnBackup.notifyFailed(this@DdnBackupActivity, DdnBackup.failed(this@DdnBackupActivity).size); paintFailed() } }
-            } })
-            failedBox.addView(row)
+            }
+            ui.actionBar(c, retry, drop)
         }
     }
 
@@ -204,7 +199,7 @@ class DdnBackupActivity : AppCompatActivity() {
         state.text = buildString {
             if (run != null) append(getString(R.string.ddn_backup_running, run.progress.getInt("done", 0), run.progress.getInt("total", 0), run.progress.getString("line") ?: "")).append("\n")
             if (st != null) {
-                append(getString(R.string.ddn_backup_last, DateUtils.getRelativeTimeSpanString(st.at), st.copied, st.waiting))
+                append(getString(R.string.ddn_backup_last, Ago.of(this@DdnBackupActivity, st.at), st.copied, st.waiting))
                 st.error?.let { append("\n").append(getString(R.string.ddn_error, it)) }
             } else append(getString(R.string.ddn_backup_never))
         }

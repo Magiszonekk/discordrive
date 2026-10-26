@@ -289,7 +289,7 @@ class ViewerActivity : SessionActivity() {
                                 .split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }.distinct()
                             saveEditedAnalysis(asset, fileId, record.copy(description = newDesc, tags = newTags))
                         }
-                        .setNegativeButton(android.R.string.cancel, null)
+                        .setNegativeButton(R.string.cobalt_cancel, null)
                         .show()
                 }
             }
@@ -405,7 +405,7 @@ class ViewerActivity : SessionActivity() {
                         .setItems(labels.toTypedArray()) { _, which ->
                             moveTo(asset, fileId, folders[which].second, folders[which].first)
                         }
-                        .setNegativeButton(android.R.string.cancel, null)
+                        .setNegativeButton(R.string.cobalt_cancel, null)
                         .show()
                 }
             }
@@ -429,7 +429,7 @@ class ViewerActivity : SessionActivity() {
         MaterialAlertDialogBuilder(this)
             .setMessage(getString(if (alsoLocal) R.string.sel_everywhere_confirm else R.string.sel_trash_confirm, 1))
             .setPositiveButton(R.string.action_delete_cloud) { _, _ -> trashCurrent(asset, alsoLocal) }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(R.string.cobalt_cancel, null)
             .show()
     }
 
@@ -501,7 +501,7 @@ class ViewerActivity : SessionActivity() {
                 MaterialAlertDialogBuilder(this)
                     .setTitle(R.string.viewer_info_title)
                     .setMessage(text)
-                    .setPositiveButton(android.R.string.ok, null)
+                    .setPositiveButton(R.string.cobalt_ok, null)
                     .show()
             }
         }

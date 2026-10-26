@@ -307,7 +307,7 @@
                 style="@style/Widget.Cobalt.Button"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@android:string/ok"
+                android:text="@string/cobalt_ok"
                 android:visibility="gone" />
         </LinearLayout>
 
