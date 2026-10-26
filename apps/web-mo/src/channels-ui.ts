@@ -300,6 +300,9 @@ export function createChannelsUi(d: ChannelsUiDeps) {
     if (!st) return;
     $("st-all").textContent = t("st.files", { files: tn("files.meta.files", st.files), size: fmtSize(st.bytes) });
     $("st-trash").textContent = t("st.files", { files: tn("files.meta.files", st.trashFiles), size: fmtSize(st.trashBytes) });
+    // The Gallery's share of all files (shown once there is one).
+    ui("st-gallery-row").hidden = !st.galleryFiles;
+    $("st-gallery").textContent = t("st.files", { files: tn("files.meta.files", st.galleryFiles ?? 0), size: fmtSize(st.galleryBytes ?? 0) });
     $("st-unavail").textContent = st.unavailableFiles ? t("st.files", { files: tn("files.meta.files", st.unavailableFiles), size: fmtSize(st.unavailableBytes) }) : t("st.unavail.none");
     ui("st-unavail-t").textContent = st.unavailableFiles ? t("st.unavail.t") : "";
     $("st-discord").textContent = st.discordBytes === null ? "—" : fmtSize(st.discordBytes);

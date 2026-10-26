@@ -10,7 +10,7 @@ export const en: Record<string, string> = {
 
   // navigation (app shell)
   "nav.label": "Main menu",
-  "nav.files": "Files",
+  "nav.files": "Drive",
   "nav.devices": "Devices",
   "nav.settings": "Settings",
   "nav.open": "Open navigation menu",
@@ -526,6 +526,10 @@ export const en: Record<string, string> = {
   // trash, rename, move, selection
   "nav.trash": "Trash",
   "nav.recovered": "Recovered",
+  "nav.gallery": "Gallery",
+  "act.toGallery": "Move to the Gallery",
+  "act.toDrive": "Move to the Drive",
+  "st.gallery": "Of them in the Gallery",
   "page.trash": "Trash",
   "trash.h": "Trash",
   "trash.lead": "Deleted files and folders stay here for 30 days, then they are deleted for good. Until then you can restore them.",
