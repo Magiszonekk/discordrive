@@ -505,6 +505,14 @@ Tekst: %3$s</string>
         <item quantity="other">Usunięto z telefonu %1$d pliku (%2$s). Jest w koszu telefonu przez 30 dni.</item>
     </plurals>
     <string name="ddn_albums">Albumy</string>
+    <string name="album_private_unmark_action">Nie prywatny</string>
+    <string name="album_private_mark_action">Ustaw jako prywatny</string>
+    <string name="ddn_to_gallery">Przenieś do Galerii</string>
+    <string name="ddn_to_drive">Przenieś do Dysku</string>
+    <string name="ddn_moved_to_gallery">Przeniesiono do Galerii.</string>
+    <string name="ddn_moved_to_drive">Przeniesiono do Dysku.</string>
+    <string name="ddn_move_into">Do: %1$s</string>
+    <string name="ddn_move_here">Tutaj</string>
     <string name="ddn_albums_empty">brak folderów ze zdjęciami</string>
     <string name="ddn_album_private">prywatny</string>
     <plurals name="ddn_album_count">

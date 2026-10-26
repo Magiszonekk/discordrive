@@ -18,7 +18,7 @@ import java.util.concurrent.Executors
  */
 object DdnThumbs {
     private val main = Handler(Looper.getMainLooper())
-    private val pool = Executors.newFixedThreadPool(4)
+    internal val pool = Executors.newFixedThreadPool(4)
     private val mem = object : LruCache<String, Bitmap>(24 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount / 1024
     }
