@@ -41,7 +41,7 @@ class CobaltUi(private val a: AppCompatActivity) {
      * The screen: a top bar with the title and back, then a scrolling column. Returns the column (sections go
      * into it). Insets: the bar takes the status bar, the column the navigation bar.
      */
-    fun screen(@StringRes title: Int, back: Boolean = true): LinearLayout {
+    fun screen(@StringRes title: Int, back: Boolean = true, scroll: Boolean = true): LinearLayout {
         val bar = MaterialToolbar(a).apply {
             setTitle(title)
             setTitleTextAppearance(a, R.style.TextAppearance_Cobalt_BarTitle)
@@ -54,18 +54,19 @@ class CobaltUi(private val a: AppCompatActivity) {
         }
         val column = LinearLayout(a).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(8), dp(16), dp(24))
+            setPadding(dp(16), dp(8), dp(16), if (scroll) dp(24) else 0)
         }
-        val scroll = ScrollView(a).apply { isFillViewport = true; clipToPadding = false; addView(column) }
+        // A list screen (scroll = false): the column fills the screen, its list scrolls by itself.
+        val body: View = if (scroll) ScrollView(a).apply { isFillViewport = true; clipToPadding = false; addView(column) } else column
         val root = LinearLayout(a).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(color(R.color.cobalt_paper))
             addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
         a.setContentView(root)
         Insets.apply(bar, top = true, bottom = false)
-        Insets.apply(scroll, top = false, bottom = true)
+        Insets.apply(body, top = false, bottom = true)
         return column
     }
 
@@ -167,6 +168,49 @@ class CobaltUi(private val a: AppCompatActivity) {
             addView(box, lp(top = 6))
         }
         return col to edit
+    }
+
+    /** A bottom bar of actions (side by side, equal width): added to `parent`, returns it. */
+    fun actionBar(parent: ViewGroup, vararg buttons: MaterialButton): LinearLayout {
+        val bar = LinearLayout(a).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(8), 0, dp(12))
+            buttons.forEachIndexed { i, b -> addView(b, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(8) }) }
+        }
+        parent.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        return bar
+    }
+
+    /**
+     * A list row: a leading view (selection box or icon), an icon, a title and a sub line; ripple, 56dp+.
+     * Returned with its parts for binding.
+     */
+    class ListRow(val view: LinearLayout, val icon: android.widget.ImageView, val title: TextView, val sub: TextView)
+
+    fun listRow(leading: View? = null): ListRow {
+        val icon = android.widget.ImageView(a).apply {
+            setColorFilter(color(R.color.cobalt_muted))
+            setBackgroundResource(R.drawable.bg_cobalt_icon)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+        val title = TextView(a).apply { TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_Label); setTextColor(color(R.color.cobalt_ink)); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }
+        val sub = TextView(a).apply { TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_Hint) }
+        val texts = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), 0, 0, 0); addView(title); addView(sub) }
+        val v = LinearLayout(a).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(60)
+            setPadding(dp(4), dp(6), dp(8), dp(6))
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            isClickable = true
+            val tv = android.util.TypedValue()
+            a.theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true)
+            setBackgroundResource(tv.resourceId)
+            if (leading != null) addView(leading)
+            addView(icon, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginStart = dp(4) })
+            addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        return ListRow(v, icon, title, sub)
     }
 
     /** The footer: centered small text (version, technical notes). */

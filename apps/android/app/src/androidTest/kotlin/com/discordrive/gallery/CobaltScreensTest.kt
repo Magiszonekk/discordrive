@@ -52,4 +52,24 @@ class CobaltScreensTest {
             InstrumentationRegistry.getArguments().getString("holdMs")?.toLongOrNull()?.let { Thread.sleep(it) }
         }
     }
+
+    @Test
+    fun trashHasOneHeadingAndActions() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        ActivityScenario.launch<DdnTrashActivity>(Intent(ctx, DdnTrashActivity::class.java).putExtra(DdnTrashActivity.KEEP_OPEN_FOR_TEST, true)).use { s ->
+            var bars = 0
+            var actions = listOf<String>()
+            var caps = 0
+            s.onActivity { a ->
+                val v = all(a.window.decorView)
+                bars = v.count { it is com.google.android.material.appbar.MaterialToolbar }
+                actions = v.filterIsInstance<MaterialButton>().map { it.text.toString() }
+                caps = v.filterIsInstance<Button>().count { it.isAllCaps }
+            }
+            assertTrue("one top bar: $bars", bars == 1)
+            assertTrue("restore and purge: $actions", actions.contains(ctx.getString(R.string.ddn_trash_restore)) && actions.contains(ctx.getString(R.string.ddn_trash_purge)))
+            assertTrue("no upper-cased buttons", caps == 0)
+            InstrumentationRegistry.getArguments().getString("holdMs")?.toLongOrNull()?.let { Thread.sleep(it) }
+        }
+    }
 }
