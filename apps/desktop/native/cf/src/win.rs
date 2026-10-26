@@ -144,6 +144,9 @@ struct State {
     /// written at the same path meanwhile (a save through ReplaceFile: the original deleted, a temp file
     /// renamed into its place) cancels it: that file becomes a new version of the same node.
     trash_later: Mutex<HashMap<String, (String, u64)>>,
+    /// Placeholders renamed to a temporary name (ReplaceFile's backup, an editor's "file~RF1a2b.TMP"): node
+    /// ID → the path key they had. Not renamed in the account; deleted, they count as deleted at that path.
+    renamed_away: Mutex<HashMap<String, String>>,
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
@@ -439,7 +442,12 @@ unsafe extern "system" fn on_delete(info: *const CF_CALLBACK_INFO, _p: *const CF
     let mut ok = st().removing.lock().unwrap().remove(&id);
     if !ok && st().outbox.is_some() && id != "root" {
         // Into the trash a moment later (a file written at the same path meanwhile takes its place instead).
-        if let Some(k) = full_path(info).as_deref().and_then(rel_key) {
+        // A placeholder renamed to a temporary name first counts at the path it had.
+        let away = st().renamed_away.lock().unwrap().remove(&id);
+        // "" = a new file already took its place (written before this delete came): nothing to trash.
+        if away.as_deref() == Some("") {
+            ok = true;
+        } else if let Some(k) = away.or_else(|| full_path(info).as_deref().and_then(rel_key)) {
             if std::env::var_os("DDN_CF_TRACE").is_some() {
                 eprintln!("ddn-cf: delete later {k} {id}");
             }
@@ -471,11 +479,29 @@ unsafe extern "system" fn on_rename(info: *const CF_CALLBACK_INFO, p: *const CF_
             .map(|t| if t.starts_with('\\') && !t.starts_with("\\\\") { format!("{}{t}", (*info).VolumeDosName.to_string().unwrap_or_default()) } else { t })
             .map(PathBuf::from);
         let inside = r.Flags.0 & CF_CALLBACK_RENAME_FLAG_TARGET_IN_SCOPE.0 != 0;
-        let res = match (&from, &to, inside) {
+        let name_of = |x: &Option<PathBuf>| x.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let (from_tmp, to_tmp) = (local_only(&name_of(&from)), local_only(&name_of(&to)));
+        let id = identity(info);
+        // To a temporary name (a save through ReplaceFile moves the original aside first): only here; the
+        // account keeps the name. Back from it: as it was.
+        let local = if inside && to_tmp && !from_tmp {
+            if let Some(k) = from.as_deref().and_then(rel_key) {
+                st().renamed_away.lock().unwrap().insert(id.clone(), k);
+            }
+            true
+        } else if inside && from_tmp && st().renamed_away.lock().unwrap().remove(&id).is_some() {
+            true
+        } else {
+            false
+        };
+        if std::env::var_os("DDN_CF_TRACE").is_some() {
+            eprintln!("ddn-cf: rename {:?} -> {:?} (local only: {local})", name_of(&from), name_of(&to));
+        }
+        let res = if local { Ok(()) } else { match (&from, &to, inside) {
             (Some(f), Some(t), true) => agent(|a| a.call(json!({ "op": "w-rename", "target": f.to_string_lossy(), "toName": t.to_string_lossy() }))).map(|_| ()),
             (Some(_), _, false) => agent(|a| a.call(json!({ "op": "w-trash", "id": identity(info) }))).map(|_| ()),
             _ => Err("no path".into()),
-        };
+        } };
         match res {
             Ok(()) => {
                 status = STATUS_SUCCESS;
@@ -749,7 +775,15 @@ fn note_written(p: &Path) {
             if std::env::var_os("DDN_CF_TRACE").is_some() {
                 eprintln!("ddn-cf: written {k} (pending delete: {})", st().trash_later.lock().unwrap().contains_key(&k));
             }
-            if st().trash_later.lock().unwrap().remove(&k).is_some() {
+            // Its original moved aside under a temporary name and not deleted yet: replaced (its delete trashes nothing).
+            let mut aside = false;
+            for v in st().renamed_away.lock().unwrap().values_mut() {
+                if *v == k {
+                    v.clear();
+                    aside = true;
+                }
+            }
+            if aside || st().trash_later.lock().unwrap().remove(&k).is_some() {
                 st().dirty_files.lock().unwrap().insert(p.to_path_buf(), now_ms());
                 return;
             }
@@ -1186,6 +1220,7 @@ pub fn main() {
         dirty_files: Mutex::new(HashMap::new()),
         pending: Mutex::new(HashMap::new()),
         trash_later: Mutex::new(HashMap::new()),
+        renamed_away: Mutex::new(HashMap::new()),
     });
     let table: &'static [CF_CALLBACK_REGISTRATION] = Box::leak(Box::new([
         CF_CALLBACK_REGISTRATION { Type: CF_CALLBACK_TYPE_FETCH_PLACEHOLDERS, Callback: Some(on_fetch_placeholders) },
