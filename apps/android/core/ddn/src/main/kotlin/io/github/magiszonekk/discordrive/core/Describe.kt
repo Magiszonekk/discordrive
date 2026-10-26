@@ -162,7 +162,7 @@ class ExtraWriter(
 
     fun addToMessage(discord: Discord, webhookUrl: String, messageId: String, name: String, data: ByteArray): Boolean {
         val now = discord.attachments(webhookUrl, messageId)
-        if (now.any { FileFormat.stripExt(it.filename) == name }) return false
+        if (now.any { FileFormat.extraKey(it.filename) == FileFormat.extraKey(name) }) return false
         require(now.size < 10) { "the message has no room for another attachment" }
         val fname = name + FileWrite.BLOB_EXT
         val payload = buildJsonObject {

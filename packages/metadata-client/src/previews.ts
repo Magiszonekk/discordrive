@@ -150,7 +150,7 @@ export async function openPreview(keys: PreviewKeys, kind: PreviewKind, data: Ui
 export function matchExtras(keys: PreviewKeys, extras: StoredExtra[]): Partial<Record<PreviewKind, StoredExtra>> {
   const out: Partial<Record<PreviewKind, StoredExtra>> = {};
   for (const k of PREVIEW_KINDS) {
-    const hit = extras.find((x) => stripExt(x.name) === keys.names[k]);
+    const hit = extras.find((x) => extraKey(x.name) === extraKey(keys.names[k]));
     if (hit) out[k] = hit;
   }
   return out;
@@ -160,6 +160,16 @@ export function matchExtras(keys: PreviewKeys, extras: StoredExtra[]): Partial<R
 export function stripExt(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(0, dot) : name;
+}
+
+/**
+ * The name an extra is found by: without its extension and without leading underscores. Discord drops
+ * leading underscores from attachment names (measured 2026-10-26: "_r90gl….txt" comes back as "r90gl….txt"),
+ * and the names are base64url (about one in 32 files has a name starting with "_"). Compared this way on
+ * both sides, an extra stored under either form is found.
+ */
+export function extraKey(name: string): string {
+  return stripExt(name).replace(/^_+/, "");
 }
 
 /** Extra-blob names the instance accepts (e2ee/plain: the blob index `x<name>`). */

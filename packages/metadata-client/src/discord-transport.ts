@@ -141,12 +141,15 @@ export class DiscordWebhookTransport implements WebhookTransport {
     const res = await this.postReq(`${hook.url}?wait=true`, "POST", filename, data, "webhook post", signal, timing, extra);
     const j = (await res.json()) as { id: string; channel_id: string; attachments: { id: string; url: string; size: number; filename?: string }[] };
     const atts = j.attachments ?? [];
-    // Discord answers the attachments in the order they were sent; matched by name to be sure.
-    const first = atts.find((a) => a.filename === filename) ?? atts[0];
+    // Discord answers the attachments in the order they were sent; matched by name to be sure (Discord drops
+    // leading underscores from names: compared without them), else by position.
+    const key = (n: string | undefined) => (n ?? "").replace(/^_+/, "");
+    const first = atts.find((a) => key(a.filename) === key(filename)) ?? atts[0];
     if (!first) throw new Error("webhook post: no attachment in response");
-    const extras = extra.map((f) => atts.find((a) => a.filename === f.filename && a !== first));
-    if (extras.some((x) => !x)) throw new Error("webhook post: an attachment is missing in the response");
-    return { webhookId: hook.id, channelId: j.channel_id, messageId: j.id, attachmentId: first.id, sizeBytes: first.size, url: first.url, extras: extras.map((a) => ({ id: a!.id, url: a!.url, size: a!.size, filename: a!.filename })) };
+    const rest = atts.filter((a) => a !== first);
+    const extras = extra.map((f, i) => rest.find((a) => key(a.filename) === key(f.filename)) ?? (rest.length === extra.length ? rest[i] : undefined));
+    // An extra the answer does not show is left out (previews are optional: the blob itself is stored).
+    return { webhookId: hook.id, channelId: j.channel_id, messageId: j.id, attachmentId: first.id, sizeBytes: first.size, url: first.url, extras: extras.filter((a) => !!a).map((a) => ({ id: a!.id, url: a!.url, size: a!.size, filename: a!.filename })) };
   }
 
   async addFiles(hook: WebhookRef, messageId: string, keep: string[], extra: ExtraFile[]): Promise<MessageAttachment[]> {

@@ -237,7 +237,7 @@ export function localOnlyName(name: string): boolean {
 }
 
 export class Outbox {
-  private items = new Map<string, { n: string; dir: string; name: string; size: number; mtime: number; trashed?: boolean; added?: number }>();
+  private items = new Map<string, { n: string; dir: string; name: string; size: number; mtime: number; trashed?: boolean; added?: number; fails?: number; notBefore?: number }>();
   /** A queued copy waits this long before its upload (a program setting its time right after the close). */
   settleMs = 1000;
   private seq = Date.now();
@@ -387,8 +387,20 @@ export class Outbox {
   private async loop() {
     let delay = 2000;
     for (;;) {
-      const first = [...this.items.values()].filter((x) => !localOnlyName(x.name)).sort((a, b) => Number(a.n) - Number(b.n))[0];
-      if (!first) return;
+      const waiting = [...this.items.values()].filter((x) => !localOnlyName(x.name)).sort((a, b) => Number(a.n) - Number(b.n));
+      if (!waiting.length) return;
+      // A file that failed waits its own time; the others go first (one file never holds the queue).
+      const now = Date.now();
+      const first = waiting.find((x) => (x.notBefore ?? 0) <= now);
+      if (!first) {
+        const soon = Math.min(...waiting.map((x) => x.notBefore ?? now));
+        await new Promise<void>((r) => {
+          const t = setTimeout(r, Math.max(50, soon - now));
+          this.wake = () => (clearTimeout(t), r());
+        });
+        this.wake = null;
+        continue;
+      }
       // Just closed: a moment for the program to set its time (rsync -t, touch -d) before it is read.
       const wait = (first.added ?? 0) + this.settleMs - Date.now();
       if (wait > 0) {
@@ -430,13 +442,22 @@ export class Outbox {
           this.report();
         }
         else {
-          // No channel, no network: again later (the copy waits in the queue).
-          await new Promise<void>((r) => {
-            const t = setTimeout(r, delay);
-            this.wake = () => (clearTimeout(t), r());
-          });
-          this.wake = null;
-          delay = Math.min(delay * 2, 5 * 60_000);
+          // No channel, no network, a post the storage refused: this file again later (2 s, doubling to 5 min);
+          // the files queued after it go meanwhile.
+          const it = this.items.get(next.n);
+          if (it) {
+            it.fails = (it.fails ?? 0) + 1;
+            it.notBefore = Date.now() + Math.min(2000 * 2 ** (it.fails - 1), 5 * 60_000);
+          }
+          // Every file failing (no network): no busy loop either.
+          if ([...this.items.values()].every((x) => localOnlyName(x.name) || (x.notBefore ?? 0) > Date.now())) {
+            await new Promise<void>((r) => {
+              const t = setTimeout(r, delay);
+              this.wake = () => (clearTimeout(t), r());
+            });
+            this.wake = null;
+            delay = Math.min(delay * 2, 5 * 60_000);
+          }
         }
       } finally {
         this.current = null;
