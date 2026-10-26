@@ -4,7 +4,7 @@ export * from "./types.js";
 export { DESCRIPTION_FORMAT, descriptionName, foldText, openDescription, sealDescription, searchItems, type DescriptionRecord, type SearchItem } from "./describe.js";
 export { AccountSettingsStore, SettingsRollbackError, emptySettings, type AccountSettings, type AiSettings, type SettingsApi } from "./account-settings.js";
 export { MemoryTransport } from "./memory-transport.js";
-export { DiscordWebhookTransport, DiscordHttpError, RateLimitedError, parseWebhookUrl, redactWebhookUrl, isCloudflareBlock, webhookMultipart, type PartsFetch } from "./discord-transport.js";
+export { DiscordWebhookTransport, DiscordHttpError, RateLimitedError, parseWebhookUrl, redactWebhookUrl, isCloudflareBlock, discordWaitMs, webhookMultipart, type PartsFetch } from "./discord-transport.js";
 export { ChannelPacer, type PacerOptions } from "./rate-limit.js";
 export { LocalArbiter, type ArbiterApi } from "./arbiter.js";
 export {

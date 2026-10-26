@@ -131,8 +131,7 @@ class DiscordWriter(
                     when {
                         res.code == 429 -> {
                             stats.rateLimited.incrementAndGet()
-                            val ra = runCatching { json.parseToJsonElement(text).jsonObject["retry_after"]?.jsonPrimitive?.content?.toDouble() }.getOrNull()
-                                ?: res.header("retry-after")?.toDoubleOrNull() ?: 1.0
+                            val ra = DiscordRateLimit.wait({ res.header(it) }, text).seconds
                             slowDown(channelKey, ra.coerceIn(0.1, 60.0))
                             lastErr = ServerException(429, "rate_limited")
                         }

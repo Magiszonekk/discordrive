@@ -43,25 +43,55 @@ export function redactWebhookUrl(s: string): string {
   return s.replace(/(\/webhooks\/\d+\/)[A-Za-z0-9_.-]+/g, "$1<redacted>");
 }
 
-/** Cloudflare edge block (HTML, no Discord rate-limit headers), not a Discord 429. */
+/** Discord's own rate-limit headers on an answer (a Cloudflare block has none of them). */
+function hasDiscordLimitHeaders(h: { get(n: string): string | null }): boolean {
+  return ["x-ratelimit-scope", "x-ratelimit-remaining", "x-ratelimit-reset-after", "x-ratelimit-limit", "x-ratelimit-bucket", "x-ratelimit-global"].some((n) => h.get(n) !== null);
+}
+
+/**
+ * Cloudflare edge block (no Discord rate-limit headers), not a Discord 429. Usually an HTML page, but not
+ * always: the plain "error code: 1015" counts too.
+ */
 export function isCloudflareBlock(res: Response): boolean {
-  return (res.headers.get("content-type") ?? "").includes("text/html") && res.headers.get("x-ratelimit-remaining") === null && res.headers.get("x-ratelimit-scope") === null;
+  return !hasDiscordLimitHeaders(res.headers) && !(res.headers.get("content-type") ?? "").includes("application/json");
+}
+
+/**
+ * How long a Discord 429 asks to wait (ms), from its headers and JSON body. Discord answers a webhook's
+ * per-route bucket with contradicting values (seen in production 2026-10-26: header retry-after 1812, body
+ * retry_after 0.3, x-ratelimit-reset-after 2, scope user): the header retry-after counts only for the
+ * global limit. A bucket's 429 waits the body's retry_after, else x-ratelimit-reset-after, at least 250 ms.
+ */
+export function discordWaitMs(h: { get(n: string): string | null }, body: { retry_after?: unknown; global?: unknown } | null): { ms: number; global: boolean } {
+  const num = (x: unknown) => (x === null || x === undefined || x === "" ? NaN : Number(x));
+  const global = body?.global === true || h.get("x-ratelimit-global") === "true" || h.get("x-ratelimit-scope") === "global";
+  const fromBody = num(body?.retry_after);
+  const reset = num(h.get("x-ratelimit-reset-after"));
+  const header = num(h.get("retry-after"));
+  let s: number;
+  if (global) s = Number.isFinite(fromBody) ? fromBody : Number.isFinite(header) ? header : 1;
+  else if (Number.isFinite(fromBody)) s = fromBody;
+  else if (Number.isFinite(reset)) s = reset;
+  else s = Number.isFinite(header) ? Math.min(header, 60) : 1;
+  return { ms: Math.max(250, Math.ceil(s * 1000)), global };
 }
 
 async function rateLimitFrom(res: Response): Promise<RateLimitedError> {
-  if (isCloudflareBlock(res)) {
-    await res.body?.cancel().catch(() => {});
+  const text = await res.text().catch(() => "");
+  let body: { retry_after?: number; global?: boolean } | null = null;
+  try {
+    body = JSON.parse(text) as typeof body;
+  } catch {
+    body = null;
+  }
+  // Cloudflare: no Discord headers and no Discord JSON (an HTML page or "error code: 1015").
+  const fromBody = body && typeof body === "object" ? (body as { retry_after?: unknown }).retry_after : undefined;
+  if (!hasDiscordLimitHeaders(res.headers) && fromBody === undefined) {
     const ra = Number(res.headers.get("retry-after") ?? 60);
     return new RateLimitedError(Math.ceil((Number.isFinite(ra) ? ra : 60) * 1000), null, true, true);
   }
-  let body: { retry_after?: number; global?: boolean } = {};
-  try {
-    body = (await res.json()) as typeof body;
-  } catch {
-    /* Cloudflare HTML ban page: no JSON */
-  }
-  const ra = Number(body.retry_after ?? res.headers.get("retry-after") ?? 1);
-  return new RateLimitedError(Math.ceil((Number.isFinite(ra) ? ra : 1) * 1000), res.headers.get("x-ratelimit-scope"), !!body.global);
+  const w = discordWaitMs(res.headers, body);
+  return new RateLimitedError(w.ms, res.headers.get("x-ratelimit-scope"), w.global);
 }
 
 /**

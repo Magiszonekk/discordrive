@@ -181,8 +181,8 @@ class ExtraWriter(
                     return true
                 }
                 if (res.code != 429 && res.code < 500) throw ServerException(res.code, "discord edit")
-                val ra = runCatching { json.parseToJsonElement(text).jsonObject["retry_after"]?.jsonPrimitive?.content?.toDouble() }.getOrNull() ?: 1.0
-                Thread.sleep((ra.coerceIn(0.2, 30.0) * 1000).toLong() + (500L shl attempt))
+                val ra = if (res.code == 429) DiscordRateLimit.wait({ res.header(it) }, text).seconds else 1.0
+                Thread.sleep((ra.coerceIn(0.2, 30.0) * 1000).toLong() + (500L shl attempt) + DiscordRateLimit.jitterMs())
             }
         }
         throw ServerException(429, "discord edit")

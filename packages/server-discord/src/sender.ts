@@ -225,7 +225,8 @@ export class DiscordSender {
         if (e instanceof RateLimitedError) {
           this.noteRateLimit(`get:${hook.id}`, e);
           if (e.cloudflare || e.retryAfterMs > this.maxWaitMs) throw new DiscordUnavailableError("Discord unavailable", e.retryAfterMs, e.cloudflare);
-          await this.sleep(e.retryAfterMs);
+          // Spread out: every request waiting on this webhook's bucket would come back at the same instant.
+          await this.sleep(e.retryAfterMs + Math.floor(Math.random() * 1500));
           continue;
         }
         if (e instanceof DiscordHttpError && e.status === 404) throw e;
