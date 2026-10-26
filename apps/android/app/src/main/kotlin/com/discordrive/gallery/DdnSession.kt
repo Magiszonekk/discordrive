@@ -197,6 +197,8 @@ class DdnSession private constructor(private val app: Context, val acct: Account
         (r["outcome"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: "?"
     }
     fun moveToTrash(ids: List<String>): String = op { sync.trash(ids) }
+    /** Move into a folder; into [galleryRoot] / an album = "Move to the Gallery", into a Drive folder = "Move to the Drive". */
+    fun move(ids: List<String>, parentId: String): String = op { sync.move(ids, parentId) }
     fun restore(ids: List<String>): String = op { sync.restore(ids) }
     fun purge(ids: List<String>): String = op { sync.purge(ids) }
 

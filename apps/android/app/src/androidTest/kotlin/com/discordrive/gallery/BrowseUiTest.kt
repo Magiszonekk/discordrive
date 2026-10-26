@@ -79,15 +79,16 @@ class BrowseUiTest {
             val st = DdnBackup.status(ctx)
             Log.i("ddn-ui", "upload status: $st")
             val sess = DdnSession.get(ctx)!!
-            val phoneRoot = sess.children("root").firstOrNull { it.name == DdnBackup.rootName(sess.acct.deviceName) }
-            val cam = phoneRoot?.let { f -> sess.children(f.id).firstOrNull { it.name == "Camera" } }
-            val copy = cam?.let { f -> sess.children(f.id).firstOrNull { it.name == name } }
-            r["autoCopyInCameraFolder"] = copy != null && copy.size == photoBytes.size.toLong()
+            // The camera's photos go to the Gallery without an album (the timeline); nothing under Files.
+            val cam = sess.galleryRoot
+            val copy = sess.children(cam).firstOrNull { it.name == name }
+            r["autoCopyInGallery"] = copy != null && copy.size == photoBytes.size.toLong() && sess.media(500, null).any { it.id == copy.id } &&
+                sess.children("root").none { it.name == DdnBackup.rootName(sess.acct.deviceName) }
             val z = sess.children("root").firstOrNull { it.name == DdnUploads.SHARED_FOLDER }
             r["sharedInZTelefonu"] = z != null && sess.children(z.id).any { it.name == "notatka z telefonu.txt" && it.size == shared.length() }
             if (copy != null) {
                 val v = sc.rpc("phoneUpload", buildJsonObject {
-                    put("folder", cam.id); put("name", name); put("sha", io.github.magiszonekk.discordrive.core.sha256Hex(photoBytes)); put("thumbSha", "")
+                    put("folder", cam); put("name", name); put("sha", io.github.magiszonekk.discordrive.core.sha256Hex(photoBytes)); put("thumbSha", "")
                 }).jsonObject
                 r["webDownloadsAutoCopy"] = v.getValue("sha").jsonPrimitive.content == "true"
                 r["autoCopyHasThumbnail"] = v["thumbW"]?.jsonPrimitive?.content == "320"
@@ -98,7 +99,7 @@ class BrowseUiTest {
             Thread.sleep(2000)
             waitUntil(60_000) { wm.getWorkInfosForUniqueWork(DdnBackup.WORK_NOW).get().all { it.state.isFinished } }
             sess.refresh()
-            r["copiedOnce"] = DdnBackup.status(ctx)?.copied == 0 && cam != null && sess.children(cam.id).count { it.name == name } == 1 &&
+            r["copiedOnce"] = DdnBackup.status(ctx)?.copied == 0 && sess.children(cam).count { it.name == name } == 1 &&
                 z != null && sess.children(z.id).count { it.name.startsWith("notatka z telefonu") } == 1
             // Free up space: the copied photo has a verified copy (same size and SHA-256, not in the trash).
             ActivityScenario.launch<DdnFreeUpActivity>(Intent(ctx, DdnFreeUpActivity::class.java)).use { f ->
@@ -554,6 +555,13 @@ class BrowseUiTest {
             s.onActivity { a -> a.openFolderForTest("fold-0000000001", "Zdjęcia 1") }
             r["photoFolder"] = waitUntil { items(s) == 3 }
             shot("2-folder")
+            // The account has the Gallery space: the Gallery tab shows only it (nothing there yet); the photo
+            // folder moved into the Gallery (Move to the Gallery) becomes its album with its 2 media.
+            val sess0 = DdnSession.get(ctx)!!
+            r["gallerySpace"] = sess0.gallerySpace
+            s.onActivity { a -> a.showGalleryForTest() }
+            r["galleryEmptyFirst"] = waitUntil { items(s) == 0 }
+            r["movedToGallery"] = sess0.move(listOf("fold-0000000001"), sess0.galleryRoot) == "applied" && sess0.children("root").none { it.id == "fold-0000000001" }
             s.onActivity { a -> a.showGalleryForTest() }
             r["galleryTwoMedia"] = waitUntil { items(s) == 2 }
             // The thumbnail of the photo (stored by the web upload) is decrypted through the tiles' path; on an

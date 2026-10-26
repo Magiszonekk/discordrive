@@ -291,6 +291,9 @@ class AccountSync(
     /** Move nodes to the trash (one operation; a group for several). */
     fun trash(ids: List<String>): JsonObject = commit(group(ids.map { id -> buildJsonObject { put("type", "trash"); put("nodeId", id) } }))
 
+    /** Move nodes into `parentId` (one operation; a group for several). Drive <-> Gallery is a plain move (rules 4). */
+    fun move(ids: List<String>, parentId: String): JsonObject = commit(group(ids.map { id -> buildJsonObject { put("type", "move"); put("nodeId", id); put("parentId", parentId) } }))
+
     /** Back from the trash to where they were (or "Odzyskane" when that folder is gone). */
     fun restore(ids: List<String>): JsonObject = commit(group(ids.map { id -> buildJsonObject { put("type", "restore"); put("nodeId", id) } }))
 
