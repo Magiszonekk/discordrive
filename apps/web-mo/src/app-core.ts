@@ -132,7 +132,7 @@ export type CoreEvent =
   | { type: "share-progress"; done: number; total: number }
   /** "Make thumbnails for existing photos": the UI makes them (it has the decoder), the core stores them. */
   | { type: "backfill"; state: BackfillState }
-  | { type: "descriptions"; state: { described: number; left: number } }
+  | { type: "descriptions"; state: { described: number; left: number }; space?: "gallery" }
   | { type: "changed" }
   | { type: "cleanup"; running: boolean }
   /** Moving a channel: progress of the job (this tab in metadata only, the instance in e2ee/plain). */
@@ -957,6 +957,9 @@ export class AppCore {
    * first by the date taken (the timeline). Same keyset cursor shape as list().
    */
   private galleryList(after: string | undefined, limit: number): { rows: ChildRow[]; total: number } {
+    // The date taken is in each file's manifest, known here only once looked at (the uploading device knows
+    // it at once): photos synced from another device get theirs in the background, the view then re-sorts.
+    void this.descSync(200, "gallery");
     const s = this.store;
     const tree = this.c().store;
     const hide = !this.showUnavailable;
@@ -1464,7 +1467,7 @@ export class AppCore {
    * manifest and its message each, a few at a time; "none" is looked at again after a day). Emits
    * "descriptions" when something new is known.
    */
-  async descSync(budget = 200): Promise<number> {
+  async descSync(budget = 200, first?: "gallery"): Promise<number> {
     if (this.descRunning || !this.ctx) return 0;
     this.descRunning = true;
     let found = 0;
@@ -1473,9 +1476,16 @@ export class AppCore {
     try {
       const s = this.store;
       const now = Date.now();
-      const todo = s instanceof SqlIndexStore
-        ? s.searchRows().filter((r) => r.at === null || (!r.v && now - r.at > 24 * 3600_000))
-        : [...this.c().store.allNodes()].filter((n) => n.kind === "file" && n.content && !this.descMem.has(n.content.manifestRef)).map((n) => ({ nodeId: n.id, manifestRef: n.content!.manifestRef }));
+      const tree = this.c().store;
+      const todo =
+        first === "gallery"
+          ? s instanceof SqlIndexStore
+            ? s.subtreeWithoutDate(GALLERY_ID, budget)
+            : [...tree.allNodes()].filter((n) => n.kind === "file" && n.content && !this.descMem.has(n.content.manifestRef) && spaceOf(tree, n.id) === "gallery").map((n) => ({ nodeId: n.id, manifestRef: n.content!.manifestRef }))
+          : s instanceof SqlIndexStore
+            ? s.searchRows().filter((r) => r.at === null || (!r.v && now - r.at > 24 * 3600_000))
+            : [...tree.allNodes()].filter((n) => n.kind === "file" && n.content && !this.descMem.has(n.content.manifestRef)).map((n) => ({ nodeId: n.id, manifestRef: n.content!.manifestRef }));
+      if (!todo.length) return 0;
       for (const r of todo.slice(0, budget)) {
         if (this.unavailableInfo(r.nodeId)) continue;
         const [d, t] = await Promise.all([this.c().readDescription(r.manifestRef).catch(() => undefined), this.c().takenAt(r.manifestRef).catch(() => null)]);
@@ -1489,7 +1499,7 @@ export class AppCore {
     } finally {
       this.descRunning = false;
     }
-    if (learned) this.onEvent({ type: "descriptions", state: this.descState() });
+    if (learned) this.onEvent({ type: "descriptions", state: this.descState(), ...(first ? { space: first } : {}) });
     return found;
   }
 

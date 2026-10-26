@@ -370,6 +370,19 @@ export class SqlIndexStore implements IndexStore {
     });
   }
 
+  /** Current files under a root whose manifest was not looked at yet (no date taken known here): the Gallery's timeline needs it. */
+  subtreeWithoutDate(rootId: NodeId, limit: number): { nodeId: string; manifestRef: string }[] {
+    this.refreshTrash();
+    return this.sql
+      .all<{ node_id: string; manifest_ref: string }>(
+        `WITH RECURSIVE t(id) AS (SELECT id FROM nodes WHERE parent_id = ? UNION SELECT n.id FROM nodes n JOIN t ON n.parent_id = t.id)
+         SELECT f.node_id, f.manifest_ref FROM files f LEFT JOIN descs d ON d.manifest_ref = f.manifest_ref
+         WHERE f.trashed = 0 AND d.manifest_ref IS NULL AND f.node_id IN (SELECT id FROM t) LIMIT ?`,
+        [rootId, limit],
+      )
+      .map((r) => ({ nodeId: r.node_id, manifestRef: r.manifest_ref }));
+  }
+
   /** Current files under a root (a space: the Gallery's root), not in the trash: count and bytes (one recursive pass). */
   subtreeTotals(rootId: NodeId): { files: number; bytes: number } {
     this.refreshTrash();

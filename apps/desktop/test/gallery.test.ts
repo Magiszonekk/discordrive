@@ -111,6 +111,31 @@ describe("the Gallery (a second space of the account)", () => {
     await core.restore([p3.nodeId]);
     expect(core.list(album).rows.some((r) => r.id === p3.nodeId)).toBe(true);
 
+    // A second device (paired): the same timeline, dates taken from the manifests (not when it synced).
+    const b = new AppCore({ discordApiOrigin: origin }, nodePlatform({ dataDir: join(base, "data-b") }));
+    const offer = await b.pairStart(url, "second device");
+    const accepted = core.pairAccept(offer.offer);
+    let sas: { sas: string } | null = null;
+    for (let i = 0; i < 100 && !sas; i++) {
+      sas = await b.pairPoll();
+      if (!sas) await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(sas).not.toBeNull();
+    await accepted;
+    await b.pairConfirm();
+    await b.open();
+    const want = core.list(GALLERY_ID).rows.map((r) => [r.name, r.modifiedAt]);
+    b.list(GALLERY_ID); // starts the look at the manifests
+    let got: unknown[] = [];
+    for (let i = 0; i < 100; i++) {
+      got = b.list(GALLERY_ID).rows.map((r) => [r.name, r.modifiedAt]);
+      if (JSON.stringify(got) === JSON.stringify(want)) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(got).toEqual(want);
+    expect(want.find((x) => x[0] === "IMG_C.jpg")![1]).toBe(Date.UTC(2023, 1, 2));
+    b.close();
+
     // After all that, Drive-only work still goes out as rules 3.
     const before = (await versions(url, core)).length;
     await core.rename(docs, "Dokumenty 2026");

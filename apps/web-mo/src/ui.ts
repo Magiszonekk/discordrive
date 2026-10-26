@@ -113,7 +113,11 @@ function onCoreEvent(e: CoreEvent) {
   else if (e.type === "cleanup" && route.name === "settings") void renderStorage();
   else if (e.type === "backfill") paintBackfillState(e.state);
   // Descriptions fetched in the background: an open search shows the new hits.
-  else if (e.type === "descriptions" && searchQ) void render();
+  // Dates taken learned for Gallery photos synced from another device: the timeline re-sorts.
+  else if (e.type === "descriptions" && (searchQ || (e.space === "gallery" && underGallery))) {
+    shownList = "";
+    void render();
+  }
   else if (e.type === "channel-move") channelsUi.onMoveEvent(e.status);
   else if (e.type === "net") paintNet(e.state);
   else if (e.type === "net-baseline") storeNet({ baseline: e.data });
