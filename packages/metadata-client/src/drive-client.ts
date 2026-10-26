@@ -29,6 +29,7 @@ import {
   type PieceLoc,
   Replica,
   type IndexStore,
+  spaceOf,
 } from "@ddv4/sync-core";
 import type { ArbiterApi } from "./arbiter.js";
 import { AbortedError, throwIfAborted, type BlobStore, type ExtraPlacement } from "./blob-store.js";
@@ -665,8 +666,8 @@ export class DriveClient {
           ops: [
             { type: "upload_commit", uploadId },
             opts.replace
-              ? { type: "new_content_version", nodeId: opts.replace.nodeId, baseVersionId: opts.replace.baseVersionId, content: version, nameHint: nfc }
-              : { type: "create", kind: "file", nodeId, parentId, name: nfc, content: version },
+              ? { type: "new_content_version", nodeId: opts.replace.nodeId, baseVersionId: opts.replace.baseVersionId, content: version, nameHint: nfc, ...this.spaceField(opts.replace.nodeId) }
+              : { type: "create", kind: "file", nodeId, parentId, name: nfc, content: version, ...this.spaceField(parentId) },
           ],
         },
         "upload_commit+create",
@@ -1013,6 +1014,14 @@ export class DriveClient {
     const node = this.store.getNode(nodeId);
     if (!node || node.kind !== "file" || !node.content) throw new Error("not a file");
     return readVersionRange(this, node.content, start, end, cache, this.downloadConcurrency);
+  }
+
+  /**
+   * `space: "gallery"` for an op on something in the Gallery (rules 4: if the album is purged meanwhile, the
+   * file goes to the Gallery's root, not to „Recovered”); nothing for the Drive (the op stays rules 3).
+   */
+  spaceField(id: NodeId): { space?: "gallery" } {
+    return this.store.getNode(id) && spaceOf(this.store, id) === "gallery" ? { space: "gallery" } : {};
   }
 
   /** Children of a folder (non-trashed), sorted by name. */

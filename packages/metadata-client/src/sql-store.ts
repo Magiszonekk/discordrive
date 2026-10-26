@@ -338,6 +338,49 @@ export class SqlIndexStore implements IndexStore {
     };
   }
 
+  /**
+   * Timeline of a space: every current file under `rootId` (albums included), newest first by the date it
+   * was taken (manifest takenAt, known in descs) or else when its version was written. Keyset paging on
+   * (date, id); cursor JSON [1, date, "", id] (the shape of listChildren's, files group).
+   */
+  listTimeline(rootId: NodeId, opts: { after?: string; limit?: number; hideUnavailable?: boolean } = {}): ChildRow[] {
+    this.refreshTrash();
+    const cur = parseCursor(opts.after);
+    const after = cur && cur.fo === 1 ? cur : null;
+    const rows = this.sql.all<{ id: string; rec: string; t: number; unav: string | null }>(
+      `WITH RECURSIVE t(id) AS (SELECT id FROM nodes WHERE parent_id = ? UNION SELECT n.id FROM nodes n JOIN t ON n.parent_id = t.id),
+       x AS (SELECT n.id, n.rec, coalesce(nullif(d.taken, 0), n.mt) AS t, u.locs AS unav FROM files f JOIN nodes n ON n.id = f.node_id
+             LEFT JOIN descs d ON d.manifest_ref = f.manifest_ref LEFT JOIN unavail u ON u.upload_id = f.upload_id
+             WHERE f.trashed = 0 AND f.node_id IN (SELECT id FROM t) AND (? = 0 OR u.upload_id IS NULL))
+       SELECT * FROM x${after ? " WHERE (t, id) < (?, ?)" : ""} ORDER BY t DESC, id DESC LIMIT ?`,
+      [rootId, opts.hideUnavailable ? 1 : 0, ...(after ? [after.key ?? 0, after.id] : []), opts.limit ?? 200],
+    );
+    return rows.map((r) => {
+      const n = JSON.parse(r.rec) as NodeRecord;
+      return {
+        id: n.id,
+        name: n.name,
+        kind: "file" as const,
+        size: n.content?.sizeBytes ?? null,
+        modifiedAt: Number(r.t) || null,
+        trashed: false,
+        cursor: JSON.stringify([1, Number(r.t), "", r.id]),
+        ...(r.unav ? { unavailable: JSON.parse(r.unav) as string[] } : {}),
+      };
+    });
+  }
+
+  /** Current files under a root (a space: the Gallery's root), not in the trash: count and bytes (one recursive pass). */
+  subtreeTotals(rootId: NodeId): { files: number; bytes: number } {
+    this.refreshTrash();
+    const r = this.sql.get<{ n: number; b: number | null }>(
+      `WITH RECURSIVE t(id) AS (SELECT id FROM nodes WHERE parent_id = ? UNION SELECT n.id FROM nodes n JOIN t ON n.parent_id = t.id)
+       SELECT count(*) AS n, sum(f.size) AS b FROM files f WHERE f.trashed = 0 AND f.node_id IN (SELECT id FROM t)`,
+      [rootId],
+    )!;
+    return { files: Number(r.n ?? 0), bytes: Number(r.b ?? 0) };
+  }
+
   /** Per location: files with a piece there and the bytes stored there (current versions, trash included). */
   locationStats(): Map<string, { files: number; bytes: number }> {
     const rows = this.sql.all<{ loc: string; n: number; b: number }>("SELECT p.loc, count(*) AS n, sum(p.bytes) AS b FROM pieces p JOIN files f ON f.upload_id = p.upload_id GROUP BY p.loc", []);

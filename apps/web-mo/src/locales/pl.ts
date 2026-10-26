@@ -10,7 +10,7 @@ export const pl: Record<string, string> = {
 
   // nawigacja (app shell)
   "nav.label": "Menu główne",
-  "nav.files": "Pliki",
+  "nav.files": "Dysk",
   "nav.devices": "Urządzenia",
   "nav.settings": "Ustawienia",
   "nav.open": "Otwórz menu",
@@ -546,6 +546,10 @@ export const pl: Record<string, string> = {
   // kosz, zmiana nazwy, przenoszenie, zaznaczanie
   "nav.trash": "Kosz",
   "nav.recovered": "Odzyskane",
+  "nav.gallery": "Galeria",
+  "act.toGallery": "Przenieś do Galerii",
+  "act.toDrive": "Przenieś do Dysku",
+  "st.gallery": "W tym w Galerii",
   "page.trash": "Kosz",
   "trash.h": "Kosz",
   "trash.lead": "Usunięte pliki i foldery leżą tu 30 dni, potem znikają na stałe. Do tego czasu możesz je przywrócić.",

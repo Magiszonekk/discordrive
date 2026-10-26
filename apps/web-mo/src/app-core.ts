@@ -21,6 +21,9 @@ import {
   type NoticeCode,
   type Operation,
   type Outcome,
+  GALLERY_ID,
+  spaceOf,
+  type Space,
 } from "@ddv4/sync-core";
 import {
   HttpApi,
@@ -113,6 +116,8 @@ export interface TrashRow {
   /** Folder path it was in (names from the root), null when unknown. */
   from: string[] | null;
   fromRecovered: boolean;
+  /** In the Gallery (its root or an album) rather than the Drive. */
+  space: Space;
 }
 
 /** Events pushed from the worker to the UI (not request/response). */
@@ -903,12 +908,16 @@ export class AppCore {
         if (inTrash(this.c().store, n.id)) ((st.trashFiles++), (st.trashBytes += n.content.sizeBytes));
         else ((st.files++), (st.bytes += n.content.sizeBytes));
       }
+      const g = this.galleryTotals();
+      st.galleryFiles = g.files;
+      st.galleryBytes = g.bytes;
       st.tookMs = Math.round(performance.now() - t0);
       return st;
     }
     const t = s.storageTotals();
+    const g = s.subtreeTotals(GALLERY_ID);
     const discord = mode.discordUsage ? await mode.discordUsage(this.ctx!, this.c()).catch(() => null) : null;
-    return { files: t.files, bytes: t.bytes, trashFiles: t.trashFiles, trashBytes: t.trashBytes, unavailableFiles: t.unavailableFiles, unavailableBytes: t.unavailableBytes, discordBytes: discord, tookMs: Math.round(performance.now() - t0) };
+    return { files: t.files, bytes: t.bytes, galleryFiles: g.files, galleryBytes: g.bytes, trashFiles: t.trashFiles, trashBytes: t.trashBytes, unavailableFiles: t.unavailableFiles, unavailableBytes: t.unavailableBytes, discordBytes: discord, tookMs: Math.round(performance.now() - t0) };
   }
 
   /**
@@ -918,6 +927,7 @@ export class AppCore {
    * replica (secondary tab), so paging behaves the same in every tab.
    */
   list(parentId = ROOT_ID, after?: string, limit = 200, sort?: ListSort): { rows: ChildRow[]; total: number } {
+    if (parentId === GALLERY_ID) return this.galleryList(after, limit);
     const s = this.store;
     const hide = !this.showUnavailable;
     if (s instanceof SqlIndexStore) return { rows: s.listChildren(parentId, { after, limit, hideUnavailable: hide, sort }), total: s.countChildren(parentId, hide) };
@@ -942,9 +952,49 @@ export class AppCore {
     return { rows, total: all.length };
   }
 
-  /** Counters for the folder heading ("3 folders · 8 files · 72 GB"). */
+  /**
+   * The Gallery's root: its albums (folders, by name), then every photo of the Gallery, in albums too, newest
+   * first by the date taken (the timeline). Same keyset cursor shape as list().
+   */
+  private galleryList(after: string | undefined, limit: number): { rows: ChildRow[]; total: number } {
+    const s = this.store;
+    const tree = this.c().store;
+    const hide = !this.showUnavailable;
+    const cur = parseCursor(after);
+    const rows: ChildRow[] = [];
+    const albums = this.subfolders(GALLERY_ID);
+    if (!cur || cur.fo === 0) {
+      const from = cur ? albums.findIndex((a) => a.id === cur.id) + 1 : 0;
+      for (const a of albums.slice(from, from + limit)) rows.push({ id: a.id, name: a.name, kind: "folder", size: null, modifiedAt: null, trashed: false, cursor: JSON.stringify([0, null, nameKey(a.name), a.id]) });
+    }
+    let photos = 0;
+    if (s instanceof SqlIndexStore) {
+      photos = s.subtreeTotals(GALLERY_ID).files;
+      if (rows.length < limit) rows.push(...s.listTimeline(GALLERY_ID, { after: cur?.fo === 1 ? after : undefined, limit: limit - rows.length, hideUnavailable: hide }));
+    } else if (tree.getNode(GALLERY_ID)) {
+      const all: ChildRow[] = [];
+      for (const n of tree.allNodes()) {
+        if (n.kind !== "file" || !n.content || inTrash(tree, n.id) || spaceOf(tree, n.id) !== "gallery") continue;
+        if (hide && this.unavailableInfo(n.id)) continue;
+        const at = this.descMem.get(n.content.manifestRef)?.taken || n.content.createdAt;
+        all.push({ id: n.id, name: n.name, kind: "file", size: n.content.sizeBytes, modifiedAt: at, trashed: false, cursor: JSON.stringify([1, at, "", n.id]) });
+      }
+      const key = (r: ChildRow) => JSON.parse(r.cursor) as [number, number, string, string];
+      all.sort((a, b) => key(b)[1] - key(a)[1] || (key(b)[3] < key(a)[3] ? -1 : 1));
+      photos = all.length;
+      const from = cur?.fo === 1 ? all.findIndex((r) => key(r)[1] < (cur.key ?? 0) || (key(r)[1] === cur.key && key(r)[3] < cur.id)) : 0;
+      if (rows.length < limit && from >= 0) rows.push(...all.slice(from, from + limit - rows.length));
+    }
+    return { rows, total: albums.length + photos };
+  }
+
+  /** Counters for the folder heading ("3 folders · 8 files · 72 GB"); the Gallery's root counts every photo of the space. */
   folderStats(parentId = ROOT_ID): FolderStats {
     const s = this.store;
+    if (parentId === GALLERY_ID) {
+      const g = s instanceof SqlIndexStore ? s.subtreeTotals(GALLERY_ID) : this.galleryTotals();
+      return { folders: this.subfolders(GALLERY_ID).length, files: g.files, bytes: g.bytes };
+    }
     if (s instanceof SqlIndexStore) return s.folderStats(parentId, !this.showUnavailable);
     const st: FolderStats = { folders: 0, files: 0, bytes: 0 };
     for (const id of this.c().store.childIds(parentId)) {
@@ -958,20 +1008,47 @@ export class AppCore {
 
   /**
    * Path from the root to a folder (breadcrumb after a reload of /folder/<id>). A path under
-   * „Recovered” (rule 4) starts with { id: "recovered" }. null when the folder no longer exists
+   * „Recovered” (rule 4) starts with { id: "recovered" }, one in the Gallery with { id: "gallery" }. null when the folder no longer exists
    * or is in the trash (another device removed it).
    */
   folderPath(nodeId: string): { id: string; name: string }[] | null {
+    // The Gallery is there to open before anything is in it (its root is made by the first rules-4 entry).
+    if (nodeId === GALLERY_ID && !this.c().store.getNode(GALLERY_ID)) return [{ id: GALLERY_ID, name: "" }];
     const out: { id: string; name: string }[] = [];
     let id: string | null = nodeId;
     for (let i = 0; id && id !== ROOT_ID && i < 256; i++) {
       const n = this.c().store.getNode(id);
       if (!n || n.kind !== "folder" || n.trashed) return null;
       out.unshift({ id: n.id, name: n.name });
-      if (n.id === RECOVERED_ID) return out;
+      if (n.id === RECOVERED_ID || n.id === GALLERY_ID) return out;
       id = n.parentId;
     }
     return id === ROOT_ID ? out : null;
+  }
+
+  /** Files in the Gallery (not in the trash), counted over the tree (a tab without the SQL index). */
+  private galleryTotals(): { files: number; bytes: number } {
+    const tree = this.c().store;
+    let files = 0;
+    let bytes = 0;
+    if (!tree.getNode(GALLERY_ID)) return { files, bytes };
+    for (const n of tree.allNodes()) if (n.kind === "file" && n.content && !inTrash(tree, n.id) && spaceOf(tree, n.id) === "gallery") ((files++), (bytes += n.content.sizeBytes));
+    return { files, bytes };
+  }
+
+  /**
+   * The Gallery is offered once the instance replays rules 4 (its health says so): an older instance
+   * would refuse the ops. Asked once per session.
+   */
+  private galleryKnown: Promise<boolean> | null = null;
+  galleryAvailable(): Promise<boolean> {
+    this.galleryKnown ??= getHealth(this.http?.baseUrl ?? this.platform.homeOrigin() ?? "")
+      .then((h) => Number(h.rulesVersion) >= 4)
+      .catch(() => {
+        this.galleryKnown = null;
+        return false;
+      });
+    return this.galleryKnown;
   }
 
   async mkdir(name: string, parentId = ROOT_ID) {
@@ -1334,7 +1411,8 @@ export class AppCore {
    * not known yet (description, date) is fetched in the background (descSync) and the next search sees it.
    * plain: the server's name search is added for files the local index does not have.
    */
-  async search(q: string) {
+  /** Search in one space: the Drive (Files, „Recovered”) or the Gallery. */
+  async search(q: string, space: Space = "drive") {
     const s = this.store;
     const tree = this.c().store;
     const descs = new Map<string, { v: string | null; taken: number | null }>();
@@ -1363,6 +1441,7 @@ export class AppCore {
       return { id: n.id, name: n.name, kind: "file" as const, parentId: n.parentId, size: n.content?.sizeBytes ?? null };
     });
     if (mode.search) for (const h of await mode.search(this.ctx!, q).catch(() => [])) if (!byId.has(h.id)) hits.push(h);
+    hits = hits.filter((h) => tree.getNode(h.id) && spaceOf(tree, h.id) === space);
     // Unavailable files are hidden from search too unless the Settings switch is on.
     if (this.showUnavailable) return hits.map((h) => ({ ...h, unavailable: this.unavailableInfo(h.id)?.webhookIds }));
     return hits.filter((h) => h.kind !== "file" || !this.unavailableInfo(h.id));
@@ -1735,10 +1814,15 @@ export class AppCore {
     return t || 1;
   }
   /** A folder's children for the disk (not in the trash; unavailable files hidden as in the lists). */
+  /** The disk in the system shows only the Drive: a node of the Gallery is not there (a stale ID from a placeholder too). */
+  private onDisk(id: string): boolean {
+    const tree = this.c().store;
+    return !!tree.getNode(id) && spaceOf(tree, id) === "drive";
+  }
   vdiskList(id: string) {
     const tree = this.c().store;
     const folder = id === "root" ? tree.getNode(ROOT_ID) : tree.getNode(id);
-    if (!folder || folder.kind !== "folder") return null;
+    if (!folder || folder.kind !== "folder" || !this.onDisk(folder.id)) return null;
     const out = [];
     for (const cid of tree.childIds(folder.id)) {
       const n = tree.getNode(cid);
@@ -1751,13 +1835,13 @@ export class AppCore {
   vdiskStat(id: string) {
     const n = this.c().store.getNode(id === "root" ? ROOT_ID : id);
     if (id === "root" && n) return { ...this.vdiskEntry(n as never), id: "root" };
-    return n && !n.trashed ? this.vdiskEntry(n as never) : null;
+    return n && !n.trashed && this.onDisk(n.id) ? this.vdiskEntry(n as never) : null;
   }
   // ── writing through the disk ──
 
   private vdiskFolder(id: string): string {
     const n = this.c().store.getNode(id === "root" ? ROOT_ID : id);
-    if (!n || n.kind !== "folder" || n.trashed) throw new Error("ENOENT: no such folder");
+    if (!n || n.kind !== "folder" || n.trashed || !this.onDisk(n.id)) throw new Error("ENOENT: no such folder");
     return n.id;
   }
   private vdiskChild(dir: string, name: string) {
@@ -1834,7 +1918,7 @@ export class AppCore {
   /** A file or folder deleted on the Windows disk (its node known from the placeholder): into the trash. */
   async vdiskTrash(id: string): Promise<void> {
     const n = this.c().store.getNode(id);
-    if (!n || n.trashed) return;
+    if (!n || n.trashed || !this.onDisk(id)) return;
     await this.trash([id]);
   }
   /** rm / rmdir: into the account's trash (30 days), never deleted for good from the disk. */
@@ -1858,6 +1942,7 @@ export class AppCore {
   /** A folder's path in the disk ("" = the root), null when it is not a current folder. */
   vdiskPath(id: string): string | null {
     if (id === "root") return "";
+    if (!this.onDisk(id)) return null;
     const p = this.folderPath(id);
     return p ? p.map((x) => x.name).join("/") : null;
   }
@@ -1959,6 +2044,7 @@ export class AppCore {
       if (n?.parentId) from[id] = n.parentId;
     }
     const ops = nodeIds.map((nodeId) => ({ type: "move" as const, nodeId, parentId }));
+    // Drive <-> Gallery is a plain move (the subtree goes along); the op is rules 4 then (sync-core picks it).
     const r = await this.commit(ops.length === 1 ? ops[0]! : { type: "group", ops }, "move");
     return { ...r, from };
   }
@@ -2015,6 +2101,7 @@ export class AppCore {
         purgeAt: n.trashed.at + TRASH_RETENTION_MS,
         from: from === null ? null : from,
         fromRecovered: this.underRecovered(n.parentId),
+        space: spaceOf(s, n.id),
       });
     }
     return out.sort((a, b) => b.trashedAt - a.trashedAt || (a.id < b.id ? -1 : 1));

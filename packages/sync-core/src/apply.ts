@@ -221,6 +221,24 @@ export function spaceOf(s: IndexStore, id: NodeId): Space {
   return "drive";
 }
 
+/**
+ * Rules version an op needs: 4 when it touches the Gallery (targets its root, a node in it, or carries a
+ * space), else `base`. So a device writes rules 4 only once someone uses the Gallery, and a client that
+ * cannot replay rules 4 keeps working until then. (Once the Gallery's root exists, rules-3 ops behave the
+ * same as rules-4 ones, so a device that never touches the Gallery may go on writing 3.)
+ */
+export function rulesVersionFor(s: IndexStore, op: Operation, base: number): number {
+  if (base >= 4) return base;
+  const inGallery = (id: NodeId | undefined) => id !== undefined && (id === GALLERY_ID || (!!s.getNode(id) && spaceOf(s, id) === "gallery"));
+  const ops = op.type === "group" ? op.ops : [op];
+  for (const o of ops) {
+    if ("space" in o && o.space !== undefined) return 4;
+    if ("nodeId" in o && inGallery(o.nodeId)) return 4;
+    if ("parentId" in o && inGallery(o.parentId)) return 4;
+  }
+  return base;
+}
+
 /** Put the system roots into an empty store. Idempotent. */
 export function initIndex(store: IndexStore): IndexStore {
   if (!store.getNode(ROOT_ID)) store.putNode(systemNode(ROOT_ID, ""));

@@ -13,6 +13,7 @@ import {
   initIndex,
   loadSnapshot,
   MemoryIndexStore,
+  Replica,
   replay,
   spaceOf,
   takeSnapshot,
@@ -25,6 +26,27 @@ describe("rules 4: the Gallery space", () => {
   it("versions: replays 4, writes 3 until every reader has rules 4", () => {
     expect(RULES_VERSION).toBe(4);
     expect(WRITE_RULES_VERSION).toBe(3);
+  });
+
+  it("a replica writes rules 4 only for ops that touch the Gallery", () => {
+    const st = initIndex(new MemoryIndexStore());
+    let n = 0;
+    const r = new Replica({ device: { id: "dev-A", name: "A" }, store: st, newOpId: () => `op-${++n}`.padEnd(10, "0") });
+    const v = (op: Parameters<Replica["enqueue"]>[0]) => r.enqueue(op).rulesVersion;
+    expect(v({ type: "create", kind: "folder", nodeId: "fold0001", parentId: ROOT_ID, name: "a" })).toBe(3);
+    expect(v({ type: "create", kind: "folder", nodeId: "albm0001", parentId: GALLERY_ID, name: "a" })).toBe(4);
+    expect(v({ type: "move", nodeId: "fold0001", parentId: GALLERY_ID })).toBe(4);
+    expect(v({ type: "create", kind: "folder", nodeId: "fold0002", parentId: ROOT_ID, name: "b", space: "drive" })).toBe(4);
+    // A node already in the Gallery (rename, trash, move out) is a Gallery op too.
+    st.putNode({ ...st.getNode(ROOT_ID)!, id: GALLERY_ID, name: "" });
+    st.putNode({ ...st.getNode(ROOT_ID)!, id: "albm0001", parentId: GALLERY_ID, name: "a" });
+    expect(v({ type: "rename", nodeId: "albm0001", name: "b" })).toBe(4);
+    expect(v({ type: "move", nodeId: "albm0001", parentId: ROOT_ID })).toBe(4);
+    expect(v({ type: "group", ops: [{ type: "trash", nodeId: "fold0001" }, { type: "trash", nodeId: "albm0001" }] })).toBe(4);
+    expect(v({ type: "trash", nodeId: "fold0001" })).toBe(3);
+    // A fixed version (tests, a pinned writer) is kept.
+    const fixed = new Replica({ device: { id: "dev-B", name: "B" }, newOpId: () => `op-${++n}`.padEnd(10, "0"), rulesVersion: 3 });
+    expect(fixed.enqueue({ type: "move", nodeId: "x0000001", parentId: GALLERY_ID }).rulesVersion).toBe(3);
   });
 
   it("a log of rules 3 has no Gallery root and the same state as before", () => {

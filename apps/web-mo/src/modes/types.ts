@@ -138,8 +138,12 @@ export interface MoveStatus {
 
 /** Settings → Storage totals (local index, SQL). */
 export interface StorageTotals {
+  /** Every current file of the account (Drive and Gallery). */
   files: number;
   bytes: number;
+  /** Of those, the ones in the Gallery. */
+  galleryFiles?: number;
+  galleryBytes?: number;
   trashFiles: number;
   trashBytes: number;
   unavailableFiles: number;

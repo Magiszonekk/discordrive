@@ -12,6 +12,7 @@ export {
   SILENT_NOTICE_CODES,
   pathOf,
   spaceOf,
+  rulesVersionFor,
   uploadsTouched,
   LogGapError,
   UnsupportedRulesVersionError,

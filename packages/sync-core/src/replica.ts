@@ -7,7 +7,7 @@
 // makes long offline periods trivial: fetch the tail, then send the outbox
 // (rule 10), with no time limit.
 
-import { applyEntry, initIndex, uploadsTouched, type ApplyResult } from "./apply.js";
+import { applyEntry, initIndex, uploadsTouched, type ApplyResult, rulesVersionFor } from "./apply.js";
 import type { Sequencer, SubmitResult } from "./sequencer.js";
 import { loadSnapshot, takeSnapshot, type IndexSnapshot } from "./snapshot.js";
 import { MemoryIndexStore, type IndexStore } from "./store.js";
@@ -20,7 +20,10 @@ export interface ReplicaOptions {
   now?: () => number;
   /** Op ID generator (random in production). */
   newOpId: () => string;
-  /** Rules version of the ops this replica writes (default WRITE_RULES_VERSION). */
+  /**
+   * Rules version of the ops this replica writes. Default: WRITE_RULES_VERSION, and 4 for an op that
+   * touches the Gallery (rulesVersionFor).
+   */
   rulesVersion?: number;
   /**
    * Device UTC offset in minutes at a given instant (CEST = 120); goes into
@@ -46,6 +49,7 @@ export class Replica {
   private readonly newOpId: () => string;
   private readonly tzOffsetMin: (atMs: number) => number;
   readonly rulesVersion: number;
+  private readonly fixedVersion: boolean;
 
   constructor(opts: ReplicaOptions) {
     this.device = opts.device;
@@ -53,6 +57,7 @@ export class Replica {
     this.now = opts.now ?? (() => Date.now());
     this.newOpId = opts.newOpId;
     this.rulesVersion = opts.rulesVersion ?? WRITE_RULES_VERSION;
+    this.fixedVersion = opts.rulesVersion !== undefined;
     this.tzOffsetMin = opts.tzOffsetMin ?? localTzOffsetMin;
   }
 
@@ -70,7 +75,7 @@ export class Replica {
     const createdAt = this.now();
     const env: OpEnvelope = {
       opId: this.newOpId(),
-      rulesVersion: this.rulesVersion,
+      rulesVersion: this.fixedVersion ? this.rulesVersion : rulesVersionFor(this.store, op, this.rulesVersion),
       baseSeq: this.headSeq,
       device: { ...this.device },
       createdAt,

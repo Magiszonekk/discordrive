@@ -333,6 +333,7 @@ function parseRoute(path = location.pathname): Route {
   const p = path.replace(/\/+$/, "") || "/";
   const f = /^\/folder\/([A-Za-z0-9_-]{1,64})$/.exec(p);
   if (f) return { name: "files", folder: f[1]! };
+  if (p === "/gallery") return { name: "files", folder: "gallery" };
   if (p === "/trash") return { name: "trash" };
   if (p === "/devices") return { name: "devices" };
   if (p === "/settings") return { name: "settings", tab: null };
@@ -500,7 +501,8 @@ let sort: { by: SortBy; desc: boolean } = (() => {
   return { by: "name", desc: false };
 })();
 function paintView() {
-  for (const w of all<HTMLElement>(".ftable-wrap")) w.dataset.view = view;
+  const inGallery = route.name === "files" && underGallery;
+  for (const w of all<HTMLElement>(".ftable-wrap")) w.dataset.view = inGallery && w.closest("[data-page=files]") ? "tiles" : view;
   for (const b of all<HTMLButtonElement>("[data-ddn=view] [data-view]")) b.setAttribute("aria-pressed", String(b.dataset.view === view));
 }
 function setView(v: View) {
@@ -536,8 +538,14 @@ const selected = new Map<string, { name: string; kind: "file" | "folder" }>();
 /** The open folder lives under „Recovered” (rule 4): set by render from the path. */
 let underRecovered = false;
 const inRecovered = () => underRecovered;
+/** The open folder is in the Gallery (its root or an album): set by render from the path. */
+let underGallery = false;
+/** The instance replays rules 4 (the Gallery is offered): asked once. */
+let galleryOn = false;
 const DRAG_TYPE = "application/x-ddn-nodes";
-const openFolder = (id: string) => navigate(id === "root" ? "/" : `/folder/${id}`);
+/** Address of a folder: the Drive's root "/", the Gallery's root "/gallery", any other "/folder/<id>". */
+const folderHref = (id: string) => (id === "root" ? "/" : id === "gallery" ? "/gallery" : `/folder/${id}`);
+const openFolder = (id: string) => navigate(folderHref(id));
 
 /** Where "Up" (button, Backspace) goes from the open folder: its parent's address, or null at the top. */
 let upHref: string | null = null;
@@ -547,7 +555,7 @@ function goUp() {
 }
 /** Breadcrumb links are drop targets too (drag rows onto a parent folder). */
 function crumbLink(id: string, label: string) {
-  const a = h("a", { href: id === "root" ? "/" : `/folder/${id}`, "data-link": "", title: label, "data-drop": id }, label);
+  const a = h("a", { href: folderHref(id), "data-link": "", title: label, "data-drop": id }, label);
   return a;
 }
 
@@ -555,22 +563,24 @@ function renderCrumbs(fullPath: { id: string; name: string }[]) {
   const nav = ui("crumbs");
   const kids: (Node | string)[] = [];
   // Under „Recovered” (rule 4) the path starts at that system folder instead of Files.
-  const rec = fullPath[0]?.id === "recovered";
-  const rootId = rec ? "recovered" : "root";
-  const rootLabel = rec ? t("nav.recovered") : t("files.root");
+  // In the Gallery it starts at the Gallery's root.
+  const top = fullPath[0]?.id;
+  const rec = top === "recovered" || top === "gallery";
+  const rootId = rec ? top! : "root";
+  const rootLabel = top === "recovered" ? t("nav.recovered") : top === "gallery" ? t("nav.gallery") : t("files.root");
   const path = rec ? fullPath.slice(1) : fullPath;
   // Mobile: back arrow to the parent (FolderBreadcrumb); desktop: the full path.
   const back = h("span", { class: "back" });
   if (path.length) {
     const parent = path.at(-2);
-    const a = h("a", { href: parent ? `/folder/${parent.id}` : rec ? "/folder/recovered" : "/", "data-link": "" }, icon("left"), parent ? parent.name : rootLabel);
+    const a = h("a", { href: folderHref(parent ? parent.id : rootId), "data-link": "" }, icon("left"), parent ? parent.name : rootLabel);
     back.append(a);
   } else back.append(h("span", { "aria-current": "page" }, rootLabel));
   kids.push(back);
   // Up: the parent folder (also a drop target: move the dragged rows there). Not shown at the top.
   const parentId = path.length ? (path.at(-2)?.id ?? rootId) : null;
   const parentLabel = path.length ? (path.at(-2)?.name ?? rootLabel) : "";
-  upHref = parentId ? (parentId === "root" ? "/" : `/folder/${parentId}`) : null;
+  upHref = parentId ? folderHref(parentId) : null;
   const up = h("button", { class: "iconbtn up", type: "button", "data-ddn": "up", "aria-label": t("files.up"), title: t("files.up") }, icon("up"));
   up.onclick = () => goUp();
   if (parentId) {
@@ -1135,12 +1145,14 @@ async function renderNow() {
   $("nav-admin").hidden = !isAdmin;
   if (route.name === "admin" && !isAdmin) return navigate("/", true);
   const page = route.name;
-  const navKey = page === "files" && route.name === "files" && route.folder === "recovered" ? "recovered" : page;
+  const navKey = page === "files" && route.name === "files" && (route.folder === "recovered" || route.folder === "gallery" || underGallery) ? (route.folder === "recovered" ? "recovered" : "gallery") : page;
   all<HTMLElement>("[data-page]").forEach((el) => (el.hidden = el.dataset.page !== page));
   all<HTMLAnchorElement>("a[data-nav]").forEach((a) => (a.dataset.nav === navKey ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current")));
   document.title = `${t(`page.${page}`)} · ${t("app.title")}`;
 
   ui("nav-recovered").hidden = (await core.recoveredCount()) === 0;
+  galleryOn = await core.galleryAvailable();
+  $("nav-gallery").hidden = !galleryOn;
   if (page === "trash") return renderTrash();
   trashShown = false;
   if (page === "admin") {
@@ -1207,8 +1219,17 @@ async function renderNow() {
     return navigate("/", true);
   }
   underRecovered = path[0]?.id === "recovered";
+  const wasGallery = underGallery;
+  underGallery = path[0]?.id === "gallery";
+  if (underGallery && !galleryOn) return navigate("/", true);
+  if (wasGallery !== underGallery) {
+    paintView();
+    all<HTMLAnchorElement>("a[data-nav]").forEach((a) => (a.dataset.nav === (underGallery ? "gallery" : "files") ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current")));
+  }
   renderCrumbs(path);
-  ui("folder-title").textContent = path.length ? (path.at(-1)!.id === "recovered" ? t("nav.recovered") : path.at(-1)!.name) : t("files.root");
+  const last = path.at(-1);
+  ui("folder-title").textContent = last ? (last.id === "recovered" ? t("nav.recovered") : last.id === "gallery" ? t("nav.gallery") : last.name) : t("files.root");
+  if (underGallery && path.length === 1) document.title = `${t("nav.gallery")} · ${t("app.title")}`;
   if (searchQ) return renderSearch();
   const [stats, pg] = await Promise.all([core.folderStats(folder), core.list(folder, cursorStack.at(-1), PAGE, sort)]);
   ui("folder-meta").textContent = [tn("files.meta.folders", stats.folders), tn("files.meta.files", stats.files), stats.bytes > 0 ? fmt(stats.bytes) : ""].filter(Boolean).join(" · ");
@@ -1254,7 +1275,7 @@ async function renderNow() {
 
 /** Search results in the file table (one page, up to 500), best first. */
 async function renderSearch() {
-  const hits = await core.search(searchQ);
+  const hits = await core.search(searchQ, underGallery ? "gallery" : "drive");
   searchRows = hits.map((x: PreviewRow) => ({ id: x.id, name: x.name, kind: x.kind, size: x.size }));
   const ds = await core.descState();
   ui("folder-meta").textContent = [tn("search.results", hits.length, { q: searchQ }), ds.described ? tn("search.described", ds.described) : ""].filter(Boolean).join(" · ");
@@ -2071,6 +2092,7 @@ function rowEntries(r: MenuRow): MenuEntry[] {
       { group: tn("bulk.count", n) },
       ...(files ? [{ ic: "download", label: t("files.download"), key: "download", run: () => void act(null, bulkDownload) }] : []),
       { ic: "move", label: t("act.move"), key: "move", run: bulkMove },
+      ...otherSpaceEntry([...selected.keys()], selected.get([...selected.keys()][0]!)?.name ?? ""),
       { ic: "x", label: t("bulk.clear"), key: "clear", run: clearSelection },
       { ic: "trash", label: t("act.trash"), key: "trash", run: () => void act(null, bulkTrash), danger: true },
     ];
@@ -2083,8 +2105,15 @@ function rowEntries(r: MenuRow): MenuEntry[] {
     ...(canShare(r) ? [{ ic: "share", label: t("files.share"), key: "share", run: () => void act(null, () => shareRow(r)) }] : []),
     { ic: "pencil", label: t("act.rename"), key: "rename", run: () => openRename(r) },
     { ic: "move", label: t("act.move"), key: "move", run: () => void openMove([r.id], r.name) },
+    ...otherSpaceEntry([r.id], r.name),
     { ic: "trash", label: t("act.trash"), key: "trash", run: () => void act(null, () => trashItems([r])), danger: true },
   ];
+}
+/** "Move to the Gallery" (from the Drive) / "Move to the Drive" (from the Gallery): the picker opens in the other space. */
+function otherSpaceEntry(ids: string[], label: string): MenuEntry[] {
+  if (!galleryOn || inRecovered()) return [];
+  const to = underGallery ? "root" : "gallery";
+  return [{ ic: underGallery ? "files" : "grid", label: t(underGallery ? "act.toDrive" : "act.toGallery"), key: underGallery ? "to-drive" : "to-gallery", run: () => void openMove(ids, label, to) }];
 }
 /** View and sort entries (both pages' empty area). */
 function viewEntries(withSort: boolean): MenuEntry[] {
@@ -2302,9 +2331,11 @@ function wireRename() {
 }
 
 // Move to… (folder picker): browse folders from the root; the moved folders themselves are not offered.
-let moving: { ids: string[]; label: string; at: string; path: { id: string; name: string }[] } | null = null;
-async function openMove(ids: string[], label: string) {
-  moving = { ids, label, at: "root", path: [] };
+let moving: { ids: string[]; label: string; root: "root" | "gallery"; at: string; path: { id: string; name: string }[] } | null = null;
+/** The picker starts in the open folder's space (the Drive or the Gallery), or in `root`. */
+async function openMove(ids: string[], label: string, root?: "root" | "gallery") {
+  const r = root ?? (underGallery ? "gallery" : "root");
+  moving = { ids, label, root: r, at: r, path: [] };
   ui("mv-title").textContent = ids.length === 1 ? t("mv.one", { name: label }) : tn("mv.many", ids.length);
   $<HTMLDialogElement>("move-dialog").showModal();
   await paintMove();
@@ -2322,7 +2353,21 @@ async function paintMove() {
     };
     return b;
   };
-  const parts: Node[] = [m.path.length ? link("root", t("files.root"), 0) : h("span", { "aria-current": "page" }, t("files.root"))];
+  const rootLabel = m.root === "gallery" ? t("nav.gallery") : t("files.root");
+  const parts: Node[] = [];
+  // With the Gallery: both spaces as the first crumb (the other one switches the picker there).
+  if (galleryOn) {
+    const other = m.root === "gallery" ? "root" : "gallery";
+    const sw = h("button", { type: "button", class: "link", "data-ddn": "move-space", "data-space": other }, other === "gallery" ? t("nav.gallery") : t("files.root"));
+    sw.onclick = () => {
+      m.root = other;
+      m.at = other;
+      m.path = [];
+      void paintMove();
+    };
+    parts.push(sw, document.createTextNode(" · "));
+  }
+  parts.push(m.path.length ? link(m.root, rootLabel, 0) : h("span", { "aria-current": "page" }, rootLabel));
   m.path.forEach((p, i) => parts.push(icon("right"), i === m.path.length - 1 ? h("span", { "aria-current": "page" }, p.name) : link(p.id, p.name, i + 1)));
   crumbs.replaceChildren(...parts);
   const kids = (await core.subfolders(m.at)).filter((f) => !m.ids.includes(f.id));
@@ -2339,7 +2384,7 @@ async function paintMove() {
         })
       : [h("li", { class: "empty-row" }, t("mv.none"))]),
   );
-  const here = m.path.at(-1)?.name ?? t("files.root");
+  const here = m.path.at(-1)?.name ?? rootLabel;
   ui("mv-hint").textContent = t("mv.target", { folder: here });
 }
 function wireMove() {
@@ -2351,7 +2396,7 @@ function wireMove() {
     void act(e.currentTarget as HTMLElement, async () => {
       const m = moving;
       if (!m) return;
-      const name = m.path.at(-1)?.name ?? t("files.root");
+      const name = m.path.at(-1)?.name ?? (m.root === "gallery" ? t("nav.gallery") : t("files.root"));
       d.close();
       await moveItems(m.ids, m.at, name, m.label);
     });
@@ -2430,7 +2475,7 @@ function wireSelection() {
     const ids = (JSON.parse(e.dataTransfer!.getData(DRAG_TYPE) || "[]") as string[]).filter((id) => id !== t0.dataset.drop);
     const dest = t0.dataset.drop!;
     if (!ids.length || dest === currentFolder()) return;
-    const name = dest === "root" ? t("files.root") : dest === "recovered" ? t("nav.recovered") : (t0.dataset.dropName ?? t0.querySelector("a")?.textContent ?? t0.textContent ?? "").trim();
+    const name = dest === "root" ? t("files.root") : dest === "recovered" ? t("nav.recovered") : dest === "gallery" ? t("nav.gallery") : (t0.dataset.dropName ?? t0.querySelector("a")?.textContent ?? t0.textContent ?? "").trim();
     const first = document.querySelector<HTMLElement>(`[data-ddn=row][data-id="${CSS.escape(ids[0]!)}"] .nm > :last-child`)?.textContent ?? "";
     void act(null, () => moveItems(ids, dest, name, first));
   });
@@ -3004,7 +3049,16 @@ function trashRow(x: TrashRow, i: number) {
   const tr = h("tr", { class: "reveal", style: `--i:${Math.min(i, 12)}`, "data-ddn": "trash-row", "data-id": x.id });
   trashData.set(tr, x);
   const days = Math.max(0, Math.ceil((x.purgeAt - Date.now()) / 86_400_000));
-  const where = x.from === null ? "" : x.fromRecovered ? t("nav.recovered") + (x.from.length > 1 ? " / " + x.from.slice(1).join(" / ") : "") : x.from.length ? x.from.join(" / ") : t("files.root");
+  const where =
+    x.from === null
+      ? ""
+      : x.space === "gallery"
+        ? t("nav.gallery") + (x.from.length ? " / " + x.from.join(" / ") : "")
+        : x.fromRecovered
+          ? t("nav.recovered") + (x.from.length > 1 ? " / " + x.from.slice(1).join(" / ") : "")
+          : x.from.length
+            ? x.from.join(" / ")
+            : t("files.root");
   const [, label, tone] = x.kind === "file" ? typeOf(x.name) : [null, "", ""];
   const lead = x.kind === "folder" ? icon("folder") : h("span", { class: `badge ${tone}` }, label);
   const name = h(
