@@ -428,7 +428,7 @@ impl Filesystem for Fs {
         reply.written(data.len() as u32)
     }
 
-    fn setattr(&mut self, _r: &Request, ino: u64, _mode: Option<u32>, _uid: Option<u32>, _gid: Option<u32>, size: Option<u64>, _a: Option<TimeOrNow>, _m: Option<TimeOrNow>, _c: Option<SystemTime>, fh: Option<u64>, _cr: Option<SystemTime>, _ch: Option<SystemTime>, _bk: Option<SystemTime>, _fl: Option<u32>, reply: ReplyAttr) {
+    fn setattr(&mut self, _r: &Request, ino: u64, _mode: Option<u32>, _uid: Option<u32>, _gid: Option<u32>, size: Option<u64>, _a: Option<TimeOrNow>, m: Option<TimeOrNow>, _c: Option<SystemTime>, fh: Option<u64>, _cr: Option<SystemTime>, _ch: Option<SystemTime>, _bk: Option<SystemTime>, _fl: Option<u32>, reply: ReplyAttr) {
         // truncate(2) on an open file (an editor saving): its local copy.
         // (The kernel may send it without the handle: the open copy of that inode then.)
         let h = fh.filter(|h| self.open_w.contains_key(h)).or_else(|| self.open_w.iter().find(|(_, w)| w.ino == ino).map(|(h, _)| *h));
@@ -449,7 +449,27 @@ impl Filesystem for Fs {
                 e.size = e.size.min(sz);
             }
         }
-        // Times and modes are not kept (the disk shows when the content was made); answer what it is.
+        // The modification time (cp -p, rsync -t, touch -d): the file's content date. Kept for a file being
+        // written (its local copy) or waiting in the upload queue (the queued copy): the upload stores it. A file
+        // already in the account keeps its date (a version's date is part of the version).
+        // ("Now", as a write or a plain touch sets it, changes nothing: the file shows when it was written.)
+        if let Some(TimeOrNow::SpecificTime(t)) = m {
+            let ms = t.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+            let h = fh.filter(|h| self.open_w.contains_key(h)).or_else(|| self.open_w.iter().find(|(_, w)| w.ino == ino).map(|(h, _)| *h));
+            // The open local copy (a later upload reads it) and, once closed, the copy in the queue (the handle
+            // may outlive the close: its release comes later).
+            let mut kept = h.and_then(|h| self.open_w.get_mut(&h)).map(|w| w.file.set_modified(t).is_ok()).unwrap_or(false);
+            if let Some(id) = self.attrs.get(&ino).map(|e| e.id.clone()).filter(|id| id.starts_with("out:")) {
+                kept |= self.agent.call(json!({ "op": "touch", "id": id, "mtime": ms })).is_ok();
+            }
+            if kept {
+                if let Some(e) = self.attrs.get_mut(&ino) {
+                    e.mtime = ms;
+                }
+                self.forget_lists();
+            }
+        }
+        // Modes are not kept; answer what the file is.
         match self.attrs.get(&ino).cloned() {
             Some(e) => {
                 let a = self.attr(ino, &e);
