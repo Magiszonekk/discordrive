@@ -440,6 +440,9 @@ unsafe extern "system" fn on_delete(info: *const CF_CALLBACK_INFO, _p: *const CF
     if !ok && st().outbox.is_some() && id != "root" {
         // Into the trash a moment later (a file written at the same path meanwhile takes its place instead).
         if let Some(k) = full_path(info).as_deref().and_then(rel_key) {
+            if std::env::var_os("DDN_CF_TRACE").is_some() {
+                eprintln!("ddn-cf: delete later {k} {id}");
+            }
             st().trash_later.lock().unwrap().insert(k, (id.clone(), now_ms()));
             ok = true;
         }
@@ -743,6 +746,9 @@ fn note_written(p: &Path) {
     // Written where a placeholder was just deleted (a save through ReplaceFile): the same node, a new version.
     if !m.is_dir() {
         if let Some(k) = rel_key(p) {
+            if std::env::var_os("DDN_CF_TRACE").is_some() {
+                eprintln!("ddn-cf: written {k} (pending delete: {})", st().trash_later.lock().unwrap().contains_key(&k));
+            }
             if st().trash_later.lock().unwrap().remove(&k).is_some() {
                 st().dirty_files.lock().unwrap().insert(p.to_path_buf(), now_ms());
                 return;
@@ -818,6 +824,9 @@ fn flush_written() {
             if let Ok(c) = std::fs::OpenOptions::new().write(true).open(&copy) {
                 let _ = c.set_modified(t);
             }
+        }
+        if std::env::var_os("DDN_CF_TRACE").is_some() {
+            eprintln!("ddn-cf: queue {}", p.display());
         }
         match agent(|a| a.call(json!({ "op": "w-upload", "target": p.to_string_lossy(), "copy": copy.to_string_lossy() }))) {
             Ok((v, _)) => {

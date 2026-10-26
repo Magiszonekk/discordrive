@@ -100,6 +100,7 @@ describe.skipIf(why !== null)(`disk in the system (Windows), writing${why ? ` �
     expect(await until(() => nodeOf("kopia ż.bin")?.size === data3.byteLength)).toBe(true);
     await disk.outbox!.idle();
     await new Promise((r) => setTimeout(r, 4000));
+    console.log("after replace", JSON.stringify({ rows: rows().map((r) => [r.name, r.id, r.size]), want: n1.id, trash: core.trashList().map((t) => [t.name, t.id]) }));
     expect(rows().filter((r) => r.name.startsWith("kopia ż")).map((r) => [r.name, r.id])).toEqual([["kopia ż.bin", n1.id]]);
     expect(core.trashList().some((t) => t.id === n1.id)).toBe(false);
     expect(sha(new Uint8Array(await (await core.download(n1.id)).arrayBuffer()))).toBe(sha(data3));
