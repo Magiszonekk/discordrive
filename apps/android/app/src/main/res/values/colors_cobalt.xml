@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cobalt (the look of discordrive web, apps/web-mo/cobalt/tokens.css), light mode. The oklch tokens converted
+     to sRGB; values-night holds the dark mode. The accent is the same in both modes, as on the web (the
+     "Cobalt" accent preset overrides the dark-mode accent there). -->
+<resources>
+    <color name="cobalt_paper">#F8FAFD</color>
+    <color name="cobalt_paper_2">#EFF2F6</color>
+    <color name="cobalt_paper_3">#E4E8ED</color>
+    <color name="cobalt_ink">#192029</color>
+    <color name="cobalt_ink_2">#323841</color>
+    <color name="cobalt_rule">#DBDEE2</color>
+    <color name="cobalt_rule_2">#C7CBD0</color>
+    <color name="cobalt_muted">#6F757D</color>
+    <color name="cobalt_accent">#0076ED</color>
+    <color name="cobalt_accent_ink">#FAFCFE</color>
+    <!-- accent 10% over paper (color-mix in the web) -->
+    <color name="cobalt_accent_soft">#DFEDFB</color>
+    <color name="cobalt_error">#D73337</color>
+    <color name="cobalt_success">#25984D</color>
+    <color name="cobalt_warning">#CE9200</color>
+    <!-- The QR code is always dark modules on white, like .qr on the web. -->
+    <color name="cobalt_qr_paper">#FFFFFF</color>
+</resources>

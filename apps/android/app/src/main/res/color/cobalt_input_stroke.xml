@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Input frame: rule-2 at rest, the accent when focused (the web's 2px focus ring). -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:color="?attr/colorPrimary" android:state_focused="true" />
+    <item android:color="@color/cobalt_rule_2" android:state_hovered="true" />
+    <item android:color="@color/cobalt_rule_2" android:state_enabled="false" android:alpha="0.5" />
+    <item android:color="@color/cobalt_rule_2" />
+</selector>

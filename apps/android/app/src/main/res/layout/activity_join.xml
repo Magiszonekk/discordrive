@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Join / pair this phone. Structure and ids only; the look (Cobalt) follows the design pass. -->
+<!-- Join / pair this phone, in Cobalt (the look of discordrive web: the "Join this device" card of apps/web-mo).
+     Steps top to bottom: wordmark + title → instance address and device name → Show code → the code card
+     (how-to, QR on white, the code as text, Copy / Share, time left) → the 6 digits large with Yes / No →
+     "I have a rescue kit", folded, under a hairline. Ids and their order of use are the screen's logic. -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/joinRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/cobalt_paper"
     android:fillViewport="true">
 
     <LinearLayout
@@ -12,79 +17,137 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="24dp">
+        android:paddingStart="@dimen/join_pad_h"
+        android:paddingTop="28dp"
+        android:paddingEnd="@dimen/join_pad_h"
+        android:paddingBottom="24dp">
 
-        <!-- 1. Logo and title -->
-        <ImageView
-            android:layout_width="64dp"
-            android:layout_height="64dp"
-            android:layout_gravity="center_horizontal"
-            android:background="@drawable/badge_bg"
-            android:padding="4dp"
-            android:src="@drawable/ic_photo"
-            android:contentDescription="@string/app_name" />
+        <!-- 1. Wordmark and title (web: .wordmark, h1 Space Grotesk 600, .sub) -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:background="@drawable/bg_cobalt_logo"
+                android:fontFamily="@font/space_grotesk_semibold"
+                android:gravity="center"
+                android:importantForAccessibility="no"
+                android:includeFontPadding="false"
+                android:text="D"
+                android:textColor="?attr/colorOnPrimary"
+                android:textSize="15sp"
+                tools:ignore="HardcodedText" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:text="@string/ddn_brand"
+                android:textAppearance="@style/TextAppearance.Cobalt.Wordmark" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/joinTitle"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_gravity="center_horizontal"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="24dp"
+            android:accessibilityHeading="true"
             android:text="@string/ddn_join_title"
-            android:textAppearance="?attr/textAppearanceHeadlineSmall" />
+            android:textAppearance="@style/TextAppearance.Cobalt.Title" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="@string/ddn_join_sub"
+            android:textAppearance="@style/TextAppearance.Cobalt.Sub" />
+
+        <!-- Already on an account: a .note (hairline box, accent edge) -->
         <TextView
             android:id="@+id/joinAlready"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:gravity="center_horizontal"
-            android:textAppearance="?attr/textAppearanceBodySmall"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/bg_cobalt_note"
+            android:paddingStart="16dp"
+            android:paddingTop="12dp"
+            android:paddingEnd="14dp"
+            android:paddingBottom="12dp"
+            android:textAppearance="@style/TextAppearance.Cobalt.Body"
+            android:textSize="13sp"
             android:visibility="gone" />
 
-        <!-- 2. Instance address and this device's name -->
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/joinServerBox"
-            style="?attr/textInputFilledStyle"
+        <!-- 2. Instance address and this device's name: label above, 6dp frame (web .field / .input) -->
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:hint="@string/ddn_server">
+            android:layout_marginTop="28dp"
+            android:labelFor="@id/joinServer"
+            android:text="@string/ddn_join_server_label"
+            android:textAppearance="@style/TextAppearance.Cobalt.Label" />
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/joinServerBox"
+            style="@style/Widget.Cobalt.TextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp">
 
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/joinServer"
+                style="@style/Widget.Cobalt.TextInput.Edit"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:hint="https://…"
+                android:importantForAutofill="no"
                 android:inputType="textUri"
-                android:singleLine="true" />
+                android:singleLine="true"
+                tools:ignore="HardcodedText" />
         </com.google.android.material.textfield.TextInputLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:labelFor="@id/joinName"
+            android:text="@string/ddn_device_name"
+            android:textAppearance="@style/TextAppearance.Cobalt.Label" />
 
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/joinNameBox"
-            style="?attr/textInputFilledStyle"
+            style="@style/Widget.Cobalt.TextInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:hint="@string/ddn_device_name">
+            android:layout_marginTop="6dp">
 
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/joinName"
+                style="@style/Widget.Cobalt.TextInput.Edit"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:importantForAutofill="no"
+                android:inputType="textCapSentences"
                 android:singleLine="true" />
         </com.google.android.material.textfield.TextInputLayout>
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/joinStart"
+            style="@style/Widget.Cobalt.Button"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/ddn_join_start" />
+            android:layout_marginTop="20dp"
+            android:text="@string/ddn_join_start"
+            app:icon="@drawable/ic_cobalt_qr" />
 
-        <!-- 3. The code card: QR, the code as text, Copy / Share, time left -->
+        <!-- 3. The code card (10dp, hairline): how-to, QR on white, the code in a paper-2 well,
+             Copy / Share side by side, time left with tabular figures -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/joinCodeCard"
-            style="?attr/materialCardViewFilledStyle"
+            style="@style/Widget.Cobalt.Card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
@@ -96,149 +159,223 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
-                <ImageView
-                    android:id="@+id/joinQr"
-                    android:layout_width="240dp"
-                    android:layout_height="240dp"
+                <TextView
+                    android:id="@+id/joinHowTo"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/ddn_join_wait"
+                    android:textAppearance="@style/TextAppearance.Cobalt.Body"
+                    android:textSize="14sp" />
+
+                <FrameLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
                     android:layout_gravity="center_horizontal"
-                    android:contentDescription="@string/ddn_qr_desc" />
+                    android:layout_marginTop="16dp"
+                    android:background="@drawable/bg_cobalt_qr"
+                    android:padding="10dp">
+
+                    <ImageView
+                        android:id="@+id/joinQr"
+                        android:layout_width="220dp"
+                        android:layout_height="220dp"
+                        android:contentDescription="@string/ddn_qr_desc"
+                        android:scaleType="fitCenter" />
+                </FrameLayout>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/ddn_join_code_label"
+                    android:textAppearance="@style/TextAppearance.Cobalt.LabelMono" />
 
                 <TextView
                     android:id="@+id/joinCode"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:fontFamily="monospace"
-                    android:textIsSelectable="true"
-                    android:textAppearance="?attr/textAppearanceBodySmall" />
+                    android:layout_marginTop="6dp"
+                    android:background="@drawable/bg_cobalt_well"
+                    android:breakStrategy="simple"
+                    android:hyphenationFrequency="none"
+                    android:paddingStart="12dp"
+                    android:paddingTop="10dp"
+                    android:paddingEnd="12dp"
+                    android:paddingBottom="10dp"
+                    android:textAppearance="@style/TextAppearance.Cobalt.Code"
+                    android:textIsSelectable="true" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
+                    android:layout_marginTop="10dp"
                     android:orientation="horizontal">
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/joinCopy"
-                        style="@style/Widget.Material3.Button.TonalButton"
+                        style="@style/Widget.Cobalt.Button.Secondary.Pair"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
                         android:layout_marginEnd="8dp"
-                        android:text="@string/ddn_copy_code" />
+                        android:layout_weight="1"
+                        android:text="@string/ddn_copy_code"
+                        app:icon="@drawable/ic_cobalt_copy" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/joinShare"
-                        style="@style/Widget.Material3.Button.TonalButton"
+                        style="@style/Widget.Cobalt.Button.Secondary.Pair"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="@string/ddn_share_code" />
+                        android:text="@string/ddn_share_code"
+                        app:icon="@drawable/ic_cobalt_share" />
                 </LinearLayout>
 
                 <TextView
                     android:id="@+id/joinTtl"
-                    android:layout_width="match_parent"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:gravity="center_horizontal"
-                    android:textAppearance="?attr/textAppearanceBodySmall" />
-
-                <TextView
-                    android:id="@+id/joinHowTo"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="@string/ddn_join_wait"
-                    android:textAppearance="?attr/textAppearanceBodyMedium" />
+                    android:layout_gravity="center_horizontal"
+                    android:layout_marginTop="14dp"
+                    android:drawableStart="@drawable/ic_cobalt_clock"
+                    android:drawablePadding="6dp"
+                    android:drawableTint="@color/cobalt_muted"
+                    android:fontFeatureSettings="tnum"
+                    android:gravity="center_vertical"
+                    android:textAppearance="@style/TextAppearance.Cobalt.Hint" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- 4. Compare the 6 digits, Yes / No; then the result (OK after a note) -->
+        <!-- 4. The 6 digits large in a paper-2 well (web .sas), then Yes / No side by side; OK after a note -->
         <LinearLayout
             android:id="@+id/joinActions"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="12dp"
             android:orientation="vertical">
 
             <TextView
                 android:id="@+id/joinSas"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:gravity="center_horizontal"
-                android:letterSpacing="0.15"
-                android:fontFamily="monospace"
-                android:textSize="40sp"
+                android:background="@drawable/bg_cobalt_well"
+                android:gravity="center"
+                android:includeFontPadding="false"
+                android:paddingStart="16dp"
+                android:paddingTop="22dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="22dp"
+                android:textAppearance="@style/TextAppearance.Cobalt.Sas"
                 android:visibility="gone" />
 
             <TextView
                 android:id="@+id/joinStatus"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:textAppearance="?attr/textAppearanceBodyMedium" />
+                android:layout_marginTop="10dp"
+                android:textAppearance="@style/TextAppearance.Cobalt.Body"
+                android:textSize="14sp" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/joinYes"
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/ddn_sas_yes"
-                android:visibility="gone" />
+                android:layout_marginTop="12dp"
+                android:orientation="horizontal">
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/joinNo"
-                style="?attr/materialButtonOutlinedStyle"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/ddn_sas_no"
-                android:visibility="gone" />
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/joinYes"
+                    style="@style/Widget.Cobalt.Button.Pair"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="8dp"
+                    android:layout_weight="1"
+                    android:text="@string/ddn_sas_yes"
+                    android:visibility="gone" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/joinNo"
+                    style="@style/Widget.Cobalt.Button.Secondary.Pair"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/ddn_sas_no"
+                    android:visibility="gone" />
+            </LinearLayout>
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/joinOk"
+                style="@style/Widget.Cobalt.Button"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@android:string/ok"
                 android:visibility="gone" />
         </LinearLayout>
 
-        <!-- 5. Rescue kit, folded -->
+        <!-- Pushes the rescue kit to the bottom of a short screen (fillViewport) -->
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:minHeight="8dp" />
+
+        <!-- 5. Rescue kit, folded, under a hairline (web .auth-foot) -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="16dp"
+            android:background="@color/cobalt_rule" />
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/joinKitToggle"
-            style="?attr/borderlessButtonStyle"
+            style="@style/Widget.Cobalt.Button.Secondary"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center_horizontal"
-            android:layout_marginTop="24dp"
-            android:text="@string/ddn_have_kit" />
+            android:layout_marginTop="16dp"
+            android:text="@string/ddn_have_kit"
+            app:icon="@drawable/ic_cobalt_lock" />
 
         <LinearLayout
             android:id="@+id/joinKitBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
             android:orientation="vertical"
             android:visibility="gone">
 
-            <com.google.android.material.textfield.TextInputLayout
-                style="?attr/textInputFilledStyle"
+            <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:hint="@string/ddn_kit_hint">
+                android:labelFor="@id/joinKit"
+                android:text="@string/ddn_join_kit_label"
+                android:textAppearance="@style/TextAppearance.Cobalt.Label" />
+
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/Widget.Cobalt.TextInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp">
 
                 <com.google.android.material.textfield.TextInputEditText
                     android:id="@+id/joinKit"
+                    style="@style/Widget.Cobalt.TextInput.Edit"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:minLines="2" />
+                    android:fontFamily="@font/jetbrains_mono_regular"
+                    android:gravity="top|start"
+                    android:hint="@string/ddn_kit_hint"
+                    android:importantForAutofill="no"
+                    android:inputType="textMultiLine|textNoSuggestions"
+                    android:minLines="3"
+                    android:textSize="13sp" />
             </com.google.android.material.textfield.TextInputLayout>
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/joinKitGo"
-                style="@style/Widget.Material3.Button.TonalButton"
+                style="@style/Widget.Cobalt.Button.Secondary"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="10dp"
                 android:text="@string/ddn_kit_go" />
         </LinearLayout>
     </LinearLayout>
