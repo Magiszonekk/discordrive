@@ -176,6 +176,15 @@ class InstanceApi(
 
     fun devices(): List<JsonObject> = call("GET", "/v1/devices", null).second.jsonObject.getValue("devices").jsonArray.map { it.jsonObject }
 
+    /** Revoke a device of the account (its key and sessions deleted; signed by this device). */
+    fun revokeDevice(deviceId: String) {
+        val c = challenge()
+        call("POST", "/v1/devices/$deviceId?action=revoke", buildJsonObject {
+            put("challengeId", c.challengeId)
+            put("signature", device!!.sign(AuthMessage.revokeDevice(c, accountId!!, deviceId)))
+        })
+    }
+
     fun setDeviceName(deviceId: String, nameSealed: String) {
         call("PUT", "/v1/devices/$deviceId/name", buildJsonObject { put("nameSealed", nameSealed) })
     }

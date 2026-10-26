@@ -183,11 +183,22 @@ class DdnSettingsActivity : AppCompatActivity() {
     private fun confirmLeave() {
         AlertDialog.Builder(this).setTitle(R.string.ddn_set_leave).setMessage(R.string.ddn_set_leave_ask)
             .setPositiveButton(R.string.ddn_set_leave) { _, _ ->
-                DdnBackup.set(this, on = false)
-                DdnSession.forget(this)
-                DdnAccount.forget(this)
-                startActivity(Intent(this, JoinActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
-                finish()
+                // This phone's entry on the account goes too (no stale device left in the list). Offline or the
+                // instance refusing: the phone still forgets the account, and says the entry stayed.
+                val acct = DdnAccount.load(this)
+                // The join screen offers this address again (the same preference it keeps).
+                acct?.let { getSharedPreferences("ddn-join", MODE_PRIVATE).edit().putString("server", it.serverUrl).apply() }
+                kotlin.concurrent.thread {
+                    val revoked = acct == null || runCatching { DdnLeave.revokeSelf(acct) }.isSuccess
+                    runOnUiThread {
+                        DdnBackup.set(this, on = false)
+                        DdnSession.forget(this)
+                        DdnAccount.forget(this)
+                        if (!revoked) android.widget.Toast.makeText(this, R.string.ddn_set_leave_kept, android.widget.Toast.LENGTH_LONG).show()
+                        startActivity(Intent(this, JoinActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
+                        finish()
+                    }
+                }
             }
             .setNegativeButton(android.R.string.cancel, null).show()
     }

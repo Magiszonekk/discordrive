@@ -107,6 +107,13 @@ class ServerModeTest {
 
         sc.rpc("done", JsonObject(r.mapValues { JsonPrimitive(it.value) }))
         println("server mode $mode: $r")
+        // Leaving the account on the phone revokes its own device: gone from the list, its session refused.
+        val before = api.devices().map { it.str("deviceId") }
+        api.revokeDevice(acct.deviceId)
+        val after = sc.rpc("deviceIds").jsonArray.map { it.jsonPrimitive.content }
+        r["leaveRevokesSelf"] = acct.deviceId in before && acct.deviceId !in after
+        r["revokedSessionRefused"] = runCatching { api.devices() }.isFailure
+
         assertTrue(r.values.all { it }, "server mode checks: $r")
     }
 }

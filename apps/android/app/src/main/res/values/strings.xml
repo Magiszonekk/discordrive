@@ -438,7 +438,8 @@ Tekst: %3$s</string>
     <string name="ddn_set_default_gallery">Domyślne aplikacje systemu</string>
     <string name="ddn_set_leave_h">To urządzenie</string>
     <string name="ddn_set_leave">Odłącz ten telefon od konta</string>
-    <string name="ddn_set_leave_ask">Telefon zapomni konto i lokalną kopię indeksu; pliki na koncie zostają. Żeby wrócić, sparuj go ponownie. Na innym urządzeniu możesz też odwołać ten telefon z listy urządzeń.</string>
+    <string name="ddn_set_leave_ask">Telefon zapomni konto i lokalną kopię indeksu, a jego wpis zniknie z listy urządzeń konta; pliki na koncie zostają. Żeby wrócić, sparuj go ponownie.</string>
+    <string name="ddn_set_leave_kept">Nie udało się usunąć tego telefonu z listy urządzeń konta (brak połączenia?). Odwołaj go na innym urządzeniu: Urządzenia.</string>
     <string name="ddn_trash">Kosz</string>
     <string name="ddn_trash_note">Zaznacz elementy, żeby je przywrócić albo usunąć na stałe.</string>
     <string name="ddn_trash_empty">Kosz jest pusty.</string>
