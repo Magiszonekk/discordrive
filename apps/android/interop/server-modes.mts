@@ -16,7 +16,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { canonicalState, applyEntry, expiredTrash, initIndex, inTrash, loadSnapshot, MemoryIndexStore, uploadsTouched, ROOT_ID, type IndexSnapshot, type LogEntry, type NodeRecord, WRITE_RULES_VERSION, rulesVersionFor, spaceOf } from "@ddv4/sync-core";
+import { takeSnapshot, nameKey, RULES_VERSION, canonicalState, applyEntry, expiredTrash, initIndex, inTrash, loadSnapshot, MemoryIndexStore, uploadsTouched, ROOT_ID, type IndexSnapshot, type LogEntry, type NodeRecord, WRITE_RULES_VERSION, rulesVersionFor, spaceOf } from "@ddv4/sync-core";
 import { AccountSettingsStore, DiscordWebhookTransport, DriveClient, EncryptedArbiter, HttpApi, OpCodec, acceptPairing, createAccountHttp, generateDeviceKey, memorySource, newAccountKey } from "@ddv4/metadata-client";
 import { PlainArbiter, PlainOpCodec } from "@ddv4/metadata-client/plain-ops";
 import { ServerBlobStore } from "@ddv4/metadata-client/server-blobs";
@@ -73,6 +73,22 @@ let paired: { sas: string; deviceId: string } | null = null;
 function core(q: Req): unknown {
   switch (q.m) {
     case "reset": store = initIndex(new MemoryIndexStore()); return null;
+    // The Safe's tree (JsIndexReplica __ddnSafe): a snapshot in, the rules applied, a snapshot out.
+    case "safeEmpty": return JSON.stringify(takeSnapshot(initIndex(new MemoryIndexStore())));
+    case "safeApply": {
+      const a = q.a as { tree: string; entry: LogEntry };
+      const t = loadSnapshot(JSON.parse(a.tree) as IndexSnapshot, new MemoryIndexStore());
+      const before = new Map<string, string>();
+      for (const n of t.allNodes()) if (n.kind === "file" && n.content) before.set(n.content.uploadId, n.content.manifestRef);
+      const result = applyEntry(t, { ...a.entry, rulesVersion: RULES_VERSION });
+      const released = [...t.allUploads()].filter((u) => u.status === "released" && u.ended?.seq === a.entry.seq && before.has(u.id)).map((u) => [u.id, before.get(u.id)!]);
+      return JSON.stringify({ tree: takeSnapshot(t), result, released });
+    }
+    case "safeChildren": {
+      const a = q.a as { tree: string; parent: string };
+      const t = loadSnapshot(JSON.parse(a.tree) as IndexSnapshot, new MemoryIndexStore());
+      return [...t.childIds(a.parent)].map((id) => t.getNode(id)!).filter((n) => !n.trashed).sort((x, y) => (x.kind !== y.kind ? (x.kind === "folder" ? -1 : 1) : nameKey(x.name) < nameKey(y.name) ? -1 : nameKey(x.name) > nameKey(y.name) ? 1 : x.id < y.id ? -1 : 1)).map(row);
+    }
     case "rules": return WRITE_RULES_VERSION;
     case "rulesFor": return rulesVersionFor(store, q.a as never, WRITE_RULES_VERSION);
     case "space": return store.getNode(q.a as string) ? spaceOf(store, q.a as string) : "drive";
@@ -133,6 +149,31 @@ async function handle(q: Req): Promise<unknown> {
     return { model: v.ai?.model ?? null };
   }
   if (q.m === "secrets") return pool.map((h) => h.url.split("/").pop()!);
+  // The Safe the phone made: the web opens it with the password, sees the phone's folder and file (same bytes),
+  // adds its own file; the phone then reads that one.
+  if (q.m === "safeWeb") {
+    const a = q.a as { password: string; folder: string; file: string; sha: string };
+    const { SafeStore, SafeTree, safeChildren } = await import("@ddv4/metadata-client");
+    const store = new SafeStore<import("@ddv4/metadata-client").SafeTreeState>(api, key, r0.accountId);
+    const tree = new SafeTree(store, { id: r0.deviceId, name: "laptop" }, { pieces: { kind: "instance", api } });
+    let u = await store.unlock(a.password);
+    const top = safeChildren(u, "root");
+    const folder = top.find((n) => n.name === a.folder);
+    const file = folder ? safeChildren(u, folder.id).find((n) => n.name === a.file) : undefined;
+    let fileSame = false;
+    if (file) {
+      const parts: Uint8Array[] = [];
+      await tree.download(u, ts, file.id, { write: async (d) => void parts.push(d.slice()) });
+      const h = createHash("sha256");
+      for (const x of parts) h.update(x);
+      fileSame = h.digest("hex") === a.sha;
+    }
+    const webData = new Uint8Array(randomBytes(70_001));
+    u = (await tree.upload(u, ts, memorySource(webData), "z przegladarki.pdf")).safe;
+    // The account's log never got the Safe's names.
+    const logText = JSON.stringify(srv.db.prepare("SELECT * FROM log WHERE account_id = ?").all(r0.accountId));
+    return { folderSeen: !!folder, fileSame, webSha: shaB(webData), logBlind: !logText.includes(a.folder) && !logText.includes(a.file) };
+  }
   if (q.m === "done") return (Object.assign(checks, q.a as Record<string, boolean>), null);
   return core(q);
 }

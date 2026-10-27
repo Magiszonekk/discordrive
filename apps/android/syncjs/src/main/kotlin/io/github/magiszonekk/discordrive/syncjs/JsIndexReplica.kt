@@ -114,6 +114,43 @@ class JsIndexReplica(private val engine: JsEngine) : IndexReplica {
         call("__ddnIx.textDone()")
     }
 
+    // ── the Safe's tree: a store apart from the account's; texts go in and come out in slices ──
+
+    private fun putSafe(text: String) {
+        call("__ddnSafe.inBegin()")
+        var at = 0
+        while (at < text.length) {
+            val end = minOf(text.length, at + CHUNK).let { if (it < text.length && text[it - 1].isHighSurrogate()) it + 1 else it }
+            call("__ddnSafe.inPart(${json.encodeToString(JsonElement.serializer(), JsonPrimitive(text.substring(at, end)))})")
+            at = end
+        }
+    }
+
+    private fun takeSafe(n: Int): String {
+        val sb = StringBuilder(n)
+        var at = 0
+        while (at < n) {
+            val part = call("__ddnSafe.outPart($at, $CHUNK)")
+            sb.append(part)
+            at += part.length
+            if (part.isEmpty()) break
+        }
+        call("__ddnSafe.outDone()")
+        return sb.toString()
+    }
+
+    override fun safeEmpty(): String = takeSafe(call("__ddnSafe.empty()").toInt())
+
+    override fun safeApply(tree: String, entry: JsonObject): String {
+        putSafe(tree)
+        return takeSafe(call("__ddnSafe.apply(${json.encodeToString(JsonObject.serializer(), entry)})").toInt())
+    }
+
+    override fun safeChildren(tree: String, parentId: String): List<IndexReplica.Child> {
+        putSafe(tree)
+        return rows(call("__ddnSafe.children(${json.encodeToString(JsonElement.serializer(), JsonPrimitive(parentId))})"))
+    }
+
     private fun rows(text: String): List<IndexReplica.Child> = json.parseToJsonElement(text).jsonArray.map {
         val o = it.jsonObject
         fun s(k: String) = o[k]?.jsonPrimitive?.takeIf { p -> p.isString }?.content
@@ -133,6 +170,46 @@ class JsIndexReplica(private val engine: JsEngine) : IndexReplica {
         const val CHUNK = 200_000
 
         const val GLUE = """
+// The Safe's tree (safe-tree.ts): a snapshot in, the rules applied, a snapshot out; never the account's store.
+globalThis.__ddnSafe = (function () {
+  var S = SyncCore, inp = null, out = null;
+  function load() { var t = S.loadSnapshot(JSON.parse(inp.join("")), new S.MemoryIndexStore()); inp = null; return t; }
+  function bound(t) { var m = {}; for (var n of t.allNodes()) if (n.kind === "file" && n.content) m[n.content.uploadId] = n.content.manifestRef; return m; }
+  return {
+    inBegin: function () { inp = []; return "ok"; },
+    inPart: function (t) { inp.push(t); return "ok"; },
+    outPart: function (i, n) {
+      var end = Math.min(out.length, i + n), c = out.charCodeAt(end - 1);
+      if (end < out.length && c >= 0xd800 && c <= 0xdbff) end++;
+      return out.slice(i, end);
+    },
+    outDone: function () { out = null; return "ok"; },
+    empty: function () { out = JSON.stringify(S.takeSnapshot(S.initIndex(new S.MemoryIndexStore()))); return String(out.length); },
+    apply: function (e) {
+      var t = load(), before = bound(t);
+      e.rulesVersion = S.RULES_VERSION;
+      var r = S.applyEntry(t, e), released = [];
+      for (var u of t.allUploads()) if (u.status === "released" && u.ended && u.ended.seq === e.seq && before[u.id]) released.push([u.id, before[u.id]]);
+      out = JSON.stringify({ tree: S.takeSnapshot(t), result: r, released: released });
+      return String(out.length);
+    },
+    children: function (pid) {
+      var t = load(), list = [];
+      for (var id of t.childIds(pid)) {
+        var n = t.getNode(id);
+        if (!n || n.trashed) continue;
+        var c = n.content;
+        list.push({ id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: c ? c.sizeBytes : null, ref: c ? c.manifestRef : null, sha: c ? c.plaintextSha256 : null, at: c ? c.createdAt : 0, up: c ? c.uploadId : null });
+      }
+      list.sort(function (a, b) {
+        if (a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
+        var x = S.nameKey(a.name), y = S.nameKey(b.name);
+        return x < y ? -1 : x > y ? 1 : a.id < b.id ? -1 : 1;
+      });
+      return JSON.stringify(list);
+    }
+  };
+})();
 globalThis.__ddnIx = (function () {
   var S = SyncCore, st = S.initIndex(new S.MemoryIndexStore()), snap = null, state = null, mediaCache = null;
   function row(n) {

@@ -91,6 +91,17 @@ interface IndexReplica : AutoCloseable {
     fun expiredTrash(nowServerMs: Long): List<String> = emptyList()
 
     /**
+     * The Safe's tree (a snapshot kept in the Safe's sealed state), through the same sync core but in a store
+     * apart from the account's. `safeApply` applies one entry to `tree` and returns
+     * { tree, result, released: [[uploadId, manifestRef]] } (uploads that entry released); `safeChildren` lists a
+     * folder of `tree`; `safeEmpty` is a new empty tree. JSON text in and out. The entry is applied under the
+     * core's own RULES_VERSION (the Safe has no older readers to wait for): its `rulesVersion` is overwritten.
+     */
+    fun safeEmpty(): String = throw UnsupportedOperationException("safeEmpty")
+    fun safeApply(tree: String, entry: JsonObject): String = throw UnsupportedOperationException("safeApply")
+    fun safeChildren(tree: String, parentId: String): List<Child> = throw UnsupportedOperationException("safeChildren")
+
+    /**
      * A node. Files: size, version (manifestRef: where the manifest is and the file key, secret), plaintext
      * SHA-256 if known, when the version was written.
      */

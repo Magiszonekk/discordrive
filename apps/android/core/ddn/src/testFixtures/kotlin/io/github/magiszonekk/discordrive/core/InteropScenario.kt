@@ -67,6 +67,9 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
             IndexReplica.Album(o.str("id"), o.str("name"), o.getValue("count").jsonPrimitive.int, rows(JsonArray(listOf(o.getValue("cover")))).first())
         }
         override fun expiredTrash(nowServerMs: Long): List<String> = rpc("expired", JsonPrimitive(nowServerMs)).jsonArray.map { it.jsonPrimitive.content }
+        override fun safeEmpty(): String = rpc("safeEmpty").jsonPrimitive.content
+        override fun safeApply(tree: String, entry: JsonObject): String = rpc("safeApply", buildJsonObject { put("tree", tree); put("entry", entry) }).jsonPrimitive.content
+        override fun safeChildren(tree: String, parentId: String): List<IndexReplica.Child> = rows(rpc("safeChildren", buildJsonObject { put("tree", tree); put("parent", parentId) }))
         private fun rows(e: JsonElement) = e.jsonArray.map {
             val o = it.jsonObject
             IndexReplica.Child(o.str("id"), o.str("name"), o.str("kind"), o.longOrNull("size"), o.strOrNull("ref"), o.strOrNull("sha"), o.longOrNull("at") ?: 0, o.strOrNull("parent"), o.longOrNull("tat"), o.strOrNull("up"))

@@ -264,6 +264,12 @@ class FileWriter(
         cancelled: () -> Boolean = { false },
         /** When the content was made (EXIF / camera date, mtime), ms; stored in the encrypted manifest. */
         takenAt: Long? = null,
+        /**
+         * The Safe: no upload_begin / commit in the account's log. When the pieces and the manifest are stored the
+         * instance is told to keep the upload (it never reaches the log, so it must not be reaped as abandoned), and
+         * `outsideLog(content, nodeId, name)` stores the reference where the caller keeps it.
+         */
+        outsideLog: ((JsonObject, String, String) -> Unit)? = null,
     ): Result {
         val nfc = Normalizer.normalize(name, Normalizer.Form.NFC)
         val uploadId = OpCodec.newId()
@@ -282,8 +288,10 @@ class FileWriter(
             }
         }
         try {
-            val begin = commit(buildJsonObject { put("type", "upload_begin"); put("uploadId", uploadId) })
-            if (begin.strOrNull("outcome") != "applied") throw IllegalStateException("upload_begin: ${begin.strOrNull("outcome")}")
+            if (outsideLog == null) {
+                val begin = commit(buildJsonObject { put("type", "upload_begin"); put("uploadId", uploadId) })
+                if (begin.strOrNull("outcome") != "applied") throw IllegalStateException("upload_begin: ${begin.strOrNull("outcome")}")
+            }
             val fileKey = randomBytes(32)
             val ck = FileFormat.contentKey(fileKey)
             val count = maxOf(1, ((size + chunkSize - 1) / chunkSize).toInt())
@@ -364,8 +372,12 @@ class FileWriter(
                 put("pieces", buildJsonArray { per.forEach { (loc, x) -> add(buildJsonObject { put("loc", loc); put("n", x.first); put("bytes", x.second) }) } })
             }
             renew()
-            if (viaInstance) api.finalizeUpload(uploadId)
+            if (viaInstance) api.finalizeUpload(uploadId, outsideLog != null)
             committed = true
+            if (outsideLog != null) {
+                outsideLog(content, nodeId, nfc)
+                return Result(nodeId, uploadId, ref, sha, size, nfc, count, "applied")
+            }
             val r = commit(buildJsonObject {
                 put("type", "group")
                 put("ops", buildJsonArray {
