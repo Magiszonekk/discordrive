@@ -140,6 +140,28 @@ the wrap key, and the proof. The server keeps SHA-256(proof), never the password
   (`pw.warn`). The login is visible to the server.
 - A password sign-in registers the device through the same rescue-key path as a kit.
 
+### 2.5a The Safe (a part of the account under its own password)
+
+`packages/metadata-client/src/safe.ts`, `apps/android/core/ddn/.../Safe.kt`. The Safe is for files that
+**someone using the same account** must not open: a paired device, whoever has the account's rescue kit,
+a copy of the server, the account's Discord channels. All of them hold the account key, so the Safe is
+**not** in the account's log and its key is **not** derived from the account key:
+- A random 32-byte master, sealed with a key from the Safe password (Argon2id 64 MiB / 3 / 4, random salt,
+  then HKDF `ddn-safe-wrap-v1`; AAD binds it to the account). The account key never wraps it.
+- The Safe's state (names, paths, the files' keys, thumbnails' keys, how many files) is one JSON object,
+  padded to 64 KiB · 2^k and sealed with a key from the master. Its header (the KDF parameters and the
+  sealed master) is sealed once more with the account subkey `safe`, so the instance alone cannot even
+  try passwords offline: that needs the account key **and** the server's row.
+- Both layers are bound to the slot's revision; a client refuses a revision older than one it saw.
+- **A forgotten password opens the Safe for nobody**, the owner included. The optional Safe kit
+  (`ddn-safe1:…`) holds the master in text: whoever has it opens the Safe without the password.
+- A password change re-seals the master only.
+- **What leaks**: that the account has a Safe, the padded size of its state (its power-of-two bucket),
+  when it changes; with files in it, the size and number of their pieces on Discord and when they were
+  sent. Whoever uses the account can **delete** the Safe's slot (not read it).
+- Whoever learns the password **and** holds the account key (or the server row and the account key) opens
+  it; a weak password falls to an offline guess by someone who has both.
+
 ### 2.6 Operation log
 
 `packages/metadata-client/src/op-crypto.ts`, `packages/sync-core/src/sequencer.ts`. The server is
