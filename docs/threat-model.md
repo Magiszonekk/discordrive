@@ -161,6 +161,12 @@ a copy of the server, the account's Discord channels. All of them hold the accou
   sent. Whoever uses the account can **delete** the Safe's slot (not read it).
 - Whoever learns the password **and** holds the account key (or the server row and the account key) opens
   it; a weak password falls to an offline guess by someone who has both.
+- **The Safe lives on the instance only.** It is not in the account's snapshots on Discord nor in the
+  account's rescue kit: an account rebuilt from Discord comes back **without** its Safe, and losing the
+  instance's database loses the Safe. The instance keeps the replaced revisions of the slot (the last 20,
+  all from the last 30 days, at most 200): an overwritten or damaged Safe (a broken client, another device
+  of the account) can be brought back from an earlier one with the password it had then. Deleting the
+  account deletes them too.
 
 ### 2.6 Operation log
 

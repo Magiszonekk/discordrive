@@ -38,6 +38,15 @@ export const MAX_SETTINGS_B64 = 64 * 1024;
  */
 export const SLOT_NAMES = ["safe"] as const;
 export const MAX_SLOT_B64 = Math.ceil((1024 * 1024 + 4096) / 3) * 4;
+/**
+ * Earlier revisions of a slot the instance keeps (an overwritten or damaged Safe can be brought back by the
+ * client, which re-seals the old one under a new revision): the last SLOT_KEEP, and every one younger than
+ * SLOT_KEEP_MS up to SLOT_KEEP_MAX. Against mistakes and a broken client, not against a user of the account
+ * who wants it gone (they can delete it; the threat model says so).
+ */
+export const SLOT_KEEP = 20;
+export const SLOT_KEEP_MS = 30 * 24 * 3600_000;
+export const SLOT_KEEP_MAX = 200;
 export const MAX_DEVICE_NAME_B64 = 1024;
 export const SERVER_VERSION = "0.2.0";
 
@@ -183,6 +192,7 @@ export class DdnServer {
       CREATE TABLE IF NOT EXISTS settings (account_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, blob TEXT NOT NULL);
       -- Named slots of an account (the Safe), sealed by the client with keys the instance never has: opaque.
       CREATE TABLE IF NOT EXISTS slots (account_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, blob TEXT NOT NULL, PRIMARY KEY (account_id, name));
+      CREATE TABLE IF NOT EXISTS slot_history (account_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, blob TEXT NOT NULL, replaced_at INTEGER NOT NULL, PRIMARY KEY (account_id, name, revision));
       CREATE TABLE IF NOT EXISTS pairing (id TEXT PRIMARY KEY, msg TEXT NOT NULL, created_at INTEGER NOT NULL);
       -- Cleanup bookkeeping (metadata only: the client deletes fragments, the server remembers
       -- which uploads are done and when the account was last cleaned; upload IDs are plaintext already).
@@ -392,10 +402,22 @@ export class DdnServer {
     try {
       const cur = this.getSlot(s, name);
       if ((cur?.revision ?? 0) !== exp || rev !== exp + 1) out = { status: "conflict", current: cur };
-      else
+      else {
+        // The replaced revision goes to the history (kept for a while, see SLOT_KEEP).
+        if (cur) {
+          this.db.prepare("INSERT OR REPLACE INTO slot_history (account_id, name, revision, blob, replaced_at) VALUES (?, ?, ?, ?, ?)").run(s.accountId, name, cur.revision, cur.blob, this.now());
+          this.db
+            .prepare(
+              `DELETE FROM slot_history WHERE account_id = ? AND name = ? AND revision NOT IN (
+                 SELECT revision FROM slot_history WHERE account_id = ? AND name = ? ORDER BY revision DESC LIMIT ?)
+               AND (replaced_at < ? OR revision NOT IN (SELECT revision FROM slot_history WHERE account_id = ? AND name = ? ORDER BY revision DESC LIMIT ?))`,
+            )
+            .run(s.accountId, name, s.accountId, name, SLOT_KEEP, this.now() - SLOT_KEEP_MS, s.accountId, name, SLOT_KEEP_MAX);
+        }
         this.db
           .prepare("INSERT INTO slots (account_id, name, revision, blob) VALUES (?, ?, ?, ?) ON CONFLICT(account_id, name) DO UPDATE SET revision = excluded.revision, blob = excluded.blob")
           .run(s.accountId, name, rev, b.blob as string);
+      }
       this.db.exec("COMMIT");
     } catch (e) {
       this.db.exec("ROLLBACK");
@@ -650,6 +672,18 @@ export class DdnServer {
         const r = this.putVault(s, await json(), "settings");
         return send(res, r.status === "ok" ? 200 : 409, r);
       }
+    }
+    // Earlier revisions of a slot: the list (revision, when it was replaced, size) and one of them.
+    const hist = /^\/v1\/slots\/([a-z]{1,16})\/history(?:\/(\d{1,12}))?$/.exec(path);
+    if (hist && method === "GET") {
+      if (!(SLOT_NAMES as readonly string[]).includes(hist[1]!)) throw new HttpError(404, "no_such_slot");
+      if (hist[2]) {
+        const r = this.db.prepare("SELECT revision, blob FROM slot_history WHERE account_id = ? AND name = ? AND revision = ?").get(s.accountId, hist[1]!, Number(hist[2])) as { revision: number; blob: string } | undefined;
+        if (!r) throw new HttpError(404, "no_such_revision");
+        return send(res, 200, r);
+      }
+      const rows = this.db.prepare("SELECT revision, replaced_at AS replacedAt, length(blob) AS chars FROM slot_history WHERE account_id = ? AND name = ? ORDER BY revision DESC").all(s.accountId, hist[1]!);
+      return send(res, 200, { revisions: rows });
     }
     const slot = /^\/v1\/slots\/([a-z]{1,16})$/.exec(path);
     if (slot) {

@@ -73,6 +73,13 @@ export class SafeMissingError extends Error {
     this.name = "SafeMissingError";
   }
 }
+/** The slot holds something that is not a Safe this account opens (overwritten or damaged): not a wrong password. */
+export class SafeDamagedError extends Error {
+  constructor(why: string) {
+    super(`the Safe is damaged or was replaced (${why})`);
+    this.name = "SafeDamagedError";
+  }
+}
 export class SafeTooLargeError extends Error {
   constructor(bytes: number) {
     super(`the Safe's state is too large (${bytes} bytes; at most ${SAFE_PAD_MAX - 4})`);
@@ -188,6 +195,9 @@ export interface SlotApi {
   getSlot(name: string): Promise<{ revision: number; blob: string | null }>;
   /** null = stored; else the current one that won. */
   putSlot(name: string, expectedRevision: number, revision: number, blob: string): Promise<{ revision: number; blob: string | null } | null>;
+  /** Earlier revisions the instance keeps (newest first), and one of them. */
+  slotHistory?(name: string): Promise<{ revision: number; replacedAt: number; chars: number }[]>;
+  slotRevision?(name: string, revision: number): Promise<{ revision: number; blob: string }>;
 }
 
 /** An open Safe: its master (keep it only in memory or behind the device's key store), header and state. */
@@ -219,7 +229,11 @@ export class SafeStore<S = unknown> {
   }
 
   private async open(revision: number, blob: string, master: (h: SafeHeader) => Promise<Uint8Array>): Promise<UnlockedSafe<S>> {
-    const { header, sealedState } = await openSafeHeader(this.key, this.accountId, revision, blob);
+    // What the account key must open (the outer layer): failing here is a damaged / replaced Safe.
+    const opened = await openSafeHeader(this.key, this.accountId, revision, blob).catch((e: unknown) => {
+      throw new SafeDamagedError(e instanceof Error ? e.message : String(e));
+    });
+    const { header, sealedState } = opened;
     const m = await master(header);
     const state = await openSafeState<S>(m, this.accountId, revision, sealedState);
     this.seenRevision = Math.max(this.seenRevision, revision);
@@ -269,6 +283,32 @@ export class SafeStore<S = unknown> {
     throw new Error("Safe: too many concurrent edits");
   }
 
+  /** Earlier revisions the instance keeps (newest first): to bring back a damaged or overwritten Safe. */
+  async history(): Promise<{ revision: number; replacedAt: number }[]> {
+    if (!this.api.slotHistory) return [];
+    return (await this.api.slotHistory(SAFE_SLOT)).map((r) => ({ revision: r.revision, replacedAt: r.replacedAt }));
+  }
+
+  /**
+   * Bring back an earlier revision: opened with the password it had then (or a master), re-sealed under the
+   * next revision of the slot (both layers are bound to their revision), with its header (that password).
+   */
+  async restore(revision: number, unlock: { password: string } | { master: Uint8Array }): Promise<UnlockedSafe<S>> {
+    if (!this.api.slotRevision) throw new Error("this instance keeps no Safe history");
+    const old = await this.api.slotRevision(SAFE_SLOT, revision);
+    const u = await this.open(old.revision, old.blob, (h) => ("password" in unlock ? openSafeMaster(h, unlock.password, this.accountId) : Promise.resolve(unlock.master)));
+    for (let i = 0; i < 5; i++) {
+      const cur = await this.api.getSlot(SAFE_SLOT);
+      const rev = cur.revision + 1;
+      const blob = await sealSafeSlot({ key: this.key, accountId: this.accountId, revision: rev, header: u.header, master: u.master, state: u.state });
+      if (!(await this.api.putSlot(SAFE_SLOT, cur.revision, rev, blob))) {
+        this.seenRevision = Math.max(this.seenRevision, rev);
+        return { master: u.master, revision: rev, header: u.header, state: u.state };
+      }
+    }
+    throw new Error("Safe: too many concurrent edits");
+  }
+
   /** A new password: the master re-sealed (the files and the state stay as they are). */
   async changePassword(u: UnlockedSafe<S>, newPassword: string, params: Pick<Argon2Params, "memoryKiB" | "iterations" | "parallelism"> = SAFE_ARGON2): Promise<UnlockedSafe<S>> {
     const header = await newSafeHeader(u.master, newPassword, this.accountId, params);
@@ -289,15 +329,21 @@ export class SafeStore<S = unknown> {
 
 // ── the optional Safe kit: the master in text (whoever has it opens the Safe without the password) ──
 
+// ddn-safe1:<account>:<master, base64url>:<check: 8 hex of SHA-256("ddn-safe-kit|account|master b64url")>,
+// so a typo says "not a Safe kit" instead of "wrong key or tampered data".
 const KIT_PREFIX = "ddn-safe1";
-export function safeKitText(accountId: string, master: Uint8Array): string {
-  return `${KIT_PREFIX}:${accountId}:${toBase64(master).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+async function kitCheck(accountId: string, m64: string): Promise<string> {
+  const h = new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`ddn-safe-kit|${accountId}|${m64}`)));
+  return [...h.subarray(0, 4)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
-export function parseSafeKit(text: string): { accountId: string; master: Uint8Array } {
-  const m = /^ddn-safe1:([A-Za-z0-9_-]{4,80}):([A-Za-z0-9_-]{43})$/.exec(text.trim());
-  if (!m) throw new Error("not a Safe kit");
-  const b64 = m[2]!.replace(/-/g, "+").replace(/_/g, "/") + "=";
-  const master = fromBase64(b64);
+export async function safeKitText(accountId: string, master: Uint8Array): Promise<string> {
+  const m64 = toBase64(master).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return `${KIT_PREFIX}:${accountId}:${m64}:${await kitCheck(accountId, m64)}`;
+}
+export async function parseSafeKit(text: string): Promise<{ accountId: string; master: Uint8Array }> {
+  const m = /^ddn-safe1:([A-Za-z0-9_-]{4,80}):([A-Za-z0-9_-]{43}):([0-9a-f]{8})$/.exec(text.trim());
+  if (!m || (await kitCheck(m[1]!, m[2]!)) !== m[3]) throw new Error("not a Safe kit");
+  const master = fromBase64(m[2]!.replace(/-/g, "+").replace(/_/g, "/") + "=");
   if (master.byteLength !== SAFE_MASTER_BYTES) throw new Error("not a Safe kit");
   return { accountId: m[1]!, master };
 }

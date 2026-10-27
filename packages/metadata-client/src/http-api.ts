@@ -260,6 +260,13 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     return r.body.current ?? { revision: 0, blob: null };
   }
 
+  async slotHistory(name: string): Promise<{ revision: number; replacedAt: number; chars: number }[]> {
+    return (await this.call<{ revisions: { revision: number; replacedAt: number; chars: number }[] }>("GET", `/v1/slots/${name}/history`)).body.revisions;
+  }
+  async slotRevision(name: string, revision: number): Promise<{ revision: number; blob: string }> {
+    return (await this.call<{ revision: number; blob: string }>("GET", `/v1/slots/${name}/history/${revision}`)).body;
+  }
+
   /** Pairing: this signed-in device vouches for the new device's public key. */
   async addDevice(newDevicePublicKey: string): Promise<{ deviceId: string }> {
     const c = await this.challenge();
