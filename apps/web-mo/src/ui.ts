@@ -313,6 +313,7 @@ async function act(btn: HTMLElement | null, fn: () => Promise<unknown>) {
 // ── routing ─────────────────────────────────────────────────────────
 type Route =
   | { name: "files"; folder: string }
+  | { name: "safe"; folder: string }
   | { name: "trash" }
   | { name: "devices" }
   | { name: "settings"; tab: SettingsTab | null }
@@ -339,6 +340,9 @@ function parseRoute(path = location.pathname): Route {
   if (f) return { name: "files", folder: f[1]! };
   if (p === "/gallery") return { name: "files", folder: "gallery" };
   if (p === "/trash") return { name: "trash" };
+  if (p === "/safe") return { name: "safe", folder: "root" };
+  const sf = /^\/safe\/([A-Za-z0-9_-]{1,64})$/.exec(p);
+  if (sf) return { name: "safe", folder: sf[1]! };
   if (p === "/devices") return { name: "devices" };
   if (p === "/settings") return { name: "settings", tab: null };
   const st = /^\/settings\/([a-z-]{1,24})$/.exec(p);
@@ -351,7 +355,7 @@ function parseRoute(path = location.pathname): Route {
   return { name: "files", folder: "root" };
 }
 const hrefOf = (r: Route) =>
-  r.name === "files" ? (r.folder === "root" ? "/" : `/folder/${r.folder}`) : r.name === "create" ? "/" : r.name === "settings" && r.tab ? `/settings/${r.tab}` : `/${r.name}`;
+  r.name === "files" ? (r.folder === "root" ? "/" : `/folder/${r.folder}`) : r.name === "safe" ? (r.folder === "root" ? "/safe" : `/safe/${r.folder}`) : r.name === "create" ? "/" : r.name === "settings" && r.tab ? `/settings/${r.tab}` : `/${r.name}`;
 let route: Route = parseRoute();
 let routeSeq = 0;
 /** Go to a page (pushState). `replace` for redirects, so Back does not bounce. */
@@ -1160,6 +1164,7 @@ async function renderNow() {
   galleryOn = await core.galleryAvailable();
   $("nav-gallery").hidden = !galleryOn;
   if (page === "trash") return renderTrash();
+  if (page === "safe") return renderSafe();
   trashShown = false;
   if (page === "admin") {
     if (!adminShown) {
@@ -2198,6 +2203,7 @@ function rowEntries(r: MenuRow): MenuEntry[] {
       ...(files ? [{ ic: "download", label: t("files.download"), key: "download", run: () => void act(null, bulkDownload) }] : []),
       { ic: "move", label: t("act.move"), key: "move", run: bulkMove },
       ...otherSpaceEntry([...selected.keys()], selected.get([...selected.keys()][0]!)?.name ?? ""),
+      { ic: "lock", label: t("safe.in"), key: "to-safe", run: () => void act(null, () => safeMoveIn([...selected.keys()], tn("bulk.count", n))) },
       { ic: "x", label: t("bulk.clear"), key: "clear", run: clearSelection },
       { ic: "trash", label: t("act.trash"), key: "trash", run: () => void act(null, bulkTrash), danger: true },
     ];
@@ -2211,6 +2217,7 @@ function rowEntries(r: MenuRow): MenuEntry[] {
     { ic: "pencil", label: t("act.rename"), key: "rename", run: () => openRename(r) },
     { ic: "move", label: t("act.move"), key: "move", run: () => void openMove([r.id], r.name) },
     ...otherSpaceEntry([r.id], r.name),
+    ...(inRecovered() ? [] : [{ ic: "lock", label: t("safe.in"), key: "to-safe", run: () => void act(null, () => safeMoveIn([r.id], r.name)) }]),
     { ic: "trash", label: t("act.trash"), key: "trash", run: () => void act(null, () => trashItems([r])), danger: true },
   ];
 }
@@ -3232,6 +3239,180 @@ async function renderTrash() {
   $<HTMLButtonElement>("trash-empty").disabled = list.length === 0;
   ui("trash-meta").textContent = list.length ? [tn("files.count", list.length), fmt(list.reduce((s0, x) => s0 + (x.size ?? 0), 0))].join(" · ") : "";
 }
+// ── the Safe (a part of the account under its own password; names exist only while it is open, in the worker) ──
+
+const safeFolder = () => (route.name === "safe" ? route.folder : "root");
+const safeHref = (id: string) => (id === "root" ? "/safe" : `/safe/${id}`);
+
+async function renderSafe() {
+  const st = await core.safeState();
+  $("safe-new").hidden = st.exists;
+  $("safe-locked").hidden = !st.exists || st.open;
+  $("safe-open").hidden = !(st.exists && st.open);
+  $("safe-chip").textContent = !st.exists ? "" : st.open ? t("safe.chip.open") : t("safe.chip.closed");
+  $("safe-chip").className = `chip${st.exists && st.open ? " chip--success" : ""}`;
+  if (!(st.exists && st.open)) {
+    // Closed: no name of the Safe stays in the page (its list, path and totals are emptied).
+    $("safe-list").replaceChildren();
+    $("safe-crumbs").replaceChildren();
+    $("safe-meta").textContent = "";
+    if (st.exists) queueMicrotask(() => $<HTMLInputElement>("safe-pw").focus());
+    return;
+  }
+  const folder = safeFolder();
+  let rows: Awaited<ReturnType<typeof core.safeList>>;
+  let path: { id: string; name: string }[] = [];
+  try {
+    rows = await core.safeList(folder);
+    if (folder !== "root") path = await core.safePath(folder);
+  } catch {
+    // The folder is gone (deleted on another device): back to the top.
+    return navigate("/safe", true);
+  }
+  const crumbs = [{ id: "root", name: t("safe.h") }, ...path];
+  $("safe-crumbs").replaceChildren(...crumbs.map((c, i) => {
+    const a = document.createElement("a");
+    a.href = safeHref(c.id);
+    a.dataset.link = "";
+    a.textContent = c.name;
+    if (i === crumbs.length - 1) a.setAttribute("aria-current", "page");
+    return a;
+  }));
+  $("safe-meta").textContent = rows.length ? [tn("files.count", rows.length), fmt(rows.reduce((s0, r) => s0 + (r.size ?? 0), 0))].join(" · ") : "";
+  $("safe-empty").hidden = rows.length > 0;
+  $("safe-list").replaceChildren(...rows.map((r) => safeRow(r)));
+}
+
+function safeRow(r: { id: string; name: string; kind: "file" | "folder"; size: number | null }): HTMLElement {
+  const li = document.createElement("li");
+  li.dataset.ddn = "safe-row";
+  li.dataset.kind = r.kind;
+  const ic = `<svg class="i"><use href="#i-${r.kind === "folder" ? "folder" : "file"}"/></svg>`;
+  const name = document.createElement(r.kind === "folder" ? "a" : "span");
+  name.className = "name";
+  name.innerHTML = ic;
+  name.append(document.createTextNode(` ${r.name}`));
+  if (r.kind === "folder") {
+    (name as HTMLAnchorElement).href = safeHref(r.id);
+    name.dataset.link = "";
+  }
+  const size = document.createElement("span");
+  size.className = "meta";
+  size.textContent = r.size === null ? "" : fmt(r.size);
+  const btns = document.createElement("span");
+  btns.className = "row-btns";
+  const b = (key: string, ic2: string, label: string, run: () => Promise<unknown>, danger = false) => {
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = `iconbtn${danger ? " danger" : ""}`;
+    x.dataset.ddn = key;
+    x.title = label;
+    x.setAttribute("aria-label", `${label}: ${r.name}`);
+    x.innerHTML = `<svg class="i"><use href="#i-${ic2}"/></svg>`;
+    x.onclick = () => void act(x, run);
+    return x;
+  };
+  if (r.kind === "file") btns.append(b("safe-download", "download", t("files.download"), async () => saveBlob(await core.safeDownload(r.id), r.name)));
+  btns.append(
+    b("safe-rename", "pencil", t("act.rename"), async () => {
+      const n = prompt(t("act.rename"), r.name);
+      if (n && n.trim() && n !== r.name) await core.safeRename(r.id, n);
+    }),
+    b("safe-out", "move", t("safe.out"), () => safeMoveOut(r)),
+    b("safe-delete", "trash", t("safe.delete"), async () => {
+      if (await confirmDanger(t("safe.delete.title", { name: r.name }), t("safe.delete.text"), t("safe.delete"))) await core.safeDelete([r.id]);
+    }, true),
+  );
+  li.append(name, size, btns);
+  return li;
+}
+
+function saveBlob(b: Blob, name: string) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(b);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+}
+
+/** Out of the Safe into the Drive's top (the file is sent again: say how much first). */
+async function safeMoveOut(r: { id: string; name: string }) {
+  const bytes = await core.safeMoveSize([r.id], false);
+  if (!(await confirmDanger(t("safe.out.title", { name: r.name }), t("safe.move.cost", { size: fmt(bytes) }), t("safe.out")))) return;
+  const out = await core.safeMoveOut([r.id], "root");
+  toast(t("safe.out.done", { n: out.files }));
+}
+
+/** From the Drive / Gallery into the Safe (row menu and the selection bar). */
+async function safeMoveIn(ids: string[], label: string) {
+  const st = await core.safeState();
+  if (!st.exists || !st.open) {
+    toast(t("safe.needOpen"), "info");
+    return navigate("/safe");
+  }
+  const bytes = await core.safeMoveSize(ids, true);
+  if (!(await confirmDanger(t("safe.in.title", { name: label }), t("safe.move.cost", { size: fmt(bytes) }) + " " + t("safe.in.text"), t("safe.in")))) return;
+  const r = await core.safeMoveIn(ids, "root");
+  clearSelection();
+  toast(t("safe.in.done", { n: r.files }));
+  void render();
+}
+
+function paintSafeStrength() {
+  const pw = $<HTMLInputElement>("safe-new-pw").value;
+  void core.passwordStrength(pw).then((r) => {
+    $("safe-strength").dataset.score = String(pw ? r.score + 1 : 0);
+    $("safe-strength-t").textContent = pw ? t(`pw.s${r.score}`) : "";
+  });
+}
+
+function wireSafe() {
+  $("safe-new-pw").addEventListener("input", paintSafeStrength);
+  $<HTMLFormElement>("safe-new-form").onsubmit = (e) => {
+    e.preventDefault();
+    const pw = $<HTMLInputElement>("safe-new-pw").value;
+    if (pw.length < 8) return toast(t("safe.err.short"), "err");
+    if (pw !== $<HTMLInputElement>("safe-new-pw2").value) return toast(t("pw.err.repeat"), "err");
+    if (!$<HTMLInputElement>("safe-new-ack").checked) return toast(t("safe.err.ack"), "err");
+    void act($("safe-create"), async () => {
+      await core.safeCreate(pw);
+      $<HTMLFormElement>("safe-new-form").reset();
+      toast(t("safe.created"));
+      void render();
+    });
+  };
+  $<HTMLFormElement>("safe-unlock-form").onsubmit = (e) => {
+    e.preventDefault();
+    const pw = $<HTMLInputElement>("safe-pw");
+    void act($("safe-unlock"), async () => {
+      try {
+        await core.safeUnlock(pw.value);
+      } catch (x) {
+        if (/safe_bad_password/.test(String((x as Error)?.message ?? x))) throw new Error(t("safe.err.badPassword"));
+        throw x;
+      } finally {
+        pw.value = "";
+      }
+      void render();
+    });
+  };
+  $("safe-close").onclick = () => void act($("safe-close"), async () => (await core.safeClose(), void render()));
+  $("safe-new-folder").onclick = () => {
+    const n = prompt(t("files.newFolder"));
+    if (n && n.trim()) void act($("safe-new-folder"), async () => (await core.safeMkdir(n, safeFolder()), void render()));
+  };
+  $<HTMLInputElement>("safe-file").onchange = (e) => {
+    const input = e.currentTarget as HTMLInputElement;
+    const files = [...(input.files ?? [])];
+    input.value = "";
+    void act(null, async () => {
+      for (const f of files) await core.safeUpload(f, f.name, safeFolder());
+      toast(tn("safe.uploaded", files.length));
+      void render();
+    });
+  };
+}
+
 function wireTrash() {
   $("trash-empty").onclick = (e) => void act(e.currentTarget as HTMLElement, () => emptyTrashAsk());
 }
@@ -3709,6 +3890,7 @@ async function main() {
   wireMove();
   wireSelection();
   wireTrash();
+  wireSafe();
   wireStorage();
   wireDiagnostics();
   wireNet();
