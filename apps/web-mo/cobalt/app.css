@@ -1286,3 +1286,64 @@ dialog.player .pv-msg .btn { color: var(--color-ink); background: var(--color-pa
   [data-space="gallery"] .ftable-wrap[data-view="tiles"] .ftable tbody tr:not(.g-h, .album) td.c-acts { top: .25rem; right: .25rem; }
   [data-space="gallery"] .ftable-wrap .empty { padding: 2.5rem 1rem; }
 }
+
+/* ── the Safe (frontend profile, 2026-10-27). One page, three states on [data-page=safe][data-state]:
+ * new = a card to create it, closed = a lock card (the padlock and the password only), open = the Drive's
+ * header + file table under a band that says it is open. CSS hangs on data-state; every data-ddn unchanged. ── */
+.safe-page .safe-h h1 { display: flex; align-items: center; gap: .75rem; min-width: 0; }
+.safe-page .safe-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* state pill: a dot + OPEN / CLOSED, at the cap height of the title (not stretched to its line) */
+.safe-state { flex: none; align-self: center; gap: .375rem; padding: .1875rem .5rem; line-height: 1rem; }
+.safe-state::before { content: ""; width: .375rem; height: .375rem; border-radius: 9999px; background: currentColor; }
+.safe-state.chip--success { background: color-mix(in oklch, var(--color-success) 8%, transparent); }
+/* the header's path, totals and actions belong to the open Safe only */
+.safe-page:not([data-state="open"]) .safe-h :is(.crumbs, .meta, .acts) { display: none; }
+.safe-page:not([data-state="open"]) .safe-h { margin-bottom: 1.25rem; }
+.safe-page .safe-h .crumbs:empty { display: none; }
+.safe-page .safe-h .crumbs .desk a { display: inline-flex; align-items: center; gap: .3125rem; }
+
+/* create / unlock: one card, as wide as the sign-in card; a seal with the shield / the padlock opens it */
+.safe-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; max-width: 30rem; padding: 1.5rem; border: 1px solid var(--color-rule); border-radius: var(--radius-card); background: var(--color-paper); }
+.safe-card--new { max-width: 32rem; }
+.safe-card-h { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 1rem; align-items: start; }
+.safe-card-h h2 { font: 600 1.125rem/1.75rem var(--font-display); letter-spacing: -.01em; color: var(--color-ink); text-wrap: balance; }
+.safe-card-h .sec-lead { margin: .25rem 0 0; }
+.safe-seal { display: grid; place-items: center; width: 3rem; height: 3rem; border-radius: 9999px; background: color-mix(in oklch, var(--color-accent) 11%, var(--color-paper)); color: var(--color-accent); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-accent) 22%, transparent); }
+.safe-seal svg.i { width: 22px; height: 22px; stroke-width: 1.75; }
+/* closed: the padlock in graphite, the Safe is shut (accent stays on Unlock) */
+.safe-card--locked .safe-seal { background: var(--color-paper-2); color: var(--color-ink); box-shadow: inset 0 0 0 1px var(--color-rule-2); }
+.safe-card .stack { gap: 1rem; }
+.safe-card .btn.block { margin-top: .25rem; }
+.safe-card .note { margin: 0; }
+
+/* open: a band over the table says so (and how it closes), Close right there */
+.safe-band { display: flex; align-items: center; gap: .75rem; margin-bottom: 1rem; padding: .5rem .5rem .5rem .75rem; border: 1px solid color-mix(in oklch, var(--color-success) 32%, var(--color-rule)); border-radius: var(--radius-card); background: color-mix(in oklch, var(--color-success) 6%, var(--color-paper)); font-size: .8125rem; line-height: 1.25rem; color: var(--color-ink-2); }
+.safe-band p { flex: 1; min-width: 0; }
+.safe-band b { font-weight: 600; color: var(--color-ink); }
+.safe-band-ic { display: grid; place-items: center; flex: none; width: 2rem; height: 2rem; border-radius: 9999px; background: color-mix(in oklch, var(--color-success) 14%, var(--color-paper)); color: color-mix(in oklch, var(--color-success) 80%, var(--color-ink)); }
+.safe-band-ic svg.i { width: 16px; height: 16px; }
+.safe-band .btn { flex: none; }
+.safe-wrap .ftable td.c-acts { width: 1%; }
+.safe-wrap .ftable .acts { gap: .125rem; }
+/* the trash button in the Safe deletes for good: quiet at rest like the Drive's, error on hover */
+
+/* Move to the Safe / to the Drive: nothing is lost, so not the red warning; the accent and a padlock */
+dialog.confirm[data-tone="safe"] .confirm-ic { background: color-mix(in oklch, var(--color-accent) 12%, transparent); color: var(--color-accent); }
+dialog.confirm .modal-acts .btn svg.i { width: 15px; height: 15px; }
+
+@media (min-width: 768px) {
+  .safe-page:not([data-state="open"]) .safe-h { flex-direction: column; align-items: flex-start; }
+}
+@media (max-width: 767.98px) {
+  .safe-card { padding: 1.25rem; }
+  .safe-card-h { grid-template-columns: minmax(0, 1fr); gap: .75rem; }
+  .safe-seal { width: 2.75rem; height: 2.75rem; }
+  .safe-band { align-items: flex-start; flex-wrap: wrap; }
+  .safe-band p { flex-basis: calc(100% - 2.75rem); }
+  .safe-band .btn { margin-left: 2.75rem; }
+  /* phone cards: name + size on the left, the actions on the right, at the card's middle */
+  .safe-wrap .ftable td.c-acts { padding: 0 .5rem 0 0; }
+  .safe-wrap .ftable .acts .iconbtn { padding: .4375rem; }
+  /* four actions leave little room: the name takes two lines before it is cut */
+  .safe-wrap .ftable .c-name a, .safe-wrap .ftable .c-name .nm > span:last-child { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
+}

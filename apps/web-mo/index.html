@@ -38,6 +38,7 @@
   <symbol id="i-share" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98M15.41 6.51l-6.82 3.98"/></symbol>
   <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></symbol>
   <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="i-lock-open" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></symbol>
   <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
   <symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></symbol>
   <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2m-7.07-17.07 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
@@ -340,45 +341,63 @@
       </div>
     </main>
 
-    <!-- The Safe: a part of the account under its own password (closed: only its name and "Unlock"). -->
-    <main class="page narrow" data-page="safe" aria-labelledby="safe-h" hidden>
-      <h1 class="page-title" id="safe-h"><span data-i18n="safe.h">Safe</span> <span class="chip" data-ddn="safe-chip"></span></h1>
-      <div class="sections">
-        <!-- No Safe yet: create (password twice, strength, "a forgotten password opens it for nobody"). -->
-        <section data-ddn="safe-new" hidden>
-          <p class="sec-lead" data-i18n="safe.new.lead"></p>
-          <div class="note warn"><svg class="i"><use href="#i-alert"/></svg><p data-i18n-html="safe.new.warn"></p></div>
-          <form class="stack" data-ddn="safe-new-form">
-            <label class="field"><span class="lab" data-i18n="safe.pw">Safe password</span><input class="input" type="password" data-ddn="safe-new-pw" autocomplete="new-password"></label>
-            <div class="strength" data-ddn="safe-strength" data-score="0"><div class="strength-h"><span class="label-mono" data-i18n="pw.strength">Password strength</span><span class="strength-t" data-ddn="safe-strength-t"></span></div><div class="strength-bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div></div>
-            <label class="field"><span class="lab" data-i18n="pw.repeat">Repeat password</span><input class="input" type="password" data-ddn="safe-new-pw2" autocomplete="new-password"></label>
-            <label class="ack plain"><input type="checkbox" data-ddn="safe-new-ack"><span data-i18n="safe.new.ack"></span></label>
-            <div class="row-btns"><button class="btn primary" type="submit" data-ddn="safe-create" data-i18n="safe.create">Create the Safe</button></div>
-          </form>
-        </section>
-        <!-- Closed: the password. -->
-        <section data-ddn="safe-locked" hidden>
-          <p class="sec-lead" data-i18n="safe.locked.lead"></p>
-          <form class="stack" data-ddn="safe-unlock-form">
-            <label class="field"><span class="lab" data-i18n="safe.pw">Safe password</span><input class="input" type="password" data-ddn="safe-pw" autocomplete="current-password"></label>
-            <div class="row-btns"><button class="btn primary" type="submit" data-ddn="safe-unlock"><svg class="i"><use href="#i-key"/></svg><span data-i18n="safe.unlock">Unlock</span></button></div>
-          </form>
-        </section>
-        <!-- Open: its folders and files. -->
-        <section data-ddn="safe-open" hidden>
-          <div class="files-h">
-            <nav class="crumbs" data-ddn="safe-crumbs" data-i18n-attr="aria-label=files.crumbs"></nav>
-            <div class="acts">
-              <button class="btn" type="button" data-ddn="safe-new-folder"><svg class="i"><use href="#i-folder-plus"/></svg><span data-i18n="files.newFolder">New folder</span></button>
-              <label class="btn primary upload-btn"><span data-i18n="files.upload">Upload files</span><input type="file" multiple data-ddn="safe-file" data-i18n-attr="aria-label=files.upload.aria"></label>
-              <button class="btn" type="button" data-ddn="safe-close"><svg class="i"><use href="#i-lock"/></svg><span data-i18n="safe.close">Close</span></button>
-            </div>
+    <!-- The Safe: a part of the account under its own password (closed: only its name and "Unlock").
+         data-state (new | closed | open) is set by renderSafe; the header's crumbs, meta and actions show only when open. -->
+    <main class="page safe-page" data-page="safe" aria-labelledby="safe-h" hidden>
+      <div class="files-h safe-h">
+        <div class="titles">
+          <nav class="crumbs" data-ddn="safe-crumbs" data-i18n-attr="aria-label=files.crumbs"></nav>
+          <div>
+            <h1 id="safe-h"><span class="safe-title" data-ddn-ui="safe-title">Safe</span><span class="chip" data-ddn="safe-chip"></span></h1>
+            <p class="meta" data-ddn="safe-meta"></p>
           </div>
-          <p class="meta" data-ddn="safe-meta"></p>
-          <ul class="list" data-ddn="safe-list"></ul>
-          <div class="empty" data-ddn="safe-empty" hidden><span class="ic"><svg class="i"><use href="#i-lock"/></svg></span><b data-i18n="safe.empty.b"></b><span data-i18n="safe.empty.s"></span></div>
-        </section>
+        </div>
+        <div class="acts safe-acts">
+          <button class="btn" type="button" data-ddn="safe-new-folder"><svg class="i"><use href="#i-folder-plus"/></svg><span class="lbl-md" data-i18n="files.newFolder">New folder</span></button>
+          <label class="btn primary upload-btn"><span data-i18n="files.upload">Upload files</span><input type="file" multiple data-ddn="safe-file" data-i18n-attr="aria-label=files.upload.aria"></label>
+        </div>
       </div>
+      <!-- No Safe yet: create (password twice, strength, "a forgotten password opens it for nobody"). -->
+      <section class="safe-card safe-card--new" data-ddn="safe-new" aria-labelledby="safe-new-h" hidden>
+        <div class="safe-card-h">
+          <span class="safe-seal" aria-hidden="true"><svg class="i"><use href="#i-shield"/></svg></span>
+          <div><h2 id="safe-new-h" data-i18n="safe.new.h">Set up the Safe</h2><p class="sec-lead" data-i18n="safe.new.lead"></p></div>
+        </div>
+        <div class="note warn"><svg class="i"><use href="#i-alert"/></svg><p data-i18n-html="safe.new.warn"></p></div>
+        <form class="stack" data-ddn="safe-new-form">
+          <label class="field"><span class="lab" data-i18n="safe.pw">Safe password</span><input class="input" type="password" data-ddn="safe-new-pw" autocomplete="new-password"></label>
+          <div class="strength" data-ddn="safe-strength" data-score="0"><div class="strength-h"><span class="label-mono" data-i18n="pw.strength">Password strength</span><span class="strength-t" data-ddn="safe-strength-t"></span></div><div class="strength-bars" aria-hidden="true"><i></i><i></i><i></i><i></i></div></div>
+          <label class="field"><span class="lab" data-i18n="pw.repeat">Repeat password</span><input class="input" type="password" data-ddn="safe-new-pw2" autocomplete="new-password"></label>
+          <label class="ack plain"><input type="checkbox" data-ddn="safe-new-ack"><span data-i18n="safe.new.ack"></span></label>
+          <button class="btn primary block" type="submit" data-ddn="safe-create"><svg class="i"><use href="#i-lock"/></svg><span data-i18n="safe.create">Create the Safe</span></button>
+        </form>
+      </section>
+      <!-- Closed: the password. -->
+      <section class="safe-card safe-card--locked" data-ddn="safe-locked" aria-labelledby="safe-locked-h" hidden>
+        <div class="safe-card-h">
+          <span class="safe-seal" aria-hidden="true"><svg class="i"><use href="#i-lock"/></svg></span>
+          <div><h2 id="safe-locked-h" data-i18n="safe.locked.h">The Safe is closed</h2><p class="sec-lead" data-i18n="safe.locked.lead"></p></div>
+        </div>
+        <form class="stack" data-ddn="safe-unlock-form">
+          <label class="field"><span class="lab" data-i18n="safe.pw">Safe password</span><input class="input" type="password" data-ddn="safe-pw" autocomplete="current-password"></label>
+          <button class="btn primary block" type="submit" data-ddn="safe-unlock"><svg class="i"><use href="#i-key"/></svg><span data-i18n="safe.unlock">Unlock</span></button>
+        </form>
+      </section>
+      <!-- Open: its folders and files (the Drive's file table). -->
+      <section data-ddn="safe-open" hidden>
+        <div class="safe-band" role="status">
+          <span class="safe-band-ic" aria-hidden="true"><svg class="i"><use href="#i-lock-open"/></svg></span>
+          <p data-i18n-html="safe.open.band"></p>
+          <button class="btn sm" type="button" data-ddn="safe-close"><svg class="i"><use href="#i-lock"/></svg><span data-i18n="safe.close">Close</span></button>
+        </div>
+        <div class="ftable-wrap safe-wrap">
+          <table class="ftable">
+            <thead><tr><th data-i18n="files.col.name">Name</th><th class="r" data-i18n="files.col.size">Size</th><th><span class="sr" data-i18n="files.col.actions">Actions</span></th></tr></thead>
+            <tbody data-ddn="safe-list"></tbody>
+          </table>
+          <div class="empty" data-ddn="safe-empty" hidden><span class="ic"><svg class="i"><use href="#i-lock"/></svg></span><b data-i18n="safe.empty.b"></b><span data-i18n="safe.empty.s"></span></div>
+        </div>
+      </section>
     </main>
 
     <!-- Devices -->
@@ -765,6 +784,16 @@
   </form>
 </dialog>
 
+<!-- The Safe: new folder / rename (instead of the browser's prompt) -->
+<dialog class="modal" data-ddn="safe-name-dialog" aria-labelledby="sn-h">
+  <div class="modal-h"><h2 id="sn-h"><svg class="i"><use data-ddn-ui="sn-ic" href="#i-folder-plus"/></svg><span data-ddn-ui="sn-title"></span></h2><button class="iconbtn" type="button" data-ddn-ui="sn-close" data-i18n-attr="aria-label=nf.cancel"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <form class="modal-b" method="dialog" data-ddn-ui="sn-form">
+    <input class="input" data-ddn="safe-name" maxlength="1024" autocomplete="off" spellcheck="false" data-i18n-attr="aria-label=rn.ph">
+    <p class="error-text" data-ddn-ui="sn-error" role="alert" hidden></p>
+    <div class="modal-acts"><button class="btn" type="button" data-ddn-ui="sn-cancel" data-i18n="nf.cancel">Cancel</button><button class="btn primary" type="submit" data-ddn="safe-name-save"></button></div>
+  </form>
+</dialog>
+
 <!-- Move to… (folder picker) -->
 <dialog class="modal" data-ddn="move-dialog" aria-labelledby="mv-h">
   <div class="modal-h"><h2 id="mv-h"><svg class="i"><use href="#i-move"/></svg><span data-ddn-ui="mv-title"></span></h2><button class="iconbtn" type="button" data-ddn-ui="mv-close" data-i18n-attr="aria-label=nf.cancel"><svg class="i"><use href="#i-x"/></svg></button></div>
@@ -778,7 +807,7 @@
 
 <!-- Confirmation (delete for good, empty trash) -->
 <dialog class="modal confirm" data-ddn="confirm-dialog" aria-labelledby="cf-h" aria-describedby="cf-text">
-  <div class="confirm-h"><span class="confirm-ic" aria-hidden="true"><svg class="i"><use href="#i-alert"/></svg></span><h2 id="cf-h" data-ddn-ui="cf-title"></h2></div>
+  <div class="confirm-h"><span class="confirm-ic" aria-hidden="true"><svg class="i"><use data-ddn-ui="cf-ic" href="#i-alert"/></svg></span><h2 id="cf-h" data-ddn-ui="cf-title"></h2></div>
   <div class="modal-b">
     <p class="muted" id="cf-text" data-ddn-ui="cf-text"></p>
     <div class="modal-acts"><button class="btn" type="button" data-ddn-ui="cf-no" data-i18n="nf.cancel">Cancel</button><button class="btn danger solid" type="button" data-ddn="confirm-yes"></button></div>
