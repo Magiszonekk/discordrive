@@ -21,7 +21,7 @@ import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { canonicalState, ROOT_ID, GALLERY_ID, applyEntry, expiredTrash, initIndex, inTrash, loadSnapshot, MemoryIndexStore, uploadsTouched, rulesVersionFor, spaceOf, WRITE_RULES_VERSION, type IndexSnapshot, type LogEntry, type NodeRecord } from "@ddv4/sync-core";
+import { takeSnapshot, nameKey, RULES_VERSION, canonicalState, ROOT_ID, GALLERY_ID, applyEntry, expiredTrash, initIndex, inTrash, loadSnapshot, MemoryIndexStore, uploadsTouched, rulesVersionFor, spaceOf, WRITE_RULES_VERSION, type IndexSnapshot, type LogEntry, type NodeRecord } from "@ddv4/sync-core";
 import {
   ChannelPacer,
   DiscordWebhookTransport,
@@ -137,6 +137,22 @@ let store = initIndex(new MemoryIndexStore());
 function core(q: Req): unknown {
   switch (q.m) {
     case "reset": store = initIndex(new MemoryIndexStore()); return null;
+    // The Safe's tree (JsIndexReplica __ddnSafe): a snapshot in, the rules applied, a snapshot out.
+    case "safeEmpty": return JSON.stringify(takeSnapshot(initIndex(new MemoryIndexStore())));
+    case "safeApply": {
+      const a = q.a as { tree: string; entry: LogEntry };
+      const t = loadSnapshot(JSON.parse(a.tree) as IndexSnapshot, new MemoryIndexStore());
+      const before = new Map<string, string>();
+      for (const n of t.allNodes()) if (n.kind === "file" && n.content) before.set(n.content.uploadId, n.content.manifestRef);
+      const result = applyEntry(t, { ...a.entry, rulesVersion: RULES_VERSION });
+      const released = [...t.allUploads()].filter((u) => u.status === "released" && u.ended?.seq === a.entry.seq && before.has(u.id)).map((u) => [u.id, before.get(u.id)!]);
+      return JSON.stringify({ tree: takeSnapshot(t), result, released });
+    }
+    case "safeChildren": {
+      const a = q.a as { tree: string; parent: string };
+      const t = loadSnapshot(JSON.parse(a.tree) as IndexSnapshot, new MemoryIndexStore());
+      return [...t.childIds(a.parent)].map((id) => t.getNode(id)!).filter((n) => !n.trashed).sort((x, y) => (x.kind !== y.kind ? (x.kind === "folder" ? -1 : 1) : nameKey(x.name) < nameKey(y.name) ? -1 : nameKey(x.name) > nameKey(y.name) ? 1 : x.id < y.id ? -1 : 1)).map(row);
+    }
     case "rules": return WRITE_RULES_VERSION;
     case "rulesFor": return rulesVersionFor(store, q.a as never, WRITE_RULES_VERSION);
     case "space": return store.getNode(q.a as string) ? spaceOf(store, q.a as string) : "drive";

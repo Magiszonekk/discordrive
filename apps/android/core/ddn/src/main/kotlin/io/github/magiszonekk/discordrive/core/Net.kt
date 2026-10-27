@@ -4,6 +4,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -231,7 +232,39 @@ class InstanceApi(
         throw ServerException(503, "instance_busy")
     }
 
-    fun finalizeUpload(uploadId: String) { call("POST", "/v1/uploads/$uploadId/final", buildJsonObject {}) }
+    /** `outsideLog`: the commit goes to the Safe, not the log: the instance keeps the upload as committed. */
+    fun finalizeUpload(uploadId: String, outsideLog: Boolean = false) { call("POST", "/v1/uploads/$uploadId/final", buildJsonObject { if (outsideLog) put("outsideLog", true) }) }
+
+    // ── named slots (the Safe): compare-and-swap on the revision, opaque to the instance ──
+
+    /** (revision, blob in base64 or null). */
+    fun slot(name: String): Pair<Long, String?> {
+        val o = call("GET", "/v1/slots/$name", null).second.jsonObject
+        return o.getValue("revision").jsonPrimitive.long to o["blob"]?.takeUnless { it is JsonNull }?.jsonPrimitive?.content
+    }
+
+    /** null = stored, else the current (revision, blob) that won. `dropHistory`: a new password. */
+    fun putSlot(name: String, expectedRevision: Long, revision: Long, blob: String, dropHistory: Boolean = false): Pair<Long, String?>? {
+        val (_, b) = call("PUT", "/v1/slots/$name", buildJsonObject {
+            put("expectedRevision", expectedRevision); put("revision", revision); put("blob", blob)
+            if (dropHistory) put("dropHistory", true)
+        }, ok = setOf(409))
+        val o = b.jsonObject
+        if (o.strOrNull("status") == "ok") return null
+        val cur = o["current"] as? JsonObject ?: return 0L to null
+        return cur.getValue("revision").jsonPrimitive.long to cur.str("blob")
+    }
+
+    /** Uploads committed outside the log (the Safe): (uploadId, state, finalAt) and the instance's clock. */
+    fun outsideUploads(): Pair<Long, List<Triple<String, String, Long>>> {
+        val o = call("GET", "/v1/uploads/outside", null).second.jsonObject
+        return o.getValue("now").jsonPrimitive.long to o.getValue("uploads").jsonArray.map { val x = it.jsonObject; Triple(x.str("uploadId"), x.str("state"), x.longOrNull("finalAt") ?: 0L) }
+    }
+
+    /** Released uploads outside the log back to committed (a restored Safe revision refers to them again). */
+    fun keptUploads(ids: List<String>) {
+        for (part in ids.chunked(1000)) call("POST", "/v1/uploads/kept", buildJsonObject { put("uploads", JsonArray(part.map { JsonPrimitive(it) })) })
+    }
     fun abortUpload(uploadId: String) { call("DELETE", "/v1/uploads/$uploadId", null, ok = setOf(404)) }
 
     /** Fresh CDN links (at most 50 at a time) for blobs of this account: attachmentId → URL. */

@@ -102,6 +102,34 @@ class ServerModeTest {
         r["settingsReadByWeb"] = roundTrip["model"]?.jsonPrimitive?.content == "m1"
         r["settingsFromWeb"] = Describe.configOf(settings.load())?.model == "m2"
 
+        // The Safe, made on the phone: the web opens it with the password and sees the same tree and bytes; a file
+        // the web adds the phone reads; a wrong password opens nothing; the account's log never sees its names.
+        run {
+            val pw = "kot ma ale i psa 2026"
+            val tree = SafeTree(SafeStore(api, AccountKey.fromB64(acct.accountKey), acct.accountId), sync.replica, acct.deviceId, acct.deviceName, api, viaInstance = true)
+            var u = tree.create(pw, Safe.Kdf(19456, 2, 1, ""))
+            val folder = tree.mkdir(u, "Dokumenty prywatne").also { u = it.safe }.nodeId!!
+            val secret = randomBytes(140_003)
+            val sfw = FileWriter(DiscordWriter(apiOrigin = origin), api, { emptyList() }, { op -> sync.commit(op) }, chunkSize = 64 * 1024, viaInstance = true)
+            u = tree.upload(u, sfw, { secret.inputStream() }, secret.size.toLong(), "paszport.pdf", folder).safe
+            r["safeListed"] = tree.children(u, folder).map { it.name } == listOf("paszport.pdf")
+            r["safeNotInAccount"] = sync.replica.children("root").none { it.name == "Dokumenty prywatne" }
+            val web = sc.rpc("safeWeb", buildJsonObject { put("password", pw); put("folder", "Dokumenty prywatne"); put("file", "paszport.pdf"); put("sha", sha256Hex(secret)) }).jsonObject
+            r["safeWebSeesPhone"] = web.getValue("folderSeen").jsonPrimitive.boolean && web.getValue("fileSame").jsonPrimitive.boolean
+            r["safeLogBlind"] = web.getValue("logBlind").jsonPrimitive.boolean
+            val phone2 = SafeStore(api, AccountKey.fromB64(acct.accountKey), acct.accountId)
+            r["safeWrongPassword"] = runCatching { phone2.unlock("zle haslo zle haslo") }.exceptionOrNull() is Safe.BadPasswordException
+            u = phone2.unlock(pw)
+            val fromWeb = tree.children(u, "root").firstOrNull { it.name == "z przegladarki.pdf" }
+            val out = java.io.ByteArrayOutputStream()
+            if (fromWeb != null) FileReader(sync.blobSource()).download(fromWeb.manifestRef!!, fromWeb.size!!, fromWeb.sha256, out)
+            r["safePhoneReadsWeb"] = fromWeb != null && sha256Hex(out.toByteArray()) == web.getValue("webSha").jsonPrimitive.content
+            // Deleted for good: released on the instance at once (its pieces go 30 days later).
+            val pid = tree.children(u, folder).first().uploadId!!
+            u = tree.delete(u, listOf(tree.children(u, folder).first().id)).safe
+            r["safeDeleteReleases"] = sc.rpc("uploadState", JsonPrimitive(pid)).jsonPrimitive.content == "released" && tree.children(u, folder).isEmpty()
+        }
+
         // A rescue kit of an e2ee / plain instance opens.
         r["kit2Parses"] = RescueKit.parse("ddn-kit2:" + B64.encUrl("""{"v":2,"accountId":"${acct.accountId}","key":"${acct.accountKey}","server":"$server"}""".toByteArray())).accountId == acct.accountId
 
