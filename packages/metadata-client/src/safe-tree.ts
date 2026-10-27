@@ -44,7 +44,7 @@ import {
   type Operation,
 } from "@ddv4/sync-core";
 import { SafeStore, type UnlockedSafe } from "./safe.js";
-import { decodeManifestRef, type ByteSink, type ByteSource, type DownloadOptions, type DriveClient, type UploadOptions } from "./drive-client.js";
+import { decodeManifestRef, readVersionRange, type ByteSink, type ByteSource, type DownloadOptions, type DriveClient, type UploadOptions } from "./drive-client.js";
 import { RateLimitedError } from "./discord-transport.js";
 import type { Placement } from "./types.js";
 
@@ -297,6 +297,133 @@ export class SafeTree {
     return client.download(nodeId, sink, { ...opts, content: { version: n.content, name: n.name } });
   }
 
+  /**
+   * Files of the account into the Safe. Each one is read and sent again under a new key (whoever had the
+   * account key may have kept the old one, so moving its reference would protect nothing), added to the Safe,
+   * then deleted for good from the account (trash + purge in one entry): its old pieces go after 30 days as
+   * any purged file's. A folder brings its subtree (empty folders too). One file at a time: a failure leaves
+   * what was moved in the Safe and the rest in the account (the same file never ends up in neither).
+   */
+  async moveIn(
+    u: UnlockedSafe<SafeTreeState>,
+    client: DriveClient,
+    ids: NodeId[],
+    safeParentId: NodeId = "root",
+    o: { onProgress?: (doneBytes: number, totalBytes: number, file: string) => void; signal?: AbortSignal } = {},
+  ): Promise<{ safe: UnlockedSafe<SafeTreeState>; files: number; bytes: number }> {
+    await client.pull();
+    const acct = client.store;
+    // What goes, in order: folders before their contents; trashed nodes skipped.
+    type Item = { id: NodeId; kind: "folder" | "file"; name: string; parent: NodeId | null };
+    const items: Item[] = [];
+    const walk = (id: NodeId, parent: NodeId | null) => {
+      const n = acct.getNode(id);
+      if (!n || n.trashed) return;
+      if (n.kind === "folder") {
+        items.push({ id, kind: "folder", name: n.name, parent });
+        for (const c of acct.childIds(id)) walk(c, id);
+      } else if (n.content) items.push({ id, kind: "file", name: n.name, parent });
+    };
+    for (const id of ids) {
+      const n = acct.getNode(id);
+      if (!n || n.parentId === null) throw new Error("not a file or folder of the account");
+      walk(id, null);
+    }
+    const total = items.reduce((s, it) => s + (it.kind === "file" ? acct.getNode(it.id)!.content!.sizeBytes : 0), 0);
+    const where = new Map<NodeId, NodeId>(); // account folder → Safe folder
+    let safe = u;
+    let done = 0;
+    let files = 0;
+    for (const it of items) {
+      o.signal?.throwIfAborted();
+      const parent = it.parent === null ? safeParentId : where.get(it.parent)!;
+      if (it.kind === "folder") {
+        const id = newId();
+        const r = await this.commit(safe, { type: "create", kind: "folder", nodeId: id, parentId: parent, name: it.name });
+        if (r.result.outcome !== "applied") throw new Error(`Safe: the folder was not added (${r.result.outcome})`);
+        safe = r.safe;
+        where.set(it.id, id);
+        continue;
+      }
+      const v = acct.getNode(it.id)!.content!;
+      const taken = await client.takenAt(v.manifestRef).catch(() => null);
+      const up = await this.upload(safe, client, versionSource(client, v), it.name, parent, {
+        signal: o.signal,
+        ...(taken ? { takenAt: taken } : {}),
+        onProgress: (b) => o.onProgress?.(done + b, total, it.name),
+      });
+      safe = up.safe;
+      // In the Safe now: out of the account. Only the version that was copied (a newer one from another device
+      // stays in the account: purge keeps what the author had not seen).
+      await client.commitOp({ type: "group", ops: [{ type: "trash", nodeId: it.id }, { type: "purge", nodeId: it.id }] }, "move into the Safe");
+      done += v.sizeBytes;
+      files++;
+    }
+    // The folders moved, emptied of their files: out of the account too.
+    const topFolders = ids.filter((id) => acct.getNode(id)?.kind === "folder");
+    if (topFolders.length) await client.commitOp({ type: "group", ops: topFolders.flatMap((id) => [{ type: "trash" as const, nodeId: id }, { type: "purge" as const, nodeId: id }]) }, "move into the Safe");
+    return { safe, files, bytes: done };
+  }
+
+  /**
+   * Files of the Safe out to the account (`parentId` in the Drive or the Gallery): sent again under a new key
+   * (the Safe's key must not end up in the account's log), added to the account, then deleted for good from the
+   * Safe (its pieces go as any Safe file's). A folder brings its subtree.
+   */
+  async moveOut(
+    u: UnlockedSafe<SafeTreeState>,
+    client: DriveClient,
+    ids: NodeId[],
+    parentId: NodeId,
+    o: { onProgress?: (doneBytes: number, totalBytes: number, file: string) => void; signal?: AbortSignal } = {},
+  ): Promise<{ safe: UnlockedSafe<SafeTreeState>; files: number; bytes: number }> {
+    const t = safeTreeOf(u);
+    type Item = { id: NodeId; kind: "folder" | "file"; name: string; parent: NodeId | null };
+    const items: Item[] = [];
+    const walk = (id: NodeId, parent: NodeId | null) => {
+      const n = t.getNode(id);
+      if (!n || n.trashed) return;
+      if (n.kind === "folder") {
+        items.push({ id, kind: "folder", name: n.name, parent });
+        for (const c of t.childIds(id)) walk(c, id);
+      } else if (n.content) items.push({ id, kind: "file", name: n.name, parent });
+    };
+    for (const id of ids) {
+      const n = t.getNode(id);
+      if (!n || n.parentId === null) throw new Error("not a file or folder of the Safe");
+      walk(id, null);
+    }
+    const total = items.reduce((s, it) => s + (it.kind === "file" ? t.getNode(it.id)!.content!.sizeBytes : 0), 0);
+    const where = new Map<NodeId, NodeId>();
+    let safe = u;
+    let done = 0;
+    let files = 0;
+    for (const it of items) {
+      o.signal?.throwIfAborted();
+      const parent = it.parent === null ? parentId : where.get(it.parent)!;
+      if (it.kind === "folder") {
+        const id = newId();
+        const r = await client.commitOp({ type: "create", kind: "folder", nodeId: id, parentId: parent, name: it.name, ...client.spaceField(parent) }, "move out of the Safe");
+        if (r.outcome !== "applied") throw new Error(`the folder was not added (${r.outcome})`);
+        where.set(it.id, id);
+        continue;
+      }
+      const v = t.getNode(it.id)!.content!;
+      const taken = await client.takenAt(v.manifestRef).catch(() => null);
+      await client.upload(versionSource(client, v), it.name, parent, {
+        signal: o.signal,
+        ...(taken ? { takenAt: taken } : {}),
+        onProgress: (b) => o.onProgress?.(done + b, total, it.name),
+      });
+      safe = (await this.commit(safe, { type: "group", ops: [{ type: "trash", nodeId: it.id }, { type: "purge", nodeId: it.id }] })).safe;
+      done += v.sizeBytes;
+      files++;
+    }
+    const topFolders = ids.filter((id) => t.getNode(id)?.kind === "folder");
+    if (topFolders.length) safe = (await this.commit(safe, { type: "group", ops: topFolders.flatMap((id) => [{ type: "trash" as const, nodeId: id }, { type: "purge" as const, nodeId: id }]) })).safe;
+    return { safe, files, bytes: done };
+  }
+
   mkdir(u: UnlockedSafe<SafeTreeState>, name: string, parentId: NodeId = "root") {
     return this.commit(u, { type: "create", kind: "folder", nodeId: newId(), parentId, name: name.normalize("NFC") });
   }
@@ -354,4 +481,19 @@ async function deletePieces(p: Extract<SafePieces, { kind: "webhooks" }>, ref: s
   }
   if (await remove(decodeManifestRef(ref).at)) n++;
   return n;
+}
+
+/** A stored version read as a source for a new upload (fragment by fragment, each checked). */
+function versionSource(client: DriveClient, v: { versionId: string; sizeBytes: number; manifestRef: string }): ByteSource {
+  const cache = new Map<string, Uint8Array>();
+  return {
+    size: v.sizeBytes,
+    read: async (offset, length) => {
+      if (length <= 0 || offset >= v.sizeBytes) return new Uint8Array(0);
+      const r = await readVersionRange(client, v, offset, Math.min(offset + length, v.sizeBytes) - 1, cache, 2);
+      // Fragments before the one read are not needed again (the upload reads in order).
+      for (const k of [...cache.keys()]) if (cache.size > 4) cache.delete(k);
+      return r.data;
+    },
+  };
 }
