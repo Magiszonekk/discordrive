@@ -162,6 +162,13 @@ a copy of the server, the account's Discord channels. All of them hold the accou
 - **What leaks**: that the account has a Safe, the padded size of its state (its power-of-two bucket),
   when it changes; with files in it, the size and number of their pieces on Discord and when they were
   sent. Whoever uses the account can **delete** the Safe's slot (not read it).
+- Files of the Safe: their pieces are stored like any file's (the account's webhooks, or the instance's pool),
+  the reference and the file key only in the Safe's state. When the Safe no longer uses a file (deleted for
+  good, replaced, a restored revision without it), its pieces are deleted after 30 days, as for the account:
+  through the instance, the Safe's client reports them (the instance cannot tell which uploads the Safe
+  uses; an upload the Safe never got to is let go an hour after it was stored); on the account's webhooks,
+  the Safe's client deletes the messages itself when the Safe is open. Until then whoever kept the file key
+  (an earlier copy of the state) can still read them.
 - Whoever learns the password **and** holds the account key (or the server row and the account key) opens
   it; a weak password falls to an offline guess by someone who has both.
 - **The Safe lives on the instance only.** It is not in the account's snapshots on Discord nor in the
