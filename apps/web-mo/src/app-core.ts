@@ -65,6 +65,13 @@ import {
   type UploadStages,
   type PreviewImage,
   type PreviewKind,
+  SafeStore,
+  SafeTree,
+  SafeBadPasswordError,
+  safeChildren,
+  safeTreeOf,
+  type SafePieces,
+  type SafeTreeState,
 } from "@ddv4/metadata-client";
 import { searchItems, type DescriptionRecord } from "@ddv4/metadata-client";
 import { AccountSettingsStore } from "@ddv4/metadata-client";
@@ -238,6 +245,17 @@ const MIME: Record<string, string> = {
 const mimeOf = (name: string) => MIME[name.split(".").pop()?.toLowerCase() ?? ""] ?? "application/octet-stream";
 
 const SNAPSHOT_TICK_MS = 15_000;
+/** The Safe closes by itself after this long without a use (its master is dropped from memory). */
+export const SAFE_IDLE_MS = 5 * 60_000;
+
+/** A row of the open Safe (names exist only while it is open, only in this worker). */
+export interface SafeRow {
+  id: string;
+  name: string;
+  kind: "file" | "folder";
+  size: number | null;
+}
+export type SafeState = { exists: false } | { exists: true; open: false } | { exists: true; open: true; closesAt: number };
 /** Automatic cleanup (Q4) in the main tab: first check shortly after opening, then hourly. */
 const CLEANUP_FIRST_MS = 60_000;
 const CLEANUP_EVERY_MS = 60 * 60_000;
@@ -278,6 +296,8 @@ export class AppCore {
   private http: HttpApi | null = null;
   private client: DriveClient | null = null;
   private store: IndexStore | null = null;
+  /** The open Safe: its master and state live only here (the worker), dropped on close / idle / sign-out. */
+  private safe: { tree: SafeTree; u: import("@ddv4/metadata-client").UnlockedSafe<SafeTreeState>; timer: ReturnType<typeof setTimeout> | null; closesAt: number } | null = null;
   private ctx: ModeCtx | null = null;
   private sub: { close(): void } | null = null;
   private uploads = new Map<string, AbortController>();
@@ -564,6 +584,7 @@ export class AppCore {
   /** The server refused this device: stop background work and tell the UI (the keys stay in this browser). */
   private lostAuth(why: AuthLost) {
     if (this.authLost) return;
+    this.safeClose();
     this.authLost = why;
     this.sub?.close();
     if (this.snapTimer) clearInterval(this.snapTimer);
@@ -2102,6 +2123,234 @@ export class AppCore {
     return this.commit(ops.length === 1 ? ops[0]! : { type: "group", ops }, "restore");
   }
 
+  // ── the Safe (a part of the account under its own password; see metadata-client/safe.ts, safe-tree.ts) ──
+
+  private safeTree(): SafeTree {
+    const a = this.acct!;
+    const pieces: SafePieces = mode.clientSnapshots
+      ? { kind: "webhooks", client: this.c() as unknown as Extract<SafePieces, { kind: "webhooks" }>["client"] }
+      : { kind: "instance", api: this.http! };
+    return new SafeTree(new SafeStore<SafeTreeState>(this.http!, this.key!, a.accountId), { id: a.deviceId, name: a.deviceName }, { pieces });
+  }
+
+  /** Keep it open SAFE_IDLE_MS from now (every use). */
+  private safeTouch() {
+    const s = this.safe;
+    if (!s) return;
+    if (s.timer) clearTimeout(s.timer);
+    s.closesAt = Date.now() + SAFE_IDLE_MS;
+    s.timer = setTimeout(() => {
+      this.safeClose();
+      this.onEvent({ type: "changed" });
+    }, SAFE_IDLE_MS);
+  }
+
+  private safeOpen(): NonNullable<AppCore["safe"]> {
+    if (!this.safe) throw new Error("safe_closed");
+    this.safeTouch();
+    return this.safe;
+  }
+
+  /** Whether the account has a Safe and whether it is open here (nothing about what is inside). */
+  async safeState(): Promise<SafeState> {
+    if (this.safe) return { exists: true, open: true, closesAt: this.safe.closesAt };
+    const exists = await new SafeStore(this.http!, this.key!, this.acct!.accountId).exists();
+    return exists ? { exists: true, open: false } : { exists: false };
+  }
+
+  /** A new Safe (the UI asked twice for the password and for "I understand: a forgotten password opens it for nobody"). */
+  async safeCreate(password: string): Promise<SafeState> {
+    if (typeof password !== "string" || password.length < 8) throw new Error("safe_password_short");
+    const tree = this.safeTree();
+    const u = await tree.create(password);
+    this.safe = { tree, u, timer: null, closesAt: 0 };
+    this.safeTouch();
+    return this.safeState();
+  }
+
+  /** Open with the password; a wrong one → "safe_bad_password". Lets go of what the Safe no longer uses (background). */
+  async safeUnlock(password: string): Promise<SafeState> {
+    const tree = this.safeTree();
+    try {
+      const u = await new SafeStore<SafeTreeState>(this.http!, this.key!, this.acct!.accountId).unlock(password);
+      this.safe = { tree, u, timer: null, closesAt: 0 };
+    } catch (e) {
+      if (e instanceof SafeBadPasswordError) throw new Error("safe_bad_password");
+      throw e;
+    }
+    this.safeTouch();
+    void this.safeCleanup();
+    return this.safeState();
+  }
+
+  /** Close: the master and every name leave memory. */
+  safeClose(): void {
+    if (this.safe?.timer) clearTimeout(this.safe.timer);
+    this.safe = null;
+  }
+
+  private async safeCleanup() {
+    const s = this.safe;
+    if (!s) return;
+    const r = await s.tree.cleanup(s.u).catch(() => null);
+    if (r && this.safe === s) s.u = r.safe;
+  }
+
+  /** Children of a folder of the open Safe ("root" = its top), folders first. */
+  safeList(parentId = "root"): SafeRow[] {
+    const s = this.safeOpen();
+    return safeChildren(s.u, parentId).map((n) => ({ id: n.id, name: n.name, kind: n.kind as "file" | "folder", size: n.content?.sizeBytes ?? null }));
+  }
+
+  /** The path of a Safe folder from its top (breadcrumbs). */
+  safePath(id: string): { id: string; name: string }[] {
+    const t = safeTreeOf(this.safeOpen().u);
+    const out: { id: string; name: string }[] = [];
+    for (let n = t.getNode(id); n && n.parentId !== null; n = t.getNode(n.parentId)) out.unshift({ id: n.id, name: n.name });
+    return out;
+  }
+
+  private async safeDo<T extends { safe: import("@ddv4/metadata-client").UnlockedSafe<SafeTreeState> }>(f: (s: NonNullable<AppCore["safe"]>) => Promise<T>): Promise<T> {
+    const s = this.safeOpen();
+    const r = await f(s);
+    if (this.safe === s) s.u = r.safe;
+    this.onEvent({ type: "changed" });
+    return r;
+  }
+
+  async safeMkdir(name: string, parentId = "root"): Promise<string> {
+    const nfc = normalizeName(name.trim());
+    const bad = validateName(nfc);
+    if (bad) throw new Error(`invalid_name: ${bad}`);
+    return (await this.safeDo((s) => s.tree.mkdir(s.u, nfc, parentId))).nodeId;
+  }
+
+  async safeRename(id: string, name: string): Promise<void> {
+    const nfc = normalizeName(name.trim());
+    const bad = validateName(nfc);
+    if (bad) throw new Error(`invalid_name: ${bad}`);
+    await this.safeDo((s) => s.tree.rename(s.u, id, nfc));
+  }
+
+  /** Delete for good (the Safe has no trash of its own in the UI: its pieces go after 30 days). */
+  async safeDelete(ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    await this.safeDo((s) => s.tree.commit(s.u, { type: "group", ops: ids.flatMap((nodeId) => [{ type: "trash" as const, nodeId }, { type: "purge" as const, nodeId }]) }));
+  }
+
+  async safeUpload(file: Blob, name: string, parentId = "root", token = ""): Promise<{ nodeId: string }> {
+    const ac = new AbortController();
+    if (token) this.uploads.set(token, ac);
+    let last = 0;
+    try {
+      const taken = (file as File).lastModified || undefined;
+      const r = await this.safeDo((s) =>
+        s.tree.upload(s.u, this.c(), blobSource(file), name, parentId, {
+          signal: ac.signal,
+          takenAt: taken,
+          onProgress: (done, total, stages) => {
+            this.safeTouch();
+            const t = Date.now();
+            if (done > 0 && done < total && t - last < 100) return;
+            last = t;
+            this.onEvent({ type: "upload-progress", token, done, total, stages });
+          },
+        }),
+      );
+      return { nodeId: r.nodeId };
+    } finally {
+      this.uploads.delete(token);
+    }
+  }
+
+  /** Desktop: a file from disk into the Safe (the window cannot hand a Blob to the agent). */
+  async safeUploadPath(path: string, parentId = "root", token = ""): Promise<{ nodeId: string }> {
+    if (typeof path !== "string" || !path) throw new Error("bad arguments");
+    const src = await this.disk().openSource(path);
+    const ac = new AbortController();
+    if (token) this.uploads.set(token, ac);
+    try {
+      const r = await this.safeDo((s) =>
+        s.tree.upload(s.u, this.c(), src, src.name, parentId, {
+          signal: ac.signal,
+          takenAt: Math.floor(src.mtimeMs) || undefined,
+          onProgress: (done, total, stages) => (this.safeTouch(), this.onEvent({ type: "upload-progress", token, done, total, stages, name: src.name })),
+        }),
+      );
+      return { nodeId: r.nodeId };
+    } finally {
+      this.uploads.delete(token);
+      await src.close();
+    }
+  }
+
+  async safeDownload(id: string, token = ""): Promise<Blob> {
+    const s = this.safeOpen();
+    const parts: Uint8Array[] = [];
+    const ac = new AbortController();
+    if (token) this.downloads.set(token, ac);
+    let last = 0;
+    try {
+      await s.tree.download(s.u, this.c(), id, { write: async (d) => void parts.push(new Uint8Array(d)) }, {
+        signal: ac.signal,
+        onProgress: (done, total) => {
+          this.safeTouch();
+          const t = Date.now();
+          if (done > 0 && done < total && t - last < 100) return;
+          last = t;
+          this.onEvent({ type: "download-progress", token, done, total });
+        },
+      });
+    } finally {
+      this.downloads.delete(token);
+    }
+    const n = safeTreeOf(s.u).getNode(id);
+    return new Blob(parts as BlobPart[], { type: n ? mimeOf(n.name) : "" });
+  }
+
+  /** How many bytes a move would send again (the UI says so before it starts). */
+  safeMoveSize(ids: string[], into: boolean): number {
+    let bytes = 0;
+    const t = into ? this.c().store : safeTreeOf(this.safeOpen().u);
+    const walk = (id: string) => {
+      const n = t.getNode(id);
+      if (!n || n.trashed) return;
+      if (n.kind === "file") bytes += n.content?.sizeBytes ?? 0;
+      else for (const c of t.childIds(id)) walk(c);
+    };
+    ids.forEach(walk);
+    return bytes;
+  }
+
+  /** Files / folders of the account into the Safe (sent again under new keys; the account's copies deleted for good). */
+  async safeMoveIn(ids: string[], safeParentId = "root", token = ""): Promise<{ files: number; bytes: number }> {
+    const ac = new AbortController();
+    if (token) this.uploads.set(token, ac);
+    try {
+      const r = await this.safeDo((s) => s.tree.moveIn(s.u, this.c(), ids, safeParentId, { signal: ac.signal, onProgress: (done, total, file) => (this.safeTouch(), this.onEvent({ type: "upload-progress", token, done, total, name: file })) }));
+      this.version++;
+      void this.snapshotSoon();
+      if (!mode.clientSnapshots) void this.gc?.run(false).catch(() => {});
+      return { files: r.files, bytes: r.bytes };
+    } finally {
+      this.uploads.delete(token);
+    }
+  }
+
+  /** Out of the Safe into a folder of the Drive or the Gallery (sent again; the Safe's copies let go). */
+  async safeMoveOut(ids: string[], parentId: string, token = ""): Promise<{ files: number; bytes: number }> {
+    const ac = new AbortController();
+    if (token) this.uploads.set(token, ac);
+    try {
+      const r = await this.safeDo((s) => s.tree.moveOut(s.u, this.c(), ids, parentId, { signal: ac.signal, onProgress: (done, total, file) => (this.safeTouch(), this.onEvent({ type: "upload-progress", token, done, total, name: file })) }));
+      this.version++;
+      void this.snapshotSoon();
+      return { files: r.files, bytes: r.bytes };
+    } finally {
+      this.uploads.delete(token);
+    }
+  }
+
   /** Delete for good (Q3: what another device changed unseen stays in the trash, 30 days again). */
   async purge(nodeIds: string[]): Promise<OpOutcome> {
     if (!nodeIds.length) return { outcome: "noop", notices: [] };
@@ -2466,6 +2715,7 @@ export class AppCore {
   }
 
   close() {
+    this.safeClose();
     void this.tlogStore?.stop();
     this.sub?.close();
     if (this.snapTimer) clearInterval(this.snapTimer);

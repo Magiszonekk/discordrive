@@ -424,8 +424,10 @@ export class SafeTree {
     return { safe, files, bytes: done };
   }
 
-  mkdir(u: UnlockedSafe<SafeTreeState>, name: string, parentId: NodeId = "root") {
-    return this.commit(u, { type: "create", kind: "folder", nodeId: newId(), parentId, name: name.normalize("NFC") });
+  /** A new folder; `nodeId` is its ID (also when a rule put it elsewhere or renamed it). */
+  async mkdir(u: UnlockedSafe<SafeTreeState>, name: string, parentId: NodeId = "root"): Promise<{ safe: UnlockedSafe<SafeTreeState>; result: ApplyResult; nodeId: NodeId }> {
+    const nodeId = newId();
+    return { ...(await this.commit(u, { type: "create", kind: "folder", nodeId, parentId, name: name.normalize("NFC") })), nodeId };
   }
   rename(u: UnlockedSafe<SafeTreeState>, nodeId: NodeId, name: string) {
     return this.commit(u, { type: "rename", nodeId, name: name.normalize("NFC") });

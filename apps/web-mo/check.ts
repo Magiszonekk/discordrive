@@ -207,13 +207,16 @@ async function pasteInto(p: Page, sel: string, text: string) {
 /** Click a sidebar link (opens the drawer first on a phone). */
 type Tab = "channels" | "account" | "storage" | "network" | "appearance" | "app";
 /** Through the menu; for Settings then the tab (clicked, as a user does). */
-async function nav(p: Page, name: "files" | "trash" | "devices" | "settings", tab?: Tab) {
+async function nav(p: Page, name: "files" | "trash" | "devices" | "settings" | "safe", tab?: Tab) {
   if (await p.isVisible("[data-ddn-ui=nav-open]")) {
     await p.click("[data-ddn-ui=nav-open]");
     await p.waitForSelector("[data-ddn-ui=signed-in-shell][data-drawer=open]");
   }
   await p.click(`a[data-nav=${name}]`);
-  await p.waitForSelector(`[data-page=${name}]:not([hidden])`);
+  await p.waitForSelector(`[data-page=${name}]:not([hidden])`).catch(async (e) => {
+    const where = await p.evaluate(() => ({ path: location.pathname, shown: [...document.querySelectorAll<HTMLElement>("[data-page]")].filter((x) => !x.hidden).map((x) => x.dataset.page), toasts: [...document.querySelectorAll(".toast")].map((x) => x.textContent) }));
+    throw new Error(`nav ${name}: ${JSON.stringify(where)}; ${e}`);
+  });
   if (name === "settings") {
     await p.waitForFunction(() => /^\/settings\/[a-z]+$/.test(location.pathname));
     if (tab) {
@@ -1962,6 +1965,86 @@ try {
   } else ch.skipped = "no extra webhook";
   r.channels = ch;
 
+  // 10c2. the Safe: create (password twice + "I understand"), a file and a folder in it, close (no name left in the
+  // page), a wrong password, unlock, "Move to the Safe" from the Drive (the Drive loses the file), download, out again.
+  step("safe");
+  {
+    const sf: Record<string, unknown> = {};
+    const PW = "kot ma ale i psa 2026";
+    await nav(p, "safe");
+    sf.newShown = await p.isVisible("[data-ddn=safe-new]");
+    await p.fill("[data-ddn=safe-new-pw]", PW);
+    await p.fill("[data-ddn=safe-new-pw2]", PW);
+    await p.click("[data-ddn=safe-create]");
+    sf.ackRequired = await p.waitForSelector(".toast", { timeout: 5000 }).then(() => p.isVisible("[data-ddn=safe-new]")).catch(() => false);
+    await p.check("[data-ddn=safe-new-ack]");
+    await p.click("[data-ddn=safe-create]");
+    await p.waitForSelector("[data-ddn=safe-open]:not([hidden])", { timeout: 60_000 }).catch(async (e) => {
+      throw new Error(`safe: not open after create; toasts: ${JSON.stringify(await p.$$eval(".toast", (els) => els.map((x) => x.textContent)))}; ${e}`);
+    });
+    sf.emptyShown = await p.isVisible("[data-ddn=safe-empty]");
+    const secret = new Uint8Array(70_000).map((_, i) => (i * 13) % 251);
+    await p.setInputFiles("[data-ddn=safe-file]", { name: "tajne-skany.pdf", mimeType: "application/pdf", buffer: Buffer.from(secret) });
+    await p.waitForSelector("[data-ddn=safe-row]", { timeout: 60_000 });
+    sf.rows = await p.$$eval("[data-ddn=safe-row]", (els) => els.map((e) => e.textContent?.trim() ?? ""));
+    // Download from the Safe: the same bytes.
+    const [dl] = await Promise.all([p.waitForEvent("download"), p.click("[data-ddn=safe-row] [data-ddn=safe-download]")]);
+    const got = readFileSync(await dl.path());
+    sf.downloadSame = Buffer.compare(got, Buffer.from(secret)) === 0;
+    // Close: the page keeps no name of the Safe.
+    await p.click("[data-ddn=safe-close]");
+    await p.waitForSelector("[data-ddn=safe-locked]:not([hidden])");
+    sf.closedNoNames = !(await p.content()).includes("tajne-skany");
+    if (!sf.closedNoNames) sf.closedWhere = await p.evaluate(() => [...document.querySelectorAll("body *")].filter((e) => e.children.length === 0 && e.textContent?.includes("tajne-skany")).map((e) => e.outerHTML.slice(0, 200)));
+    // A wrong password: a clear message, still closed.
+    await p.fill("[data-ddn=safe-pw]", "zle haslo zle haslo");
+    await p.click("[data-ddn=safe-unlock]");
+    // The password check (Argon2) takes a moment: wait until the button is free again, then read the message.
+    await p.waitForSelector("[data-ddn=safe-unlock]:not([aria-busy=true])", { timeout: 60_000 });
+    sf.badText = await p.$$eval(".toast", (els) => els.map((x) => x.textContent ?? "").join(" | "));
+    sf.stillClosed = await p.isVisible("[data-ddn=safe-locked]");
+    await p.fill("[data-ddn=safe-pw]", PW);
+    await p.click("[data-ddn=safe-unlock]");
+    await p.waitForSelector("[data-ddn=safe-open]:not([hidden])", { timeout: 60_000 });
+    sf.backAfterUnlock = (await p.$$eval("[data-ddn=safe-row]", (els) => els.map((e) => e.textContent ?? ""))).some((x) => x.includes("tajne-skany"));
+    // "Move to the Safe" from the Drive (row menu): the cost is said first, then the Drive loses the file.
+    // A reload closes the Safe (its key lives only in memory).
+    await p.reload();
+    await p.waitForSelector("body[data-ready='1']");
+    await p.waitForSelector("[data-ddn=safe-locked]:not([hidden])");
+    sf.closedAfterReload = !(await p.content()).includes("tajne-skany");
+    await p.fill("[data-ddn=safe-pw]", PW);
+    await p.click("[data-ddn=safe-unlock]");
+    await p.waitForSelector("[data-ddn=safe-open]:not([hidden])", { timeout: 60_000 });
+    // In-app navigation (no reload) to a folder of the step's own.
+    const sfFolder = await p.evaluate(async () => (window as unknown as { ddnCore: { mkdir(n: string): Promise<string> } }).ddnCore.mkdir("Do sejfu"));
+    await p.evaluate((id) => {
+      history.pushState(null, "", `/folder/${id}`);
+      dispatchEvent(new PopStateEvent("popstate"));
+    }, sfFolder);
+    await p.waitForSelector("[data-page=files]:not([hidden])");
+    await p.setInputFiles("[data-ddn=file]", { name: "do-sejfu.txt", mimeType: "text/plain", buffer: Buffer.from("x".repeat(3000)) });
+    const row = p.locator("[data-ddn=row]", { hasText: "do-sejfu.txt" });
+    await row.waitFor({ timeout: 60_000 });
+    await row.click({ button: "right" });
+    await p.click("[data-ddn=menu-to-safe]");
+    await p.waitForSelector("[data-ddn=confirm-dialog][open]");
+    sf.costText = await p.textContent("[data-ddn-ui=cf-text]");
+    await p.click("[data-ddn=confirm-yes]");
+    await p.waitForFunction(() => ![...document.querySelectorAll("[data-ddn=row]")].some((r) => r.textContent?.includes("do-sejfu.txt")), null, { timeout: 60_000 });
+    sf.goneFromDrive = true;
+    await nav(p, "safe");
+    await p.waitForSelector("[data-ddn=safe-row]");
+    sf.inSafe = (await p.$$eval("[data-ddn=safe-row]", (els) => els.map((e) => e.textContent ?? ""))).some((x) => x.includes("do-sejfu.txt"));
+    // The server never sees a name of the Safe (the slot is sealed; in plain too).
+    if (srv) sf.serverBlind = !JSON.stringify(srv.db.prepare("SELECT * FROM slots").all()).includes("tajne-skany");
+    else sf.serverBlind = true;
+    await shot(p, "34-safe");
+    await p.click("[data-ddn=safe-close]");
+    await p.waitForSelector("[data-ddn=safe-locked]:not([hidden])");
+    r.safe = sf;
+  }
+
   // 10d. a browser without Ed25519 in WebCrypto (Chromium before 137): every sign-up card says "too old"
   // with the versions instead of the raw "Algorithm: Unrecognized name", its buttons are off.
   step("old browser");
@@ -2320,6 +2403,14 @@ try {
         a.codeShown === true && a.codeNotInList === true && a.revokedRefused === 403 &&
         /blocked|zablokował/.test(String(a.blockedText)) && a.blockedScreenMs < 15_000 && a.backAfterUnblock === true &&
         ["account.admin_on", "invite.create", "invite.revoke", "account.block", "account.unblock"].every((x) => log.includes(x)) && a.phoneNoHScroll === true
+      );
+    })(),
+    safe: (() => {
+      const o = r.safe as Record<string, unknown> | undefined;
+      return (
+        !!o && o.newShown === true && o.ackRequired === true && o.emptyShown === true && (o.rows as string[]).some((x) => x.includes("tajne-skany.pdf")) && o.downloadSame === true &&
+        o.closedNoNames === true && o.closedAfterReload === true && /wrong safe password|złe hasło sejfu/i.test(String(o.badText)) && o.stillClosed === true && o.backAfterUnlock === true &&
+        /new key|nowym kluczem/i.test(String(o.costText)) && o.goneFromDrive === true && o.inSafe === true && o.serverBlind === true
       );
     })(),
     noPageErrors: errors.length === 0,
