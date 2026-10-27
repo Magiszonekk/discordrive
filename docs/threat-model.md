@@ -155,7 +155,10 @@ a copy of the server, the account's Discord channels. All of them hold the accou
 - Both layers are bound to the slot's revision; a client refuses a revision older than one it saw.
 - **A forgotten password opens the Safe for nobody**, the owner included. The optional Safe kit
   (`ddn-safe1:…`) holds the master in text: whoever has it opens the Safe without the password.
-- A password change re-seals the master only.
+- A password change re-seals the master only, and drops the instance's earlier revisions of the slot in the
+  same write (they hold the master under the old password): from then on the old password opens nothing.
+  Whoever learned the old password **and** opened the Safe before the change (or kept a copy of the slot
+  from then) knows the master, which a password change does not replace; the files' keys are in the state.
 - **What leaks**: that the account has a Safe, the padded size of its state (its power-of-two bucket),
   when it changes; with files in it, the size and number of their pieces on Discord and when they were
   sent. Whoever uses the account can **delete** the Safe's slot (not read it).

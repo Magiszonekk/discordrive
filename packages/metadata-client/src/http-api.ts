@@ -254,8 +254,8 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     const r = await this.call<{ revision: number; blob: string | null }>("GET", `/v1/slots/${name}`);
     return { revision: r.body.revision, blob: r.body.blob };
   }
-  async putSlot(name: string, expectedRevision: number, revision: number, blob: string): Promise<{ revision: number; blob: string | null } | null> {
-    const r = await this.call<{ status: "ok" } | { status: "conflict"; current: { revision: number; blob: string } | null }>("PUT", `/v1/slots/${name}`, { expectedRevision, revision, blob }, [409]);
+  async putSlot(name: string, expectedRevision: number, revision: number, blob: string, opts: { dropHistory?: boolean } = {}): Promise<{ revision: number; blob: string | null } | null> {
+    const r = await this.call<{ status: "ok" } | { status: "conflict"; current: { revision: number; blob: string } | null }>("PUT", `/v1/slots/${name}`, { expectedRevision, revision, blob, ...(opts.dropHistory ? { dropHistory: true } : {}) }, [409]);
     if (r.body.status === "ok") return null;
     return r.body.current ?? { revision: 0, blob: null };
   }

@@ -193,8 +193,8 @@ export async function openSafeState<S>(master: Uint8Array, accountId: string, re
 export interface SlotApi {
   /** revision 0 + blob null = none. */
   getSlot(name: string): Promise<{ revision: number; blob: string | null }>;
-  /** null = stored; else the current one that won. */
-  putSlot(name: string, expectedRevision: number, revision: number, blob: string): Promise<{ revision: number; blob: string | null } | null>;
+  /** null = stored; else the current one that won. `dropHistory`: forget the earlier revisions (a new password). */
+  putSlot(name: string, expectedRevision: number, revision: number, blob: string, opts?: { dropHistory?: boolean }): Promise<{ revision: number; blob: string | null } | null>;
   /** Earlier revisions the instance keeps (newest first), and one of them. */
   slotHistory?(name: string): Promise<{ revision: number; replacedAt: number; chars: number }[]>;
   slotRevision?(name: string, revision: number): Promise<{ revision: number; blob: string }>;
@@ -309,13 +309,17 @@ export class SafeStore<S = unknown> {
     throw new Error("Safe: too many concurrent edits");
   }
 
-  /** A new password: the master re-sealed (the files and the state stay as they are). */
+  /**
+   * A new password: the master re-sealed (the files and the state stay as they are), and the instance's earlier
+   * revisions dropped in the same write: they hold the master under the old password, which must stop working
+   * (someone who learned the old password and had already opened the Safe knows the master: see the threat model).
+   */
   async changePassword(u: UnlockedSafe<S>, newPassword: string, params: Pick<Argon2Params, "memoryKiB" | "iterations" | "parallelism"> = SAFE_ARGON2): Promise<UnlockedSafe<S>> {
     const header = await newSafeHeader(u.master, newPassword, this.accountId, params);
     for (let cur = u, i = 0; i < 5; i++) {
       const rev = cur.revision + 1;
       const blob = await sealSafeSlot({ key: this.key, accountId: this.accountId, revision: rev, header, master: cur.master, state: cur.state });
-      const won = await this.api.putSlot(SAFE_SLOT, cur.revision, rev, blob);
+      const won = await this.api.putSlot(SAFE_SLOT, cur.revision, rev, blob, { dropHistory: true });
       if (!won) {
         this.seenRevision = rev;
         return { master: cur.master, revision: rev, header, state: cur.state };

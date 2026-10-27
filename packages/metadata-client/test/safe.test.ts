@@ -11,6 +11,7 @@ import {
   SAFE_PAD_MIN,
   accountKeyFromB64,
   openSafeHeader,
+  openSafeMaster,
   padState,
   parseSafeKit,
   safeKitText,
@@ -142,6 +143,33 @@ describe("the Safe", () => {
     const db = (srv as unknown as { db: { prepare(q: string): { get(...a: unknown[]): { n: number } } } }).db;
     expect(db.prepare("SELECT count(*) AS n FROM slot_history WHERE account_id = ?").get(a.accountId).n).toBe(3);
   }, 60_000);
+
+  it("after a password change the old password opens the Safe by no way (unlock, history, restore)", async () => {
+    const { url } = await startServer();
+    const a = await newAccount(url);
+    const b = await addDevice(url, a);
+    const sa = new SafeStore<State>(a.api, a.key, a.accountId);
+    let u = await sa.create("old password leaked", state(), FAST);
+    u = await sa.update(u, (s) => ({ files: [...s.files, { name: "x.pdf", thumb: "t" }] }));
+    expect((await sa.history()).length).toBe(1);
+    u = await sa.changePassword(u, "new password 2026!", FAST);
+    u = await sa.update(u, (s) => ({ files: [...s.files, { name: "added-after-change.pdf", thumb: "t2" }] }));
+    // The other device of the account knows only the old password.
+    const sb = new SafeStore<State>(b.api, a.key, a.accountId);
+    await expect(sb.unlock("old password leaked")).rejects.toBeInstanceOf(SafeBadPasswordError);
+    // No earlier revision from before the change is left to try the old password on.
+    const hist = await sb.history();
+    expect(hist.every((h) => h.revision > 2)).toBe(true);
+    for (const h of hist) {
+      const old = await b.api.slotRevision("safe", h.revision);
+      const { header } = await openSafeHeader(a.key, a.accountId, old.revision, old.blob);
+      await expect(openSafeMaster(header, "old password leaked", a.accountId)).rejects.toBeInstanceOf(SafeBadPasswordError);
+    }
+    for (const r of [1, 2]) await expect(b.api.slotRevision("safe", r)).rejects.toThrow();
+    for (const h of hist) await expect(sb.restore(h.revision, { password: "old password leaked" })).rejects.toBeInstanceOf(SafeBadPasswordError);
+    // The new password works; the history keeps working after the change (revisions under the new password).
+    expect((await sb.unlock("new password 2026!")).state.files.map((f) => f.name)).toContain("added-after-change.pdf");
+  }, 120_000);
 
   it("padding: 64 KiB · 2^k buckets, round trip, too large refused", () => {
     expect(padState(new Uint8Array(10)).byteLength).toBe(SAFE_PAD_MIN);

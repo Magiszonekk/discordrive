@@ -390,10 +390,15 @@ export class DdnServer {
     return (this.db.prepare("SELECT revision, blob FROM slots WHERE account_id = ? AND name = ?").get(s.accountId, name) as { revision: number; blob: string } | undefined) ?? null;
   }
 
-  /** Compare-and-swap of a named slot (the Safe), like the vault; never deleted by a client (an empty Safe stays). */
+  /**
+   * Compare-and-swap of a named slot (the Safe), like the vault; never deleted by a client (an empty Safe stays).
+   * `dropHistory: true` (a new password) forgets the earlier revisions in the same transaction: they hold the
+   * master under the old password, which must stop opening the Safe.
+   */
   putSlot(s: Session, name: string, body: unknown): { status: "ok" } | { status: "conflict"; current: { revision: number; blob: string } | null } {
-    const b = body as { expectedRevision?: unknown; revision?: unknown; blob?: unknown };
+    const b = body as { expectedRevision?: unknown; revision?: unknown; blob?: unknown; dropHistory?: unknown };
     if (!Number.isInteger(b?.expectedRevision) || !Number.isInteger(b?.revision) || typeof b?.blob !== "string") throw new HttpError(400, "bad_slot");
+    if (b.dropHistory !== undefined && typeof b.dropHistory !== "boolean") throw new HttpError(400, "bad_slot");
     if ((b.blob as string).length > MAX_SLOT_B64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(b.blob as string)) throw new HttpError(400, "bad_slot_blob");
     const exp = b.expectedRevision as number;
     const rev = b.revision as number;
@@ -403,8 +408,9 @@ export class DdnServer {
       const cur = this.getSlot(s, name);
       if ((cur?.revision ?? 0) !== exp || rev !== exp + 1) out = { status: "conflict", current: cur };
       else {
-        // The replaced revision goes to the history (kept for a while, see SLOT_KEEP).
-        if (cur) {
+        if (b.dropHistory === true) this.db.prepare("DELETE FROM slot_history WHERE account_id = ? AND name = ?").run(s.accountId, name);
+        // The replaced revision goes to the history (kept for a while, see SLOT_KEEP); not after a new password.
+        else if (cur) {
           this.db.prepare("INSERT OR REPLACE INTO slot_history (account_id, name, revision, blob, replaced_at) VALUES (?, ?, ?, ?, ?)").run(s.accountId, name, cur.revision, cur.blob, this.now());
           this.db
             .prepare(
