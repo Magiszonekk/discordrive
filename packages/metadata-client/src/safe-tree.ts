@@ -29,6 +29,7 @@ import {
   type Operation,
 } from "@ddv4/sync-core";
 import { SafeStore, type UnlockedSafe } from "./safe.js";
+import type { ByteSink, ByteSource, DownloadOptions, DriveClient, UploadOptions } from "./drive-client.js";
 
 export interface SafeTreeState {
   v: 1;
@@ -100,6 +101,39 @@ export class SafeTree {
       return { v: 1, tree: takeSnapshot(t) };
     });
     return { safe, result: result! };
+  }
+
+  /**
+   * A file into the Safe: its pieces and manifest stored as any upload (the client's store: the account's
+   * webhooks or the instance), its reference (with the file key) only in the Safe's state, in one Safe entry
+   * (upload_begin + upload_commit + create). Nothing in the account's log.
+   */
+  async upload(u: UnlockedSafe<SafeTreeState>, client: DriveClient, src: ByteSource, name: string, parentId: NodeId = "root", opts: Omit<UploadOptions, "outsideLog" | "replace" | "resumeKey"> = {}): Promise<{ safe: UnlockedSafe<SafeTreeState>; nodeId: NodeId; result: ApplyResult }> {
+    let out: { safe: UnlockedSafe<SafeTreeState>; result: ApplyResult } | null = null;
+    const r = await client.upload(src, name, parentId, {
+      ...opts,
+      outsideLog: {
+        commit: async (version, nodeId, nfc) => {
+          out = await this.commit(u, {
+            type: "group",
+            ops: [
+              { type: "upload_begin", uploadId: version.uploadId },
+              { type: "upload_commit", uploadId: version.uploadId },
+              { type: "create", kind: "file", nodeId, parentId, name: nfc, content: version },
+            ],
+          });
+          if (out.result.outcome !== "applied") throw new Error(`Safe: the file was not added (${out.result.outcome})`);
+        },
+      },
+    });
+    return { safe: out!.safe, nodeId: r.nodeId, result: out!.result };
+  }
+
+  /** A file of the Safe, read with its reference from the Safe's state. */
+  async download(u: UnlockedSafe<SafeTreeState>, client: DriveClient, nodeId: NodeId, sink: ByteSink, opts: Omit<DownloadOptions, "content"> = {}) {
+    const n = safeTreeOf(u).getNode(nodeId);
+    if (!n || n.kind !== "file" || !n.content) throw new Error("not a file of the Safe");
+    return client.download(nodeId, sink, { ...opts, content: { version: n.content, name: n.name } });
   }
 
   mkdir(u: UnlockedSafe<SafeTreeState>, name: string, parentId: NodeId = "root") {

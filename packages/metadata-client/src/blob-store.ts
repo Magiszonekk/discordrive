@@ -69,7 +69,7 @@ export interface BlobStore {
    */
   prefetch?(ps: Placement[], ctx?: { x?: string; first?: number }): Promise<void>;
   /** All blobs of the upload are stored; about to commit (the server stops treating it as abandoned). */
-  finalize?(uploadId: string): Promise<void>;
+  finalize?(uploadId: string, o?: { outsideLog?: boolean }): Promise<void>;
   /** The upload failed or was cancelled before finalize: drop its blobs (best effort). */
   abort?(uploadId: string): Promise<void>;
 }

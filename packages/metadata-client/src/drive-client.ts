@@ -263,10 +263,18 @@ export interface UploadOptions {
    * on the version the caller saw (a concurrent change becomes a conflict copy, rule 7).
    */
   replace?: { nodeId: NodeId; baseVersionId: string | null };
+  /**
+   * Outside the account's log (the Safe): no upload_begin / commit in the log, no resume journal; when the
+   * pieces and the manifest are stored, the instance is told to keep the upload (it is not in the log, so it
+   * must not be reaped as abandoned) and `commit(version)` stores the reference where the caller keeps it.
+   */
+  outsideLog?: { commit(version: ContentRef, nodeId: NodeId, name: string): Promise<void> };
 }
 
 export interface DownloadOptions {
   signal?: AbortSignal;
+  /** A version kept outside the account's tree (the Safe): read it instead of looking `nodeId` up. */
+  content?: { version: FileVersion | ContentRef; name: string };
   /** Plaintext bytes written to the sink so far. */
   onProgress?: (doneBytes: number, totalBytes: number) => void;
   /**
@@ -457,7 +465,7 @@ export class DriveClient {
     // Resume: the same upload ID, file key and node ID as the unfinished
     // upload, if it is still open in the index and its lease can be taken again; otherwise a fresh start.
     const rs = this.d.resume;
-    const rk = opts.resumeKey && rs ? resumeKeys(opts.resumeKey) : null;
+    const rk = opts.resumeKey && rs && !opts.outsideLog ? resumeKeys(opts.resumeKey) : null;
     let jr: UploadJournal | null = null;
     const prevFrags = new Map<number, UploadJournalFrag>();
     const forget = async () => {
@@ -507,7 +515,7 @@ export class DriveClient {
     };
     let committed = false;
     try {
-      if (!jr) await this.commitOp({ type: "upload_begin", uploadId }, "upload_begin");
+      if (!jr && !opts.outsideLog) await this.commitOp({ type: "upload_begin", uploadId }, "upload_begin");
 
       const key = jr ? await importFileKey(jr.key) : await newFileKey();
       const count = Math.max(1, Math.ceil(src.size / this.chunkSize));
@@ -658,8 +666,14 @@ export class DriveClient {
       throwIfAborted(signal);
       await renew();
       const tf = log ? nowMs() : 0;
-      await this.blobs.finalize?.(uploadId);
+      await this.blobs.finalize?.(uploadId, opts.outsideLog ? { outsideLog: true } : undefined);
       committed = true;
+      if (opts.outsideLog) {
+        await opts.outsideLog.commit(version, nodeId, nfc);
+        log?.emit("commit", { dir: "up", x: uploadId, dur: ms(tf) });
+        endLog(true);
+        return { nodeId, uploadId, version, chunks: count, posts: stats.posts, resumed };
+      }
       await this.commitOp(
         {
           type: "group",
@@ -841,9 +855,9 @@ export class DriveClient {
   async download(nodeId: NodeId, sink: ByteSink, signalOrOpts?: AbortSignal | DownloadOptions): Promise<FileVersion> {
     const opts: DownloadOptions = signalOrOpts instanceof AbortSignal ? { signal: signalOrOpts } : (signalOrOpts ?? {});
     const signal = opts.signal;
-    const node = this.store.getNode(nodeId);
-    if (!node || node.kind !== "file" || !node.content) throw new Error("not a file");
-    const v = node.content;
+    const node = opts.content ? { name: opts.content.name, content: opts.content.version } : this.store.getNode(nodeId);
+    if (!node || ("kind" in node && node.kind !== "file") || !node.content) throw new Error("not a file");
+    const v = node.content as FileVersion;
     const log = this.tlog;
     const x = v.uploadId;
     const t0 = nowMs();

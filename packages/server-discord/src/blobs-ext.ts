@@ -14,6 +14,8 @@
 //                                     (name, size, placement); deleted and moved with the upload
 //   GET    /v1/uploads/<U>            state + stored blob indexes (resume after a restart)
 //   POST   /v1/uploads/<U>/final      all blobs stored, commit follows: never cleaned as abandoned
+//                                     ({ outsideLog: true }: the commit goes to the Safe, not the log: kept
+//                                     as committed now; released later like any upload)
 //   DELETE /v1/uploads/<U>            cancel: blobs deleted, U refused from now on (tombstone)
 //   POST   /v1/uploads/released       client reports released uploads (purged/superseded
 //                                     versions, from its index): deleted 30 days later
@@ -494,13 +496,15 @@ export class BlobsExtension implements ServerExtension {
     }
   }
 
-  private finalize(r: ExtRequest, u: string): void {
+  private finalize(r: ExtRequest, u: string, body: unknown): void {
     const s = r.session();
     this.requireLease(s.accountId, s.deviceId, u);
     const up = this.upload(s.accountId, u);
     if (!up) throw new HttpError(404, "no_such_upload");
     if (up.state !== "open" && up.state !== "final") throw new HttpError(410, "upload_gone");
-    this.db.prepare("UPDATE s_uploads SET state = 'final', final_at = ?, active_at = ? WHERE account_id = ? AND upload_id = ?").run(this.now, this.now, s.accountId, u);
+    // The Safe's uploads are committed in the Safe (sealed, never in the log): kept as committed from here.
+    const outside = (body as { outsideLog?: unknown } | null)?.outsideLog === true;
+    this.db.prepare(`UPDATE s_uploads SET state = '${outside ? "committed" : "final"}', final_at = ?, active_at = ? WHERE account_id = ? AND upload_id = ?`).run(this.now, this.now, s.accountId, u);
     r.send(200, { ok: true });
   }
 
@@ -708,7 +712,7 @@ export class BlobsExtension implements ServerExtension {
     const up = /^\/v1\/uploads\/([A-Za-z0-9_-]{8,64})(\/final)?$/.exec(path);
     if (up) {
       const s = r.session();
-      if (up[2] && method === "POST") return (this.finalize(r, up[1]!), true);
+      if (up[2] && method === "POST") return (this.finalize(r, up[1]!, await r.json().catch(() => null)), true);
       if (!up[2] && method === "DELETE") return (await this.cancel(r, up[1]!), true);
       if (!up[2] && method === "GET") {
         const st = this.upload(s.accountId, up[1]!);

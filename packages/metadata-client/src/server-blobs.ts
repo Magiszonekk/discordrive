@@ -180,8 +180,9 @@ export class ServerBlobStore implements BlobStore {
     }
   }
 
-  async finalize(uploadId: string): Promise<void> {
-    await this.api.json("POST", `/v1/uploads/${uploadId}/final`, {});
+  async finalize(uploadId: string, o?: { outsideLog?: boolean }): Promise<void> {
+    // outsideLog (the Safe): the commit never reaches the log, so the instance keeps it as committed now.
+    await this.api.json("POST", `/v1/uploads/${uploadId}/final`, o?.outsideLog ? { outsideLog: true } : {});
   }
 
   async abort(uploadId: string): Promise<void> {
