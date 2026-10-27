@@ -254,6 +254,11 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     const r = await this.call<{ revision: number; blob: string | null }>("GET", `/v1/slots/${name}`);
     return { revision: r.body.revision, blob: r.body.blob };
   }
+  /** The slot's revision without its blob (an instance from before `meta` sends the blob too: ignored). */
+  async slotMeta(name: string): Promise<{ revision: number }> {
+    const r = await this.call<{ revision: number }>("GET", `/v1/slots/${name}?meta=1`);
+    return { revision: r.body.revision };
+  }
   async putSlot(name: string, expectedRevision: number, revision: number, blob: string, opts: { dropHistory?: boolean } = {}): Promise<{ revision: number; blob: string | null } | null> {
     const r = await this.call<{ status: "ok" } | { status: "conflict"; current: { revision: number; blob: string } | null }>("PUT", `/v1/slots/${name}`, { expectedRevision, revision, blob, ...(opts.dropHistory ? { dropHistory: true } : {}) }, [409]);
     if (r.body.status === "ok") return null;
@@ -262,6 +267,11 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
 
   async slotHistory(name: string): Promise<{ revision: number; replacedAt: number; chars: number }[]> {
     return (await this.call<{ revisions: { revision: number; replacedAt: number; chars: number }[] }>("GET", `/v1/slots/${name}/history`)).body.revisions;
+  }
+  /** Put an earlier revision back into the slot's history (below the slot only); true = added. */
+  async putSlotHistory(name: string, revision: number, blob: string, replacedAt: number): Promise<boolean> {
+    const r = await this.call<{ status: string }>("PUT", `/v1/slots/${name}/history/${revision}`, { blob, replacedAt }, [409]);
+    return r.body.status === "ok";
   }
   async slotRevision(name: string, revision: number): Promise<{ revision: number; blob: string }> {
     return (await this.call<{ revision: number; blob: string }>("GET", `/v1/slots/${name}/history/${revision}`)).body;

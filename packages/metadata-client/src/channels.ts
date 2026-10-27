@@ -147,6 +147,7 @@ export class ChainIndex {
     this.store(st);
     for (const s of st.segs) add(s[2], "snapshots", s[4]);
     for (const b of pointerBases(p)) for (const part of b.parts) add(part.webhookId, "snapshots", part.size);
+    for (const c of p.safe?.copies ?? []) add(c.webhookId, "snapshots", c.size);
     return { what, bytes };
   }
 }

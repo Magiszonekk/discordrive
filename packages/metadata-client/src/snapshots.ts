@@ -105,6 +105,25 @@ export interface Pointer {
   backends?: BackendDescriptor[];
   /** Vault revision the `backends` copy came from (a newer copy is never replaced by an older one). */
   vaultRevision?: number;
+  /**
+   * Copies of the account's Safe slot (see „copies of the Safe” below). Optional: absent = no Safe or not
+   * copied yet; writers build the next pointer from the one they read, so one that does not know the field keeps it.
+   */
+  safe?: PointerSafe;
+}
+
+/** One copy of the Safe's slot on a backend: the slot's blob at `revision`, sealed with the snapshot key. */
+export interface SafeCopyRef extends ObjRef {
+  revision: number;
+  /** Tag of the blob (its SHA-256, 16 hex): the same slot is not copied twice. */
+  h: string;
+  /** When it was copied (retention). */
+  copiedAt: number;
+}
+
+export interface PointerSafe {
+  /** Newest first: the first is the slot as it was last copied, the others its earlier revisions. */
+  copies: SafeCopyRef[];
 }
 
 export interface PointerLocation {
@@ -134,6 +153,7 @@ const AAD = {
   pointer: (acct: string) => `ddn-pointer-v1|${acct}`,
   segment: (acct: string, from: number, to: number) => `ddn-segment-v1|${acct}|${from}|${to}`,
   base: (acct: string, headSeq: number, i: number, n: number) => `ddn-base-v1|${acct}|${headSeq}|${i}|${n}`,
+  safe: (acct: string, revision: number) => `ddn-safe-copy-v1|${acct}|${revision}`,
 };
 
 async function sealObj(key: AccountKey, value: unknown, aad: string): Promise<Uint8Array> {
@@ -165,12 +185,21 @@ export const toPlacement = (r: ObjRef): Placement =>
     messageId: r.messageId,
     attachmentId: r.attachmentId,
   };
-const toRef = (p: Placement, size: number): ObjRef =>
+export const toRef = (p: Placement, size: number): ObjRef =>
   isDiscordPlacement(p) ? { webhookId: p.locationId, messageId: p.messageId, attachmentId: p.attachmentId, size } : { webhookId: p.locationId, messageId: "", attachmentId: "", size, at: { ...(p as OtherPlacement) } };
 
 /** Same backends (kind, ID, credentials) in the same order: no pointer rewrite needed. */
 export function sameBackends(a: BackendDescriptor[] | undefined, b: BackendDescriptor[] | undefined): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/**
+ * The Safe's copies change only through updatePointer (safe-copy.ts); every other pointer write keeps them as
+ * they are now (a writer holding an older read, or an older client without the field, never undoes them).
+ */
+function keepSafe(cur: Pointer, next: Pointer): Pointer {
+  const { safe: _drop, ...rest } = next;
+  return cur.safe ? { ...rest, safe: cur.safe } : rest;
 }
 
 export function emptyPointer(): Pointer {
@@ -215,6 +244,7 @@ export async function writePointer(
   // The backend list: a copy from a newer vault revision is never replaced by an older one (another device
   // saw the vault later), nor dropped by a writer that has none.
   if ((cur.vaultRevision ?? -1) > (next.vaultRevision ?? -1) || (cur.backends && !next.backends)) next = { ...next, backends: cur.backends, vaultRevision: cur.vaultRevision };
+  next = keepSafe(cur, next);
   if (mode === "same_coverage") {
     if (cur.toSeq !== next.toSeq || (cur.base?.headSeq ?? -1) !== (next.base?.headSeq ?? -1)) return "kept_newer";
   } else {
@@ -224,6 +254,27 @@ export async function writePointer(
   }
   await io.slot(loc.webhookId).write(loc.messageId, await sealObj(key, next, AAD.pointer(accountId)), "ddn-pointer.txt");
   return "written";
+}
+
+/**
+ * Read-modify-write of the pointer for bookkeeping outside the log (the Safe's copies): `build` gets the
+ * pointer as it is now and returns the next one (null = nothing to write). Coverage and bases come from
+ * that read, so a snapshot written before it is never undone.
+ */
+export async function updatePointer(io: BlobIO, key: AccountKey, accountId: string, loc: PointerLocation, build: (cur: Pointer) => Pointer | null): Promise<{ written: boolean; pointer: Pointer }> {
+  const cur = await readPointer(io, key, accountId, loc);
+  const next = build(cur);
+  if (!next) return { written: false, pointer: cur };
+  await io.slot(loc.webhookId).write(loc.messageId, await sealObj(key, next, AAD.pointer(accountId)), "ddn-pointer.txt");
+  return { written: true, pointer: next };
+}
+
+/** A copy of the Safe's slot (its blob, already sealed for the Safe) sealed once more for the chain. */
+export async function sealSafeCopy(key: AccountKey, accountId: string, revision: number, blob: Uint8Array): Promise<Uint8Array> {
+  return seal(await key.subkey("snapshot"), blob, AAD.safe(accountId, revision));
+}
+export async function openSafeCopy(key: AccountKey, accountId: string, revision: number, sealed: Uint8Array): Promise<Uint8Array> {
+  return unseal(await key.subkey("snapshot"), sealed, AAD.safe(accountId, revision), "Safe copy");
 }
 
 // --- policy
@@ -443,7 +494,8 @@ export async function chainObjects(io: BlobIO, key: AccountKey, accountId: strin
     ref = body.prev;
   }
   const bases = [p.base, ...(p.history ?? [])].filter((b): b is BaseRef => !!b);
-  return { segments, parts: bases.flatMap((b) => b.parts) };
+  // Copies of the Safe lie next to the chain: moving or draining the channel takes them along.
+  return { segments, parts: [...bases.flatMap((b) => b.parts), ...(p.safe?.copies ?? [])] };
 }
 
 /**
@@ -492,8 +544,16 @@ export async function rehomeChain(
     }
     return { ...b, parts: out, segmentAtBase: b.segmentAtBase ? (seg.get(k(b.segmentAtBase)) ?? b.segmentAtBase) : b.segmentAtBase };
   };
+  // Copies of the Safe: byte for byte too (their AAD names the account and the revision, not a place).
+  const safeCopies = [];
+  for (const c of p.safe?.copies ?? []) {
+    const raw = await io.fetch(toPlacement(c));
+    safeCopies.push({ ...c, ...toRef(await post(raw, "ddn-safe.txt"), raw.byteLength) });
+    old.push(c);
+  }
   const next: Pointer = {
     ...p,
+    ...(p.safe ? { safe: { copies: safeCopies } } : {}),
     base: await base(p.base),
     history: p.history ? await Promise.all(p.history.map((h) => base(h).then((x) => x!))) : p.history,
     lastSegment: p.lastSegment ? (seg.get(k(p.lastSegment)) ?? p.lastSegment) : null,

@@ -204,7 +204,7 @@ export class ChannelStore {
     const a = acct ? " AND account_id = ?" : "";
     const args = acct ? [webhookId, acct] : [webhookId];
     const ptr = (this.db.prepare(`SELECT account_id FROM s_snapshots WHERE webhook_id = ?${a}`).all(...args) as { account_id: string }[]).map((r) => r.account_id);
-    const seg = (this.db.prepare(`SELECT DISTINCT account_id FROM s_snap_objs WHERE webhook_id = ? AND kind = 'segment'${a}`).all(...args) as { account_id: string }[]).map((r) => r.account_id);
+    const seg = (this.db.prepare(`SELECT DISTINCT account_id FROM s_snap_objs WHERE webhook_id = ? AND kind IN ('segment', 'safe')${a}`).all(...args) as { account_id: string }[]).map((r) => r.account_id);
     const what: ("pointer" | "snapshots")[] = [];
     if (ptr.length) what.push("pointer");
     if (seg.length) what.push("snapshots");

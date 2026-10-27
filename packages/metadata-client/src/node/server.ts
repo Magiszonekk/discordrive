@@ -38,6 +38,8 @@ export const MAX_SETTINGS_B64 = 64 * 1024;
  */
 export const SLOT_NAMES = ["safe"] as const;
 export const MAX_SLOT_B64 = Math.ceil((1024 * 1024 + 4096) / 3) * 4;
+/** Highest slot revision (a jump forward is allowed, so a bound keeps the next increments exact). */
+export const MAX_SLOT_REVISION = 2 ** 40;
 /**
  * Earlier revisions of a slot the instance keeps (an overwritten or damaged Safe can be brought back by the
  * client, which re-seals the old one under a new revision): the last SLOT_KEEP, and every one younger than
@@ -89,6 +91,8 @@ export interface ServerExtension {
   accountGone?(accountId: string): void;
   /** Called after an entry is appended to an account's log. */
   onAppend?(accountId: string, entry: EncryptedEntry): void;
+  /** A named slot was written (the Safe: its copy on the instance's chain). `dropHistory`: a new password. */
+  onSlotWrite?(accountId: string, name: string, revision: number, dropHistory: boolean): void;
   /** May a device take/renew the lease of this upload? (e2ee: not after the server reaped it.) */
   leaseGate?(accountId: string, uploadId: string, deviceId: string): boolean;
   close?(): Promise<void>;
@@ -406,7 +410,10 @@ export class DdnServer {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const cur = this.getSlot(s, name);
-      if ((cur?.revision ?? 0) !== exp || rev !== exp + 1) out = { status: "conflict", current: cur };
+      // The revision only grows. It may jump (rev > exp + 1): a copy of the slot brought back from the account's
+      // snapshots after this database lost it keeps the revision it was sealed for.
+      if (rev > MAX_SLOT_REVISION) throw new HttpError(400, "bad_slot");
+      if ((cur?.revision ?? 0) !== exp || rev <= exp) out = { status: "conflict", current: cur };
       else {
         if (b.dropHistory === true) this.db.prepare("DELETE FROM slot_history WHERE account_id = ? AND name = ?").run(s.accountId, name);
         // The replaced revision goes to the history (kept for a while, see SLOT_KEEP); not after a new password.
@@ -429,7 +436,46 @@ export class DdnServer {
       this.db.exec("ROLLBACK");
       throw e;
     }
+    if (out.status === "ok") for (const x of this.extensions) x.onSlotWrite?.(s.accountId, name, rev, b.dropHistory === true);
     return out;
+  }
+
+  /** A slot of an account by its ID (extensions: the Safe's copy on the chain), null = none. */
+  slotOf(accountId: string, name: string): { revision: number; blob: string } | null {
+    return this.getSlot({ accountId } as Session, name);
+  }
+
+  /** One earlier revision's blob (null = not kept). */
+  slotRevisionOf(accountId: string, name: string, revision: number): string | null {
+    return (this.db.prepare("SELECT blob FROM slot_history WHERE account_id = ? AND name = ? AND revision = ?").get(accountId, name, revision) as { blob: string } | undefined)?.blob ?? null;
+  }
+
+  /** Revisions of a slot's history the instance keeps (extensions: which copies may go). */
+  slotHistoryOf(accountId: string, name: string): number[] {
+    return (this.db.prepare("SELECT revision FROM slot_history WHERE account_id = ? AND name = ? ORDER BY revision DESC").all(accountId, name) as { revision: number }[]).map((r) => r.revision);
+  }
+
+  /**
+   * Put back a slot the database lost (or has older) from a copy (extensions: the Safe from the chain), with
+   * earlier revisions as its history. Only when the copy is newer than what is here; true = written.
+   */
+  restoreSlot(accountId: string, name: string, slot: { revision: number; blob: string }, history: { revision: number; blob: string; replacedAt: number }[] = []): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const cur = this.slotOf(accountId, name);
+      if ((cur?.revision ?? 0) >= slot.revision) {
+        this.db.exec("ROLLBACK");
+        return false;
+      }
+      for (const h of history) if (h.revision < slot.revision && h.revision > (cur?.revision ?? 0)) this.db.prepare("INSERT OR IGNORE INTO slot_history (account_id, name, revision, blob, replaced_at) VALUES (?, ?, ?, ?, ?)").run(accountId, name, h.revision, h.blob, h.replacedAt);
+      if (cur) this.db.prepare("INSERT OR IGNORE INTO slot_history (account_id, name, revision, blob, replaced_at) VALUES (?, ?, ?, ?, ?)").run(accountId, name, cur.revision, cur.blob, this.now());
+      this.db.prepare("INSERT INTO slots (account_id, name, revision, blob) VALUES (?, ?, ?, ?) ON CONFLICT(account_id, name) DO UPDATE SET revision = excluded.revision, blob = excluded.blob").run(accountId, name, slot.revision, slot.blob);
+      this.db.exec("COMMIT");
+      return true;
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
   }
 
   getVault(s: Session, table: "vault" | "settings" = "vault"): { revision: number; blob: string } | null {
@@ -681,6 +727,18 @@ export class DdnServer {
     }
     // Earlier revisions of a slot: the list (revision, when it was replaced, size) and one of them.
     const hist = /^\/v1\/slots\/([a-z]{1,16})\/history(?:\/(\d{1,12}))?$/.exec(path);
+    // An earlier revision put back (the Safe's copies from the account's snapshots): only below the slot,
+    // only one the instance does not have. Whoever may write the slot may do this (no new power).
+    if (hist && hist[2] && method === "PUT") {
+      if (!(SLOT_NAMES as readonly string[]).includes(hist[1]!)) throw new HttpError(404, "no_such_slot");
+      const b = (await json()) as { blob?: unknown; replacedAt?: unknown };
+      if (typeof b?.blob !== "string" || b.blob.length > MAX_SLOT_B64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(b.blob) || !Number.isInteger(b.replacedAt)) throw new HttpError(400, "bad_slot");
+      const rev = Number(hist[2]);
+      const cur = this.getSlot(s, hist[1]!);
+      if (!cur || rev >= cur.revision) return send(res, 409, { status: "conflict" });
+      const r = this.db.prepare("INSERT OR IGNORE INTO slot_history (account_id, name, revision, blob, replaced_at) VALUES (?, ?, ?, ?, ?)").run(s.accountId, hist[1]!, rev, b.blob, Math.min(b.replacedAt as number, this.now()));
+      return send(res, 200, { status: r.changes ? "ok" : "exists" });
+    }
     if (hist && method === "GET") {
       if (!(SLOT_NAMES as readonly string[]).includes(hist[1]!)) throw new HttpError(404, "no_such_slot");
       if (hist[2]) {
@@ -694,7 +752,12 @@ export class DdnServer {
     const slot = /^\/v1\/slots\/([a-z]{1,16})$/.exec(path);
     if (slot) {
       if (!(SLOT_NAMES as readonly string[]).includes(slot[1]!)) throw new HttpError(404, "no_such_slot");
-      if (method === "GET") return send(res, 200, this.getSlot(s, slot[1]!) ?? { revision: 0, blob: null });
+      if (method === "GET") {
+        const cur = this.getSlot(s, slot[1]!);
+        // ?meta=1: the revision only (a client checking every few seconds whether the slot changed).
+        if (url.searchParams.get("meta") === "1") return send(res, 200, { revision: cur?.revision ?? 0, chars: cur?.blob.length ?? 0 });
+        return send(res, 200, cur ?? { revision: 0, blob: null });
+      }
       if (method === "PUT") {
         const r = this.putSlot(s, slot[1]!, await json());
         return send(res, r.status === "ok" ? 200 : 409, r);
