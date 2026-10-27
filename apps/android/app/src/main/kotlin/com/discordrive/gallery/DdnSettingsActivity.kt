@@ -67,6 +67,11 @@ class DdnSettingsActivity : AppCompatActivity() {
             ui.add(c, ui.button(R.string.ddn_free, icon = R.drawable.ic_cloud_done) { startActivity(Intent(this, DdnFreeUpActivity::class.java)) }, top = 8)
         }
 
+        // The Safe (its own password; the same Safe as in the browser).
+        ui.section(page, R.string.safe_title, getString(R.string.safe_settings_note)).also { c ->
+            ui.add(c, ui.button(R.string.safe_title, icon = R.drawable.ic_lock) { DdnSafeActivity.open(this) }, top = 6)
+        }
+
         // Private folders: the PIN (set, change, remove) and fingerprint — here, not the gallery's old screen.
         ui.section(page, R.string.private_title, getString(R.string.ddn_private_note)).also { c ->
             pinButton = ui.button(if (PrivateAlbums.hasPin(this)) R.string.private_change_pin else R.string.private_set_pin, icon = R.drawable.ic_lock) { setPinDialog() }

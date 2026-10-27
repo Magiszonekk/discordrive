@@ -86,6 +86,7 @@ open class DdnActivity : AppCompatActivity() {
         barIcon(R.drawable.ic_cobalt_search, R.string.ddn_search) { startActivity(Intent(this@DdnActivity, DdnSearchActivity::class.java)) }
         // Upload into the open place: the folder (Files), the album, the Gallery.
         barIcon(R.drawable.ic_cobalt_upload, R.string.ddn_upload) { pick.launch(arrayOf("*/*")) }
+        barIcon(R.drawable.ic_lock, R.string.safe_title) { DdnSafeActivity.open(this@DdnActivity) }
         barIcon(R.drawable.ic_cobalt_settings, R.string.ddn_settings) { startActivity(Intent(this@DdnActivity, DdnSettingsActivity::class.java)) }
         bar.setPaddingRelative(0, 0, dp(4), 0)
         root.addView(bar)
@@ -345,6 +346,7 @@ open class DdnActivity : AppCompatActivity() {
             if (inGallery) items += getString(R.string.ddn_to_drive) to { pickDriveFolder { to -> move(c, to, getString(R.string.ddn_moved_to_drive)) } }
             else if (c.isFolder || DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) items += getString(R.string.ddn_to_gallery) to { move(c, s.galleryRoot, getString(R.string.ddn_moved_to_gallery)) }
         }
+        items += getString(R.string.safe_to_safe) to { DdnSafeActivity.moveIn(this, listOf(c)) { show() } }
         items += getString(R.string.ddn_to_trash) to { askTrash(c) }
         return items
     }

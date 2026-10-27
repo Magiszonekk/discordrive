@@ -322,6 +322,23 @@ async function handle(q: Req): Promise<unknown> {
     const h = hookUrl(2, "1550000000000000303");
     return realHooks ? { ...h, channelId: (await inspectForVault(transport, h.url)).channelId } : h;
   }
+  // The Safe the phone made (metadata only: its pieces on the account's webhooks): the web opens it with the
+  // password and reads the file the phone moved in.
+  if (q.m === "safeWeb") {
+    const a = q.a as { password: string; file: string; sha: string };
+    const { SafeStore, SafeTree, safeChildren } = await import("@ddv4/metadata-client");
+    ts = await mk();
+    const store = new SafeStore<import("@ddv4/metadata-client").SafeTreeState>(api, key, r0.accountId);
+    const tree = new SafeTree(store, { id: r0.deviceId, name: "laptop" });
+    const u = await store.unlock(a.password);
+    const f = safeChildren(u, "root").find((n) => n.name === a.file);
+    if (!f) return { fileSame: false };
+    const parts: Uint8Array[] = [];
+    await tree.download(u, ts, f.id, { write: async (d) => void parts.push(d.slice()) });
+    const h = createHash("sha256");
+    for (const x of parts) h.update(x);
+    return { fileSame: h.digest("hex") === a.sha };
+  }
   if (q.m === "done") {
     Object.assign(checks, q.a as Record<string, boolean>);
     return null;

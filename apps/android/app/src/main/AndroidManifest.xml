@@ -70,6 +70,7 @@
         </activity>
         <activity android:name=".DdnBackupActivity" android:exported="false" android:label="@string/ddn_backup" />
         <activity android:name=".DdnTrashActivity" android:exported="false" android:label="@string/ddn_trash" />
+        <activity android:name=".DdnSafeActivity" android:exported="false" android:label="@string/safe_title" />
         <activity android:name=".DdnFreeUpActivity" android:exported="false" android:label="@string/ddn_free" />
         <activity android:name=".DdnEditActivity" android:exported="false" android:theme="@style/Theme.Gallery.Viewer" />
         <activity android:name=".DdnSearchActivity" android:exported="false" android:label="@string/ddn_search" android:windowSoftInputMode="stateVisible|adjustResize" />

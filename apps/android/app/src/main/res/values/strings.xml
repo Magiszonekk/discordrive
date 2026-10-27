@@ -570,4 +570,61 @@ Tekst: %3$s</string>
         <item quantity="other">%1$d dni temu</item>
     </plurals>
     <string name="ddn_backup_state_h">Stan</string>
+    <!-- Sejf (części konta pod osobnym hasłem; ten sam co w przeglądarce) -->
+    <string name="safe_title">Sejf</string>
+    <string name="safe_new_title">Załóż Sejf</string>
+    <string name="safe_new_lead">Foldery i pliki pod osobnym hasłem. Inne urządzenia tego konta, jego zestaw ratunkowy i serwer nie otworzą ich bez tego hasła.</string>
+    <string name="safe_new_warn">Zapomnianego hasła Sejfu nie odzyska nikt, także Ty. Zestaw ratunkowy konta nie otwiera Sejfu.</string>
+    <string name="safe_new_ack">Rozumiem: jeśli zapomnę to hasło, zawartość Sejfu przepadnie.</string>
+    <string name="safe_password">Hasło Sejfu</string>
+    <string name="safe_password_repeat">Powtórz hasło</string>
+    <string name="safe_create">Załóż Sejf</string>
+    <string name="safe_created">Sejf gotowy.</string>
+    <string name="safe_err_short">Użyj co najmniej %d znaków; najlepiej hasło z kilku słów.</string>
+    <string name="safe_err_repeat">Hasła się różnią.</string>
+    <string name="safe_err_ack">Potwierdź, że rozumiesz: zapomnianego hasła nie da się odzyskać.</string>
+    <string name="safe_err_password">Złe hasło Sejfu.</string>
+    <string name="safe_closed_title">Sejf jest zamknięty</string>
+    <string name="safe_closed_lead">Nazwy i pliki w nim są niewidoczne, dopóki go nie odblokujesz. Zamyka się sam po 5 minutach bez użycia.</string>
+    <string name="safe_unlock">Odblokuj</string>
+    <string name="safe_unlock_device">Odblokuj odciskiem lub PIN-em telefonu</string>
+    <string name="safe_use_password">Użyj hasła</string>
+    <string name="safe_device_switch">Odblokowanie odciskiem lub PIN-em tego telefonu</string>
+    <string name="safe_device_enable">Potwierdź, by włączyć odblokowanie Sejfu</string>
+    <string name="safe_close">Zamknij</string>
+    <string name="safe_folder">Folder</string>
+    <string name="safe_empty">Sejf jest pusty. Wyślij tu pliki albo użyj „Przenieś do Sejfu” na plikach z Plików lub Galerii.</string>
+    <string name="safe_name">Nazwa</string>
+    <string name="safe_to_files">Przenieś do Plików</string>
+    <string name="safe_to_files_ask">Wyjąć „%s” z Sejfu?</string>
+    <string name="safe_move_cost">Plik zostanie wysłany ponownie pod nowym kluczem (%s).</string>
+    <string name="safe_delete">Usuń na stałe</string>
+    <string name="safe_delete_ask">Usunąć „%s” na stałe?</string>
+    <string name="safe_delete_note">Sejf nie ma kosza: tego nie da się przywrócić.</string>
+    <string name="safe_no_viewer">Brak aplikacji do otwarcia tego pliku.</string>
+    <string name="safe_need_open">Najpierw odblokuj Sejf.</string>
+    <string name="safe_to_safe">Przenieś do Sejfu</string>
+    <string name="safe_to_safe_ask">Przenieść „%s” do Sejfu?</string>
+    <string name="safe_to_safe_note">Kopia w Plikach zostanie usunięta na stałe.</string>
+    <string name="safe_settings_note">Foldery i pliki pod osobnym hasłem, niewidoczne dla innych urządzeń konta.</string>
+    <plurals name="safe_uploaded">
+        <item quantity="one">Dodano %d plik do Sejfu.</item>
+        <item quantity="few">Dodano %d pliki do Sejfu.</item>
+        <item quantity="many">Dodano %d plików do Sejfu.</item>
+        <item quantity="other">Dodano %d pliku do Sejfu.</item>
+    </plurals>
+    <plurals name="safe_moved_in">
+        <item quantity="one">Przeniesiono %d plik do Sejfu.</item>
+        <item quantity="few">Przeniesiono %d pliki do Sejfu.</item>
+        <item quantity="many">Przeniesiono %d plików do Sejfu.</item>
+        <item quantity="other">Przeniesiono %d pliku do Sejfu.</item>
+    </plurals>
+    <plurals name="safe_items">
+        <item quantity="one">%d element</item>
+        <item quantity="few">%d elementy</item>
+        <item quantity="many">%d elementów</item>
+        <item quantity="other">%d elementu</item>
+    </plurals>
+    <string name="ddn_new_folder">Nowy folder</string>
+    <string name="ddn_rename">Zmień nazwę</string>
 </resources>
