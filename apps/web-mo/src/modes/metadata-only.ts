@@ -14,6 +14,7 @@ import {
   MetadataClient,
   OpCodec,
   SnapshotScheduler,
+  SafeCopier,
   WebhookVault,
   clientBlobIO,
   createPointerMessage,
@@ -69,6 +70,7 @@ async function ensurePointer(ctx: ModeCtx, c: DriveClient) {
 }
 
 const schedulers = new WeakMap<DriveClient, SnapshotScheduler>();
+const copiers = new WeakMap<DriveClient, SafeCopier>();
 
 // ── channels ─────────────────────
 const sqlOf = (ctx: ModeCtx) => (ctx.store instanceof SqlIndexStore ? ctx.store : null);
@@ -320,6 +322,16 @@ export const mode: ModeImpl = {
       schedulers.set(c, s);
     }
     const r = await s.tick(force);
+    // The Safe's slot copied next to the chain (and put back when the instance lost it): see safe-copy.ts.
+    let cp = copiers.get(c);
+    if (!cp) {
+      const ptr = v.pointer;
+      const at = () => vault(ctx).cached?.content.pointer ?? ptr;
+      // Copies go to the pointer's channel, like the chain (one critical channel).
+      cp = new SafeCopier({ io: { ...clientBlobIO(mc(c), transport(ctx)), post: (d, f) => mc(c).postBlobTo(at().webhookId, d, f) }, key: ctx.key, accountId: ctx.acct.accountId, pointer: at, api: ctx.http, now: () => Date.now() });
+      copiers.set(c, cp);
+    }
+    await cp.tick(force).catch(() => null);
     return r ? { kind: r.kind, written: r.written, toSeq: r.pointer.toSeq } : null;
   },
 

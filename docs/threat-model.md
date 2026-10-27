@@ -175,12 +175,20 @@ a copy of the server, the account's Discord channels. All of them hold the accou
   Either way the move costs a new upload of the whole file.
 - Whoever learns the password **and** holds the account key (or the server row and the account key) opens
   it; a weak password falls to an offline guess by someone who has both.
-- **The Safe lives on the instance only.** It is not in the account's snapshots on Discord nor in the
-  account's rescue kit: an account rebuilt from Discord comes back **without** its Safe, and losing the
-  instance's database loses the Safe. The instance keeps the replaced revisions of the slot (the last 20,
-  all from the last 30 days, at most 200): an overwritten or damaged Safe (a broken client, another device
-  of the account) can be brought back from an earlier one with the password it had then. Deleting the
-  account deletes them too.
+- **The Safe's slot lives on the instance, with copies next to the account's snapshots** (`safe-copy.ts`).
+  After it changes (a quiet minute, at the latest 5 minutes; at once after a new password) the slot's blob,
+  still sealed with the account key and the Safe's master, is sealed once more with the snapshot key and
+  posted where the snapshot chain is (metadata only: the main tab / desktop agent on the pointer's channel;
+  e2ee/plain: the instance on its pool). The pointer lists the copies: the account's rescue kit reaches them,
+  and only the Safe's password (or its kit) opens them, so the copies add no reader. The instance keeps the
+  replaced revisions of the slot (the last 20, all from the last 30 days, at most 200); the copies follow it
+  (at most 20; a copy goes when the instance lets its revision go, and a new password drops the copies under
+  the old one with the next copy). An overwritten or damaged Safe can be brought back from an earlier revision
+  with the password it had then. A database that lost the slot or went back to an older backup gets the newer
+  copy back (the next copy round of a client in metadata only, the instance itself on start in e2ee/plain;
+  the instance accepts the jump to the copy's revision). A change made in the last minutes before the loss
+  can be missing. Whoever uses the account can delete the copies on the channels as they can delete the slot.
+  Deleting the account deletes the slot, its history and (e2ee/plain) the copies.
 
 ### 2.6 Operation log
 

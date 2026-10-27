@@ -21,7 +21,15 @@
 // normally sits on ONE channel. Moving a critical channel writes a FRESH chain from the database
 // log (rewriteChain: new pointer + segments of <= 2000 entries) instead of copying old objects:
 // the server has the whole log, and e2ee has no bases that could point at old messages.
+//
+// The Safe: its slot (sealed by the client; the instance cannot open it) is copied into the same chain
+// (safe-copy.ts), so that losing the database does not lose it: after a write, once quiet for a minute (at
+// the latest 5 minutes after the first write, at once after a new password), the pointer lists a copy of the
+// slot and of no revision the database no longer keeps. A moved chain takes the copies along (rewritten from
+// the database). After the database is lost: rebuildAccountSafe + DdnServer.restoreSlot; a database restored
+// from an older backup gets the newer copies back by itself (checked once after start).
 
+import { createHash } from "node:crypto";
 import { writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -30,6 +38,17 @@ import type { DatabaseSync as Db } from "node:sqlite";
 import {
   accountKeyFromRaw,
   readLogChain,
+  readSafeCopies,
+  sealSafeCopy,
+  syncSafeCopies,
+  toRef,
+  updatePointer,
+  SAFE_COPY_FILE,
+  SAFE_COPY_MAX,
+  SAFE_COPY_MAX_DELAY_MS,
+  SAFE_COPY_QUIET_MS,
+  type SafeCopyRef,
+  type SafeSlotSource,
   createPointerMessage,
   decideSnapshot,
   discordSlot,
@@ -77,7 +96,7 @@ export interface SnapObj {
   message_id: string;
   webhook_id: string;
   attachment_id: string;
-  kind: "pointer" | "segment";
+  kind: "pointer" | "segment" | "safe";
   size: number;
 }
 
@@ -189,7 +208,11 @@ export class SnapshotsExtension implements ServerExtension {
   private readonly pending = new Map<string, { first: number; last: number }>();
   /** Last background try to index old chains (retried every BACKFILL_RETRY_MS while some are left, not every tick). */
   private backfillAt = -Infinity;
-  readonly stats = { segments: 0, errors: 0, rewritten: 0 };
+  /** Accounts whose Safe slot changed and is not copied yet: first and last write (server time), now = a new password. */
+  private readonly safePending = new Map<string, { first: number; last: number; now: boolean }>();
+  /** The once-after-start check of every chain's Safe copies against the database (null = not done yet). */
+  private safeChecked: number | null = null;
+  readonly stats = { segments: 0, errors: 0, rewritten: 0, safeCopies: 0, safeRestored: 0 };
   lastError: string | null = null;
 
   constructor(readonly o: SnapshotsExtensionOptions) {}
@@ -211,6 +234,14 @@ export class SnapshotsExtension implements ServerExtension {
 
   health(): Record<string, unknown> {
     return { snapshots: { by: "server", segments: this.stats.segments, lastError: this.lastError } };
+  }
+
+  onSlotWrite(accountId: string, name: string, _revision: number, dropHistory: boolean): void {
+    if (name !== "safe") return;
+    const t = this.srv.clock();
+    const p = this.safePending.get(accountId);
+    if (p) ((p.last = t), (p.now ||= dropHistory));
+    else this.safePending.set(accountId, { first: t, last: t, now: dropHistory });
   }
 
   onAppend(accountId: string, entry: EncryptedEntry): void {
@@ -288,11 +319,101 @@ export class SnapshotsExtension implements ServerExtension {
           this.o.log?.(`snapshot of ${acct}: ${this.lastError}`);
         }
       }
+      written += await this.safeTick(force);
       if (written) this.exportLocations();
       return written;
     } finally {
       this.running = false;
     }
+  }
+
+  /** The database's Safe slot of `acct` as the copier sees it (current + the revisions it keeps). */
+  private slotSource(acct: string): SafeSlotSource {
+    return {
+      current: async () => this.srv.slotOf(acct, "safe"),
+      kept: async () => new Set(this.srv.slotHistoryOf(acct, "safe")),
+    };
+  }
+
+  /** Copy the Safe slots that are due; first, once after start, put back newer copies the database lacks. */
+  private async safeTick(force: boolean): Promise<number> {
+    let n = 0;
+    if (this.safeChecked === null) {
+      this.safeChecked = this.srv.clock();
+      const rows = this.db.prepare("SELECT account_id FROM s_snapshots").all() as { account_id: string }[];
+      for (const { account_id: acct } of rows) {
+        try {
+          if (await this.putBackSafe(acct)) n++;
+        } catch (e) {
+          this.o.log?.(`Safe copies of ${acct}: ${(e as Error).message}`);
+        }
+      }
+      // Slots never copied (written before this version): copy them once.
+      for (const r of this.db.prepare("SELECT account_id FROM slots WHERE name = 'safe'").all() as { account_id: string }[]) if (!this.safePending.has(r.account_id)) this.safePending.set(r.account_id, { first: 0, last: 0, now: false });
+    }
+    const now = this.srv.clock();
+    for (const [acct, p] of [...this.safePending]) {
+      if (!force && !p.now && now - p.last < SAFE_COPY_QUIET_MS && now - p.first < SAFE_COPY_MAX_DELAY_MS) continue;
+      try {
+        await this.copySafe(acct);
+        if (this.safePending.get(acct) === p) this.safePending.delete(acct);
+        n++;
+      } catch (e) {
+        this.stats.errors++;
+        this.lastError = String((e as Error).message ?? e);
+        this.o.log?.(`Safe copy of ${acct}: ${this.lastError}`);
+      }
+    }
+    return n;
+  }
+
+  /** The pointer of `acct`, made when the account has none yet (a Safe before the first log entry). */
+  private async ensurePointer(acct: string): Promise<PointerLocation> {
+    const loc = this.location(acct);
+    if (loc) return loc;
+    const hooks = this.o.hooks().hooksFor(acct).filter((h) => h.alive !== false);
+    if (!hooks.length) throw new Error("need_channel");
+    const key = serverSnapshotKey(this.o.instanceKey, acct);
+    const made = await createPointerMessage(serverBlobIO(this.o.hooks(), this.o.sender, acct), key, acct, hooks[0]!);
+    this.db.prepare("INSERT INTO s_snapshots (account_id, webhook_id, message_id, objs_ok) VALUES (?, ?, ?, 1)").run(acct, made.webhookId, made.messageId);
+    recordObj(this.db, { account_id: acct, message_id: made.messageId, webhook_id: made.webhookId, attachment_id: "", kind: "pointer", size: 0 });
+    this.exportLocations();
+    return made;
+  }
+
+  /** Runs inside tick() (which holds the lock). */
+  private async copySafe(acct: string): Promise<void> {
+    if (!this.srv.slotOf(acct, "safe")) return;
+    {
+      const loc = await this.ensurePointer(acct);
+      const io = serverBlobIO(this.o.hooks(), this.o.sender, acct, this.segmentTargets(acct, loc));
+      const r = await syncSafeCopies(io, serverSnapshotKey(this.o.instanceKey, acct), acct, loc, this.slotSource(acct), () => this.srv.clock());
+      if (r.copied) {
+        recordObj(this.db, { account_id: acct, message_id: r.copied.messageId, webhook_id: r.copied.webhookId, attachment_id: r.copied.attachmentId, kind: "safe", size: r.copied.size });
+        this.stats.safeCopies++;
+      }
+      for (const d of r.dropped) this.db.prepare("DELETE FROM s_snap_objs WHERE account_id = ? AND message_id = ?").run(acct, d.messageId);
+      // The database is behind its copies (restored from an older backup while running): they go back first.
+      if (r.behind && (await this.putBackSafe(acct))) await this.copySafe(acct);
+    }
+  }
+
+  /** Copies newer than the database's slot go back into it (slot + history). True = put back. */
+  async putBackSafe(acct: string): Promise<boolean> {
+    const loc = this.location(acct);
+    if (!loc || !this.o.hooks().hook(loc.webhookId)) return false;
+    const io = serverBlobIO(this.o.hooks(), this.o.sender, acct);
+    const key = serverSnapshotKey(this.o.instanceKey, acct);
+    const p = await readPointer(io, key, acct, loc);
+    const top = p.safe?.copies[0];
+    if (!top || (this.srv.slotOf(acct, "safe")?.revision ?? 0) >= top.revision) return false;
+    const copies = await readSafeCopies(io, key, acct, p);
+    const ok = this.srv.restoreSlot(acct, "safe", copies[0]!, copies.slice(1).map((c) => ({ revision: c.revision, blob: c.blob, replacedAt: c.copiedAt })));
+    if (ok) {
+      this.stats.safeRestored++;
+      this.o.log?.(`Safe of ${acct}: revision ${top.revision} put back from its copy on Discord`);
+    }
+    return ok;
   }
 
   /** Index chains written before s_snap_objs existed (all accounts, or `only`). */
@@ -365,6 +486,23 @@ export class SnapshotsExtension implements ServerExtension {
           fresh.push({ account_id: acct, message_id: sg.messageId, webhook_id: sg.webhookId, attachment_id: sg.attachmentId, kind: "segment", size: sg.size });
           toSeq = r.pointer.toSeq;
         }
+        // The Safe: the slot and the revisions the database keeps, copied into the new chain.
+        const slot = this.srv.slotOf(acct, "safe");
+        if (slot) {
+          const copies: SafeCopyRef[] = [];
+          for (const rev of [slot.revision, ...this.srv.slotHistoryOf(acct, "safe")].slice(0, SAFE_COPY_MAX)) {
+            const blob = rev === slot.revision ? slot.blob : this.srv.slotRevisionOf(acct, "safe", rev);
+            if (blob === null) continue;
+            const raw = Buffer.from(blob, "base64");
+            const sealed = await sealSafeCopy(key, acct, rev, new Uint8Array(raw));
+            const at = await io.post(sealed, SAFE_COPY_FILE);
+            const c: SafeCopyRef = { ...toRef(at, sealed.byteLength), revision: rev, h: createHash("sha256").update(raw).digest("hex").slice(0, 16), copiedAt: this.srv.clock() };
+            copies.push(c);
+            fresh.push({ account_id: acct, message_id: c.messageId, webhook_id: c.webhookId, attachment_id: c.attachmentId, kind: "safe", size: c.size });
+          }
+          await updatePointer(io, key, acct, loc, (cur) => ({ ...cur, safe: { copies } }));
+          this.safePending.delete(acct);
+        }
       } catch (e) {
         // Half-written new chain: drop it, the old one still stands.
         for (const o of fresh) await this.o.sender.delete(this.o.hooks().hook(o.webhook_id) ?? target, o.message_id).catch(() => {});
@@ -427,4 +565,17 @@ export async function rebuildAccountLog(instanceKey: Buffer, hooks: InstanceHook
   const { entries } = await readLogChain(serverBlobIO(hooks, sender, accountId), serverSnapshotKey(instanceKey, accountId), accountId, loc);
   if (entries.length && entries[0]!.seq !== 1) throw new Error("chain does not start at seq 1");
   return entries;
+}
+
+/**
+ * The Safe of one account from its copies on Discord after the server database is gone (operator path, next to
+ * rebuildAccountLog): the slot and the earlier revisions, for DdnServer.restoreSlot. Still sealed by the client:
+ * only the Safe's password opens it.
+ */
+export async function rebuildAccountSafe(instanceKey: Buffer, hooks: InstanceHooks, sender: DiscordSender, accountId: string, loc: PointerLocation): Promise<{ slot: { revision: number; blob: string }; history: { revision: number; blob: string; replacedAt: number }[] } | null> {
+  const io = serverBlobIO(hooks, sender, accountId);
+  const key = serverSnapshotKey(instanceKey, accountId);
+  const copies = await readSafeCopies(io, key, accountId, await readPointer(io, key, accountId, loc));
+  if (!copies.length) return null;
+  return { slot: { revision: copies[0]!.revision, blob: copies[0]!.blob }, history: copies.slice(1).map((c) => ({ revision: c.revision, blob: c.blob, replacedAt: c.copiedAt })) };
 }
