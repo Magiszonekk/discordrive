@@ -202,6 +202,7 @@ const TRANSFER_CALLS: Map<string, { dir: "up" | "down"; tokenAt: number }> = new
   ["uploadPath", { dir: "up", tokenAt: 3 }],
   ["uploadPaths", { dir: "up", tokenAt: 2 }],
   ["upload", { dir: "up", tokenAt: 3 }],
+  ["safeUploadPath", { dir: "up", tokenAt: 2 }],
   ["downloadToDisk", { dir: "down", tokenAt: 2 }],
   ["download", { dir: "down", tokenAt: 1 }],
 ]);

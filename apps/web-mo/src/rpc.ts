@@ -44,7 +44,17 @@ function decodeBlobs(v: unknown): unknown {
   return v;
 }
 
-export function connect(worker: Endpoint, onEvent: (e: CoreEvent) => void = () => {}): Methods {
+/** Is there a Blob (a File too) among the arguments, at the top or one level down (an array, a plain object)? */
+export function hasBlobArg(args: unknown[]): boolean {
+  const one = (x: unknown) => isBlob(x) || (Array.isArray(x) ? x.some(isBlob) : !!x && typeof x === "object" && Object.getPrototypeOf(x) === Object.prototype && Object.values(x).some(isBlob));
+  return args.some(one);
+}
+
+/**
+ * `blobArgs: false` (the desktop agent, another process): a call with a Blob argument is refused at once
+ * ("<method>: a file cannot be sent to the app's agent") instead of being posted, where it would never answer.
+ */
+export function connect(worker: Endpoint, onEvent: (e: CoreEvent) => void = () => {}, opts: { blobArgs?: boolean } = {}): Methods {
   let n = 0;
   const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   worker.onmessage = (ev: MessageEvent<{ id: number; ok: boolean; result?: unknown; error?: string; event?: CoreEvent }>) => {
@@ -58,6 +68,7 @@ export function connect(worker: Endpoint, onEvent: (e: CoreEvent) => void = () =
   return new Proxy({} as Methods, {
     get: (_t, method: string) => (...args: unknown[]) =>
       new Promise((resolve, reject) => {
+        if (opts.blobArgs === false && hasBlobArg(args)) return reject(new Error(`${method}: a file cannot be sent to the app's agent`));
         const id = ++n;
         pending.set(id, { resolve, reject });
         worker.postMessage({ id, method, args });

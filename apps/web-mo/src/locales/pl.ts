@@ -1104,5 +1104,6 @@ export const pl: Record<string, string> = {
   "safe.uploaded_other": "Dodano {n} pliku do Sejfu.",
   "safe.err.short": "Użyj co najmniej 8 znaków; najlepiej hasło z kilku słów.",
   "safe.err.ack": "Potwierdź, że rozumiesz: zapomnianego hasła nie da się odzyskać.",
+  "safe.err.noPath": "Aplikacja nie odczytała, gdzie te pliki leżą na tym komputerze. Wybierz je jeszcze raz.",
   "safe.err.badPassword": "Złe hasło Sejfu.",
 };

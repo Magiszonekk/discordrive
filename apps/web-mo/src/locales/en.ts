@@ -1036,5 +1036,6 @@ export const en: Record<string, string> = {
   "safe.uploaded_other": "{n} files added to the Safe.",
   "safe.err.short": "Use at least 8 characters; a passphrase of several words is best.",
   "safe.err.ack": "Confirm that you understand a forgotten password cannot be recovered.",
+  "safe.err.noPath": "The app could not read where these files are on this computer. Pick them again.",
   "safe.err.badPassword": "Wrong Safe password.",
 };
