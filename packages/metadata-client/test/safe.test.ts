@@ -3,6 +3,7 @@
 import { describe, expect, it, afterEach } from "vitest";
 import {
   SafeBadPasswordError,
+  SafeDamagedError,
   SafeExistsError,
   SafeRollbackError,
   SafeStore,
@@ -10,6 +11,7 @@ import {
   SAFE_PAD_MIN,
   accountKeyFromB64,
   openSafeHeader,
+  openSafeMaster,
   padState,
   parseSafeKit,
   safeKitText,
@@ -63,12 +65,16 @@ describe("the Safe", () => {
     const restored = new SafeStore<State>(a.api, accountKeyFromB64(a.key.rawB64), a.accountId);
     await expect(restored.unlock("")).rejects.toBeInstanceOf(SafeBadPasswordError);
     // The optional Safe kit holds the master: it opens without the password.
-    const kit = safeKitText(a.accountId, u.master);
-    expect(kit).toMatch(/^ddn-safe1:/);
-    const parsed = parseSafeKit(kit);
+    const kit = await safeKitText(a.accountId, u.master);
+    expect(kit).toMatch(/^ddn-safe1:[^:]+:[A-Za-z0-9_-]{43}:[0-9a-f]{8}$/);
+    const parsed = await parseSafeKit(kit);
     expect(parsed.accountId).toBe(a.accountId);
     expect((await restored.unlockWithMaster(parsed.master)).state.files).toHaveLength(3);
-    expect(() => parseSafeKit("ddn-safe1:x:abc")).toThrow();
+    await expect(parseSafeKit("ddn-safe1:x:abc")).rejects.toThrow("not a Safe kit");
+    // A typo in the key part: the check says "not a Safe kit" (not "wrong key or tampered data").
+    const parts = kit.split(":");
+    const typo = [parts[0], parts[1], (parts[2]![0] === "A" ? "B" : "A") + parts[2]!.slice(1), parts[3]].join(":");
+    await expect(parseSafeKit(typo)).rejects.toThrow("not a Safe kit");
   }, 60_000);
 
   it("password change keeps the master; concurrent edits merge; a rollback is refused; one Safe per account", async () => {
@@ -113,6 +119,57 @@ describe("the Safe", () => {
     db.prepare("UPDATE slots SET revision = 3 WHERE account_id = ?").run(a.accountId);
     await expect(new SafeStore<State>(a.api, a.key, a.accountId).unlock("correct horse battery staple")).rejects.toThrow();
   }, 60_000);
+
+  it("overwritten by another device: damaged (not a wrong password); an earlier revision brings it back", async () => {
+    const { srv, url } = await startServer();
+    const a = await newAccount(url);
+    const b = await addDevice(url, a);
+    const sa = new SafeStore<State>(a.api, a.key, a.accountId);
+    let u = await sa.create("correct horse battery staple", { files: [] }, FAST);
+    u = await sa.update(u, () => state());
+    // Another device of the account writes junk into the slot (a broken client, or on purpose).
+    expect(await b.api.putSlot("safe", u.revision, u.revision + 1, Buffer.from("junk junk junk").toString("base64"))).toBeNull();
+    const fresh = new SafeStore<State>(a.api, a.key, a.accountId);
+    await expect(fresh.unlock("correct horse battery staple")).rejects.toBeInstanceOf(SafeDamagedError);
+    // The instance kept the replaced revisions: the newest good one comes back under a new revision.
+    const hist = await fresh.history();
+    expect(hist.map((h) => h.revision)).toEqual([2, 1]);
+    const back = await fresh.restore(2, { password: "correct horse battery staple" });
+    expect(back.revision).toBe(4);
+    expect((await new SafeStore<State>(b.api, a.key, a.accountId).unlock("correct horse battery staple")).state.files.map((f) => f.name)).toEqual(SECRET_NAMES);
+    // The history is the account's own (another account sees none) and goes with the account's deletion.
+    const other = await newAccount(url);
+    expect(await other.api.slotHistory("safe")).toEqual([]);
+    const db = (srv as unknown as { db: { prepare(q: string): { get(...a: unknown[]): { n: number } } } }).db;
+    expect(db.prepare("SELECT count(*) AS n FROM slot_history WHERE account_id = ?").get(a.accountId).n).toBe(3);
+  }, 60_000);
+
+  it("after a password change the old password opens the Safe by no way (unlock, history, restore)", async () => {
+    const { url } = await startServer();
+    const a = await newAccount(url);
+    const b = await addDevice(url, a);
+    const sa = new SafeStore<State>(a.api, a.key, a.accountId);
+    let u = await sa.create("old password leaked", state(), FAST);
+    u = await sa.update(u, (s) => ({ files: [...s.files, { name: "x.pdf", thumb: "t" }] }));
+    expect((await sa.history()).length).toBe(1);
+    u = await sa.changePassword(u, "new password 2026!", FAST);
+    u = await sa.update(u, (s) => ({ files: [...s.files, { name: "added-after-change.pdf", thumb: "t2" }] }));
+    // The other device of the account knows only the old password.
+    const sb = new SafeStore<State>(b.api, a.key, a.accountId);
+    await expect(sb.unlock("old password leaked")).rejects.toBeInstanceOf(SafeBadPasswordError);
+    // No earlier revision from before the change is left to try the old password on.
+    const hist = await sb.history();
+    expect(hist.every((h) => h.revision > 2)).toBe(true);
+    for (const h of hist) {
+      const old = await b.api.slotRevision("safe", h.revision);
+      const { header } = await openSafeHeader(a.key, a.accountId, old.revision, old.blob);
+      await expect(openSafeMaster(header, "old password leaked", a.accountId)).rejects.toBeInstanceOf(SafeBadPasswordError);
+    }
+    for (const r of [1, 2]) await expect(b.api.slotRevision("safe", r)).rejects.toThrow();
+    for (const h of hist) await expect(sb.restore(h.revision, { password: "old password leaked" })).rejects.toBeInstanceOf(SafeBadPasswordError);
+    // The new password works; the history keeps working after the change (revisions under the new password).
+    expect((await sb.unlock("new password 2026!")).state.files.map((f) => f.name)).toContain("added-after-change.pdf");
+  }, 120_000);
 
   it("padding: 64 KiB · 2^k buckets, round trip, too large refused", () => {
     expect(padState(new Uint8Array(10)).byteLength).toBe(SAFE_PAD_MIN);

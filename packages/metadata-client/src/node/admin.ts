@@ -107,6 +107,7 @@ const ACCOUNT_TABLES: [table: string, column: string][] = [
   ["vault", "account_id"],
   ["settings", "account_id"],
   ["slots", "account_id"],
+  ["slot_history", "account_id"],
   ["gc_runs", "account_id"],
   ["gc_done", "account_id"],
   ["shares", "account_id"],

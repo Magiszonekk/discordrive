@@ -66,6 +66,10 @@ class SafeVectorsTest {
         assertEquals(v.str("kit"), Safe.kitText(acct, Safe.parseKit(v.str("kit")).second))
         assertEquals(v.str("masterB64"), B64.enc(Safe.parseKit(v.str("kit")).second))
         assertThrows(IllegalArgumentException::class.java) { Safe.parseKit("ddn-safe1:x:abc") }
+        // A typo in the key part fails the check.
+        val p = v.str("kit").split(":")
+        val typo = listOf(p[0], p[1], (if (p[2][0] == 'A') "B" else "A") + p[2].substring(1), p[3]).joinToString(":")
+        assertThrows(IllegalArgumentException::class.java) { Safe.parseKit(typo) }
         assertEquals(Safe.PAD_MIN, Safe.pad(ByteArray(10)).size)
         assertEquals(2 * Safe.PAD_MIN, Safe.pad(ByteArray(Safe.PAD_MIN - 3)).size)
         val x = ByteArray(1000) { it.toByte() }

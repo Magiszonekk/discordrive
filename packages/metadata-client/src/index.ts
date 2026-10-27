@@ -202,6 +202,7 @@ export {
   SafeExistsError,
   SafeMissingError,
   SafeTooLargeError,
+  SafeDamagedError,
   SAFE_ARGON2,
   SAFE_PAD_MIN,
   SAFE_PAD_MAX,

@@ -36,7 +36,7 @@ const v = {
   masterHex: hex(master),
   header,
   slot: { revision, blob, state },
-  kit: safeKitText(ACCT, master),
+  kit: await safeKitText(ACCT, master),
   masterB64: toBase64(master),
 };
 mkdirSync(dirname(out), { recursive: true });

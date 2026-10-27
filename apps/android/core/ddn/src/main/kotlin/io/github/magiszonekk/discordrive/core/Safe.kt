@@ -121,11 +121,19 @@ object Safe {
     fun openState(master: ByteArray, accountId: String, revision: Long, sealed: ByteArray): JsonElement =
         json.parseToJsonElement(unpad(Seal.unseal(stateKey(master), sealed, stateAad(accountId, revision), "Safe state")).toString(Charsets.UTF_8))
 
-    /** The optional Safe kit: the master in text (whoever has it opens the Safe without the password). */
-    fun kitText(accountId: String, master: ByteArray): String =
-        "ddn-safe1:$accountId:" + B64.enc(master).replace('+', '-').replace('/', '_').trimEnd('=')
+    /**
+     * The optional Safe kit: the master in text (whoever has it opens the Safe without the password), with a
+     * check (8 hex of SHA-256("ddn-safe-kit|account|master")) so a typo says "not a Safe kit".
+     */
+    private fun kitCheck(accountId: String, m64: String): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest("ddn-safe-kit|$accountId|$m64".toByteArray(Charsets.UTF_8)).copyOfRange(0, 4).joinToString("") { "%02x".format(it) }
+    fun kitText(accountId: String, master: ByteArray): String {
+        val m64 = B64.enc(master).replace('+', '-').replace('/', '_').trimEnd('=')
+        return "ddn-safe1:$accountId:$m64:${kitCheck(accountId, m64)}"
+    }
     fun parseKit(text: String): Pair<String, ByteArray> {
-        val m = Regex("^ddn-safe1:([A-Za-z0-9_-]{4,80}):([A-Za-z0-9_-]{43})$").matchEntire(text.trim()) ?: throw IllegalArgumentException("not a Safe kit")
+        val m = Regex("^ddn-safe1:([A-Za-z0-9_-]{4,80}):([A-Za-z0-9_-]{43}):([0-9a-f]{8})$").matchEntire(text.trim()) ?: throw IllegalArgumentException("not a Safe kit")
+        require(kitCheck(m.groupValues[1], m.groupValues[2]) == m.groupValues[3]) { "not a Safe kit" }
         val master = B64.dec(m.groupValues[2].replace('-', '+').replace('_', '/') + "=")
         require(master.size == 32) { "not a Safe kit" }
         return m.groupValues[1] to master
