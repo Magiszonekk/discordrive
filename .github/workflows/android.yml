@@ -79,6 +79,16 @@ jobs:
             if (JSON.stringify(fixed(cur)) !== JSON.stringify(fixed(old))) { console.error("::error::account-vectors.json is stale: run npx tsx scripts/android-vectors.ts in packages/metadata-client and commit it"); process.exit(1); }
           '
           git checkout -- ../../apps/android/core/ddn/src/test/resources/account-vectors.json
+          # The Safe's vectors (random IVs): the header's KDF, the state and the kit must not change.
+          npx tsx scripts/safe-vectors.ts > /dev/null
+          node -e '
+            const f = "../../apps/android/core/ddn/src/test/resources/safe-vectors.json";
+            const cur = JSON.parse(require("fs").readFileSync(f, "utf8"));
+            const old = JSON.parse(require("child_process").execSync(`git show HEAD:apps/android/core/ddn/src/test/resources/safe-vectors.json`, { cwd: "../.." }).toString());
+            const fixed = (v) => ({ a: v.argon2, m: v.masterHex, k: v.header.kdf, s: v.slot.state, r: v.slot.revision, kit: v.kit });
+            if (JSON.stringify(fixed(cur)) !== JSON.stringify(fixed(old))) { console.error("::error::safe-vectors.json is stale: run npx tsx scripts/safe-vectors.ts in packages/metadata-client and commit it"); process.exit(1); }
+          '
+          git checkout -- ../../apps/android/core/ddn/src/test/resources/safe-vectors.json
 
       - name: JVM tests (account layer against the TypeScript vectors, crypto, API)
         working-directory: apps/android

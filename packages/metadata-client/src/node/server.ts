@@ -32,6 +32,12 @@ export const MAX_PAYLOAD_B64 = 1024 * 1024;
 export const MAX_VAULT_B64 = 512 * 1024;
 /** Account settings (small JSON): 64 KiB of base64. */
 export const MAX_SETTINGS_B64 = 64 * 1024;
+/**
+ * Named slots of an account (the Safe: GET/PUT /v1/slots/safe), sealed by the client, opaque here: the padded
+ * state (≤ 1 MiB) and its header, in base64.
+ */
+export const SLOT_NAMES = ["safe"] as const;
+export const MAX_SLOT_B64 = Math.ceil((1024 * 1024 + 4096) / 3) * 4;
 export const MAX_DEVICE_NAME_B64 = 1024;
 export const SERVER_VERSION = "0.2.0";
 
@@ -175,6 +181,8 @@ export class DdnServer {
       CREATE TABLE IF NOT EXISTS vault (account_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, blob TEXT NOT NULL);
       -- Account settings shared by its devices (every mode), sealed with the account key: opaque here.
       CREATE TABLE IF NOT EXISTS settings (account_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, blob TEXT NOT NULL);
+      -- Named slots of an account (the Safe), sealed by the client with keys the instance never has: opaque.
+      CREATE TABLE IF NOT EXISTS slots (account_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, blob TEXT NOT NULL, PRIMARY KEY (account_id, name));
       CREATE TABLE IF NOT EXISTS pairing (id TEXT PRIMARY KEY, msg TEXT NOT NULL, created_at INTEGER NOT NULL);
       -- Cleanup bookkeeping (metadata only: the client deletes fragments, the server remembers
       -- which uploads are done and when the account was last cleaned; upload IDs are plaintext already).
@@ -366,6 +374,34 @@ export class DdnServer {
   }
   releaseLease(s: Session, uploadId: string): void {
     this.seq(s.accountId).releaseLease(uploadId, s.deviceId);
+  }
+
+  getSlot(s: Session, name: string): { revision: number; blob: string } | null {
+    return (this.db.prepare("SELECT revision, blob FROM slots WHERE account_id = ? AND name = ?").get(s.accountId, name) as { revision: number; blob: string } | undefined) ?? null;
+  }
+
+  /** Compare-and-swap of a named slot (the Safe), like the vault; never deleted by a client (an empty Safe stays). */
+  putSlot(s: Session, name: string, body: unknown): { status: "ok" } | { status: "conflict"; current: { revision: number; blob: string } | null } {
+    const b = body as { expectedRevision?: unknown; revision?: unknown; blob?: unknown };
+    if (!Number.isInteger(b?.expectedRevision) || !Number.isInteger(b?.revision) || typeof b?.blob !== "string") throw new HttpError(400, "bad_slot");
+    if ((b.blob as string).length > MAX_SLOT_B64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(b.blob as string)) throw new HttpError(400, "bad_slot_blob");
+    const exp = b.expectedRevision as number;
+    const rev = b.revision as number;
+    let out: { status: "ok" } | { status: "conflict"; current: { revision: number; blob: string } | null } = { status: "ok" };
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const cur = this.getSlot(s, name);
+      if ((cur?.revision ?? 0) !== exp || rev !== exp + 1) out = { status: "conflict", current: cur };
+      else
+        this.db
+          .prepare("INSERT INTO slots (account_id, name, revision, blob) VALUES (?, ?, ?, ?) ON CONFLICT(account_id, name) DO UPDATE SET revision = excluded.revision, blob = excluded.blob")
+          .run(s.accountId, name, rev, b.blob as string);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+    return out;
   }
 
   getVault(s: Session, table: "vault" | "settings" = "vault"): { revision: number; blob: string } | null {
@@ -612,6 +648,15 @@ export class DdnServer {
       if (method === "GET") return send(res, 200, this.getVault(s, "settings") ?? { revision: 0, blob: null });
       if (method === "PUT") {
         const r = this.putVault(s, await json(), "settings");
+        return send(res, r.status === "ok" ? 200 : 409, r);
+      }
+    }
+    const slot = /^\/v1\/slots\/([a-z]{1,16})$/.exec(path);
+    if (slot) {
+      if (!(SLOT_NAMES as readonly string[]).includes(slot[1]!)) throw new HttpError(404, "no_such_slot");
+      if (method === "GET") return send(res, 200, this.getSlot(s, slot[1]!) ?? { revision: 0, blob: null });
+      if (method === "PUT") {
+        const r = this.putSlot(s, slot[1]!, await json());
         return send(res, r.status === "ok" ? 200 : 409, r);
       }
     }

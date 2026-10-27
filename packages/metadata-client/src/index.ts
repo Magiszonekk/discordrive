@@ -195,6 +195,32 @@ export {
   type Argon2Params,
   type PasswordKeyUpload,
 } from "./password-key.js";
+export {
+  SafeStore,
+  SafeBadPasswordError,
+  SafeRollbackError,
+  SafeExistsError,
+  SafeMissingError,
+  SafeTooLargeError,
+  SAFE_ARGON2,
+  SAFE_PAD_MIN,
+  SAFE_PAD_MAX,
+  newSafeHeader,
+  openSafeMaster,
+  openSafeHeader,
+  openSafeState,
+  sealSafeSlot,
+  safeKeys,
+  safeWrapKey,
+  safeArgon2,
+  safeKitText,
+  parseSafeKit,
+  padState,
+  unpadState,
+  type SafeHeader,
+  type SlotApi,
+  type UnlockedSafe,
+} from "./safe.js";
 export { HttpApi, HttpPairingMailbox, ServerError, createAccountHttp, getChallenge, getHealth, passwordParams, passwordSealedKey, rescueRegisterDevice, type HttpSession, type ServerDevice } from "./http-api.js";
 export { sealDeviceName, openDeviceName, cleanDeviceName, MAX_DEVICE_NAME } from "./device-names.js";
 export { prepareShare, prepareShareWith, shareLink, parseShareLink, openShare, attachmentFilename, type ShareMeta, type ShareAttachment, type OpenedShare } from "./share.js";

@@ -9,13 +9,14 @@
 //   op         - operation payloads in the log
 //   snapshot   - snapshots and the pointer message, later
 //   settings   - account settings shared by the devices (every mode)
+//   safe       - the outer layer of the Safe's slot (its header; the Safe's own key is not derived from this)
 // File keys stay random per file and travel inside encrypted
 // op payloads.
 
 import { fromBase64, toBase64 } from "@ddv4/processing";
 
 export const ACCOUNT_KEY_BYTES = 32;
-export type SubkeyLabel = "vault" | "op" | "snapshot" | "device-name" | "share-note" | "settings";
+export type SubkeyLabel = "vault" | "op" | "snapshot" | "device-name" | "share-note" | "settings" | "safe";
 
 export interface AccountKey {
   /** Raw key, base64. Secret: never log. */
