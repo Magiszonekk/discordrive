@@ -68,4 +68,49 @@ describe("files in the Safe", () => {
       await fake.close();
     }
   }, 60_000);
+
+  it("metadata only: deleted for good (or replaced by a restored revision) → its messages deleted from the account's webhook after 30 days; a file in use stays", async () => {
+    const fake = new FakeDiscord();
+    const origin = await fake.listen();
+    try {
+      const { url } = await startServer();
+      const a = await newAccount(url);
+      const hook = fake.addWebhook("1550000000000000902");
+      const ca = new MetadataClient({ device: { id: a.deviceId, name: "laptop" }, arbiter: new EncryptedArbiter(new OpCodec(a.key, a.accountId), a.api), transport: new DiscordWebhookTransport({ apiOrigin: origin }), webhooks: [{ id: hook.id, url: hook.url }], chunkSize: 64 * 1024, pacer: new ChannelPacer({ perMin: 1e6, maxPerMin: 1e6, burst: 1e6 }) });
+      const clock = { t: Date.UTC(2026, 9, 27) };
+      const tree = new SafeTree(new SafeStore<SafeTreeState>(a.api, a.key, a.accountId), { id: a.deviceId, name: "laptop" }, { pieces: { kind: "webhooks", client: ca }, now: () => clock.t });
+      let u = await tree.create("correct horse battery staple", FAST);
+      const keep = await tree.upload(u, ca, memorySource(new Uint8Array(randomBytes(100))), "zostaje.txt");
+      u = keep.safe;
+      const before = new Set(fake.messages.keys());
+      const del = await tree.upload(u, ca, memorySource(new Uint8Array(randomBytes(64 * 1024 * 2 + 1))), "do-usuniecia.pdf");
+      u = del.safe;
+      const delMsgs = [...fake.messages.keys()].filter((k) => !before.has(k));
+      expect(delMsgs.length).toBe(4); // 3 fragments + manifest
+      u = (await tree.trash(u, del.nodeId)).safe;
+      u = (await tree.commit(u, { type: "purge", nodeId: del.nodeId })).safe;
+      expect(u.state.gone?.map((g) => g.u)).toEqual([del.version.uploadId]);
+      // Inside the 30 days (a restored revision may still want it): nothing deleted.
+      clock.t += 29 * 86_400_000;
+      let r = await tree.cleanup(u);
+      u = r.safe;
+      expect(r.deleted).toBe(0);
+      for (const k of delMsgs) expect(fake.messages.has(k)).toBe(true);
+      clock.t += 2 * 86_400_000;
+      r = await tree.cleanup(u);
+      u = r.safe;
+      expect(r.deleted).toBe(4);
+      for (const k of delMsgs) expect(fake.messages.has(k)).toBe(false);
+      expect(fake.messages.size).toBe(before.size); // the file in use keeps its messages
+      // The note and the released record leave the state; a second run has nothing to do.
+      expect(u.state.gone ?? []).toEqual([]);
+      expect(u.state.tree.uploads.map((x) => x.id)).toEqual([keep.version.uploadId]);
+      expect((await tree.cleanup(u)).deleted).toBe(0);
+      const s = sink();
+      await tree.download(u, ca, keep.nodeId, s);
+      expect(s.data().byteLength).toBe(100);
+    } finally {
+      await fake.close();
+    }
+  }, 60_000);
 });

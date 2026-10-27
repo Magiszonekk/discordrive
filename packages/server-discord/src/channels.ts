@@ -96,6 +96,8 @@ export function blobTables(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS s_moves_scope ON s_moves(scope, id);
     CREATE TABLE IF NOT EXISTS s_move_trash (job_id INTEGER NOT NULL, webhook_id TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY (job_id, message_id));
   `);
+  // Uploads committed outside the log (the Safe): never reaped; released by their client; listed for it.
+  if (!(db.prepare("PRAGMA table_info(s_uploads)").all() as { name: string }[]).some((c) => c.name === "outside")) db.exec("ALTER TABLE s_uploads ADD COLUMN outside INTEGER NOT NULL DEFAULT 0");
 }
 
 export interface ChannelStats {

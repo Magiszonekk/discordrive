@@ -15,7 +15,11 @@
 //   GET    /v1/uploads/<U>            state + stored blob indexes (resume after a restart)
 //   POST   /v1/uploads/<U>/final      all blobs stored, commit follows: never cleaned as abandoned
 //                                     ({ outsideLog: true }: the commit goes to the Safe, not the log: kept
-//                                     as committed now; released later like any upload)
+//                                     as committed now, never reaped; its client releases it like any upload)
+//   GET    /v1/uploads/outside        uploads committed outside the log (the Safe) with state and time: the
+//                                     client finds those its Safe no longer (or never) refers to
+//   POST   /v1/uploads/kept           {uploads}: released uploads outside the log back to committed (the Safe
+//                                     was restored to a revision that refers to them; before they are purged)
 //   DELETE /v1/uploads/<U>            cancel: blobs deleted, U refused from now on (tombstone)
 //   POST   /v1/uploads/released       client reports released uploads (purged/superseded
 //                                     versions, from its index): deleted 30 days later
@@ -504,7 +508,7 @@ export class BlobsExtension implements ServerExtension {
     if (up.state !== "open" && up.state !== "final") throw new HttpError(410, "upload_gone");
     // The Safe's uploads are committed in the Safe (sealed, never in the log): kept as committed from here.
     const outside = (body as { outsideLog?: unknown } | null)?.outsideLog === true;
-    this.db.prepare(`UPDATE s_uploads SET state = '${outside ? "committed" : "final"}', final_at = ?, active_at = ? WHERE account_id = ? AND upload_id = ?`).run(this.now, this.now, s.accountId, u);
+    this.db.prepare(`UPDATE s_uploads SET state = '${outside ? "committed" : "final"}', outside = ?, final_at = ?, active_at = ? WHERE account_id = ? AND upload_id = ?`).run(outside ? 1 : 0, this.now, this.now, s.accountId, u);
     r.send(200, { ok: true });
   }
 
@@ -543,6 +547,23 @@ export class BlobsExtension implements ServerExtension {
       );
     }
     r.send(200, { ok: true, marked });
+  }
+
+  private outsideUploads(r: ExtRequest): void {
+    const s = r.session();
+    const rows = this.db
+      .prepare("SELECT upload_id, state, final_at FROM s_uploads WHERE account_id = ? AND outside = 1 AND state IN ('committed', 'released') ORDER BY upload_id LIMIT 20000")
+      .all(s.accountId) as { upload_id: string; state: string; final_at: number | null }[];
+    r.send(200, { now: this.now, uploads: rows.map((x) => ({ uploadId: x.upload_id, state: x.state, finalAt: x.final_at ?? 0 })) });
+  }
+
+  private kept(r: ExtRequest, body: unknown): void {
+    const s = r.session();
+    const list = (body as { uploads?: unknown })?.uploads;
+    if (!Array.isArray(list) || list.length > 1000 || !list.every(isClientId)) throw new HttpError(400, "bad_uploads");
+    let kept = 0;
+    for (const u of list as string[]) kept += Number(this.db.prepare("UPDATE s_uploads SET state = 'committed', released_at = NULL WHERE account_id = ? AND upload_id = ? AND outside = 1 AND state = 'released'").run(s.accountId, u).changes);
+    r.send(200, { ok: true, kept });
   }
 
   // --- reading
@@ -701,6 +722,8 @@ export class BlobsExtension implements ServerExtension {
     const ub = /^\/v1\/uploads\/([A-Za-z0-9_-]{8,64})\/blobs\/(m|\d{1,6}|x[A-Za-z0-9_-]{8,40})$/.exec(path);
     if (ub && method === "PUT") return (await this.putBlob(r, ub[1]!, ub[2]!), true);
     if (method === "POST" && path === "/v1/uploads/released") return (this.released(r, await r.json()), true);
+    if (method === "GET" && path === "/v1/uploads/outside") return (this.outsideUploads(r), true);
+    if (method === "POST" && path === "/v1/uploads/kept") return (this.kept(r, await r.json()), true);
     if (path === "/v1/diagnostics/transfer-log") return (await this.diagnostics(r), true);
     // Cleanup state for Settings → Storage (the instance cleans in the background) and "Clean up now".
     if (method === "GET" && path === "/v1/gc") return (r.send(200, this.gcStatus(r.session().accountId)), true);

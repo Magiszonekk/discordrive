@@ -222,7 +222,7 @@ export {
   type SlotApi,
   type UnlockedSafe,
 } from "./safe.js";
-export { SafeTree, emptySafeTree, safeChildren, safeTreeOf, type SafeTreeState } from "./safe-tree.js";
+export { SafeTree, SAFE_ORPHAN_GRACE_MS, emptySafeTree, safeChildren, safeTreeOf, type SafeCleanupReport, type SafeGone, type SafePieces, type SafeTreeOptions, type SafeTreeState } from "./safe-tree.js";
 export { HttpApi, HttpPairingMailbox, ServerError, createAccountHttp, getChallenge, getHealth, passwordParams, passwordSealedKey, rescueRegisterDevice, type HttpSession, type ServerDevice } from "./http-api.js";
 export { sealDeviceName, openDeviceName, cleanDeviceName, MAX_DEVICE_NAME } from "./device-names.js";
 export { prepareShare, prepareShareWith, shareLink, parseShareLink, openShare, attachmentFilename, type ShareMeta, type ShareAttachment, type OpenedShare } from "./share.js";
