@@ -2217,7 +2217,7 @@ function rowEntries(r: MenuRow): MenuEntry[] {
     { ic: "pencil", label: t("act.rename"), key: "rename", run: () => openRename(r) },
     { ic: "move", label: t("act.move"), key: "move", run: () => void openMove([r.id], r.name) },
     ...otherSpaceEntry([r.id], r.name),
-    ...(inRecovered() ? [] : [{ ic: "lock", label: t("safe.in"), key: "to-safe", run: () => void act(null, () => safeMoveIn([r.id], r.name)) }]),
+    ...(inRecovered() ? [] : ["sep" as const, { ic: "lock", label: t("safe.in"), key: "to-safe", run: () => void act(null, () => safeMoveIn([r.id], r.name)) }]),
     { ic: "trash", label: t("act.trash"), key: "trash", run: () => void act(null, () => trashItems([r])), danger: true },
   ];
 }
@@ -2520,11 +2520,17 @@ function wireMove() {
 }
 
 /** Ask before something that cannot be undone. Resolves true on the danger button. */
-function confirmDanger(title: string, text: string, yes: string): Promise<boolean> {
+/** Confirm something that cannot be undone. `safe` (an icon name): a move into / out of the Safe, which
+ * re-sends the file but loses nothing; accent tone and that icon instead of the red warning. */
+function confirmDanger(title: string, text: string, yes: string, safe?: "lock" | "lock-open"): Promise<boolean> {
   const d = $<HTMLDialogElement>("confirm-dialog");
   ui("cf-title").textContent = title;
   ui("cf-text").textContent = text;
-  $("confirm-yes").textContent = yes;
+  if (safe) d.dataset.tone = "safe";
+  else delete d.dataset.tone;
+  ui("cf-ic").setAttribute("href", `#i-${safe ?? "alert"}`);
+  $("confirm-yes").className = safe ? "btn primary" : "btn danger solid";
+  $("confirm-yes").replaceChildren(...(safe ? [icon(safe)] : []), h("span", {}, yes));
   d.showModal();
   ui<HTMLButtonElement>("cf-no").focus();
   return new Promise((resolve) => {
@@ -3246,16 +3252,25 @@ const safeHref = (id: string) => (id === "root" ? "/safe" : `/safe/${id}`);
 
 async function renderSafe() {
   const st = await core.safeState();
+  const state = !st.exists ? "new" : st.open ? "open" : "closed";
   $("safe-new").hidden = st.exists;
   $("safe-locked").hidden = !st.exists || st.open;
   $("safe-open").hidden = !(st.exists && st.open);
+  // The page's look hangs on data-state (header actions, crumbs and meta only while open).
+  ui("safe-title").closest<HTMLElement>("[data-page=safe]")!.dataset.state = state;
   $("safe-chip").textContent = !st.exists ? "" : st.open ? t("safe.chip.open") : t("safe.chip.closed");
-  $("safe-chip").className = `chip${st.exists && st.open ? " chip--success" : ""}`;
+  $("safe-chip").className = `chip safe-state${st.exists && st.open ? " chip--success" : ""}`;
+  $("safe-chip").hidden = !st.exists;
   if (!(st.exists && st.open)) {
-    // Closed: no name of the Safe stays in the page (its list, path and totals are emptied).
+    // Closed: no name of the Safe stays in the page (its list, path, title, totals and the name dialog are emptied).
     $("safe-list").replaceChildren();
     $("safe-crumbs").replaceChildren();
     $("safe-meta").textContent = "";
+    ui("safe-title").textContent = t("safe.h");
+    ui("safe-title").title = "";
+    $<HTMLInputElement>("safe-name").value = "";
+    const nd = $<HTMLDialogElement>("safe-name-dialog");
+    if (nd.open) nd.close();
     if (st.exists) queueMicrotask(() => $<HTMLInputElement>("safe-pw").focus());
     return;
   }
@@ -3269,62 +3284,112 @@ async function renderSafe() {
     // The folder is gone (deleted on another device): back to the top.
     return navigate("/safe", true);
   }
-  const crumbs = [{ id: "root", name: t("safe.h") }, ...path];
-  $("safe-crumbs").replaceChildren(...crumbs.map((c, i) => {
-    const a = document.createElement("a");
-    a.href = safeHref(c.id);
-    a.dataset.link = "";
-    a.textContent = c.name;
-    if (i === crumbs.length - 1) a.setAttribute("aria-current", "page");
-    return a;
-  }));
-  $("safe-meta").textContent = rows.length ? [tn("files.count", rows.length), fmt(rows.reduce((s0, r) => s0 + (r.size ?? 0), 0))].join(" · ") : "";
+  ui("safe-title").textContent = path.at(-1)?.name ?? t("safe.h");
+  ui("safe-title").title = path.at(-1)?.name ?? "";
+  // Crumbs like the Drive's: inside a folder only (phone: a back link to the parent; desktop: the whole path).
+  const kids: Node[] = [];
+  if (path.length) {
+    const parent = path.at(-2);
+    kids.push(h("span", { class: "back" }, h("a", { href: safeHref(parent ? parent.id : "root"), "data-link": "" }, icon("left"), parent ? parent.name : t("safe.h"))));
+    const desk = h("span", { class: "desk crumbs" }, h("a", { href: safeHref("root"), "data-link": "" }, icon("lock"), t("safe.h")));
+    path.forEach((c, i) => {
+      desk.append(icon("right"));
+      desk.append(i === path.length - 1 ? h("span", { "aria-current": "page", title: c.name }, c.name) : h("a", { href: safeHref(c.id), "data-link": "", title: c.name }, c.name));
+    });
+    kids.push(desk);
+  }
+  $("safe-crumbs").replaceChildren(...kids);
+  const folders = rows.filter((r) => r.kind === "folder").length;
+  $("safe-meta").textContent = rows.length
+    ? [tn("files.meta.folders", folders), tn("files.meta.files", rows.length - folders), fmt(rows.reduce((s0, r) => s0 + (r.size ?? 0), 0))].join(" · ")
+    : "";
   $("safe-empty").hidden = rows.length > 0;
   $("safe-list").replaceChildren(...rows.map((r) => safeRow(r)));
 }
 
+/** One row of the Safe: the Drive's file table row (type badge, name, size; actions on the right). */
 function safeRow(r: { id: string; name: string; kind: "file" | "folder"; size: number | null }): HTMLElement {
-  const li = document.createElement("li");
-  li.dataset.ddn = "safe-row";
-  li.dataset.kind = r.kind;
-  const ic = `<svg class="i"><use href="#i-${r.kind === "folder" ? "folder" : "file"}"/></svg>`;
-  const name = document.createElement(r.kind === "folder" ? "a" : "span");
-  name.className = "name";
-  name.innerHTML = ic;
-  name.append(document.createTextNode(` ${r.name}`));
+  const tr = h("tr");
+  tr.dataset.ddn = "safe-row";
+  tr.dataset.kind = r.kind;
+  const name = h("td", { class: "c-name" });
   if (r.kind === "folder") {
-    (name as HTMLAnchorElement).href = safeHref(r.id);
-    name.dataset.link = "";
+    name.append(h("span", { class: "nm" }, icon("folder"), h("a", { href: safeHref(r.id), "data-link": "", title: r.name }, r.name)), h("span", { class: "sub" }, t("files.folder")));
+    // A click anywhere on a folder row (not on its buttons) opens it, as in the Drive.
+    tr.classList.add("open-row");
+    tr.onclick = (e) => {
+      if (!(e.target as Element | null)?.closest("button, a")) navigate(safeHref(r.id));
+    };
+  } else {
+    const [, label, tone] = typeOf(r.name);
+    name.append(h("span", { class: "nm" }, h("span", { class: `badge ${tone}` }, label), h("span", { title: r.name }, r.name)), h("span", { class: "sub" }, r.size === null ? "" : fmt(r.size)));
   }
-  const size = document.createElement("span");
-  size.className = "meta";
-  size.textContent = r.size === null ? "" : fmt(r.size);
-  const btns = document.createElement("span");
-  btns.className = "row-btns";
-  const b = (key: string, ic2: string, label: string, run: () => Promise<unknown>, danger = false) => {
-    const x = document.createElement("button");
-    x.type = "button";
-    x.className = `iconbtn${danger ? " danger" : ""}`;
-    x.dataset.ddn = key;
-    x.title = label;
-    x.setAttribute("aria-label", `${label}: ${r.name}`);
-    x.innerHTML = `<svg class="i"><use href="#i-${ic2}"/></svg>`;
+  const b = (key: string, ic2: string, label: string, run: () => Promise<unknown>, tone = "") => {
+    const x = h("button", { type: "button", class: `iconbtn${tone ? ` ${tone}` : ""}`, "data-ddn": key, title: label, "aria-label": `${label}: ${r.name}` }, icon(ic2));
     x.onclick = () => void act(x, run);
     return x;
   };
-  if (r.kind === "file") btns.append(b("safe-download", "download", t("files.download"), async () => saveBlob(await core.safeDownload(r.id), r.name)));
-  btns.append(
+  const acts = h("span", { class: "acts" });
+  if (r.kind === "file") acts.append(b("safe-download", "download", t("files.download"), async () => saveBlob(await core.safeDownload(r.id), r.name), "accent"));
+  acts.append(
     b("safe-rename", "pencil", t("act.rename"), async () => {
-      const n = prompt(t("act.rename"), r.name);
-      if (n && n.trim() && n !== r.name) await core.safeRename(r.id, n);
+      const n = await askSafeName(r.kind === "folder" ? "rn.folder" : "rn.file", "rn.save", r.name);
+      if (n && n !== r.name) await core.safeRename(r.id, n);
     }),
     b("safe-out", "move", t("safe.out"), () => safeMoveOut(r)),
     b("safe-delete", "trash", t("safe.delete"), async () => {
       if (await confirmDanger(t("safe.delete.title", { name: r.name }), t("safe.delete.text"), t("safe.delete"))) await core.safeDelete([r.id]);
-    }, true),
+    }, "danger quiet"),
   );
-  li.append(name, size, btns);
-  return li;
+  tr.append(name, h("td", { class: "size" }, r.size === null ? "" : fmt(r.size)), h("td", { class: "c-acts" }, acts));
+  return tr;
+}
+
+/** New folder / rename inside the Safe: the app's own name dialog (prefilled, the name without the extension selected). */
+function askSafeName(titleKey: string, yesKey: string, current = ""): Promise<string | null> {
+  const d = $<HTMLDialogElement>("safe-name-dialog");
+  const input = $<HTMLInputElement>("safe-name");
+  const err = ui("sn-error");
+  ui("sn-title").textContent = t(titleKey);
+  ui("sn-ic").setAttribute("href", current ? "#i-pencil" : "#i-folder-plus");
+  $("safe-name-save").textContent = t(yesKey);
+  input.value = current;
+  input.placeholder = current ? "" : t("nf.ph");
+  err.hidden = true;
+  d.showModal();
+  input.focus();
+  const dot = current.lastIndexOf(".");
+  input.setSelectionRange(0, dot > 0 ? dot : current.length);
+  return new Promise((resolve) => {
+    let answer: string | null = null;
+    input.oninput = () => {
+      const p = renameProblem(input.value);
+      err.hidden = !p || !input.value;
+      err.textContent = p ?? "";
+    };
+    ui<HTMLFormElement>("sn-form").onsubmit = (e) => {
+      e.preventDefault();
+      const v = input.value.trim();
+      const p = renameProblem(v);
+      if (p) {
+        err.hidden = false;
+        err.textContent = p;
+        return;
+      }
+      answer = v;
+      d.close();
+    };
+    ui("sn-cancel").onclick = () => d.close();
+    ui("sn-close").onclick = () => d.close();
+    d.addEventListener(
+      "close",
+      () => {
+        input.value = "";
+        resolve(answer);
+      },
+      { once: true },
+    );
+  });
 }
 
 function saveBlob(b: Blob, name: string) {
@@ -3338,7 +3403,7 @@ function saveBlob(b: Blob, name: string) {
 /** Out of the Safe into the Drive's top (the file is sent again: say how much first). */
 async function safeMoveOut(r: { id: string; name: string }) {
   const bytes = await core.safeMoveSize([r.id], false);
-  if (!(await confirmDanger(t("safe.out.title", { name: r.name }), t("safe.move.cost", { size: fmt(bytes) }), t("safe.out")))) return;
+  if (!(await confirmDanger(t("safe.out.title", { name: r.name }), t("safe.move.cost", { size: fmt(bytes) }), t("safe.out"), "lock-open"))) return;
   const out = await core.safeMoveOut([r.id], "root");
   toast(t("safe.out.done", { n: out.files }));
 }
@@ -3351,7 +3416,7 @@ async function safeMoveIn(ids: string[], label: string) {
     return navigate("/safe");
   }
   const bytes = await core.safeMoveSize(ids, true);
-  if (!(await confirmDanger(t("safe.in.title", { name: label }), t("safe.move.cost", { size: fmt(bytes) }) + " " + t("safe.in.text"), t("safe.in")))) return;
+  if (!(await confirmDanger(t("safe.in.title", { name: label }), t("safe.move.cost", { size: fmt(bytes) }) + " " + t("safe.in.text"), t("safe.in"), "lock"))) return;
   const r = await core.safeMoveIn(ids, "root");
   clearSelection();
   toast(t("safe.in.done", { n: r.files }));
@@ -3397,10 +3462,12 @@ function wireSafe() {
     });
   };
   $("safe-close").onclick = () => void act($("safe-close"), async () => (await core.safeClose(), void render()));
-  $("safe-new-folder").onclick = () => {
-    const n = prompt(t("files.newFolder"));
-    if (n && n.trim()) void act($("safe-new-folder"), async () => (await core.safeMkdir(n, safeFolder()), void render()));
-  };
+  $("safe-new-folder").onclick = () =>
+    void act($("safe-new-folder"), async () => {
+      const n = await askSafeName("nf.h", "nf.create");
+      if (n) await core.safeMkdir(n, safeFolder());
+      void render();
+    });
   $<HTMLInputElement>("safe-file").onchange = (e) => {
     const input = e.currentTarget as HTMLInputElement;
     const files = [...(input.files ?? [])];
