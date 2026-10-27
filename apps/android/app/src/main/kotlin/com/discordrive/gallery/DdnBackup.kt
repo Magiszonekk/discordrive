@@ -262,10 +262,18 @@ object DdnBackup {
 /** The upload job: the queue first (the user is waiting for it), then the automatic copy. */
 class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     private var line = ""
+    /** This run's files (status, what is left). */
     private var done = 0
     private var total = 0
+    /** What the notification counts: the whole series of runs (see [BackupSeries]). */
+    private val series by lazy { BackupSeries.of(applicationContext) }
+    private var shown = BackupSeries.State(0, 0)
 
-    override suspend fun getForegroundInfo(): ForegroundInfo = foreground()
+    // Asked before the run starts (an expedited job on older Android): the series as it stands, not "0 of 0".
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        shown = if (series.open) series.state() else BackupSeries.State(0, 0)
+        return foreground()
+    }
 
     private fun foreground(): ForegroundInfo {
         val c = applicationContext
@@ -275,9 +283,9 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         }
         val n = NotificationCompat.Builder(c, DdnBackup.NOTIF_CHANNEL)
             .setSmallIcon(R.drawable.ic_sync)
-            .setContentTitle(c.getString(R.string.ddn_up_title, done, maxOf(total, done)))
+            .setContentTitle(c.getString(R.string.ddn_up_title, shown.done, shown.total))
             .setContentText(line)
-            .setProgress(maxOf(total, 1), done, total == 0)
+            .setProgress(maxOf(shown.total, 1), shown.done, shown.total == 0)
             .setOngoing(true).setOnlyAlertOnce(true)
             .build()
         return if (Build.VERSION.SDK_INT >= 29) ForegroundInfo(DdnBackup.NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) else ForegroundInfo(DdnBackup.NOTIF_ID, n)
@@ -285,8 +293,19 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
 
     private suspend fun show(text: String) {
         line = text
+        lastShown = System.currentTimeMillis()
         runCatching { setForeground(foreground()) }
+        publish()
     }
+
+    /** One file done (sent, or already in the account): the series counts it, the notification at most once a second. */
+    private suspend fun step() {
+        done++
+        shown = series.step()
+        if (System.currentTimeMillis() - lastShown >= 1000) show(line)
+    }
+
+    private fun publish() = setProgressAsync(Data.Builder().putInt("done", shown.done).putInt("total", shown.total).putString("line", line).build())
 
     override suspend fun doWork(): Result = DdnBackup.running.withLockFun { work() }
 
@@ -309,6 +328,7 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             val queue = db.queued(acct).filter { it.error == null }
             val media = if (auto) DdnBackup.scan(c, DdnBackup.buckets(c)).filter { !db.isCopied(it.id, it.size, it.modified, acct) } else emptyList()
             total = queue.size + media.size
+            shown = series.start(acct, total)
             show(c.getString(R.string.ddn_up_starting))
             for (q in queue) {
                 if (isStopped || System.currentTimeMillis() - t0 > DdnBackup.RUN_BUDGET_MS) break
@@ -321,7 +341,8 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                     up.upload(open, q.size, q.name, q.folder, pics, progress = { a, b -> progress(q.name, a, b) }, cancelled = { isStopped }, takenAt = taken)
                     db.done(q.id)
                     local?.delete()
-                    done++; copied++
+                    copied++
+                    step()
                 } catch (e: FileWriter.Cancelled) {
                     break
                 } catch (e: Exception) {
@@ -360,7 +381,7 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                             db.markCopied(m.id, m.size, m.modified, acct, r.nodeId)
                             copied++
                         }
-                        done++
+                        step()
                     } catch (e: FileWriter.Cancelled) {
                         break
                     } catch (e: Exception) {
@@ -371,6 +392,7 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                 }
             }
             waiting = total - done
+            series.end(waiting)
             DdnBackup.log("run: copied $copied, waiting $waiting, ${System.currentTimeMillis() - t0} ms")
         } catch (e: Exception) {
             err = e.message
@@ -395,7 +417,7 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         lastShown = t
         line = "$name · ${sent * 100 / maxOf(size, 1)}%"
         runCatching { setForegroundAsync(foreground()) }
-        setProgressAsync(Data.Builder().putInt("done", done).putInt("total", total).putString("line", line).build())
+        publish()
     }
 
     private fun picturesOf(c: Context, local: File?, uri: String?): List<io.github.magiszonekk.discordrive.core.FileWrite.Picture> {

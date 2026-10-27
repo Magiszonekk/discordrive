@@ -42,7 +42,9 @@ object DdnAi {
     private const val SECRET = "ddn-ai-config"
     const val WORK_PERIODIC = "ddn-ai-periodic"
     const val WORK_NOW = "ddn-ai-now"
-    const val NOTIF_ID = 4711
+    /** Its own notification: two foreground jobs with one ID show the older job's stale text (WorkManager
+     * re-posts the first job's notification after each update of the second). */
+    const val NOTIF_ID = 4713
     /** One description at a time, at most this many per minute (endpoint limits; the background stays light). */
     const val PER_MIN = 12
     /** One run's work at most (WorkManager gives ~10 min). */
@@ -351,6 +353,7 @@ object DdnAi {
 
 /** The background run: describes what is not described yet, paced (PER_MIN), within RUN_BUDGET_MS. */
 class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
+    /** Photos looked at in this run (described, or failed): the notification's count moves with each one. */
     private var done = 0
     private var total = 0
 
@@ -398,7 +401,6 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             for (attempt in 0 until 3) {
                 try {
                     DdnAi.describeOne(c, s, ai, f, db, relang)
-                    done++
                     DdnAi.live = db.count(acct, "ok") to all.size
                     err = null
                 } catch (e: AiException) {
@@ -418,7 +420,9 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
                 break
             }
             if (stop) break
-            if (done % 5 == 0) runCatching { setForeground(info()) }
+            // Counted also when it failed (counting only descriptions left "0 of N" through a run of errors).
+            done++
+            runCatching { setForeground(info()) }
         }
         DdnAi.live = null
         DdnAi.setStatus(c, DdnAi.Status(System.currentTimeMillis(), db.count(acct, "ok"), all.size, err, gone))
