@@ -390,6 +390,14 @@
           <p data-i18n-html="safe.open.band"></p>
           <button class="btn sm" type="button" data-ddn="safe-close"><svg class="i"><use href="#i-lock"/></svg><span data-i18n="safe.close">Close</span></button>
         </div>
+        <!-- Files going into the Safe: a row per file with its progress (the Drive's upload list). -->
+        <section class="uploads" data-ddn="safe-queue" hidden aria-live="polite">
+          <div class="uploads-h">
+            <div class="t"><b data-ddn="safe-queue-title" data-i18n="queue.title">Uploads</b><span data-ddn="safe-queue-meta"></span></div>
+            <button class="iconbtn" type="button" data-ddn="safe-queue-close" data-i18n-attr="aria-label=queue.hide" hidden><svg class="i"><use href="#i-x"/></svg></button>
+          </div>
+          <ul class="qlist" data-ddn="safe-queue-list"></ul>
+        </section>
         <div class="ftable-wrap safe-wrap">
           <table class="ftable">
             <thead><tr><th data-i18n="files.col.name">Name</th><th class="r" data-i18n="files.col.size">Size</th><th><span class="sr" data-i18n="files.col.actions">Actions</span></th></tr></thead>

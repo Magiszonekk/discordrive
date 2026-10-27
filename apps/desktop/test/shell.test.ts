@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import { checkCall, CORE_METHODS } from "../src/agent/methods.js";
+import { connect } from "../../web-mo/src/rpc.js";
 import { normaliseServerUrl, isPrivateHost, loadSettings, saveSettings, DEFAULTS } from "../src/shell/settings.js";
 import { autostartOn, setAutostart, xdgEntry, xdgFile, type AutostartEnv } from "../src/shell/autostart.js";
 import { safeFileName, freeName } from "../src/agent/node-platform.js";
@@ -29,6 +30,31 @@ describe("agent call checks", () => {
     expect(checkCall("downloadToDisk", ["id", undefined, "tok"])).toBeNull();
     expect(checkCall("list", [undefined, undefined, 200, { by: "name", desc: false }])).toBeNull();
     expect(checkCall("rename", "ab")).toMatch(/bad arguments/);
+  });
+  it("lets the window call every core method it uses (browser-only calls named and guarded)", () => {
+    // What ui.ts and the other window modules call on the core. A call missing here fails in the app with
+    // "no method …" (or hangs, for a File argument), which the browser tests never see.
+    const dir = join(__dirname, "..", "..", "web-mo", "src");
+    const used = new Set<string>();
+    for (const f of ["ui.ts", "admin-ui.ts", "channels-ui.ts"]) for (const m of readFileSync(join(dir, f), "utf8").matchAll(/\bcore\.([a-zA-Z]+)\(/g)) used.add(m[1]!);
+    // Called only where the window is a browser: the desktop takes another branch (paths, downloads to disk).
+    const browserOnly: Record<string, string> = { init: "the agent made its core", upload: "uploadPath", safeUpload: "safeUploadPath", downloadStream: "downloadToDisk" };
+    const missing = [...used].filter((m) => !Object.hasOwn(CORE_METHODS, m) && !Object.hasOwn(browserOnly, m));
+    expect(missing).toEqual([]);
+    for (const [m, alt] of Object.entries(browserOnly)) if (m !== "init") expect(Object.hasOwn(CORE_METHODS, alt), `${m} -> ${alt}`).toBe(true);
+    // The desktop branch of each browser-only call is in ui.ts.
+    const ui = readFileSync(join(dir, "ui.ts"), "utf8");
+    expect(ui).toMatch(/if \(desktop\) await core\.safeUploadPath\(/);
+  });
+  it("a File argument is refused at once on the way to the agent, not left hanging", async () => {
+    const sent: unknown[] = [];
+    const ep = { onmessage: null as ((ev: MessageEvent) => void) | null, postMessage: (m: unknown) => void sent.push(m) };
+    const c = connect(ep, () => {}, { blobArgs: false }) as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    await expect(c.safeUpload!(new Blob(["x"]), "x.txt")).rejects.toThrow(/safeUpload: a file cannot be sent/);
+    await expect(c.upload!({ f: new Blob(["x"]) })).rejects.toThrow(/cannot be sent/);
+    expect(sent).toEqual([]);
+    void c.safeUploadPath!("/tmp/x.txt");
+    expect(sent).toEqual([{ id: 1, method: "safeUploadPath", args: ["/tmp/x.txt"] }]);
   });
   it("lists only methods the core has", async () => {
     const src = readFileSync(join(__dirname, "..", "..", "web-mo", "src", "app-core.ts"), "utf8");

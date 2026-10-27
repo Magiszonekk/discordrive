@@ -125,7 +125,9 @@ function onCoreEvent(e: CoreEvent) {
   else if (e.type === "auth-lost") void render();
   else if (e.type === "speed-progress") paintSpeedProgress(e.p);
 }
-export const core = connect(worker, onCoreEvent);
+// Desktop: a File/Blob argument cannot reach the agent (another process); such a call fails at once with a
+// readable error instead of hanging. The window passes paths (desktop.pathsOf) instead.
+export const core = connect(worker, onCoreEvent, { blobArgs: !desktop });
 (window as unknown as { ddnCore: typeof core }).ddnCore = core;
 
 // Stream requests from the service worker -> app worker.
@@ -3266,6 +3268,8 @@ async function renderSafe() {
     $("safe-list").replaceChildren();
     $("safe-crumbs").replaceChildren();
     $("safe-meta").textContent = "";
+    // The upload list too, once nothing is running into the Safe (it names the files).
+    if (!safeQueueRunning) closeSafeQueue();
     ui("safe-title").textContent = t("safe.h");
     ui("safe-title").title = "";
     $<HTMLInputElement>("safe-name").value = "";
@@ -3472,12 +3476,108 @@ function wireSafe() {
     const input = e.currentTarget as HTMLInputElement;
     const files = [...(input.files ?? [])];
     input.value = "";
-    void act(null, async () => {
-      for (const f of files) await core.safeUpload(f, f.name, safeFolder());
-      toast(tn("safe.uploaded", files.length));
-      void render();
-    });
+    void act(null, () => safeUploadFiles(files));
   };
+  safeQueueCloser = panelCloser($("safe-queue"), closeSafeQueue);
+  $("safe-queue-close").onclick = () => closeSafeQueue();
+}
+
+let safeQueueCloser: Closer | null = null;
+let safeQueueRunning = 0;
+function closeSafeQueue() {
+  safeQueueCloser?.stop();
+  $("safe-queue").hidden = true;
+  $("safe-queue-list").replaceChildren();
+}
+/**
+ * Files into the open Safe, one after another, a row each with its progress. Desktop app: the agent reads
+ * them from disk by their paths (a File cannot cross into the agent's process); a browser sends the File.
+ * A failure is shown on its row and as a message, never dropped.
+ */
+async function safeUploadFiles(files: File[]) {
+  if (!files.length) return;
+  const paths = desktop ? desktop.pathsOf(files) : [];
+  if (desktop && paths.length !== files.length) throw new Error(t("safe.err.noPath"));
+  const folder = safeFolder();
+  const box = $("safe-queue");
+  const list = $("safe-queue-list");
+  safeQueueCloser?.stop();
+  safeQueueRunning++;
+  box.hidden = false;
+  $("safe-queue-close").hidden = true;
+  const rows = files.map((f) => {
+    const state = h("span", { class: "qstate" }, t("queue.wait"));
+    const bar = h("i");
+    const token = crypto.randomUUID();
+    const cancel = h("button", { class: "iconbtn qcancel", type: "button", "data-ddn": "safe-queue-cancel", "aria-label": t("queue.cancel"), title: t("queue.cancel") }, icon("x"));
+    const li = h("li", { "data-ddn": "safe-queue-item" }, h("span", { class: "qname", title: f.name }, f.name), h("span", { class: "qside" }, cancel, state), h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, fmt(f.size)));
+    list.append(li);
+    const row = { f, state, bar, token, cancel, cancelled: false };
+    cancel.onclick = () => {
+      row.cancelled = true;
+      cancel.hidden = true;
+      void core.cancelUpload(token);
+    };
+    return row;
+  });
+  let ok = 0;
+  let failed = 0;
+  let cancelled = 0;
+  const meta = () => ($("safe-queue-meta").textContent = t("queue.running", { done: ok + failed + cancelled, total: files.length }));
+  meta();
+  for (const [i, r] of rows.entries()) {
+    const { f, state, bar, token } = r;
+    if (r.cancelled) {
+      cancelled++;
+      state.className = "qstate cancel";
+      bar.className = "cancel";
+      state.textContent = t("queue.cancelled");
+      meta();
+      continue;
+    }
+    state.className = "qstate run";
+    state.textContent = t("queue.preparing");
+    progressHandlers.set(token, (done, tot) => {
+      const pct = tot ? Math.floor((done / tot) * 100) : 100;
+      state.textContent = `${pct}%`;
+      bar.style.width = `${pct}%`;
+    });
+    try {
+      if (desktop) await core.safeUploadPath(paths[i]!, folder, token);
+      else await core.safeUpload(f, f.name, folder, token);
+      ok++;
+      state.className = "qstate done";
+      state.textContent = t("queue.ok");
+      bar.className = "done";
+      bar.style.width = "100%";
+    } catch (e) {
+      if (r.cancelled) {
+        cancelled++;
+        state.className = "qstate cancel";
+        bar.className = "cancel";
+        state.textContent = t("queue.cancelled");
+      } else {
+        failed++;
+        const why = errText(e);
+        state.className = "qstate err";
+        bar.className = "err";
+        state.textContent = t("queue.err");
+        state.title = why;
+        toast(`${f.name}: ${why}`, "err");
+      }
+    } finally {
+      progressHandlers.delete(token);
+      r.cancel.hidden = true;
+      meta();
+    }
+    void render();
+  }
+  if (--safeQueueRunning === 0) {
+    $("safe-queue-meta").textContent = "";
+    $("safe-queue-close").hidden = false;
+    safeQueueCloser?.start(failed ? "err" : cancelled ? "cancel" : "ok");
+  }
+  if (ok) toast(tn("safe.uploaded", ok));
 }
 
 function wireTrash() {

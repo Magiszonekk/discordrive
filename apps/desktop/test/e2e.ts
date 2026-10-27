@@ -186,6 +186,45 @@ try {
   check("listed", rows.some((x) => x.name === "movie.bin") && rows.some((x) => x.name === "photos" && x.kind === "folder"));
   const movie = rows.find((x) => x.name === "movie.bin")!;
 
+  step("the Safe: create it in the window, Upload files from disk (the agent reads them by path), a queue row each");
+  {
+    await p.evaluate(() => {
+      history.pushState(null, "", "/safe");
+      dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await p.waitForSelector("[data-ddn=safe-new]:not([hidden])", { timeout: 15_000 });
+    const SPW = "e2e safe password horse staple";
+    await p.fill("[data-ddn=safe-new-pw]", SPW);
+    await p.fill("[data-ddn=safe-new-pw2]", SPW);
+    await p.check("[data-ddn=safe-new-ack]");
+    await p.click("[data-ddn=safe-create]");
+    await p.waitForSelector("[data-ddn=safe-open]:not([hidden])", { timeout: 60_000 });
+    writeFileSync(join(src, "tajne.pdf"), randomBytes(300_000));
+    await p.setInputFiles("[data-ddn=safe-file]", [join(src, "tajne.pdf"), join(src, "photos", "a.txt")]);
+    const safeDone = await p
+      .waitForFunction(() => {
+        const rows = [...document.querySelectorAll("[data-ddn=safe-row]")].map((x) => x.textContent ?? "");
+        const q = [...document.querySelectorAll("[data-ddn=safe-queue-item] .qstate")];
+        return rows.some((x) => x.includes("tajne.pdf")) && rows.some((x) => x.includes("a.txt")) && q.length === 2 && q.every((x) => x.classList.contains("done"));
+      }, null, { timeout: 60_000 })
+      .then(() => true)
+      .catch(() => false);
+    r.safeRows = await p.$$eval("[data-ddn=safe-row]", (e) => e.map((x) => x.textContent?.trim()));
+    r.safeQueue = await p.$$eval("[data-ddn=safe-queue-item]", (e) => e.map((x) => x.textContent?.trim()));
+    check("safeUploadFromWindow", safeDone);
+    const sizes = await p.evaluate(() => (window as unknown as { ddnCore: { safeList(): Promise<{ name: string; size: number | null }[]> } }).ddnCore.safeList());
+    check("safeUploadSizes", sizes.some((x) => x.name === "tajne.pdf" && x.size === 300_000) && sizes.some((x) => x.name === "a.txt" && x.size === 1));
+    // The Drive does not see it (the Safe's files are not in the account's log).
+    const drive = (await p.evaluate(() => (window as unknown as { ddnCore: { list(): Promise<{ rows: { name: string }[] }> } }).ddnCore.list())).rows;
+    check("safeNotInDrive", !drive.some((x) => x.name === "tajne.pdf"));
+    await p.click("[data-ddn=safe-close]");
+    await p.waitForSelector("[data-ddn=safe-locked]:not([hidden])", { timeout: 10_000 });
+    await p.evaluate(() => {
+      history.pushState(null, "", "/");
+      dispatchEvent(new PopStateEvent("popstate"));
+    });
+  }
+
   step("speed test through the agent: the result card, Copy, nothing left in the account or on Discord");
   {
     const files0 = (await p.evaluate(() => (window as unknown as { ddnCore: { list(): Promise<{ rows: unknown[] }> } }).ddnCore.list())).rows.length;
