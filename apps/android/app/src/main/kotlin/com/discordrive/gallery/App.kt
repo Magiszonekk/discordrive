@@ -10,6 +10,8 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         AppLog.init(this)
+        // Files opened from the Safe by a process that was killed: nothing is open in this one.
+        DdnSafe.onProcessStart(this)
         applyAccentToEveryActivity()
         val version = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()
         AppLog.i(

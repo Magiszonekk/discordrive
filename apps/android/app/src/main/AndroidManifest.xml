@@ -70,6 +70,7 @@
         </activity>
         <activity android:name=".DdnBackupActivity" android:exported="false" android:label="@string/ddn_backup" />
         <activity android:name=".DdnTrashActivity" android:exported="false" android:label="@string/ddn_trash" />
+        <activity android:name=".DdnSafeActivity" android:exported="false" android:label="@string/safe_title" />
         <activity android:name=".DdnFreeUpActivity" android:exported="false" android:label="@string/ddn_free" />
         <activity android:name=".DdnEditActivity" android:exported="false" android:theme="@style/Theme.Gallery.Viewer" />
         <activity android:name=".DdnSearchActivity" android:exported="false" android:label="@string/ddn_search" android:windowSoftInputMode="stateVisible|adjustResize" />
@@ -135,6 +136,8 @@
             android:theme="@style/Theme.Gallery.Viewer" />
 
         <receiver android:name=".SyncActionReceiver" android:exported="false" />
+        <!-- Closes the Safe after 5 minutes idle even with the app in the background or its process killed. -->
+        <receiver android:name=".DdnSafe$CloseReceiver" android:exported="false" />
 
         <!-- Android 14+: declare the FGS type on WorkManager's foreground service
              so setForeground(dataSync) is allowed (else startForeground throws). -->

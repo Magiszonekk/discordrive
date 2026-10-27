@@ -437,6 +437,56 @@ class BrowseUiTest {
      * releases API, downloaded with its SHA-256 checked, handed to the system installer), Open with (VIEW) of
      * a photo of another app.
      */
+    /**
+     * The Safe on the phone: the screen offers to create it; created with a password it opens empty; a file of
+     * Files moved in (sent again, gone from Files); closed by the button (no names), a wrong password refused, the
+     * right one opens it again; the web opens the phone's Safe with the password and reads the moved file.
+     */
+    private fun safe(sc: InteropScenario, r: LinkedHashMap<String, Boolean>) {
+        val pw = "kot ma ale i psa 2026"
+        val s = DdnSession.get(ctx)!!
+        s.refresh()
+        DdnSafe.forget(ctx)
+        ActivityScenario.launch<DdnSafeActivity>(Intent(ctx, DdnSafeActivity::class.java)).use { a ->
+            r["safeOffersCreate"] = waitUntil { var st = ""; a.onActivity { x -> st = x.stateForTest }; st == "new" }
+            shot("6-safe-new")
+        }
+        DdnSafe.create(ctx, pw)
+        r["safeOpenEmpty"] = DdnSafe.isOpen && DdnSafe.children(ctx, "root").isEmpty()
+        // A file of its own (uploaded here): moving it in must not change what other steps counted.
+        val bytes = ByteArray(70_003) { (it * 31).toByte() }
+        val up = s.uploader().upload({ bytes.inputStream() }, bytes.size.toLong(), "do-sejfu.pdf", "root")
+        s.refresh()
+        val doc = s.children("root").first { it.id == up.nodeId }
+        val moved = DdnSafe.moveIn(ctx, listOf(doc))
+        r["safeMovedIn"] = moved == 1 && DdnSafe.children(ctx, "root").map { it.name } == listOf("do-sejfu.pdf") && s.children("root").none { it.id == doc.id }
+        ActivityScenario.launch<DdnSafeActivity>(Intent(ctx, DdnSafeActivity::class.java)).use { a ->
+            r["safeScreenOpen"] = waitUntil { var st = ""; a.onActivity { x -> st = x.stateForTest }; st == "open" }
+            shot("7-safe-open")
+            a.onActivity { DdnSafe.close(ctx) }
+            r["safeClosedByButton"] = waitUntil { var st = ""; a.onActivity { x -> st = x.stateForTest }; st == "closed" } && !DdnSafe.isOpen
+        }
+        r["safeNoNamesWhenClosed"] = runCatching { DdnSafe.children(ctx, "root") }.isFailure
+        r["safeWrongPassword"] = runCatching { DdnSafe.unlock(ctx, "zle haslo zle haslo") }.exceptionOrNull() is io.github.magiszonekk.discordrive.core.Safe.BadPasswordException
+        DdnSafe.unlock(ctx, pw)
+        r["safeReopened"] = DdnSafe.children(ctx, "root").map { it.name } == listOf("do-sejfu.pdf")
+        val web = sc.rpc("safeWeb", buildJsonObject { put("password", pw); put("file", "do-sejfu.pdf"); put("sha", up.sha256) }).jsonObject
+        r["safeWebOpensPhoneSafe"] = web["fileSame"]?.jsonPrimitive?.content == "true"
+        // A file opened from the Safe sits in the cache only while it is open: past the idle time it closes and the
+        // file goes (the system alarm is set while open); a new process (the old one killed) wipes what is left.
+        val opened = DdnSafe.fetch(ctx, DdnSafe.children(ctx, "root").first())
+        r["safeOpenedFileCached"] = opened.length() == bytes.size.toLong() && DdnSafe.alarmSetForTest(ctx)
+        DdnSafe.expireForTest()
+        r["safeExpiredRefused"] = !DdnSafe.isOpen && runCatching { DdnSafe.children(ctx, "root") }.isFailure
+        var closedNow = false
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { closedNow = DdnSafe.closeIfIdle(ctx) }
+        r["safeIdleWipesOpened"] = closedNow && !opened.exists() && !DdnSafe.alarmSetForTest(ctx)
+        val left = java.io.File(ctx.cacheDir, "safe-open").apply { mkdirs() }.resolve("left.txt").apply { writeText("x") }
+        DdnSafe.onProcessStart(ctx)
+        r["safeNewProcessWipes"] = !left.exists()
+        DdnSafe.close(ctx)
+    }
+
     private fun trashAndSettings(sc: InteropScenario, r: LinkedHashMap<String, Boolean>, updatesApi: String?) {
         val s = DdnSession.get(ctx)!!
         s.refresh()
@@ -599,6 +649,8 @@ class BrowseUiTest {
         failedUpload(sc, r)
         aiDescriptions(sc, r, args.getString("ddnAi"))
         if (args.getString("ddnAi") != null) search(sc, r)
+        // Last: the Safe (it moves a file out of Files; nothing after it counts files).
+        safe(sc, r)
         Log.i("ddn-ui", "RESULT $r")
         sc.rpc("done", kotlinx.serialization.json.JsonObject(r.mapValues { JsonPrimitive(it.value) }))
         assertTrue("ui checks: $r", r.values.all { it })

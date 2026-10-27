@@ -130,6 +130,25 @@ class DdnSession private constructor(private val app: Context, val acct: Account
         ix { _ -> sync.commit(op).also { headSeq = replica.headSeq; DdnAccount.setVaultRevision(app, sync.vaultRevision); saveCopy() } }
     }, parallel = parallel)
 
+    /**
+     * The Safe's tree through this session's JS engine (DdnSafe / core SafeTree): every call on the index thread,
+     * so it follows the engine when the session moves to QuickJS. The account's index is not touched.
+     */
+    val safeReplica: IndexReplica = object : IndexReplica {
+        override val rulesVersion: Int get() = ix { it.rulesVersion }
+        override val headSeq: Long get() = 0
+        override fun reset() {}
+        override fun loadSnapshotText(slices: Sequence<String>): Long = throw UnsupportedOperationException()
+        override fun apply(entries: List<kotlinx.serialization.json.JsonObject>): IndexReplica.ApplySummary = throw UnsupportedOperationException()
+        override fun leaseGuard(op: kotlinx.serialization.json.JsonObject): List<String> = ix { it.leaseGuard(op) }
+        override fun stateSha256(): String = throw UnsupportedOperationException()
+        override fun children(parentId: String): List<IndexReplica.Child> = throw UnsupportedOperationException()
+        override fun safeEmpty(): String = ix { it.safeEmpty() }
+        override fun safeApply(tree: String, entry: kotlinx.serialization.json.JsonObject): String = ix { it.safeApply(tree, entry) }
+        override fun safeChildren(tree: String, parentId: String): List<IndexReplica.Child> = ix { it.safeChildren(tree, parentId) }
+        override fun close() {}
+    }
+
     /** The folder at `path` under the root (made where missing). Returns its ID. */
     fun folderPath(path: List<String>): String = ix { _ -> path.fold("root") { parent, name -> sync.folder(name, parent) } }
 
@@ -264,6 +283,7 @@ class DdnSession private constructor(private val app: Context, val acct: Account
 
         @Synchronized
         fun forget(context: Context) {
+            DdnSafe.forget(context)
             current?.close()
             current = null
             File(context.filesDir, "ddn-index.json").delete()

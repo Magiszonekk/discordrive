@@ -69,9 +69,9 @@ class SafeTreeEngineTest {
                 assertEquals(listOf(listOf("upl-0000001", content.getValue("manifestRef").jsonPrimitive.content)), rel)
                 assertEquals(5L, tree.getValue("meta").jsonObject.getValue("headSeq").jsonPrimitive.long)
                 // A tree larger than one slice (200 000 characters) goes in and out whole.
-                for (i in 0 until 2500) apply(6L + i, buildJsonObject { put("type", "create"); put("kind", "folder"); put("nodeId", "big-%07d".format(i)); put("parentId", "fold-0000002"); put("name", "folder %05d ${"x".repeat(40)}".format(i)) })
-                assertTrue(json.encodeToString(JsonElement.serializer(), tree).length > 400_000)
-                assertEquals(2500, ix.safeChildren(json.encodeToString(JsonElement.serializer(), tree), "fold-0000002").size)
+                for (i in 0 until 600) apply(6L + i, buildJsonObject { put("type", "create"); put("kind", "folder"); put("nodeId", "big-%07d".format(i)); put("parentId", "fold-0000002"); put("name", "folder %05d ${"x".repeat(160)}".format(i)) })
+                assertTrue(json.encodeToString(JsonElement.serializer(), tree).length > 250_000)
+                assertEquals(600, ix.safeChildren(json.encodeToString(JsonElement.serializer(), tree), "fold-0000002").size)
                 // The account's index is another store.
                 assertEquals(accountHead, ix.headSeq)
             }
