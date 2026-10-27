@@ -472,6 +472,18 @@ class BrowseUiTest {
         r["safeReopened"] = DdnSafe.children(ctx, "root").map { it.name } == listOf("do-sejfu.pdf")
         val web = sc.rpc("safeWeb", buildJsonObject { put("password", pw); put("file", "do-sejfu.pdf"); put("sha", up.sha256) }).jsonObject
         r["safeWebOpensPhoneSafe"] = web["fileSame"]?.jsonPrimitive?.content == "true"
+        // A file opened from the Safe sits in the cache only while it is open: past the idle time it closes and the
+        // file goes (the system alarm is set while open); a new process (the old one killed) wipes what is left.
+        val opened = DdnSafe.fetch(ctx, DdnSafe.children(ctx, "root").first())
+        r["safeOpenedFileCached"] = opened.length() == bytes.size.toLong() && DdnSafe.alarmSetForTest(ctx)
+        DdnSafe.expireForTest()
+        r["safeExpiredRefused"] = !DdnSafe.isOpen && runCatching { DdnSafe.children(ctx, "root") }.isFailure
+        var closedNow = false
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { closedNow = DdnSafe.closeIfIdle(ctx) }
+        r["safeIdleWipesOpened"] = closedNow && !opened.exists() && !DdnSafe.alarmSetForTest(ctx)
+        val left = java.io.File(ctx.cacheDir, "safe-open").apply { mkdirs() }.resolve("left.txt").apply { writeText("x") }
+        DdnSafe.onProcessStart(ctx)
+        r["safeNewProcessWipes"] = !left.exists()
         DdnSafe.close(ctx)
     }
 

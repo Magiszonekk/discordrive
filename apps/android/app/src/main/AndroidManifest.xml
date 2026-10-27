@@ -136,6 +136,8 @@
             android:theme="@style/Theme.Gallery.Viewer" />
 
         <receiver android:name=".SyncActionReceiver" android:exported="false" />
+        <!-- Closes the Safe after 5 minutes idle even with the app in the background or its process killed. -->
+        <receiver android:name=".DdnSafe$CloseReceiver" android:exported="false" />
 
         <!-- Android 14+: declare the FGS type on WorkManager's foreground service
              so setForeground(dataSync) is allowed (else startForeground throws). -->

@@ -56,7 +56,8 @@ class DdnSafeActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        DdnSafe.touch()
+        // Back after the idle time: closed (not opened for 5 more minutes); else the use keeps it open.
+        if (DdnSafe.closeIfIdle(this)) { if (stateForTest == "open") show() } else DdnSafe.touch()
     }
 
     override fun onDestroy() {

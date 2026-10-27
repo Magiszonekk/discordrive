@@ -1,7 +1,12 @@
 package com.discordrive.gallery
 
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
 import android.os.Build
+import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
@@ -30,6 +35,10 @@ import javax.crypto.spec.GCMParameterSpec
  * Safe's master sealed by an Android Keystore key that needs the user every time). The open Safe (its master and its
  * names) lives only in this process's memory: dropped on Close, after [IDLE_MS] without a use, and when the account
  * leaves the phone. Files opened from the Safe are written to a cache folder only for the viewer and wiped on close.
+ *
+ * The idle deadline is on the elapsed-realtime clock (it keeps running while the phone sleeps) and is also kept by a
+ * system alarm: with the app in the background, or its process killed, the alarm closes the Safe and wipes the
+ * opened files. A new process starts with the Safe closed, so it wipes whatever an earlier one left ([onProcessStart]).
  */
 object DdnSafe {
     const val IDLE_MS = 5 * 60_000L
@@ -37,11 +46,18 @@ object DdnSafe {
     @Volatile private var open: SafeStore.Unlocked? = null
     private var tree: SafeTree? = null
     private var store: SafeStore? = null
-    private val closeLater = Runnable { close() }
+    /** Elapsed realtime after which the open Safe closes ([IDLE_MS] after its last use). */
+    @Volatile private var closesAt = 0L
+    /** When the system alarm is set for (it is moved only when the deadline moved enough, not on every touch). */
+    @Volatile private var alarmAt = 0L
+    private const val ALARM_SLACK_MS = 30_000L
+    private val closeLater = Runnable { closeIfIdle() }
     /** Called on the main thread when the Safe closes by itself (the screen shows the closed state). */
     @Volatile var onClosed: (() -> Unit)? = null
 
-    val isOpen: Boolean get() = open != null
+    val isOpen: Boolean get() = open != null && !expired()
+
+    private fun expired(now: Long = SystemClock.elapsedRealtime()) = now >= closesAt
 
     @Volatile private var appCtx: Context? = null
 
@@ -64,16 +80,69 @@ object DdnSafe {
     private fun prefs(c: Context) = c.getSharedPreferences("ddn-safe", Context.MODE_PRIVATE)
     private fun seenRevision(c: Context) = prefs(c).getLong("seen", 0)
     private fun keep(c: Context, u: SafeStore.Unlocked): SafeStore.Unlocked {
+        appCtx = c.applicationContext
+        closesAt = SystemClock.elapsedRealtime() + IDLE_MS
         open = u
         prefs(c).edit().putLong("seen", maxOf(seenRevision(c), u.revision)).apply()
         touch()
         return u
     }
 
-    /** Any use keeps it open [IDLE_MS] longer. */
+    /** Any use keeps it open [IDLE_MS] longer (not once it is past its deadline: then it closes). */
     fun touch() {
+        if (open == null || closeIfIdle()) return
+        closesAt = SystemClock.elapsedRealtime() + IDLE_MS
         main.removeCallbacks(closeLater)
-        if (open != null) main.postDelayed(closeLater, IDLE_MS)
+        main.postDelayed(closeLater, IDLE_MS)
+        if (closesAt - alarmAt > ALARM_SLACK_MS) appCtx?.let { setAlarm(it, closesAt) }
+    }
+
+    /** Closes the Safe when it is past its deadline (or keeps the timers on the deadline); true when it is closed. */
+    fun closeIfIdle(c: Context? = null): Boolean {
+        if (open == null) { wipeOpened(c ?: appCtx); return true }
+        val now = SystemClock.elapsedRealtime()
+        if (expired(now)) { close(c); return true }
+        main.removeCallbacks(closeLater)
+        main.postDelayed(closeLater, closesAt - now)
+        return false
+    }
+
+    /** A new process: no Safe is open in it, so the files an earlier (killed) process opened go. */
+    fun onProcessStart(c: Context) {
+        appCtx = c.applicationContext
+        wipeOpened(c)
+    }
+
+    private fun wipeOpened(c: Context?) { c?.let { File(it.cacheDir, "safe-open").deleteRecursively() } }
+
+    private fun alarmIntent(c: Context, flags: Int): PendingIntent? =
+        PendingIntent.getBroadcast(c, 0, Intent(c, CloseReceiver::class.java), PendingIntent.FLAG_IMMUTABLE or flags)
+
+    /** The system alarm (wakes the phone, allowed in Doze; inexact: may come a few minutes late, never early). */
+    private fun setAlarm(c: Context, at: Long) {
+        val am = c.getSystemService(AlarmManager::class.java) ?: return
+        am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, alarmIntent(c, PendingIntent.FLAG_UPDATE_CURRENT)!!)
+        alarmAt = at
+    }
+
+    private fun cancelAlarm(c: Context) {
+        alarmIntent(c, PendingIntent.FLAG_NO_CREATE)?.let { c.getSystemService(AlarmManager::class.java)?.cancel(it); it.cancel() }
+        alarmAt = 0
+    }
+
+    internal fun alarmSetForTest(c: Context): Boolean = alarmIntent(c, PendingIntent.FLAG_NO_CREATE) != null
+    internal fun expireForTest() { closesAt = 0 }
+
+    /** The idle alarm: with the process alive it closes the Safe when idle (else moves the alarm); in a new process it wipes. */
+    class CloseReceiver : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            val app = c.applicationContext
+            main.post {
+                appCtx = appCtx ?: app
+                alarmAt = 0
+                if (!closeIfIdle(app)) setAlarm(app, closesAt)
+            }
+        }
     }
 
     // ── off the main thread ──
@@ -87,10 +156,14 @@ object DdnSafe {
     fun unlockWithMaster(c: Context, master: ByteArray): SafeStore.Unlocked = keep(c, parts(c).first.unlockWithMaster(master)).also { cleanupLater(c) }
 
     private fun cleanupLater(c: Context) {
-        Thread { runCatching { val u = open ?: return@Thread; open = parts(c).second.cleanup(u).safe } }.start()
+        Thread { runCatching { val u = open ?: return@Thread; val r = parts(c).second.cleanup(u).safe; if (open != null) open = r } }.start()
     }
 
-    private fun cur(): SafeStore.Unlocked = open ?: throw IllegalStateException("safe_closed")
+    private fun cur(): SafeStore.Unlocked {
+        val u = open
+        if (u == null || expired()) { if (u != null) main.post { closeIfIdle() }; throw IllegalStateException("safe_closed") }
+        return u
+    }
 
     fun children(c: Context, parentId: String): List<IndexReplica.Child> { touch(); return parts(c).second.children(cur(), parentId) }
 
@@ -113,10 +186,12 @@ object DdnSafe {
 
     /** A file of the Safe into the viewer's cache folder (wiped on close). */
     fun fetch(c: Context, f: IndexReplica.Child, progress: (Long, Long) -> Unit = { _, _ -> }): File {
-        touch()
+        touch(); cur()
         val dir = File(c.cacheDir, "safe-open").apply { mkdirs() }
         val out = File(dir, f.name.replace('/', '_'))
         out.outputStream().use { DdnSession.get(c)!!.files.download(f.manifestRef!!, f.size!!, f.sha256, it) { a, b -> touch(); progress(a, b) } }
+        // Closed while it downloaded: the file does not stay behind.
+        if (!isOpen) { out.delete(); throw IllegalStateException("safe_closed") }
         return out
     }
 
@@ -166,7 +241,8 @@ object DdnSafe {
         main.removeCallbacks(closeLater)
         val was = open != null
         open = null
-        (c ?: appCtx)?.let { File(it.cacheDir, "safe-open").deleteRecursively() }
+        closesAt = 0
+        (c ?: appCtx)?.let { wipeOpened(it); cancelAlarm(it) }
         if (was) onClosed?.invoke()
     }
 
