@@ -169,6 +169,10 @@ a copy of the server, the account's Discord channels. All of them hold the accou
   uses; an upload the Safe never got to is let go an hour after it was stored); on the account's webhooks,
   the Safe's client deletes the messages itself when the Safe is open. Until then whoever kept the file key
   (an earlier copy of the state) can still read them.
+- Moving a file into the Safe sends it again under a new key and deletes the account's copy for good (its
+  pieces go after 30 days): the old file key was in the account's log, so whoever has the account key may
+  have kept it. Moving out of the Safe sends it again too, so the Safe's file key never reaches the log.
+  Either way the move costs a new upload of the whole file.
 - Whoever learns the password **and** holds the account key (or the server row and the account key) opens
   it; a weak password falls to an offline guess by someone who has both.
 - **The Safe lives on the instance only.** It is not in the account's snapshots on Discord nor in the
