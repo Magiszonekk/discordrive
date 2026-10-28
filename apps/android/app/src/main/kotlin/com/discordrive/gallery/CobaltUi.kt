@@ -204,7 +204,11 @@ class CobaltUi(private val a: AppCompatActivity) {
             setPadding(dp(12), dp(12), dp(12), dp(12))
             if (hint != null) this.hint = hint
         }
+        // An edit text made in code keeps the platform's underline as its background; the layout draws the
+        // outlined box only when that background is gone (as for one inflated inside it from XML).
+        edit.background = null
         val box = TextInputLayout(a, null, com.google.android.material.R.attr.textInputStyle).apply {
+            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
             if (password) endIconMode = TextInputLayout.END_ICON_PASSWORD_TOGGLE
             addView(edit, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
@@ -288,17 +292,7 @@ class CobaltUi(private val a: AppCompatActivity) {
     }
 
     /** A Lucide type icon for a file row's tile by its name (folder, image, video, audio, document, archive, other). */
-    @DrawableRes fun typeIcon(name: String, folder: Boolean): Int {
-        if (folder) return R.drawable.ic_cobalt_folder
-        return when (name.substringAfterLast('.', "").lowercase()) {
-            "jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "avif", "bmp", "dng" -> R.drawable.ic_cobalt_image
-            "mp4", "mov", "mkv", "webm", "avi", "3gp", "m4v" -> R.drawable.ic_cobalt_film
-            "mp3", "m4a", "flac", "wav", "ogg", "opus", "aac" -> R.drawable.ic_cobalt_music
-            "pdf", "txt", "md", "doc", "docx", "odt", "rtf", "xls", "xlsx", "csv", "ppt", "pptx" -> R.drawable.ic_cobalt_doc
-            "zip", "7z", "rar", "tar", "gz", "xz", "zst", "apk" -> R.drawable.ic_cobalt_archive
-            else -> R.drawable.ic_cobalt_file
-        }
-    }
+    @DrawableRes fun typeIcon(name: String, folder: Boolean): Int = typeIconOf(name, folder)
 
     /** A folder row's tile: the accent at 12% with the icon in the accent (files keep the neutral tile). */
     fun folderTile(row: ListRow, folder: Boolean) {
@@ -366,6 +360,19 @@ class CobaltUi(private val a: AppCompatActivity) {
         }
 
     companion object {
+        /** The same as [typeIcon], without an activity (grids of other screens). */
+        @DrawableRes fun typeIconOf(name: String, folder: Boolean): Int {
+            if (folder) return R.drawable.ic_cobalt_folder
+            return when (name.substringAfterLast('.', "").lowercase()) {
+                "jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "avif", "bmp", "dng" -> R.drawable.ic_cobalt_image
+                "mp4", "mov", "mkv", "webm", "avi", "3gp", "m4v" -> R.drawable.ic_cobalt_film
+                "mp3", "m4a", "flac", "wav", "ogg", "opus", "aac" -> R.drawable.ic_cobalt_music
+                "pdf", "txt", "md", "doc", "docx", "odt", "rtf", "xls", "xlsx", "csv", "ppt", "pptx" -> R.drawable.ic_cobalt_doc
+                "zip", "7z", "rar", "tar", "gz", "xz", "zst", "apk" -> R.drawable.ic_cobalt_archive
+                else -> R.drawable.ic_cobalt_file
+            }
+        }
+
         /** Activities that use CobaltUi set this theme before super.onCreate (the manifest may keep another). */
         fun theme(a: Activity) {
             a.setTheme(R.style.Theme_Ddn_Cobalt)

@@ -627,4 +627,20 @@ Tekst: %3$s</string>
     </plurals>
     <string name="ddn_new_folder">Nowy folder</string>
     <string name="ddn_rename">Zmień nazwę</string>
+    <string name="ddn_prev_label">Poprzedni plik</string>
+    <string name="ddn_next_label">Następny plik</string>
+    <string name="ddn_share">Udostępnij</string>
+    <string name="ddn_info">Info</string>
+    <string name="ddn_info_type">Typ: %1$s</string>
+    <string name="ddn_info_size">Rozmiar: %1$s</string>
+    <string name="ddn_info_taken">Wykonano: %1$s</string>
+    <string name="ddn_info_added">Dodano: %1$s</string>
+    <string name="ddn_info_where">Miejsce: %1$s</string>
+    <string name="ddn_info_ai">Opis AI: %1$s</string>
+    <string name="ddn_info_tags">Tagi: %1$s</string>
+    <string name="ddn_free_h">Kopie sprawdzone na koncie</string>
+    <string name="ddn_ai_h_endpoint">Serwer AI</string>
+    <string name="ddn_ai_h_when">Kiedy opisywać</string>
+    <string name="ddn_ai_h_lang">Język</string>
+    <string name="ddn_ai_h_privacy">Prywatność</string>
 </resources>

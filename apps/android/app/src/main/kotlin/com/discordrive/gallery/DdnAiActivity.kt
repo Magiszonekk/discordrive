@@ -1,20 +1,14 @@
 package com.discordrive.gallery
 
-import android.app.AlertDialog
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.os.Bundle
 import android.text.InputType
-import android.widget.Button
-import android.widget.CheckBox
 import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.widget.SwitchCompat
 import io.github.magiszonekk.discordrive.core.AiDescriber
 import io.github.magiszonekk.discordrive.core.Describe
 import java.io.ByteArrayOutputStream
@@ -27,9 +21,9 @@ class DdnAiActivity : AppCompatActivity() {
     private lateinit var model: EditText
     private lateinit var result: TextView
     private lateinit var progress: TextView
-    private lateinit var on: SwitchCompat
+    private lateinit var on: com.google.android.material.materialswitch.MaterialSwitch
     @Volatile private var loaded = false
-    private lateinit var relang: Button
+    private lateinit var relang: com.google.android.material.button.MaterialButton
 
     private fun paintRelang() {
         thread {
@@ -39,22 +33,30 @@ class DdnAiActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        CobaltUi.theme(this)
         super.onCreate(savedInstanceState)
-        title = getString(R.string.ddn_ai_title)
-        val pad = (16 * resources.displayMetrics.density).toInt()
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad, pad, pad); setBackgroundColor(getColor(R.color.bg)) }
-        fun text(s: CharSequence, dim: Boolean = false) = TextView(this).apply { text = s; textSize = if (dim) 13f else 15f; setTextColor(getColor(if (dim) R.color.text_dim else R.color.text)); setPadding(0, pad / 4, 0, pad / 4) }
-        // Single line first: setSingleLine resets the input type's transformation (a password field showed the key).
-        fun field(hint: Int, type: Int) = EditText(this).apply { this.hint = getString(hint); isSingleLine = true; inputType = type; setTextColor(getColor(R.color.text)); setHintTextColor(getColor(R.color.text_dim)) }
-        fun check(s: Int, v: Boolean, f: (Boolean) -> Unit) = CheckBox(this).apply { text = getString(s); isChecked = v; setTextColor(getColor(R.color.text)); setOnCheckedChangeListener { _, x -> f(x) } }
-
+        val ui = CobaltUi(this)
+        val page = ui.screen(R.string.ddn_ai_title)
         val s = DdnSession.get(this)
         DdnAi.reloadConfig()
-        root.addView(text(getString(R.string.ddn_ai_privacy), dim = true))
-        if (s?.acct?.mode == io.github.magiszonekk.discordrive.core.AccountState.MODE_PLAIN) root.addView(text(getString(R.string.ddn_ai_plain_note), dim = true))
-        root.addView(text(getString(R.string.ddn_ai_where_vault), dim = true))
+
+        // The endpoint: what is sent where (the note), address, key (masked, the eye shows it), model.
+        val note = buildString {
+            append(getString(R.string.ddn_ai_privacy))
+            if (s?.acct?.mode == io.github.magiszonekk.discordrive.core.AccountState.MODE_PLAIN) append("\n\n").append(getString(R.string.ddn_ai_plain_note))
+            append("\n\n").append(getString(R.string.ddn_ai_where_vault))
+        }
+        val endpoint = ui.section(page, R.string.ddn_ai_h_endpoint, note)
+        // Single line first: setSingleLine resets the input type's transformation (a password field showed the key).
+        fun field(label: Int, type: Int, password: Boolean = false): EditText {
+            val (box, edit) = ui.field(label, password = password)
+            edit.isSingleLine = true
+            edit.inputType = type
+            ui.add(endpoint, box, top = 14)
+            return edit
+        }
         url = field(R.string.ddn_ai_url, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
-        key = field(R.string.ddn_ai_key, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
+        key = field(R.string.ddn_ai_key, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD, password = true)
         model = field(R.string.ddn_ai_model, InputType.TYPE_CLASS_TEXT)
         // The account's settings come from the server (off the main thread); fields the user typed meanwhile stay.
         thread {
@@ -68,62 +70,46 @@ class DdnAiActivity : AppCompatActivity() {
                 loaded = true
             }
         }
-        root.addView(url); root.addView(key)
-        root.addView(CheckBox(this).apply {
-            text = getString(R.string.ddn_ai_show_key); setTextColor(getColor(R.color.text))
-            setOnCheckedChangeListener { _, x ->
-                key.transformationMethod = if (x) null else android.text.method.PasswordTransformationMethod.getInstance()
-                key.setSelection(key.text.length)
-            }
-        })
-        root.addView(model)
-        root.addView(Button(this).apply { text = getString(R.string.ddn_ai_pick_model); setOnClickListener { pickModel() } })
-        root.addView(Button(this).apply { text = getString(R.string.ddn_ai_save_check); setOnClickListener { saveAndCheck() } })
-        result = text("", dim = true).apply { tag = "ddn-ai-result" }
-        root.addView(result)
+        ui.add(endpoint, ui.button(R.string.ddn_ai_pick_model, CobaltUi.Kind.TONAL, R.drawable.ic_cobalt_sparkles) { pickModel() }, top = 14)
+        ui.add(endpoint, ui.button(R.string.ddn_ai_save_check, CobaltUi.Kind.PRIMARY) { saveAndCheck() }, top = 10)
+        result = ui.note("").apply { tag = "ddn-ai-result" }
+        ui.add(endpoint, result, top = 10)
 
-        on = SwitchCompat(this).apply {
-            text = getString(R.string.ddn_ai_on); isChecked = DdnAi.enabled(this@DdnAiActivity); textSize = 16f; setTextColor(getColor(R.color.text))
-            setOnCheckedChangeListener { v, x ->
-                if (x && current().let { it.url.isEmpty() || it.model.isEmpty() }) { v.isChecked = false; result.text = getString(R.string.ddn_ai_need_config); return@setOnCheckedChangeListener }
-                DdnAi.set(this@DdnAiActivity, on = x)
-                if (x) DdnAi.runNow(this@DdnAiActivity)
-            }
+        // When: in the background (with the auto-copy's conditions), private albums, Describe now, progress.
+        val whenBox = ui.section(page, R.string.ddn_ai_h_when)
+        on = ui.switchRow(whenBox, R.string.ddn_ai_on, DdnAi.enabled(this)) { v, x ->
+            if (x && current().let { it.url.isEmpty() || it.model.isEmpty() }) { v.isChecked = false; result.text = getString(R.string.ddn_ai_need_config); return@switchRow }
+            DdnAi.set(this@DdnAiActivity, on = x)
+            if (x) DdnAi.runNow(this@DdnAiActivity)
         }
-        root.addView(on)
-        root.addView(check(R.string.ddn_backup_wifi, DdnAi.wifiOnly(this)) { DdnAi.set(this, wifi = it) })
-        root.addView(check(R.string.ddn_backup_charging, DdnAi.chargingOnly(this)) { DdnAi.set(this, charging = it) })
-        root.addView(check(R.string.ddn_ai_private, DdnAi.privateAllowed(this)) { DdnAi.set(this, private = it) })
-        root.addView(Button(this).apply {
-            text = getString(R.string.ddn_ai_now)
-            setOnClickListener {
-                if (current().let { it.url.isEmpty() || it.model.isEmpty() }) result.text = getString(R.string.ddn_ai_need_config)
-                else { DdnAi.runNow(this@DdnAiActivity); result.text = getString(R.string.ddn_ai_started) }
-            }
-        })
-        progress = text("", dim = true).apply { tag = "ddn-ai-progress" }
-        root.addView(progress)
+        ui.switchRow(whenBox, R.string.ddn_backup_wifi, DdnAi.wifiOnly(this)) { _, x -> DdnAi.set(this, wifi = x) }
+        ui.switchRow(whenBox, R.string.ddn_backup_charging, DdnAi.chargingOnly(this)) { _, x -> DdnAi.set(this, charging = x) }
+        ui.switchRow(whenBox, R.string.ddn_ai_private, DdnAi.privateAllowed(this)) { _, x -> DdnAi.set(this, private = x) }
+        ui.add(whenBox, ui.button(R.string.ddn_ai_now, CobaltUi.Kind.TONAL) {
+            if (current().let { it.url.isEmpty() || it.model.isEmpty() }) result.text = getString(R.string.ddn_ai_need_config)
+            else { DdnAi.runNow(this@DdnAiActivity); result.text = getString(R.string.ddn_ai_started) }
+        }, top = 12)
+        progress = ui.note("").apply { tag = "ddn-ai-progress" }
+        ui.add(whenBox, progress, top = 10)
 
         // The language of new descriptions and tags (the app's by default); files described in another one
         // can be described again (kept on this phone).
-        root.addView(text(getString(R.string.ddn_ai_lang_title)))
+        val langBox = ui.section(page, R.string.ddn_ai_h_lang, getString(R.string.ddn_ai_lang_title))
         val langs = listOf("pl" to R.string.ddn_ai_lang_pl, "en" to R.string.ddn_ai_lang_en)
         val group = android.widget.RadioGroup(this)
-        for ((i, l) in langs.withIndex()) group.addView(android.widget.RadioButton(this).apply {
-            id = 7100 + i; text = getString(l.second); setTextColor(getColor(R.color.text)); isChecked = DdnAi.lang(this@DdnAiActivity) == l.first
+        for ((i, l) in langs.withIndex()) group.addView(com.google.android.material.radiobutton.MaterialRadioButton(this).apply {
+            id = 7100 + i; text = getString(l.second); isChecked = DdnAi.lang(this@DdnAiActivity) == l.first
+            androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowTitle); minHeight = ui.dp(48)
         })
         group.setOnCheckedChangeListener { _, id -> DdnAi.setLang(this, langs[id - 7100].first); paintRelang() }
-        root.addView(group)
-        relang = Button(this).apply { setOnClickListener {
+        ui.add(langBox, group, top = 6)
+        relang = ui.button("", CobaltUi.Kind.TONAL) {
             if (current().let { it.url.isEmpty() || it.model.isEmpty() }) result.text = getString(R.string.ddn_ai_need_config)
             else { DdnAi.runRelang(this@DdnAiActivity); result.text = getString(R.string.ddn_ai_started) }
-        } }
-        root.addView(relang)
-        root.addView(text(getString(R.string.ddn_ai_relang_note), dim = true))
+        }
+        ui.add(langBox, relang, top = 10)
+        ui.add(langBox, ui.note(getString(R.string.ddn_ai_relang_note)), top = 8)
         paintRelang()
-
-        setContentView(ScrollView(this).apply { addView(root) })
-        Insets.apply(root)
     }
 
     private val tick = object : Runnable {
