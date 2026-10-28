@@ -1108,7 +1108,7 @@ export const pl: Record<string, string> = {
   "safe.err.badPassword": "Złe hasło Sejfu.",
   "safe.usage": "Sejf zapełniony w {pct}%",
   "safe.usage.warn": "Sejf zapełniony w {pct}%: blisko limitu",
-  "safe.usage.title": "Sejf trzyma nazwy i klucze wszystkich swoich plików i folderów w jednym zaszyfrowanym zapisie do 1 MiB: kilka tysięcy pozycji, mniej przy długich nazwach.",
+  "safe.usage.title": "Sejf trzyma nazwy i klucze wszystkich swoich plików i folderów w jednym zapisie do 1 MiB: kilka tysięcy pozycji, mniej przy długich nazwach.",
   "safe.move.costN": "Pliki do ponownej wysyłki pod nowym kluczem: {n} ({size}).",
   "safe.in.trashed_one": "{n} plik z kosza wewnątrz tego folderu nie zostanie przeniesiony: zniknie na stałe razem z folderem.",
   "safe.in.trashed_few": "{n} pliki z kosza wewnątrz tego folderu nie zostaną przeniesione: znikną na stałe razem z folderem.",
@@ -1124,7 +1124,7 @@ export const pl: Record<string, string> = {
   "safe.err.missing": "To konto nie ma już Sejfu: usunięto go na innym urządzeniu.",
   "err.safe_damaged": "Sejfu nie da się odczytać: jest uszkodzony albo został nadpisany (to nie jest złe hasło).",
   "err.safe_missing": "To konto nie ma już Sejfu: usunięto go na innym urządzeniu.",
-  "err.safe_full": "Sejf jest pełny: nie zmieści więcej nazw (jego zaszyfrowany zapis ma limit 1 MiB). Usuń albo wyjmij część plików lub folderów.",
+  "err.safe_full": "Sejf jest pełny: nie zmieści więcej nazw (jego zapis ma limit 1 MiB). Usuń albo wyjmij część plików lub folderów.",
   "err.safe_file_gone": "Ten plik jest niedostępny: jego zawartość została już usunięta (przywrócono starszą wersję Sejfu albo serwer z dawnej kopii zapasowej).",
   "err.safe_closed": "Sejf został zamknięty. Odblokuj go ponownie.",
 };
