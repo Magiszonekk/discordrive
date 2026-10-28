@@ -2096,6 +2096,11 @@ try {
     const tr = p.locator("[data-ddn=trash-row]", { hasText: "g-rzadkie-1.png" });
     await tr.waitFor({ timeout: 30_000 });
     g.trashFrom = await tr.locator("[data-ddn=trash-from]").isVisible() ? await tr.locator("[data-ddn=trash-from]").textContent() : null;
+    // Tiles: said once (in the sub-line), the separate line hidden.
+    await p.click("[data-page=trash] [data-ddn=view] [data-view=tiles]");
+    await p.waitForSelector("[data-page=trash] .trash-wrap[data-view=tiles]");
+    g.tilesFromOnce = !(await tr.locator("[data-ddn=trash-from]").isVisible()) && /Galler|Galeri/.test((await tr.locator(".sub:not(.trash-from)").textContent()) ?? "");
+    await p.click("[data-page=trash] [data-ddn=view] [data-view=list]");
     r.galleryTimeline = g;
   }
 
@@ -2469,11 +2474,11 @@ try {
       );
     })(),
     galleryTimeline: (() => {
-      const o = r.galleryTimeline as { heads: string[]; exifUnder2019: string | null; trashFrom: string | null } | undefined;
+      const o = r.galleryTimeline as { heads: string[]; exifUnder2019: string | null; trashFrom: string | null; tilesFromOnce: boolean } | undefined;
       if (!o) return false;
       const days = o.heads.filter((x) => x.startsWith("gallery-day:"));
       // March 2025: the busy day (20th, 4 photos) and one range over the 7 sparse days (1–7); no heading per sparse day.
-      return days.filter((x) => /20/.test(x)).length >= 1 && days.some((x) => /1\s*[–-]\s*7/.test(x)) && days.length <= 4 && /2019/.test(String(o.exifUnder2019)) && /Galler|Galeri/.test(String(o.trashFrom));
+      return days.filter((x) => /20/.test(x)).length >= 1 && days.some((x) => /1\s*[–-]\s*7/.test(x)) && days.length <= 4 && /2019/.test(String(o.exifUnder2019)) && /Galler|Galeri/.test(String(o.trashFrom)) && o.tilesFromOnce === true;
     })(),
     noPageErrors: errors.length === 0,
   };

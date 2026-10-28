@@ -689,6 +689,24 @@ class BrowseUiTest {
         }
     }
 
+    private fun newerRules(sc: InteropScenario, r: LinkedHashMap<String, Boolean>) {
+        sc.rpc("rulesNewer")
+        val s = DdnSession.get(ctx)!!
+        r["newerRulesRefreshNoThrow"] = runCatching { s.refresh() }.isSuccess
+        r["newerRulesSaysUpdate"] = io.github.magiszonekk.discordrive.core.ErrorText.needsUpdate(s.lastError)
+        val want = ctx.getString(R.string.ddn_err_update)
+        ActivityScenario.launch<DdnActivity>(Intent(ctx, DdnActivity::class.java)).use { a ->
+            a.onActivity { x -> x.refreshForTest() }
+            r["newerRulesScreen"] = waitUntil {
+                var st = ""
+                a.onActivity { x -> st = x.statusForTest() }
+                st.contains(want) && !st.contains("V8") && !st.contains("QuickJS")
+            }
+            r["newerRulesStillListed"] = waitUntil { items(a) >= 1 }
+            shot("7-newer-rules")
+        }
+    }
+
     @Test
     fun filesGalleryViewer() {
         val args = InstrumentationRegistry.getArguments()
@@ -756,6 +774,9 @@ class BrowseUiTest {
         if (args.getString("ddnAi") != null) search(sc, r)
         // Last: the Safe (it moves a file out of Files; nothing after it counts files).
         safe(sc, r)
+        // After everything: the account gets an entry from a newer app. A refresh must not end the app; the screen
+        // asks for an update instead of a raw engine error (the local copy stays as it was).
+        newerRules(sc, r)
         Log.i("ddn-ui", "RESULT $r")
         sc.rpc("done", kotlinx.serialization.json.JsonObject(r.mapValues { JsonPrimitive(it.value) }))
         assertTrue("ui checks: $r", r.values.all { it })

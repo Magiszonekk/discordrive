@@ -178,7 +178,8 @@ open class DdnActivity : AppCompatActivity() {
         refreshing = true
         swipe.isRefreshing = true
         thread {
-            s.refresh()
+            // A failure is in s.lastError (shown by show()); never let it end the app.
+            runCatching { s.refresh() }.onFailure { if (s.lastError == null) s.lastError = it.message }
             main.post {
                 refreshing = false
                 swipe.isRefreshing = false
@@ -199,7 +200,7 @@ open class DdnActivity : AppCompatActivity() {
         crumbs.visibility = if (!gallery && !albumsTab && path.size > 1) View.VISIBLE else View.GONE
         crumbs.text = path.dropLast(1).joinToString(" › ") { it.second }
         crumbs.setOnClickListener { if (path.size > 1) { path.removeAt(path.size - 1); show() } }
-        status.text = s.lastError?.let { getString(R.string.ddn_offline, DdnErrors.bare(this, it)) } ?: ""
+        status.text = s.lastError?.let { if (io.github.magiszonekk.discordrive.core.ErrorText.needsUpdate(it)) getString(R.string.ddn_err_update) else getString(R.string.ddn_offline, DdnErrors.bare(this, it)) } ?: ""
         status.visibility = if (status.text.isEmpty()) View.GONE else View.VISIBLE
         thread {
             if (albumsTab) {
@@ -437,6 +438,8 @@ open class DdnActivity : AppCompatActivity() {
     internal fun findRecycler(): RecyclerView? = if (::list.isInitialized) list else null
     internal fun openFolderForTest(id: String, name: String) { gallery = false; nav.selectedItemId = 1; path += id to name; show() }
     internal fun showGalleryForTest() { nav.selectedItemId = 2 }
+    internal fun statusForTest(): String = status.text.toString()
+    internal fun refreshForTest() = refresh()
     internal fun showAlbumsForTest() { nav.selectedItemId = 3 }
     internal fun openAlbumForTest(id: String, name: String) { album = id to name; show() }
     internal fun isDrawn(): Boolean = list.isLaidOut && list.childCount > 0
