@@ -256,6 +256,71 @@ class BrowseUiTest {
      * (a PIN set here): its media leave the Gallery, the tile shows the lock; the PIN check opens it. Then public
      * again (nothing of this reaches the account).
      */
+    /**
+     * The viewer (opened on the photo of the album "Zdjęcia 1", moved into the Gallery above): its pages are the
+     * list it was opened from; a swipe goes to the next file (the video, which plays) and back (the video stops);
+     * the top bar has Download, Share and ⋮ and hides by itself; ⋮ lists the gallery's actions; Info names the
+     * place, the size and the photo's dimensions; Show in folder opens the album.
+     */
+    private fun viewer(r: LinkedHashMap<String, Boolean>) {
+        val s = DdnSession.get(ctx)!!
+        val list = s.albumMedia("fold-0000000001").sortedBy { if (it.name.endsWith(".jpg")) 0 else 1 }
+        val photo = list.first { it.name.endsWith(".jpg") }
+        val film = list.firstOrNull { it.name == "film.webm" }
+        DdnViewerActivity.pending = list
+        var folderIntent: Intent? = null
+        ActivityScenario.launch<DdnViewerActivity>(Intent(ctx, DdnViewerActivity::class.java).putExtra("id", photo.id)).use { v ->
+            fun <T> on(f: (DdnViewerActivity) -> T): T { var x: T? = null; v.onActivity { a -> x = f(a) }; @Suppress("UNCHECKED_CAST") return x as T }
+            r["viewerPicture"] = waitUntil { on { it.hasPictureForTest() } }
+            r["viewerPages"] = on { it.pagesForTest() == list.size && it.pageForTest() == 0 && it.titleForTest() == photo.name }
+            // The top bar: Download, Share, ⋮ (nothing at the bottom any more).
+            r["viewerActions"] = on { it.actionsForTest() } == listOf(R.string.ddn_download, R.string.ddn_share, R.string.ddn_more).map { ctx.getString(it) }
+            shot("4-viewer")
+            // Hides by itself (~3 s without a touch), a tap brings it back.
+            r["viewerChromeAtStart"] = on { it.chromeShownForTest() }
+            val pagerTop = on { it.pagerTopForTest() }
+            r["viewerChromeHides"] = waitUntil(6_000) { !on { it.chromeShownForTest() } }
+            shot("4a-viewer-hidden")
+            // Full screen without a jump: the page stays where it was when the bars hide.
+            r["viewerNoJump"] = on { it.pagerTopForTest() } == pagerTop
+            on { it.tapForTest() }
+            r["viewerChromeTap"] = waitUntil(2_000) { on { it.chromeShownForTest() } }
+            // ⋮ of a photo in the Gallery: the gallery's actions; Info: where, size, dimensions (640 × 480).
+            val menu = on { it.menuItems(s, photo).map { m -> m.first } }
+            r["viewerMenu"] = menu == listOf(R.string.ddn_edit, R.string.ddn_info, R.string.viewer_set_wallpaper, R.string.action_move_to_album, R.string.ddn_to_drive, R.string.safe_to_safe, R.string.ddn_show_in_folder, R.string.ddn_delete).map { ctx.getString(it) }
+            val meta = ViewerInfo.read(s, photo)
+            val info = on { it.infoLines(s, photo, meta) }
+            r["viewerInfo"] = info.contains(ctx.getString(R.string.ddn_info_where, "Galeria / Zdjęcia 1")) && info.any { it.startsWith(ctx.getString(R.string.ddn_info_size, "").trimEnd()) } &&
+                info.any { it.startsWith(ctx.getString(R.string.ddn_info_dims, 640, 480)) }
+            Log.i("ddn-ui", "viewer menu $menu, info $info")
+            // Show in folder: the Files screen opens the album the photo is in.
+            val shown = on { it.folderIntentForTest(s, photo) }
+            r["viewerShowInFolder"] = shown.getStringExtra(DdnActivity.START) == "album" && shown.getStringExtra(DdnActivity.ALBUM_ID) == "fold-0000000001"
+            folderIntent = shown
+            if (film != null) {
+                // Swipe to the video: the next page, its name in the bar, it plays; its controls clear of the bars.
+                val at = list.indexOf(film)
+                repeat(at) { on { a -> a.dragForTest(-a.window.decorView.width * 0.8f) }; Thread.sleep(800) }
+                r["viewerSwipeNext"] = waitUntil(5_000) { on { it.pageForTest() == at && it.titleForTest() == film.name } }
+                r["viewerVideoPlays"] = waitUntil(10_000) { on { it.playingForTest() } == film.id }
+                r["viewerVideoControlsClear"] = waitUntil(30_000) { on { a -> a.showControlsForTest(); a.controlsClearForTest() } == true }
+                r["viewerVideoMenu"] = on { it.menuItems(s, film).map { m -> m.first } }.let { !it.contains(ctx.getString(R.string.ddn_edit)) && !it.contains(ctx.getString(R.string.viewer_set_wallpaper)) && it.contains(ctx.getString(R.string.action_move_to_album)) }
+                shot("4b-viewer-video")
+                // Back to the photo: the video stops (no player), the photo's page again.
+                repeat(at) { on { a -> a.dragForTest(a.window.decorView.width * 0.8f) }; Thread.sleep(800) }
+                r["viewerSwipeBack"] = waitUntil(5_000) { on { it.pageForTest() == 0 && it.titleForTest() == photo.name } }
+                r["viewerVideoStops"] = waitUntil(5_000) { on { it.playingForTest() } == null }
+            }
+        }
+        // (Each scenario starts a new task: these run after the viewer's.) Show in folder opens the album.
+        ActivityScenario.launch<DdnActivity>(folderIntent!!).use { f -> r["viewerShowInFolderOpens"] = waitUntil { items(f) == list.size } }
+        // Set as wallpaper: the photo of the account in the cropper (not applied: the device's wallpaper stays).
+        ActivityScenario.launch<DdnWallpaperActivity>(Intent(ctx, DdnWallpaperActivity::class.java).putExtra(DdnWallpaperActivity.EXTRA_ID, photo.id)).use { w ->
+            r["viewerWallpaperLoads"] = waitUntil { var ok = false; w.onActivity { a -> ok = a.loadedForTest() }; ok }
+            shot("4c-wallpaper")
+        }
+    }
+
     private fun albums(r: LinkedHashMap<String, Boolean>) {
         val s = DdnSession.get(ctx)!!
         val al = s.albums()
@@ -632,27 +697,7 @@ class BrowseUiTest {
             Log.i("ddn-ui", "window drawn: $drawn")
             shot("3-gallery")
         }
-        val photo = DdnSession.get(ctx)!!.media(10, null).first { it.name.endsWith(".jpg") }
-        DdnViewerActivity.pending = listOf(photo)
-        ActivityScenario.launch<DdnViewerActivity>(Intent(ctx, DdnViewerActivity::class.java).putExtra("id", photo.id)).use { v ->
-            r["viewerPicture"] = waitUntil { var ok = false; v.onActivity { a -> ok = a.hasPictureForTest() }; ok }
-            // The bottom bar: Share, Download, Edit (a photo), Info, Trash; Info names the place and the size.
-            var acts = listOf<String>()
-            var info = listOf<String>()
-            v.onActivity { a -> acts = a.actionsForTest(); info = a.infoLines(DdnSession.get(ctx)!!, photo) }
-            r["viewerActions"] = acts == listOf(R.string.ddn_share, R.string.ddn_download, R.string.ddn_edit, R.string.ddn_info, R.string.ddn_trash).map { ctx.getString(it) }
-            r["viewerInfo"] = info.any { it.startsWith(ctx.getString(R.string.ddn_info_where, "").trimEnd()) } && info.any { it.startsWith(ctx.getString(R.string.ddn_info_size, "").trimEnd()) }
-            Log.i("ddn-ui", "viewer actions $acts, info $info")
-            shot("4-viewer")
-        }
-        // A video: its seek bar and time above the bottom bar (they were under it), the bars follow the controls.
-        DdnSession.get(ctx)!!.children("fold-0000000001").firstOrNull { it.name == "film.webm" }?.let { film ->
-            DdnViewerActivity.pending = listOf(film)
-            ActivityScenario.launch<DdnViewerActivity>(Intent(ctx, DdnViewerActivity::class.java).putExtra("id", film.id)).use { v ->
-                r["viewerVideoControlsClear"] = waitUntil(30_000) { var ok: Boolean? = null; v.onActivity { a -> a.showControlsForTest(); ok = a.controlsClearForTest() }; ok == true }
-                shot("4b-viewer-video")
-            }
-        }
+        viewer(r)
         albums(r)
         // Upload from the phone (PR 4): a file shared into the queue and a photo of the camera folder copied
         // automatically, both through the background job (WorkManager, as in the app); the TS device downloads
