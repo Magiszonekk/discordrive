@@ -94,6 +94,7 @@
         </activity>
         <receiver android:name=".DdnInstallReceiver" android:exported="false" />
         <activity android:name=".DdnViewerActivity" android:exported="false" android:theme="@style/Theme.Gallery.Viewer" />
+        <activity android:name=".DdnWallpaperActivity" android:exported="false" android:theme="@style/Theme.Gallery.Viewer" />
 
         <!-- The phone's own photos (old gallery screen): kept for the next steps (auto backup), not in the launcher. -->
         <activity

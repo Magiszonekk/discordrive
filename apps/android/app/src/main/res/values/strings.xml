@@ -643,4 +643,15 @@ Tekst: %3$s</string>
     <string name="ddn_ai_h_when">Kiedy opisywać</string>
     <string name="ddn_ai_h_lang">Język</string>
     <string name="ddn_ai_h_privacy">Prywatność</string>
+    <string name="ddn_more">Więcej</string>
+    <string name="ddn_delete">Usuń</string>
+    <string name="ddn_show_in_folder">Pokaż w folderze</string>
+    <string name="ddn_new_album">Nowy album…</string>
+    <string name="ddn_moved_to_album">Przeniesiono do albumu „%1$s”.</string>
+    <string name="ddn_info_dims">Wymiary: %1$d × %2$d</string>
+    <string name="ddn_info_length">Długość: %1$s</string>
+    <string name="ddn_info_camera">Aparat: %1$s</string>
+    <string name="ddn_info_exposure">Ekspozycja: %1$s</string>
+    <string name="ddn_info_place">Lokalizacja: %1$s</string>
+    <string name="ddn_info_map">Mapa</string>
 </resources>

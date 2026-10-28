@@ -57,6 +57,15 @@ open class DdnActivity : AppCompatActivity() {
         DdnSessionDirs.cacheDir = cacheDir
         gallery = intent.getStringExtra(START) == "gallery" || intent.component?.className?.endsWith(".DdnGallery") == true
         path += "root" to getString(R.string.ddn_files)
+        // "Show in folder" from the viewer: Files at a folder (its path from the root) or an album.
+        when (intent.getStringExtra(START)) {
+            "files" -> {
+                val ids = intent.getStringArrayListExtra(PATH_IDS).orEmpty()
+                val names = intent.getStringArrayListExtra(PATH_NAMES).orEmpty()
+                if (ids.size == names.size) path += ids.zip(names)
+            }
+            "album" -> intent.getStringExtra(ALBUM_ID)?.let { albumsTab = true; album = it to (intent.getStringExtra(ALBUM_NAME) ?: "") }
+        }
 
         // Cobalt: paper page, a bar with the wordmark (Files) or the screen's name, breadcrumbs in Files, a quiet
         // status line only for what the user must know (offline, empty); the sync state is in Settings → Diagnostics.
@@ -72,7 +81,7 @@ open class DdnActivity : AppCompatActivity() {
             menu.add(0, 2, 1, R.string.ddn_gallery).setIcon(R.drawable.ic_cobalt_gallery)
             menu.add(0, 3, 2, R.string.ddn_albums).setIcon(R.drawable.ic_cobalt_album)
             setBackgroundColor(getColor(R.color.cobalt_paper))
-            selectedItemId = if (gallery) 2 else 1
+            selectedItemId = if (albumsTab) 3 else if (gallery) 2 else 1
             setOnItemSelectedListener { gallery = it.itemId == 2; albumsTab = it.itemId == 3; album = null; show(); true }
         }
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
@@ -343,7 +352,7 @@ open class DdnActivity : AppCompatActivity() {
     private fun rowMenuItems(s: DdnSession, c: IndexReplica.Child, inGallery: Boolean): List<Pair<String, () -> Unit>> {
         val items = ArrayList<Pair<String, () -> Unit>>()
         if (s.gallerySpaceKnown) {
-            if (inGallery) items += getString(R.string.ddn_to_drive) to { pickDriveFolder { to -> move(c, to, getString(R.string.ddn_moved_to_drive)) } }
+            if (inGallery) items += getString(R.string.ddn_to_drive) to { DdnPick.driveFolder(this, s) { to -> move(c, to, getString(R.string.ddn_moved_to_drive)) } }
             else if (c.isFolder || DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) items += getString(R.string.ddn_to_gallery) to { move(c, s.galleryRoot, getString(R.string.ddn_moved_to_gallery)) }
         }
         items += getString(R.string.safe_to_safe) to { DdnSafeActivity.moveIn(this, listOf(c)) { show() } }
@@ -373,7 +382,7 @@ open class DdnActivity : AppCompatActivity() {
         val s = session ?: return
         val items = ArrayList<Pair<String, () -> Unit>>()
         items += getString(if (priv) R.string.album_private_unmark_action else R.string.album_private_mark_action) to { togglePrivate(a, priv) }
-        if (s.gallerySpaceKnown) items += getString(R.string.ddn_to_drive) to { pickDriveFolder { to -> move(IndexReplica.Child(a.id, a.name, "folder", null), to, getString(R.string.ddn_moved_to_drive)) } }
+        if (s.gallerySpaceKnown) items += getString(R.string.ddn_to_drive) to { DdnPick.driveFolder(this, s) { to -> move(IndexReplica.Child(a.id, a.name, "folder", null), to, getString(R.string.ddn_moved_to_drive)) } }
         com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle(a.name)
             .setItems(items.map { it.first }.toTypedArray()) { _, i -> items[i].second() }.show()
     }
@@ -385,20 +394,6 @@ open class DdnActivity : AppCompatActivity() {
             main.post {
                 r.onSuccess { toast(if (it == "applied") done else getString(R.string.ddn_trash_not_done, it)) }.onFailure { note(getString(R.string.ddn_error, it.message)) }
                 show()
-            }
-        }
-    }
-
-    /** Move to the Drive: a folder of the Drive, browsed from Files (one level at a time; "Here" moves). */
-    private fun pickDriveFolder(at: Pair<String, String> = "root" to getString(R.string.ddn_files), onPick: (String) -> Unit) {
-        val s = session ?: return
-        thread {
-            val kids = runCatching { s.children(at.first).filter { it.isFolder } }.getOrDefault(emptyList())
-            main.post {
-                com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle(getString(R.string.ddn_move_into, at.second))
-                    .setItems(kids.map { it.name }.toTypedArray()) { _, i -> pickDriveFolder(kids[i].id to kids[i].name, onPick) }
-                    .setPositiveButton(R.string.ddn_move_here) { _, _ -> onPick(at.first) }
-                    .setNegativeButton(R.string.cobalt_cancel, null).show()
             }
         }
     }
@@ -449,6 +444,12 @@ open class DdnActivity : AppCompatActivity() {
 
     companion object {
         const val START = "start"
+        /** With START "files": the folders from the root down to the one to open (IDs and names, same order). */
+        const val PATH_IDS = "pathIds"
+        const val PATH_NAMES = "pathNames"
+        /** With START "album": the album to open. */
+        const val ALBUM_ID = "albumId"
+        const val ALBUM_NAME = "albumName"
     }
 }
 
