@@ -103,7 +103,12 @@ class DdnSearchActivity : AppCompatActivity() {
             val s = DdnSession.get(this) ?: return@thread
             val alive = runCatching { s.allFiles(DdnPrivate.all(this)).associateBy { it.id } }.getOrNull() ?: return@thread
             val now = have.mapNotNull { (c, item) -> alive[c.id]?.let { it to item } }
-            main.post { items = now; seq++; search(); refreshForTest = true }
+            main.post {
+                items = now
+                // The results on screen drop them at once (the query is not run again: nothing new to find).
+                if (shown.any { it.id !in alive }) { show(shown.filter { it.id in alive }); info.text = getString(R.string.ddn_search_found, shown.size) }
+                refreshForTest = true
+            }
         }
     }
 
@@ -166,6 +171,7 @@ class DdnSearchActivity : AppCompatActivity() {
 
     internal fun queryForTest(q: String) = box.setText(q)
     internal fun resultsForTest(): List<String> = shown.map { it.name }
+    internal fun resultIdsForTest(): List<String> = shown.map { it.id }
     internal fun readyForTest(): Boolean = items != null
     @Volatile internal var refreshForTest = false
 

@@ -405,15 +405,18 @@ class BrowseUiTest {
         ActivityScenario.launch<DdnSearchActivity>(Intent(ctx, DdnSearchActivity::class.java).putExtra(DdnSearchActivity.QUERY, "obraz testowy")).use { a ->
             waitUntil { var ok = false; a.onActivity { x -> ok = x.readyForTest() }; ok }
             var before: List<String> = emptyList()
-            waitUntil(10_000) { a.onActivity { x -> before = x.resultsForTest() }; before.isNotEmpty() }
-            val gone = s.media(100, null).first { it.name == before.first() }
+            waitUntil(10_000) { a.onActivity { x -> before = x.resultIdsForTest() }; before.isNotEmpty() }
+            Thread.sleep(800)
+            a.onActivity { x -> before = x.resultIdsForTest() }
+            val gone = before.first()
             a.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
-            val trashed = s.moveToTrash(listOf(gone.id)) == "applied"
+            val trashed = s.moveToTrash(listOf(gone))
             a.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
             var after: List<String> = before
-            r["searchDropsTrashed"] = trashed && waitUntil(10_000) { var ok = false; a.onActivity { x -> ok = x.refreshForTest; after = x.resultsForTest() }; ok } &&
-                after.size == before.size - 1 && gone.name !in after
-            s.restore(listOf(gone.id))
+            val refreshed = waitUntil(10_000) { var ok = false; a.onActivity { x -> ok = x.refreshForTest; after = x.resultIdsForTest() }; ok }
+            Log.i("ddn-ui", "search after trash: $trashed, refreshed $refreshed, ${before.size} -> ${after.size}")
+            r["searchDropsTrashed"] = trashed == "applied" && refreshed && after.size == before.size - 1 && gone !in after
+            s.restore(listOf(gone))
         }
         DdnPrivate.set(ctx, anyPhoto.parentId!!, true)
         try {
