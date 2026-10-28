@@ -53,6 +53,8 @@ object DdnBackup {
     private const val WORK_PERIODIC = "ddn-backup-periodic"
     private const val WORK_TRIGGER = "ddn-backup-trigger"
     const val WORK_NOW = "ddn-upload-now"
+    /** Every unique job that runs [DdnUploadWorker] (the state on the automatic copy screen watches them all). */
+    val WORKS = listOf(WORK_NOW, WORK_PERIODIC, WORK_TRIGGER)
     const val NOTIF_CHANNEL = "ddn-upload"
     const val NOTIF_ID = 4711
     const val NOTIF_FAILED = 4712
@@ -263,7 +265,11 @@ object DdnBackup {
             .setStyle(NotificationCompat.BigTextStyle().bigText(c.getString(R.string.ddn_loc_tap)))
             .setContentIntent(open).setAutoCancel(true).setOnlyAlertOnce(true).build())
     }
-    internal fun cancelNeedLocation(c: Context) = c.getSystemService(android.app.NotificationManager::class.java).cancel(NOTIF_LOCATION)
+    /** The wait is over (granted, or refused for good): its notification goes, and so does its error in the state. */
+    internal fun cancelNeedLocation(c: Context) {
+        c.getSystemService(android.app.NotificationManager::class.java).cancel(NOTIF_LOCATION)
+        status(c)?.takeIf { it.error == c.getString(R.string.ddn_loc_wait) }?.let { setStatus(c, it.copy(error = null)) }
+    }
 
     /** Queue files the user sent: kept in the app's storage until uploaded (a share grant ends with the share). */
     fun enqueueCopy(c: Context, source: Uri, name: String, folderId: String): Long {

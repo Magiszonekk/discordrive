@@ -360,7 +360,9 @@ class DdnViewerActivity : AppCompatActivity() {
                 r.onSuccess { f ->
                     val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
                     val type = DdnDocumentsProvider.mimeOf(c.name)
+                    // The ClipData gives the share sheet its preview (the photo's thumbnail at the top).
                     val send = Intent(Intent.ACTION_SEND).setType(type).putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        .also { it.clipData = android.content.ClipData.newRawUri(c.name, uri) }
                     startActivity(Intent.createChooser(send, getString(R.string.ddn_share)))
                 }.onFailure { Toast.makeText(this, getString(R.string.ddn_error, it.message), Toast.LENGTH_LONG).show() }
             }
@@ -419,11 +421,22 @@ class DdnViewerActivity : AppCompatActivity() {
         val s = DdnSession.get(this) ?: return
         thread {
             val r = runCatching { s.move(listOf(c.id), to) }
+            // The file as it is now (its new folder): ⋮, Info and Show in folder follow it.
+            val now = runCatching { s.node(c.id) }.getOrNull()
             main.post {
-                r.onSuccess { Toast.makeText(this, if (it == "applied") done else getString(R.string.ddn_trash_not_done, it), Toast.LENGTH_SHORT).show() }
+                if (now != null) moved(now)
+                r.onSuccess { Toast.makeText(this, moveOutcome(this, it, done), Toast.LENGTH_SHORT).show() }
                     .onFailure { Toast.makeText(this, getString(R.string.ddn_error, it.message), Toast.LENGTH_LONG).show() }
             }
         }
+    }
+
+    /** A file of the list changed its place: the list keeps the new node (the page shows the same file). */
+    private fun moved(now: IndexReplica.Child) {
+        val at = items.indexOfFirst { it.id == now.id }
+        if (at < 0) return
+        items = items.toMutableList().also { it[at] = now }
+        pending = items
     }
 
     /** Move to an album: the account's albums, or a new one (in the Gallery). */
@@ -591,6 +604,8 @@ class DdnViewerActivity : AppCompatActivity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
+    internal fun movedForTest(now: IndexReplica.Child) = moved(now)
+    internal fun currentForTest(): IndexReplica.Child? = current()
     internal fun textForTest(): String = active?.box?.findViewWithTag<TextView>("ddn-viewer-note")?.text?.toString()
         ?: holderAt(pager.currentItem)?.box?.findViewWithTag<TextView>("ddn-viewer-note")?.text?.toString() ?: ""
     /** The icons of the top bar (labels), left to right after the name. */
@@ -611,6 +626,13 @@ class DdnViewerActivity : AppCompatActivity() {
     @Volatile internal var trashedForTest: String? = null
 
     companion object {
+        /** What a move did, in words: "noop" = it was already there (no other device is to blame). */
+        fun moveOutcome(c: android.content.Context, outcome: String, done: String): String = when (outcome) {
+            "applied" -> done
+            "noop" -> c.getString(R.string.ddn_move_noop)
+            else -> c.getString(R.string.ddn_trash_not_done, outcome)
+        }
+
         /** The list the viewer was opened from (set by the caller just before starting it). */
         @Volatile var pending: List<IndexReplica.Child>? = null
         /** Whole photos up to this size are shown in full; larger ones stay on the preview. */

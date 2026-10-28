@@ -274,8 +274,9 @@ jobs:
             # failure too, its report says OK or FAILURES.
             adb shell am instrument -w -e class com.discordrive.gallery.JoinNoteTest io.github.magiszonekk.discordrive.test/androidx.test.runner.AndroidJUnitRunner | tee build/join-note.txt; grep -q "^OK (3 tests)" build/join-note.txt
             adb shell am instrument -w -e class com.discordrive.gallery.CobaltScreensTest io.github.magiszonekk.discordrive.test/androidx.test.runner.AndroidJUnitRunner | tee build/cobalt-screens.txt; grep -q "^OK (" build/cobalt-screens.txt
-            # The upload notification: one count for a series of runs, its own ID next to the AI descriptions' job.
-            adb shell am instrument -w -e class com.discordrive.gallery.BackupProgressTest io.github.magiszonekk.discordrive.test/androidx.test.runner.AndroidJUnitRunner | tee build/backup-progress.txt; grep -q "^OK (6 tests)" build/backup-progress.txt
+            # The upload notification: one count for a series of runs, its own ID next to the AI descriptions' job,
+            # swiped away it stays away; the automatic copy screen's state and location note.
+            adb shell am instrument -w -e class com.discordrive.gallery.BackupProgressTest io.github.magiszonekk.discordrive.test/androidx.test.runner.AndroidJUnitRunner | tee build/backup-progress.txt; grep -q "^OK (9 tests)" build/backup-progress.txt
             # Photos keep their GPS position: without ACCESS_MEDIA_LOCATION (revoked here, it kills the app) the
             # app asks for it before reading photos and then reads the original with the position.
             adb shell pm revoke io.github.magiszonekk.discordrive android.permission.ACCESS_MEDIA_LOCATION

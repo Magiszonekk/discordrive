@@ -91,6 +91,22 @@ class DdnSearchActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Back from the viewer (a file moved to the trash, the Safe, a private album there): the results drop what
+     * is no longer in the account's files, without reading the descriptions again.
+     */
+    override fun onRestart() {
+        super.onRestart()
+        refreshForTest = false
+        val have = items ?: return
+        thread {
+            val s = DdnSession.get(this) ?: return@thread
+            val alive = runCatching { s.allFiles(DdnPrivate.all(this)).associateBy { it.id } }.getOrNull() ?: return@thread
+            val now = have.mapNotNull { (c, item) -> alive[c.id]?.let { it to item } }
+            main.post { items = now; seq++; search(); refreshForTest = true }
+        }
+    }
+
     private fun search() {
         val all = items ?: return
         val q = box.text.toString()
@@ -151,6 +167,7 @@ class DdnSearchActivity : AppCompatActivity() {
     internal fun queryForTest(q: String) = box.setText(q)
     internal fun resultsForTest(): List<String> = shown.map { it.name }
     internal fun readyForTest(): Boolean = items != null
+    @Volatile internal var refreshForTest = false
 
     companion object {
         const val QUERY = "q"

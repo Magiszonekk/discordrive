@@ -62,7 +62,9 @@ object ViewerInfo {
         exif?.getAttributeDouble(android.media.ExifInterface.TAG_EXPOSURE_TIME, 0.0)?.takeIf { it > 0 }?.let { parts += if (it < 1) "1/${Math.round(1 / it)} s" else "${trim(it)} s" }
         exif?.getAttributeDouble(android.media.ExifInterface.TAG_FOCAL_LENGTH, 0.0)?.takeIf { it > 0 }?.let { parts += "${trim(it)} mm" }
         exif?.getAttributeInt(android.media.ExifInterface.TAG_ISO_SPEED_RATINGS, 0)?.takeIf { it > 0 }?.let { parts += "ISO $it" }
-        val ll = FloatArray(2).takeIf { exif?.getLatLong(it) == true }?.map { it.toDouble() }
+        // 0, 0 is what Android leaves of the position when the app could not read it (and no photo is taken
+        // there): no position, as for videos.
+        val ll = FloatArray(2).takeIf { exif?.getLatLong(it) == true }?.map { it.toDouble() }?.takeUnless { it[0] == 0.0 && it[1] == 0.0 }
         val taken = (exif?.getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL) ?: exif?.getAttribute(android.media.ExifInterface.TAG_DATETIME))?.let { d ->
             runCatching { java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.US).parse(d)?.time }.getOrNull()
         }

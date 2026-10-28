@@ -143,6 +143,75 @@ class BackupProgressTest {
         } finally { FgNotice.denyForegroundForTest = false }
     }
 
+    /** U2: a plain notification the user swiped away does not come back with the next update. */
+    @Test
+    fun aSwipedAwayNotificationStaysAway() {
+        val nm = ctx.getSystemService(NotificationManager::class.java)
+        if (nm.getNotificationChannel(DdnBackup.NOTIF_CHANNEL) == null) nm.createNotificationChannel(android.app.NotificationChannel(DdnBackup.NOTIF_CHANNEL, "test", NotificationManager.IMPORTANCE_LOW))
+        var n = 0
+        val notice = FgNotice(ctx, 4795, minGapMs = 0, setForeground = null) { ongoing -> n++; NotificationCompat.Builder(ctx, DdnBackup.NOTIF_CHANNEL).setSmallIcon(R.drawable.ic_sync).setContentTitle("S $n").setOngoing(ongoing).build() }
+        kotlinx.coroutines.runBlocking { notice.start() }
+        try {
+            assertTrue("shown", waitUntil(3_000) { nm.activeNotifications.any { it.id == 4795 } })
+            Thread.sleep(1000); notice.update()
+            assertTrue("updated", waitUntil(3_000) { nm.activeNotifications.any { it.id == 4795 && it.notification.extras.getCharSequence(NotificationCompat.EXTRA_TITLE) == "S 2" } })
+            // The user swipes it away (the system removes it as cancel does).
+            nm.cancel(4795)
+            Thread.sleep(1000)
+            repeat(3) { notice.update(); Thread.sleep(300) }
+            Thread.sleep(500)
+            assertTrue("not posted again", nm.activeNotifications.none { it.id == 4795 })
+            assertTrue("dismissed", notice.dismissed)
+        } finally { notice.end() }
+    }
+
+    /**
+     * U1, L2: the automatic copy screen's state. A run going on shows its series count and not the last run's
+     * error (an old network failure, the wait for the location); with no run the last error shows. The wait for
+     * the location's error goes once the permission is granted.
+     */
+    @Test
+    fun stateShowsTheRunNotTheLastError() {
+        val old = DdnBackup.Status(System.currentTimeMillis() - 120_000, 50, 400, "Unable to resolve host")
+        val during = DdnBackupActivity.stateText(ctx, DdnBackupActivity.Running(450, 1109, "IMG_1.jpg · 40%"), old)
+        assertTrue(during, during.startsWith(ctx.getString(R.string.ddn_backup_running, 450, 1109, "IMG_1.jpg · 40%")))
+        assertTrue(during, !during.contains("Unable to resolve host"))
+        val starting = DdnBackupActivity.stateText(ctx, DdnBackupActivity.Running(0, 0, null), null)
+        assertEquals(ctx.getString(R.string.ddn_backup_running_start), starting)
+        val after = DdnBackupActivity.stateText(ctx, null, old)
+        assertTrue(after, after.contains("Unable to resolve host"))
+
+        val prefs = ctx.getSharedPreferences("ddn-backup", Context.MODE_PRIVATE)
+        val before = prefs.all.toMap()
+        try {
+            DdnBackup.setStatus(ctx, DdnBackup.Status(System.currentTimeMillis(), 0, 2, ctx.getString(R.string.ddn_loc_wait)))
+            DdnBackup.cancelNeedLocation(ctx)
+            assertEquals("the wait's error goes with its notification", null, DdnBackup.status(ctx)?.error)
+            DdnBackup.setStatus(ctx, DdnBackup.Status(System.currentTimeMillis(), 0, 2, "HTTP 500"))
+            DdnBackup.cancelNeedLocation(ctx)
+            assertEquals("another error stays", "HTTP 500", DdnBackup.status(ctx)?.error)
+        } finally {
+            prefs.edit().clear().apply { before.forEach { (k, v) -> when (v) { is Boolean -> putBoolean(k, v); is Int -> putInt(k, v); is Long -> putLong(k, v); is String -> putString(k, v); is Set<*> -> putStringSet(k, v.map { it.toString() }.toSet()) } } }.commit()
+        }
+    }
+
+    /** L1: with the automatic copy off, its screen says nothing about waiting for the photos' location. */
+    @Test
+    fun noWaitNoteWithTheCopyOff() {
+        val prefs = ctx.getSharedPreferences("ddn-backup", Context.MODE_PRIVATE)
+        val before = prefs.all.toMap()
+        try {
+            prefs.edit().putBoolean("on", false).commit()
+            androidx.test.core.app.ActivityScenario.launch<DdnBackupActivity>(android.content.Intent(ctx, DdnBackupActivity::class.java)).use { s ->
+                var note = true
+                s.onActivity { a -> note = a.locationNoteForTest() }
+                assertTrue("no location note with the copy off", !note)
+            }
+        } finally {
+            prefs.edit().clear().apply { before.forEach { (k, v) -> when (v) { is Boolean -> putBoolean(k, v); is Int -> putInt(k, v); is Long -> putLong(k, v); is String -> putString(k, v); is Set<*> -> putStringSet(k, v.map { it.toString() }.toSet()) } } }.commit()
+        }
+    }
+
     /** At most one update a second (Android drops a package's updates above 5 a second). */
     @Test
     fun updatesAreThrottled() {

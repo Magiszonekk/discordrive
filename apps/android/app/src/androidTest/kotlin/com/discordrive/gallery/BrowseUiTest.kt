@@ -207,6 +207,7 @@ class BrowseUiTest {
         DdnEditActivity.loadedForTest = false
         ActivityScenario.launch<DdnEditActivity>(Intent(ctx, DdnEditActivity::class.java).putExtra(DdnEditActivity.EXTRA_ID, photo.id)).use { e ->
             r["editLoads"] = waitUntil(30_000) { DdnEditActivity.loadedForTest }
+            r["editToolsEnabled"] = run { var ok = false; e.onActivity { a -> ok = a.toolsEnabledForTest() }; ok }
             e.onActivity { a -> a.rotateForTest() }
             shot("12-edit")
             e.onActivity { a -> a.findViewById<android.view.View>(R.id.saveButton).performClick() }
@@ -297,6 +298,17 @@ class BrowseUiTest {
             val shown = on { it.folderIntentForTest(s, photo) }
             r["viewerShowInFolder"] = shown.getStringExtra(DdnActivity.START) == "album" && shown.getStringExtra(DdnActivity.ALBUM_ID) == "fold-0000000001"
             folderIntent = shown
+            // N62: moved (here to the Gallery's timeline) while open: ⋮, Info and Show in folder follow the new
+            // place; the same move again says it is already there (not "another device").
+            if (s.move(listOf(photo.id), s.galleryRoot) == "applied") {
+                on { it.movedForTest(s.node(photo.id)!!) }
+                val cur = on { it.currentForTest() }!!
+                r["viewerMovedFollows"] = cur.parentId == s.galleryRoot && on { it.folderIntentForTest(s, cur) }.getStringExtra(DdnActivity.START) == "gallery" &&
+                    on { it.infoLines(s, cur) }.contains(ctx.getString(R.string.ddn_info_where, "Galeria"))
+                r["viewerMoveAgainInWords"] = s.move(listOf(photo.id), s.galleryRoot).let { DdnViewerActivity.moveOutcome(ctx, it, "ok") } == ctx.getString(R.string.ddn_move_noop)
+                r["viewerMovedBack"] = s.move(listOf(photo.id), "fold-0000000001") == "applied"
+                on { it.movedForTest(s.node(photo.id)!!) }
+            } else r["viewerMovedFollows"] = false
             if (film != null) {
                 // Swipe to the video: the next page, its name in the bar, it plays; its controls clear of the bars.
                 val at = list.indexOf(film)
@@ -389,6 +401,20 @@ class BrowseUiTest {
         r["searchWebTakenDate"] = s.children("fold-0000000001").none { it.name == "Wakacje \u017B.jpg" } || "Wakacje \u017B.jpg" in may
         old.delete()
         r["searchByName"] = s.children("fold-0000000001").none { it.name == "Wakacje \u017B.jpg" } || results("wakacje").isNotEmpty()
+        // N58: a result moved to the trash from the viewer is gone from the results when the search comes back.
+        ActivityScenario.launch<DdnSearchActivity>(Intent(ctx, DdnSearchActivity::class.java).putExtra(DdnSearchActivity.QUERY, "obraz testowy")).use { a ->
+            waitUntil { var ok = false; a.onActivity { x -> ok = x.readyForTest() }; ok }
+            var before: List<String> = emptyList()
+            waitUntil(10_000) { a.onActivity { x -> before = x.resultsForTest() }; before.isNotEmpty() }
+            val gone = s.media(100, null).first { it.name == before.first() }
+            a.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            val trashed = s.moveToTrash(listOf(gone.id)) == "applied"
+            a.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            var after: List<String> = before
+            r["searchDropsTrashed"] = trashed && waitUntil(10_000) { var ok = false; a.onActivity { x -> ok = x.refreshForTest; after = x.resultsForTest() }; ok } &&
+                after.size == before.size - 1 && gone.name !in after
+            s.restore(listOf(gone.id))
+        }
         DdnPrivate.set(ctx, anyPhoto.parentId!!, true)
         try {
             r["searchPrivateLeftOut"] = anyPhoto.name !in results("obraz testowy")

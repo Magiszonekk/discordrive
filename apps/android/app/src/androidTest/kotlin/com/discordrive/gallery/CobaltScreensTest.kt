@@ -96,6 +96,31 @@ class CobaltScreensTest {
         }
     }
 
+    /** Edit a photo: the Cobalt bar with back, the tools as icons with labels, no upper-cased or plain text buttons. */
+    @Test
+    fun editInCobalt() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        // No account: the picture does not load; the screen stays open for the look.
+        ActivityScenario.launch<DdnEditActivity>(Intent(ctx, DdnEditActivity::class.java).putExtra(DdnEditActivity.EXTRA_ID, "none").putExtra(DdnEditActivity.KEEP_OPEN_FOR_TEST, true)).use { s ->
+            var caps = -1
+            var textButtons = -1
+            var back = false
+            var tools = listOf<String>()
+            s.onActivity { a ->
+                val v = all(a.window.decorView)
+                caps = v.filterIsInstance<Button>().count { it.isAllCaps }
+                textButtons = v.filterIsInstance<MaterialButton>().count { it.text.toString() in listOf(ctx.getString(R.string.edit_rotate), ctx.getString(R.string.edit_flip), ctx.getString(R.string.edit_reset)) }
+                back = v.any { it.contentDescription == ctx.getString(R.string.cobalt_back) }
+                tools = v.filter { it.isClickable && it.contentDescription != null }.map { it.contentDescription.toString() }
+            }
+            assertTrue("no upper-cased buttons: $caps", caps == 0)
+            assertTrue("tools are not text buttons: $textButtons", textButtons == 0)
+            assertTrue("back", back)
+            assertTrue("tools: $tools", tools.containsAll(listOf(R.string.edit_rotate, R.string.edit_flip, R.string.edit_reset).map { ctx.getString(it) }))
+            InstrumentationRegistry.getArguments().getString("holdMs")?.toLongOrNull()?.let { Thread.sleep(it) }
+        }
+    }
+
     /** The PIN dialog in the Cobalt look, "Anuluj" in Polish whatever the system language. */
     @Test
     fun pinDialogCobalt() {
