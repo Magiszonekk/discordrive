@@ -10,7 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
 import android.view.Gravity
-import android.widget.Button
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -33,22 +33,60 @@ class DdnOpenActivity : AppCompatActivity() {
     @Volatile private var shown = false
     private var name = ""
 
+    private lateinit var sendButton: com.google.android.material.button.MaterialButton
+    private lateinit var bottomBar: android.view.View
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        CobaltUi.theme(this)
         super.onCreate(savedInstanceState)
         val uri = intent.data ?: return finish()
         // The type: the intent's, else the provider's (MediaStore answers getType), else from the name.
         val type = intent.type?.takeIf { it != "*/*" } ?: runCatching { contentResolver.getType(uri) }.getOrNull() ?: ""
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xFF000000.toInt()) }
+        // The photo fills the screen; the name on a scrim at the top (with back), "Send to discordrive" as the
+        // primary button at the bottom.
+        val root = FrameLayout(this).apply { setBackgroundColor(0xFF000000.toInt()) }
         box = FrameLayout(this)
+        root.addView(box, FrameLayout.LayoutParams(-1, -1))
         val name = DdnUploads.displayName(this, uri, type)
-        val info = TextView(this).apply { text = name; setTextColor(0xFFE8E8EC.toInt()); setPadding(dp(16), dp(8), dp(16), dp(4)); textSize = 13f }
-        val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER; setPadding(dp(8), 0, dp(8), dp(8)) }
-        bar.addView(Button(this).apply { text = getString(R.string.ddn_open_send); setOnClickListener { send(uri) } })
-        root.addView(box, LinearLayout.LayoutParams(-1, 0, 1f))
-        root.addView(info)
-        root.addView(bar)
+        val onScrim = getColor(R.color.cobalt_on_scrim)
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundResource(R.drawable.bg_cobalt_scrim_top)
+            setPadding(dp(4), dp(4), dp(16), dp(20))
+            addView(android.widget.ImageView(this@DdnOpenActivity).apply {
+                setImageResource(R.drawable.ic_cobalt_back); setColorFilter(onScrim); contentDescription = getString(R.string.cobalt_back)
+                setPadding(dp(12), dp(12), dp(12), dp(12))
+                val tv = android.util.TypedValue(); theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, tv, true); setBackgroundResource(tv.resourceId)
+                setOnClickListener { finish() }
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            addView(TextView(this@DdnOpenActivity).apply {
+                text = name; androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowTitle); setTextColor(onScrim)
+                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(4) })
+        }
+        sendButton = CobaltUi(this).button(R.string.ddn_open_send, CobaltUi.Kind.PRIMARY, R.drawable.ic_cobalt_upload) { send(uri) }
+        // The insets pad the outer bar (Insets.apply replaces its padding); the inner one keeps the margins.
+        val bottom = FrameLayout(this).apply {
+            setBackgroundResource(R.drawable.bg_cobalt_scrim_bottom)
+            addView(LinearLayout(this@DdnOpenActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16), dp(28), dp(16), dp(16))
+                addView(sendButton, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
+            }, FrameLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        root.addView(top, FrameLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
+        root.addView(bottom, FrameLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
         setContentView(root)
-        Insets.apply(root)
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+        bottomBar = bottom
+        // A video's controls sit above "Send" (they were under it): the player is padded by the bar's height.
+        bottom.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> (box.getChildAt(0) as? PlayerView)?.let { if (it.paddingBottom != bottom.height) it.setPadding(0, 0, 0, bottom.height) } }
+        androidx.core.view.WindowCompat.getInsetsController(window, root).apply { isAppearanceLightStatusBars = false; isAppearanceLightNavigationBars = false }
+        Insets.apply(top, top = true, bottom = false)
+        Insets.apply(bottom, top = false, bottom = true)
         if (type.startsWith("video/") || (!type.startsWith("image/") && DdnSession.isVideo(name))) playVideo(uri) else showImage(uri)
         this.name = name
     }
@@ -67,7 +105,7 @@ class DdnOpenActivity : AppCompatActivity() {
             }.getOrNull()
             main.post {
                 if (bmp != null) { img.setImageBitmap(bmp); shown = true }
-                else box.addView(TextView(this).apply { text = getString(R.string.ddn_no_preview); setTextColor(0xFF9C9CA6.toInt()); gravity = Gravity.CENTER }, FrameLayout.LayoutParams(-1, -1))
+                else box.addView(TextView(this).apply { text = getString(R.string.ddn_no_preview); androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_Body); setTextColor(0xFFC4C7CF.toInt()); gravity = Gravity.CENTER; setPadding(dp(32), 0, dp(32), 0) }, FrameLayout.LayoutParams(-1, -1))
             }
         }
     }
@@ -75,6 +113,7 @@ class DdnOpenActivity : AppCompatActivity() {
     private fun playVideo(uri: Uri) {
         val view = PlayerView(this)
         box.addView(view, FrameLayout.LayoutParams(-1, -1))
+        if (::bottomBar.isInitialized) view.setPadding(0, 0, 0, bottomBar.height)
         val p = ExoPlayer.Builder(this).build()
         p.setMediaItem(MediaItem.fromUri(uri))
         p.prepare()
@@ -125,4 +164,7 @@ class DdnOpenActivity : AppCompatActivity() {
 
     internal fun shownForTest(): Boolean = shown
     internal fun nameForTest(): String = name
+    internal fun showControlsForTest(): Boolean = (box.getChildAt(0) as? PlayerView)?.let { it.showController(); true } ?: false
+    internal fun controlsClearForTest(): Boolean? = VideoFit.clear(box.getChildAt(0) as? PlayerView, bottomBar)
+    internal fun sendButtonForTest(): com.google.android.material.button.MaterialButton = sendButton
 }

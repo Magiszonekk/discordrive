@@ -6,10 +6,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.format.Formatter
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.ProgressBar
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.IntentSenderRequest
@@ -26,8 +22,8 @@ import kotlin.concurrent.thread
 class DdnFreeUpActivity : AppCompatActivity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var state: TextView
-    private lateinit var progress: ProgressBar
-    private lateinit var go: Button
+    private lateinit var progress: com.google.android.material.progressindicator.LinearProgressIndicator
+    private lateinit var go: com.google.android.material.button.MaterialButton
     private var scan: DdnFreeUp.Scan? = null
     /** After a removal: what went (shown above the next check, which finds nothing more to remove). */
     private var removedNote: String? = null
@@ -43,19 +39,17 @@ class DdnFreeUpActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        CobaltUi.theme(this)
         super.onCreate(savedInstanceState)
-        title = getString(R.string.ddn_free)
-        val pad = dp(16)
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad, pad, pad); setBackgroundColor(getColor(R.color.bg)) }
-        root.addView(TextView(this).apply { text = getString(R.string.ddn_free_note); textSize = 14f; setTextColor(getColor(R.color.text_dim)); setPadding(0, 0, 0, dp(12)) })
-        progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 1000 }
-        state = TextView(this).apply { textSize = 15f; setTextColor(getColor(R.color.text)); setPadding(0, dp(8), 0, dp(8)) }
-        go = Button(this).apply { text = getString(R.string.ddn_free_go); isEnabled = false; setOnClickListener { remove() } }
-        root.addView(progress)
-        root.addView(state)
-        root.addView(go)
-        setContentView(ScrollView(this).apply { addView(root) })
-        Insets.apply(root)
+        val ui = CobaltUi(this)
+        val page = ui.screen(R.string.ddn_free)
+        val c = ui.section(page, R.string.ddn_free_h, getString(R.string.ddn_free_note))
+        progress = com.google.android.material.progressindicator.LinearProgressIndicator(this).apply { max = 1000 }
+        state = ui.text("")
+        go = ui.button(R.string.ddn_free_go, CobaltUi.Kind.DANGER, R.drawable.ic_cobalt_trash) { remove() }.apply { isEnabled = false }
+        ui.add(c, progress, top = 14)
+        ui.add(c, state, top = 10)
+        ui.add(c, go, top = 14)
         check()
     }
 
@@ -65,7 +59,7 @@ class DdnFreeUpActivity : AppCompatActivity() {
         state.text = getString(R.string.ddn_free_checking)
         thread {
             val r = runCatching {
-                DdnFreeUp.scan(this) { i, n -> main.post { progress.progress = if (n > 0) i * 1000 / n else 0; state.text = getString(R.string.ddn_free_checking_n, i, n) } }
+                DdnFreeUp.scan(this) { i, n -> main.post { progress.setProgressCompat(if (n > 0) i * 1000 / n else 0, true); state.text = getString(R.string.ddn_free_checking_n, i, n) } }
             }
             main.post {
                 progress.visibility = android.view.View.GONE
@@ -90,8 +84,6 @@ class DdnFreeUpActivity : AppCompatActivity() {
         val pi = DdnFreeUp.request(this, sc.ready) ?: return
         confirm.launch(IntentSenderRequest.Builder(pi.intentSender).build())
     }
-
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     // ── for the instrumentation test ──
     @Volatile internal var checkedForTest = false

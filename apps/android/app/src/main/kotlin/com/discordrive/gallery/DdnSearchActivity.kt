@@ -40,21 +40,26 @@ class DdnSearchActivity : AppCompatActivity() {
     private var seq = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        CobaltUi.theme(this)
         super.onCreate(savedInstanceState)
-        title = getString(R.string.ddn_search)
-        val pad = dp(12)
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(getColor(R.color.bg)) }
-        box = EditText(this).apply {
-            hint = getString(R.string.ddn_search_hint); isSingleLine = true; imeOptions = EditorInfo.IME_ACTION_SEARCH
-            setTextColor(getColor(R.color.text)); setHintTextColor(getColor(R.color.text_dim)); setPadding(pad, pad, pad, pad)
+        val ui = CobaltUi(this)
+        // A list screen: the bar (back, "Szukaj"), the search field, a note (counts), the grid of results.
+        val root = ui.screen(R.string.ddn_search, scroll = false)
+        val (field, edit) = ui.field(R.string.ddn_search, hint = getString(R.string.ddn_search_hint))
+        box = edit.apply { isSingleLine = true; imeOptions = EditorInfo.IME_ACTION_SEARCH }
+        // The label above the field repeats the bar's title: the field alone (its hint says what to type).
+        (field as ViewGroup).getChildAt(0).visibility = View.GONE
+        (field.getChildAt(1) as com.google.android.material.textfield.TextInputLayout).apply {
+            startIconDrawable = getDrawable(R.drawable.ic_cobalt_search)
+            setStartIconTintList(android.content.res.ColorStateList.valueOf(getColor(R.color.cobalt_muted)))
+            endIconMode = com.google.android.material.textfield.TextInputLayout.END_ICON_CLEAR_TEXT
         }
-        info = TextView(this).apply { textSize = 12f; setTextColor(getColor(R.color.text_dim)); setPadding(pad, 0, pad, dp(6)) }
-        grid = RecyclerView(this)
-        root.addView(box)
-        root.addView(info)
-        root.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        setContentView(root)
-        Insets.apply(root)
+        root.addView(field, ui.lp(top = 4))
+        info = ui.note("").apply { setPadding(ui.dp(4), 0, ui.dp(4), 0) }
+        root.addView(info, ui.lp(top = 8))
+        grid = RecyclerView(this).apply { clipToPadding = false }
+        // The grid reaches the screen's edges (the column pads 16dp).
+        root.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = ui.dp(8); marginStart = -ui.dp(16); marginEnd = -ui.dp(16) })
         box.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -108,9 +113,9 @@ class DdnSearchActivity : AppCompatActivity() {
             override fun getItemCount() = list.size
             override fun onCreateViewHolder(p: ViewGroup, t: Int): RecyclerView.ViewHolder {
                 val f = FrameLayout(this@DdnSearchActivity).apply { layoutParams = ViewGroup.LayoutParams(cell, cell); setPadding(1, 1, 1, 1) }
-                f.addView(ImageView(this@DdnSearchActivity).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(getColor(R.color.surface)) }, FrameLayout.LayoutParams(-1, -1))
+                f.addView(ImageView(this@DdnSearchActivity).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(getColor(R.color.cobalt_tile)) }, FrameLayout.LayoutParams(-1, -1))
                 f.addView(ImageView(this@DdnSearchActivity).apply { setImageResource(R.drawable.ic_play); setColorFilter(Color.WHITE) }, FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER))
-                f.addView(TextView(this@DdnSearchActivity).apply { textSize = 11f; setTextColor(getColor(R.color.text)); maxLines = 3; setPadding(dp(6), dp(6), dp(6), dp(6)) }, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+                f.addView(TextView(this@DdnSearchActivity).apply { androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowSub); setTextColor(getColor(R.color.cobalt_ink)); maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE; setPadding(dp(8), dp(6), dp(8), dp(8)) }, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
                 return object : RecyclerView.ViewHolder(f) {}
             }
             override fun onBindViewHolder(h: RecyclerView.ViewHolder, i: Int) {
@@ -125,7 +130,11 @@ class DdnSearchActivity : AppCompatActivity() {
                 img.setImageDrawable(null)
                 img.contentDescription = c.name
                 img.scaleType = ImageView.ScaleType.CENTER_CROP
-                if (media) DdnThumbs.into(s, c.manifestRef, img, cell) { img.setImageResource(R.drawable.ic_photo); img.scaleType = ImageView.ScaleType.CENTER_INSIDE }
+                img.clearColorFilter()
+                img.setPadding(0, 0, 0, 0)
+                // Media: the thumbnail (the type icon until it comes); other files: their type icon above the name.
+                fun typeIcon() { img.setImageResource(CobaltUi.typeIconOf(c.name, false)); img.setColorFilter(getColor(R.color.cobalt_muted)); img.scaleType = ImageView.ScaleType.CENTER_INSIDE; img.setPadding(0, 0, 0, if (media) 0 else cell / 4) }
+                if (media) DdnThumbs.into(s, c.manifestRef, img, cell) { typeIcon() } else typeIcon()
                 f.setOnClickListener { open(c) }
             }
         }

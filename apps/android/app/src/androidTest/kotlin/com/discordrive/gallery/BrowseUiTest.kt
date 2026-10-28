@@ -636,7 +636,22 @@ class BrowseUiTest {
         DdnViewerActivity.pending = listOf(photo)
         ActivityScenario.launch<DdnViewerActivity>(Intent(ctx, DdnViewerActivity::class.java).putExtra("id", photo.id)).use { v ->
             r["viewerPicture"] = waitUntil { var ok = false; v.onActivity { a -> ok = a.hasPictureForTest() }; ok }
+            // The bottom bar: Share, Download, Edit (a photo), Info, Trash; Info names the place and the size.
+            var acts = listOf<String>()
+            var info = listOf<String>()
+            v.onActivity { a -> acts = a.actionsForTest(); info = a.infoLines(DdnSession.get(ctx)!!, photo) }
+            r["viewerActions"] = acts == listOf(R.string.ddn_share, R.string.ddn_download, R.string.ddn_edit, R.string.ddn_info, R.string.ddn_trash).map { ctx.getString(it) }
+            r["viewerInfo"] = info.any { it.startsWith(ctx.getString(R.string.ddn_info_where, "").trimEnd()) } && info.any { it.startsWith(ctx.getString(R.string.ddn_info_size, "").trimEnd()) }
+            Log.i("ddn-ui", "viewer actions $acts, info $info")
             shot("4-viewer")
+        }
+        // A video: its seek bar and time above the bottom bar (they were under it), the bars follow the controls.
+        DdnSession.get(ctx)!!.children("fold-0000000001").firstOrNull { it.name == "film.webm" }?.let { film ->
+            DdnViewerActivity.pending = listOf(film)
+            ActivityScenario.launch<DdnViewerActivity>(Intent(ctx, DdnViewerActivity::class.java).putExtra("id", film.id)).use { v ->
+                r["viewerVideoControlsClear"] = waitUntil(30_000) { var ok: Boolean? = null; v.onActivity { a -> a.showControlsForTest(); ok = a.controlsClearForTest() }; ok == true }
+                shot("4b-viewer-video")
+            }
         }
         albums(r)
         // Upload from the phone (PR 4): a file shared into the queue and a photo of the camera folder copied
