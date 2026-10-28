@@ -10,7 +10,10 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.work.CoroutineWorker
 import androidx.work.Data
 import androidx.work.ForegroundInfo
+import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequestBuilder
+import java.util.concurrent.TimeUnit
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
@@ -85,6 +88,72 @@ class BackupProgressTest {
         Log.i("ddn-ui", "one ID for both jobs shows: '$shared'")
     }
 
+    /**
+     * B1: a periodic job is updated while it runs (the app does enqueueUniquePeriodicWork(UPDATE) each time it
+     * opens). Its generation changes, and WorkManager posts the notification of the first generation again
+     * after every setForeground. With setForeground per update the count freezes (only logged); with FgNotice
+     * (one setForeground, then notify) the screen shows the last count.
+     */
+    @Test
+    fun aPeriodicJobUpdatedWhileItRunsKeepsItsCount() {
+        val viaSetForeground = periodic("setForeground")
+        Log.i("ddn-ui", "setForeground per update, after UPDATE shows: '$viaSetForeground'")
+        assertEquals("FgNotice: the last count", "P 12 z 12", periodic("notice"))
+    }
+
+    private fun periodic(mode: String): String? {
+        val wm = WorkManager.getInstance(ctx)
+        val nm = ctx.getSystemService(NotificationManager::class.java)
+        val name = "fg-test-periodic"
+        fun req() = PeriodicWorkRequestBuilder<FgTestWorker>(6, TimeUnit.HOURS)
+            .setInputData(Data.Builder().putString("title", "P").putInt("id", 4798).putInt("steps", 12).putLong("hold", 3_000).putString("mode", mode).build()).build()
+        wm.enqueueUniquePeriodicWork(name, ExistingPeriodicWorkPolicy.UPDATE, req()).result.get()
+        fun info() = wm.getWorkInfosForUniqueWork(name).get().firstOrNull()
+        assertTrue("periodic job running", waitUntil { info()?.state == WorkInfo.State.RUNNING && (info()?.progress?.getInt("step", 0) ?: 0) >= 2 })
+        // The app opens: the same periodic job enqueued again with UPDATE (a new generation of the running one).
+        wm.enqueueUniquePeriodicWork(name, ExistingPeriodicWorkPolicy.UPDATE, req()).result.get()
+        assertTrue("reached its last count", waitUntil { info()?.progress?.getInt("step", 0) == 12 })
+        Thread.sleep(800)
+        val title = nm.activeNotifications.firstOrNull { it.id == 4798 }?.notification?.extras?.getCharSequence(NotificationCompat.EXTRA_TITLE)?.toString()
+        wm.cancelUniqueWork(name).result.get()
+        waitUntil { info()?.state?.isFinished != false || info()?.state == WorkInfo.State.ENQUEUED }
+        Thread.sleep(1000)
+        return title
+    }
+
+    /**
+     * B2: a run Android does not allow in the foreground (started in the background): the notification is
+     * shown anyway, not ongoing, and gone once the run ends.
+     */
+    @Test
+    fun aRunWithoutTheForegroundServiceLeavesNoNotification() {
+        val wm = WorkManager.getInstance(ctx)
+        val nm = ctx.getSystemService(NotificationManager::class.java)
+        FgNotice.denyForegroundForTest = true
+        try {
+            val r = OneTimeWorkRequestBuilder<FgTestWorker>()
+                .setInputData(Data.Builder().putString("title", "Q").putInt("id", 4797).putInt("steps", 6).putLong("hold", 1_500).putString("mode", "notice").build()).build()
+            wm.enqueue(r)
+            assertTrue("reached its last count", waitUntil { wm.getWorkInfoById(r.id).get()?.progress?.getInt("step", 0) == 6 })
+            val during = nm.activeNotifications.firstOrNull { it.id == 4797 }
+            assertEquals("shown during the run", "Q 6 z 6", during?.notification?.extras?.getCharSequence(NotificationCompat.EXTRA_TITLE)?.toString())
+            assertTrue("not ongoing without the service", during!!.notification.flags and android.app.Notification.FLAG_ONGOING_EVENT == 0)
+            assertTrue("finished", waitUntil { wm.getWorkInfoById(r.id).get()?.state == WorkInfo.State.SUCCEEDED })
+            assertTrue("gone after the run", waitUntil(5_000) { nm.activeNotifications.none { it.id == 4797 } })
+        } finally { FgNotice.denyForegroundForTest = false }
+    }
+
+    /** At most one update a second (Android drops a package's updates above 5 a second). */
+    @Test
+    fun updatesAreThrottled() {
+        var built = 0
+        val n = FgNotice(ctx, 4796, minGapMs = 1000, setForeground = null) { built++; android.app.Notification.Builder(ctx, DdnBackup.NOTIF_CHANNEL).setSmallIcon(R.drawable.ic_sync).build() }
+        val t0 = System.currentTimeMillis()
+        while (System.currentTimeMillis() - t0 < 2_500) { n.update(); Thread.sleep(5) }
+        n.end()
+        assertTrue("about one a second, not hundreds: $built", built in 2..4)
+    }
+
     private fun run(firstId: Int, secondId: Int): String? {
         val wm = WorkManager.getInstance(ctx)
         val nm = ctx.getSystemService(NotificationManager::class.java)
@@ -128,16 +197,29 @@ class FgTestWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
 
     override suspend fun getForegroundInfo() = info(inputData.getString("title")!!)
 
+    private var text = ""
+    private val notice by lazy {
+        FgNotice(this, inputData.getInt("id", 0), minGapMs = 0) { ongoing ->
+            NotificationCompat.Builder(applicationContext, DdnBackup.NOTIF_CHANNEL).setSmallIcon(R.drawable.ic_sync).setContentTitle(text).setOngoing(ongoing).setOnlyAlertOnce(true).build()
+        }
+    }
+
     override suspend fun doWork(): Result {
         val title = inputData.getString("title")!!
         val steps = inputData.getInt("steps", 0)
-        setForeground(info(if (steps == 0) title else "$title 0 z $steps"))
-        for (i in 1..steps) {
-            delay(400)
-            setForeground(info("$title $i z $steps"))
-            setProgress(Data.Builder().putInt("step", i).build())
-        }
-        delay(inputData.getLong("hold", 0))
+        val viaNotice = inputData.getString("mode") == "notice"
+        text = if (steps == 0) title else "$title 0 z $steps"
+        info(text) // the channel
+        if (viaNotice) notice.start() else setForeground(info(text))
+        try {
+            for (i in 1..steps) {
+                delay(400)
+                text = "$title $i z $steps"
+                if (viaNotice) notice.update() else setForeground(info(text))
+                setProgress(Data.Builder().putInt("step", i).build())
+            }
+            delay(inputData.getLong("hold", 0))
+        } finally { if (viaNotice) notice.end() }
         return Result.success()
     }
 }

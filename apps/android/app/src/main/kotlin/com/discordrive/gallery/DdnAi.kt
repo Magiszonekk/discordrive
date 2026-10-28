@@ -357,18 +357,19 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
     private var done = 0
     private var total = 0
 
-    override suspend fun getForegroundInfo(): ForegroundInfo = info()
+    private val notice = FgNotice(this, DdnAi.NOTIF_ID) { ongoing -> notification(ongoing) }
 
-    private fun info(): ForegroundInfo {
+    override suspend fun getForegroundInfo(): ForegroundInfo = notice.info()
+
+    private fun notification(ongoing: Boolean): android.app.Notification {
         val c = applicationContext
         val mgr = c.getSystemService(android.app.NotificationManager::class.java)
         if (mgr.getNotificationChannel(DdnBackup.NOTIF_CHANNEL) == null) {
             mgr.createNotificationChannel(android.app.NotificationChannel(DdnBackup.NOTIF_CHANNEL, c.getString(R.string.ddn_up_channel), android.app.NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
         }
-        val n = NotificationCompat.Builder(c, DdnBackup.NOTIF_CHANNEL).setSmallIcon(R.drawable.ic_sync)
+        return NotificationCompat.Builder(c, DdnBackup.NOTIF_CHANNEL).setSmallIcon(R.drawable.ic_sync)
             .setContentTitle(c.getString(R.string.ddn_ai_progress, done, maxOf(total, done)))
-            .setProgress(maxOf(total, 1), done, total == 0).setOngoing(true).setOnlyAlertOnce(true).build()
-        return if (Build.VERSION.SDK_INT >= 29) ForegroundInfo(DdnAi.NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) else ForegroundInfo(DdnAi.NOTIF_ID, n)
+            .setProgress(maxOf(total, 1), done, total == 0).setOngoing(ongoing).setOnlyAlertOnce(true).build()
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
@@ -390,7 +391,8 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
         var err: String? = null
         var gone = 0
         var last = 0L
-        runCatching { setForeground(info()) }
+        notice.start()
+        try {
         for (f in todo) {
             if (isStopped || System.currentTimeMillis() - t0 > DdnAi.RUN_BUDGET_MS) break
             val wait = last + 60_000L / DdnAi.PER_MIN - System.currentTimeMillis()
@@ -422,8 +424,9 @@ class DdnAiWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
             if (stop) break
             // Counted also when it failed (counting only descriptions left "0 of N" through a run of errors).
             done++
-            runCatching { setForeground(info()) }
+            notice.update()
         }
+        } finally { notice.end() }
         DdnAi.live = null
         DdnAi.setStatus(c, DdnAi.Status(System.currentTimeMillis(), db.count(acct, "ok"), all.size, err, gone))
         Result.success()

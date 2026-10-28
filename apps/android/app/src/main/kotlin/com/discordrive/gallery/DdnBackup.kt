@@ -46,6 +46,8 @@ import java.util.concurrent.TimeUnit
 object DdnBackup {
     private const val TAG = "ddn-backup"
     const val RUN_BUDGET_MS = 30 * 60_000L
+    /** A run without the foreground service (Android refused it): a plain job is stopped after 10 minutes. */
+    const val PLAIN_RUN_BUDGET_MS = 8 * 60_000L
     const val PERIOD_H = 6L
     private const val PREFS = "ddn-backup"
     private const val WORK_PERIODIC = "ddn-backup-periodic"
@@ -269,40 +271,41 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
     private val series by lazy { BackupSeries.of(applicationContext) }
     private var shown = BackupSeries.State(0, 0)
 
+    /** The notification: foreground once at the start, then kept current by [FgNotice] (see there why). */
+    private val notice = FgNotice(this, DdnBackup.NOTIF_ID) { ongoing -> notification(ongoing) }
+
     // Asked before the run starts (an expedited job on older Android): the series as it stands, not "0 of 0".
     override suspend fun getForegroundInfo(): ForegroundInfo {
         shown = if (series.open) series.state() else BackupSeries.State(0, 0)
-        return foreground()
+        return notice.info()
     }
 
-    private fun foreground(): ForegroundInfo {
+    private fun notification(ongoing: Boolean): android.app.Notification {
         val c = applicationContext
         val mgr = c.getSystemService(android.app.NotificationManager::class.java)
         if (mgr.getNotificationChannel(DdnBackup.NOTIF_CHANNEL) == null) {
             mgr.createNotificationChannel(android.app.NotificationChannel(DdnBackup.NOTIF_CHANNEL, c.getString(R.string.ddn_up_channel), android.app.NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
         }
-        val n = NotificationCompat.Builder(c, DdnBackup.NOTIF_CHANNEL)
+        return NotificationCompat.Builder(c, DdnBackup.NOTIF_CHANNEL)
             .setSmallIcon(R.drawable.ic_sync)
             .setContentTitle(c.getString(R.string.ddn_up_title, shown.done, shown.total))
             .setContentText(line)
             .setProgress(maxOf(shown.total, 1), shown.done, shown.total == 0)
-            .setOngoing(true).setOnlyAlertOnce(true)
+            .setOngoing(ongoing).setOnlyAlertOnce(true)
             .build()
-        return if (Build.VERSION.SDK_INT >= 29) ForegroundInfo(DdnBackup.NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) else ForegroundInfo(DdnBackup.NOTIF_ID, n)
     }
 
-    private suspend fun show(text: String) {
+    private fun show(text: String, force: Boolean = false) {
         line = text
-        lastShown = System.currentTimeMillis()
-        runCatching { setForeground(foreground()) }
+        notice.update(force)
         publish()
     }
 
-    /** One file done (sent, or already in the account): the series counts it, the notification at most once a second. */
-    private suspend fun step() {
+    /** One file done (sent, or already in the account): the series counts it. */
+    private fun step() {
         done++
         shown = series.step()
-        if (System.currentTimeMillis() - lastShown >= 1000) show(line)
+        show(line)
     }
 
     private fun publish() = setProgressAsync(Data.Builder().putInt("done", shown.done).putInt("total", shown.total).putString("line", line).build())
@@ -329,9 +332,13 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             val media = if (auto) DdnBackup.scan(c, DdnBackup.buckets(c)).filter { !db.isCopied(it.id, it.size, it.modified, acct) } else emptyList()
             total = queue.size + media.size
             shown = series.start(acct, total)
-            show(c.getString(R.string.ddn_up_starting))
+            line = c.getString(R.string.ddn_up_starting)
+            // Started in the background (the trigger on new photos), Android may refuse the foreground service:
+            // then the run is a plain job, which Android stops after ~10 minutes, so it takes a shorter budget.
+            if (!notice.start()) budget = DdnBackup.PLAIN_RUN_BUDGET_MS
+            publish()
             for (q in queue) {
-                if (isStopped || System.currentTimeMillis() - t0 > DdnBackup.RUN_BUDGET_MS) break
+                if (isStopped || System.currentTimeMillis() - t0 > budget) break
                 show(q.name)
                 try {
                     val local = q.local?.let(::File)
@@ -357,7 +364,7 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                 val toGallery = s.gallerySpace
                 val folders = HashMap<String, String>()
                 for (m in media) {
-                    if (isStopped || System.currentTimeMillis() - t0 > DdnBackup.RUN_BUDGET_MS) break
+                    if (isStopped || System.currentTimeMillis() - t0 > budget) break
                     show(m.name)
                     try {
                         val folder = folders.getOrPut(m.bucket) {
@@ -398,6 +405,7 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             err = e.message
             DdnBackup.log("run failed: ${e.message}")
         } finally {
+            notice.end()
             DdnBackup.setStatus(c, DdnBackup.Status(System.currentTimeMillis(), copied, waiting, err))
             runCatching { DdnBackup.notifyFailed(c, DdnBackup.failed(c).size) }
             if (inputData.getBoolean("trigger", false)) DdnBackup.armTrigger(c)
@@ -410,14 +418,13 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         Result.success()
     }
 
+    private var budget = DdnBackup.RUN_BUDGET_MS
     private var lastShown = 0L
     private fun progress(name: String, sent: Long, size: Long) {
         val t = System.currentTimeMillis()
-        if (t - lastShown < 1000 && sent < size) return
+        if (t - lastShown < 1000) return
         lastShown = t
-        line = "$name · ${sent * 100 / maxOf(size, 1)}%"
-        runCatching { setForegroundAsync(foreground()) }
-        publish()
+        show("$name · ${sent * 100 / maxOf(size, 1)}%")
     }
 
     private fun picturesOf(c: Context, local: File?, uri: String?): List<io.github.magiszonekk.discordrive.core.FileWrite.Picture> {
