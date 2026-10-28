@@ -127,6 +127,10 @@ open class DdnActivity : AppCompatActivity() {
                 show()
                 refresh()
                 DdnBackup.schedule(this)
+                // The automatic copy is on and photos may be read, their position not (access given by an older
+                // version or in the system settings): ask once; the group's access grants it without a dialog.
+                if (savedInstanceState == null && DdnBackup.enabled(this) && MediaLocation.hasMediaAccess(this) && !DdnBackup.mayCopyMedia(this))
+                    gate.ask { if (MediaLocation.granted(this)) { DdnBackup.cancelNeedLocation(this); DdnBackup.runNow(this) } }
                 DdnAi.schedule(this)
                 DdnApp.schedule(this)
             }
@@ -148,14 +152,17 @@ open class DdnActivity : AppCompatActivity() {
             gallery || albumsTab -> null
             else -> path.last().first
         }
-        thread {
+        gate.then(uris) { thread {
             val r = runCatching { DdnUploads.queue(this, uris, folder) }
             main.post {
                 r.onSuccess { android.widget.Toast.makeText(this, plq(R.plurals.ddn_up_queued, it, it), android.widget.Toast.LENGTH_LONG).show(); watchUploads() }
                     .onFailure { status.text = getString(R.string.ddn_error, it.message) }
             }
-        }
+        } }
     }
+
+    /** Photos picked from the phone keep their GPS position: the permission is asked for before they are read. */
+    private val gate = LocationGate(this)
 
     /** When the upload job ends, the list shows the new files. */
     private fun watchUploads() {

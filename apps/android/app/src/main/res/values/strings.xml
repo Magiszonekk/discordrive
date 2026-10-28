@@ -411,6 +411,11 @@ Tekst: %3$s</string>
     <string name="ddn_backup_running">Trwa: %1$d z %2$d · %3$s</string>
     <string name="ddn_backup_last">Ostatnio: %1$s · skopiowano %2$d · czeka %3$d</string>
     <string name="ddn_backup_never">Jeszcze nie kopiowano.</string>
+    <string name="ddn_loc_wait">Auto-kopia czeka na dostęp do lokalizacji zdjęć</string>
+    <string name="ddn_loc_tap">Bez niego Android wysyła zdjęcia z wyzerowaną pozycją GPS i kopia na koncie straciłaby ją na zawsze. Dotknij, żeby zezwolić.</string>
+    <string name="ddn_loc_missing">Aplikacja nie ma dostępu do lokalizacji zapisanej w zdjęciach: Android wyzerowałby pozycję GPS w kopiach. Auto-kopia czeka, aż zezwolisz.</string>
+    <string name="ddn_loc_declined">Odmówiono dostępu do lokalizacji zdjęć: kopie trafiają na konto bez pozycji GPS.</string>
+    <string name="ddn_loc_allow">Zezwól na lokalizację zdjęć</string>
     <string name="ddn_backup_partial">Jeśli dasz dostęp tylko do wybranych zdjęć (Android 14+), auto-kopia widzi tylko te wybrane. Pełny dostęp: Ustawienia telefonu → Aplikacje → discordrive → Uprawnienia → Zdjęcia i filmy → Zezwalaj zawsze.</string>
     <string name="ddn_settings">Ustawienia</string>
     <string name="ddn_set_account">Konto</string>

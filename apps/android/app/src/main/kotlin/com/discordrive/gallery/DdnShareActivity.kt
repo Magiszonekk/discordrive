@@ -27,17 +27,33 @@ import kotlin.concurrent.thread
  * the background with a notification.
  */
 class DdnShareActivity : AppCompatActivity() {
+    /** Photos of the phone keep their GPS position: the permission is asked for before they are read. */
+    private val gate = LocationGate(this) { queue() }
+
+    private fun uris(): List<Uri> = when (intent.action) {
+        Intent.ACTION_SEND -> listOfNotNull(intent.parcel(Intent.EXTRA_STREAM))
+        Intent.ACTION_SEND_MULTIPLE -> intent.parcelList(Intent.EXTRA_STREAM)
+        else -> emptyList()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val uris: List<Uri> = when (intent.action) {
-            Intent.ACTION_SEND -> listOfNotNull(intent.parcel(Intent.EXTRA_STREAM))
-            Intent.ACTION_SEND_MULTIPLE -> intent.parcelList(Intent.EXTRA_STREAM)
-            else -> emptyList()
-        }
         if (DdnAccount.load(this) == null) {
             Toast.makeText(this, R.string.ddn_up_no_account, Toast.LENGTH_LONG).show()
             startActivity(Intent(this, JoinActivity::class.java)); finish(); return
         }
+        // Made again while the permission's dialog was up (a rotation): its answer comes to the gate's fallback.
+        if (savedInstanceState?.getBoolean(ASKING) == true) return
+        gate.then(uris()) { queue() }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(ASKING, gate.asking)
+    }
+
+    private fun queue() {
+        val uris = uris()
         val folder = intent.getStringExtra(EXTRA_FOLDER)
         thread {
             val n = runCatching { DdnUploads.queue(this, uris, folder) }.getOrElse { e -> runOnUiThread { Toast.makeText(this, getString(R.string.ddn_error, e.message), Toast.LENGTH_LONG).show(); finish() }; return@thread }
@@ -55,6 +71,7 @@ class DdnShareActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_FOLDER = "folder"
+        private const val ASKING = "asking-location"
     }
 }
 
@@ -128,9 +145,12 @@ class DdnBackupActivity : AppCompatActivity() {
         page.addView(failedBox)
 
         ui.section(page, R.string.ddn_backup, getString(R.string.ddn_backup_where, DdnBackup.rootName(DdnAccount.load(this)?.deviceName ?: "?"))).also { c ->
-            ui.switchRow(c, R.string.ddn_backup_on, DdnBackup.enabled(this)) { v, on -> if (on && !hasMedia()) { v.isChecked = false; askMedia() } else DdnBackup.set(this, on = on) }
+            ui.switchRow(c, R.string.ddn_backup_on, DdnBackup.enabled(this)) { v, on -> if (on && !hasMedia()) { v.isChecked = false; askMedia() } else { DdnBackup.set(this, on = on); if (on) askLocationIfNeeded() } }
             ui.switchRow(c, R.string.ddn_backup_wifi, DdnBackup.wifiOnly(this)) { _, v -> DdnBackup.set(this, wifi = v) }
             ui.switchRow(c, R.string.ddn_backup_charging, DdnBackup.chargingOnly(this)) { _, v -> DdnBackup.set(this, charging = v) }
+            // The GPS position of photos: without the permission the copies would have it zeroed.
+            location = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            c.addView(location, ui.lp(top = 4))
         }
         ui.section(page, R.string.ddn_backup_folders).also { c ->
             folders = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -141,6 +161,7 @@ class DdnBackupActivity : AppCompatActivity() {
             ui.add(c, state, top = 6)
             ui.add(c, ui.button(R.string.ddn_backup_now, CobaltUi.Kind.PRIMARY, R.drawable.ic_sync) {
                 if (!hasMedia()) askMedia()
+                else if (!DdnBackup.mayCopyMedia(this)) gate.ask { paintLocation(); if (MediaLocation.granted(this)) { DdnBackup.runNow(this, manual = true); Toast.makeText(this, R.string.ddn_backup_started, Toast.LENGTH_SHORT).show() } }
                 else if (DdnBackup.buckets(this).let { chosen -> chosen.isEmpty() || runCatching { DdnBackup.allBuckets(this).keys.none { it in chosen } }.getOrDefault(false) })
                     Toast.makeText(this, R.string.ddn_backup_no_chosen, Toast.LENGTH_LONG).show()
                 else { DdnBackup.runNow(this, manual = true); Toast.makeText(this, R.string.ddn_backup_started, Toast.LENGTH_SHORT).show() }
@@ -149,6 +170,37 @@ class DdnBackupActivity : AppCompatActivity() {
         WorkManager.getInstance(this).getWorkInfosForUniqueWorkLiveData(DdnBackup.WORK_NOW).observe(this) { paintState(it) }
         paintFolders()
         paintState(emptyList())
+        // Opened from "the automatic copy waits for the location" (or with the copy on and access to photos
+        // given before): ask now; with access to photos the system grants it without a dialog.
+        if (savedInstanceState == null && DdnBackup.enabled(this) && hasMedia()) askLocationIfNeeded()
+    }
+
+    private lateinit var location: LinearLayout
+    private val gate = LocationGate(this) { paintLocation() }
+
+    /** Asked once by itself; after a refusal only the screen's "Allow" asks again. */
+    private fun askLocationIfNeeded() {
+        if (!DdnBackup.mayCopyMedia(this)) gate.ask { paintLocation(); DdnBackup.cancelNeedLocation(this); if (MediaLocation.granted(this)) DdnBackup.runNow(this) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        paintLocation()
+    }
+
+    /** Without the permission: why the copies would lose the position, and "Allow". */
+    private fun paintLocation() {
+        location.removeAllViews()
+        if (MediaLocation.granted(this) || !hasMedia()) return
+        location.addView(ui.note(getString(if (DdnBackup.locationDeclined(this)) R.string.ddn_loc_declined else R.string.ddn_loc_missing)), ui.lp(top = 8))
+        ui.add(location, ui.button(R.string.ddn_loc_allow, CobaltUi.Kind.TONAL) {
+            gate.ask {
+                // Refused for good (no dialog any more): the app's permissions in the system settings.
+                if (!MediaLocation.granted(this)) runCatching { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }
+                else { DdnBackup.cancelNeedLocation(this); if (DdnBackup.enabled(this)) DdnBackup.runNow(this) }
+                paintLocation()
+            }
+        }, top = 8)
     }
 
     private fun mediaPerms(): Array<String> = if (Build.VERSION.SDK_INT >= 33) {
@@ -163,7 +215,12 @@ class DdnBackupActivity : AppCompatActivity() {
     @Deprecated("Deprecated in Java")
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (hasMedia()) { DdnBackup.set(this, on = true); recreate() }
+        // Only the screen's own request (the location gate's answer also passes here).
+        if (requestCode == 7 && hasMedia()) {
+            // The dialog asked for the location too: its answer counts as the user's choice.
+            if (permissions.contains(Manifest.permission.ACCESS_MEDIA_LOCATION)) DdnBackup.setLocationDeclined(this, !MediaLocation.granted(this))
+            DdnBackup.set(this, on = true); recreate()
+        }
     }
 
     private fun paintFolders() {

@@ -244,6 +244,27 @@ object DdnBackup {
             .setContentIntent(open).setAutoCancel(true).build())
     }
 
+    // ── the GPS position of photos (ACCESS_MEDIA_LOCATION) ──
+    const val NOTIF_LOCATION = 4713
+    /** The user refused the permission (the dialog's answer): copies go without the position. */
+    fun locationDeclined(c: Context) = prefs(c).getBoolean("loc_declined", false)
+    fun setLocationDeclined(c: Context, v: Boolean) = prefs(c).edit().putBoolean("loc_declined", v).apply()
+    /** The automatic copy may read photos now: the position is readable, or the user chose to go without it. */
+    fun mayCopyMedia(c: Context) = MediaLocation.granted(c) || locationDeclined(c)
+
+    /** "Open the app to keep the location of photos" (tap: the automatic copy screen, which asks). */
+    internal fun notifyNeedLocation(c: Context) {
+        if (Build.VERSION.SDK_INT >= 33 && c.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        val mgr = c.getSystemService(android.app.NotificationManager::class.java)
+        if (mgr.getNotificationChannel(NOTIF_CHANNEL_FAILED) == null) mgr.createNotificationChannel(android.app.NotificationChannel(NOTIF_CHANNEL_FAILED, c.getString(R.string.ddn_fail_channel), android.app.NotificationManager.IMPORTANCE_DEFAULT))
+        val open = android.app.PendingIntent.getActivity(c, 12, android.content.Intent(c, DdnBackupActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK), android.app.PendingIntent.FLAG_IMMUTABLE)
+        mgr.notify(NOTIF_LOCATION, NotificationCompat.Builder(c, NOTIF_CHANNEL_FAILED).setSmallIcon(R.drawable.ic_cloud_pending)
+            .setContentTitle(c.getString(R.string.ddn_loc_wait)).setContentText(c.getString(R.string.ddn_loc_tap))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(c.getString(R.string.ddn_loc_tap)))
+            .setContentIntent(open).setAutoCancel(true).setOnlyAlertOnce(true).build())
+    }
+    internal fun cancelNeedLocation(c: Context) = c.getSystemService(android.app.NotificationManager::class.java).cancel(NOTIF_LOCATION)
+
     /** Queue files the user sent: kept in the app's storage until uploaded (a share grant ends with the share). */
     fun enqueueCopy(c: Context, source: Uri, name: String, folderId: String): Long {
         val acct = DdnAccount.load(c) ?: throw IllegalStateException("no account")
@@ -251,7 +272,8 @@ object DdnBackup {
         val f = File.createTempFile("up-", ".bin", dir)
         // The date first: the copy in the outbox has today's mtime and the source may lose its permission.
         val taken = runCatching { DdnPictures.takenAt(c, source) }.getOrNull()
-        c.contentResolver.openInputStream(source)!!.use { i -> f.outputStream().use { o -> i.copyTo(o, 1 shl 20) } }
+        // The original bytes: a photo keeps its GPS position (the caller asked for the permission first).
+        MediaLocation.open(c, source).use { i -> f.outputStream().use { o -> i.copyTo(o, 1 shl 20) } }
         return Db(c).enqueue(null, f.path, name, f.length(), folderId, acct.accountId, taken)
     }
 
@@ -329,7 +351,13 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             val acct = s.acct.accountId
             val up = s.uploader()
             val queue = db.queued(acct).filter { it.error == null }
-            val media = if (auto) DdnBackup.scan(c, DdnBackup.buckets(c)).filter { !db.isCopied(it.id, it.size, it.modified, acct) } else emptyList()
+            // Without ACCESS_MEDIA_LOCATION the system hands out photos with the position zeroed and a copy would
+            // keep them so: the automatic copy waits (a notification asks to open the app, which asks for it),
+            // unless the user refused it (then the copies are without the position, as chosen).
+            val noLocation = auto && MediaLocation.hasMediaAccess(c) && !DdnBackup.mayCopyMedia(c)
+            if (noLocation) DdnBackup.notifyNeedLocation(c) else DdnBackup.cancelNeedLocation(c)
+            val media = if (auto && !noLocation) DdnBackup.scan(c, DdnBackup.buckets(c)).filter { !db.isCopied(it.id, it.size, it.modified, acct) } else emptyList()
+            if (noLocation) err = c.getString(R.string.ddn_loc_wait)
             total = queue.size + media.size
             shown = series.start(acct, total)
             line = c.getString(R.string.ddn_up_starting)
@@ -379,9 +407,9 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                         if (have != null) {
                             db.markCopied(m.id, m.size, m.modified, acct, have.id)
                         } else {
-                            // The original bytes (with the GPS position in EXIF where the app may read it).
-                            val src = if (Build.VERSION.SDK_INT >= 29) runCatching { MediaStore.setRequireOriginal(m.uri) }.getOrDefault(m.uri) else m.uri
-                            val open = { runCatching { c.contentResolver.openInputStream(src)!! }.getOrElse { c.contentResolver.openInputStream(m.uri)!! } }
+                            // The original bytes, with the GPS position (the run waits for the permission, see below).
+                            val src = MediaLocation.original(c, m.uri)
+                            val open = { MediaLocation.open(c, m.uri) }
                             val pics = runCatching { DdnPictures.make(c.contentResolver, m.uri) }.getOrDefault(emptyList())
                             val taken = runCatching { DdnPictures.takenAt(c, src) }.getOrNull() ?: (m.modified * 1000).takeIf { it > 0 }
                             val r = up.upload(open, m.size, m.name, folder, pics, progress = { a, b -> progress(m.name, a, b) }, cancelled = { isStopped }, takenAt = taken)

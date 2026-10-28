@@ -139,7 +139,10 @@ class DdnOpenActivity : AppCompatActivity() {
         queue(uri)
     }
 
-    private fun queue(uri: Uri) {
+    /** A photo of the phone keeps its GPS position: the permission is asked for before it is read. */
+    private val gate = LocationGate(this)
+
+    private fun queue(uri: Uri) = gate.then(listOf(uri)) {
         thread {
             val r = runCatching { DdnUploads.queue(this, listOf(uri), null).also { DdnUploads.markSent(this, uri, name) } }
             main.post {
