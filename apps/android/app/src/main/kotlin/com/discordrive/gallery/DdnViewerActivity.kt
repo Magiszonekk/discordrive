@@ -96,8 +96,15 @@ class DdnViewerActivity : AppCompatActivity() {
         root.addView(top, FrameLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
         root.addView(bottom, FrameLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
         setContentView(root)
-        // Light status / navigation icons on the dark photo in both themes.
+        // Under the system bars on every Android version (before 15 the status bar kept the light theme's
+        // colour), light status / navigation icons on the dark photo in both themes.
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
         androidx.core.view.WindowCompat.getInsetsController(window, root).apply { isAppearanceLightStatusBars = false; isAppearanceLightNavigationBars = false }
+        bottomBar = bottom
+        // A video's controls sit above the bottom bar (they were under it): the player is padded by its height.
+        bottom.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> fitPlayer() }
         Insets.apply(top, top = true, bottom = false)
         Insets.apply(bottom, top = false, bottom = true)
         chrome = listOf(top, bottom)
@@ -105,9 +112,18 @@ class DdnViewerActivity : AppCompatActivity() {
     }
 
     private var chrome: List<View> = emptyList()
-    private fun toggleChrome() {
-        val hide = chrome.firstOrNull()?.visibility == View.VISIBLE
-        chrome.forEach { it.visibility = if (hide) View.GONE else View.VISIBLE }
+    private lateinit var bottomBar: View
+    private fun toggleChrome() = setChrome(chrome.firstOrNull()?.visibility != View.VISIBLE)
+    private fun setChrome(on: Boolean) {
+        chrome.forEach { it.visibility = if (on) View.VISIBLE else View.GONE }
+        fitPlayer()
+    }
+
+    /** The player's controls end where the bottom bar starts (none when the bars are hidden). */
+    private fun fitPlayer() {
+        val pv = box.getChildAt(0) as? PlayerView ?: return
+        val pad = if (bottomBar.visibility == View.VISIBLE) bottomBar.height else 0
+        if (pv.paddingBottom != pad) pv.setPadding(0, 0, 0, pad)
     }
 
     private fun go(d: Int) {
@@ -167,6 +183,9 @@ class DdnViewerActivity : AppCompatActivity() {
     private fun playVideo(s: DdnSession, c: IndexReplica.Child, ref: String) {
         val view = PlayerView(this)
         box.addView(view, FrameLayout.LayoutParams(-1, -1))
+        // A tap on the video shows / hides its controls; the bars follow them.
+        view.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { v -> setChrome(v == View.VISIBLE) })
+        fitPlayer()
         val size = c.size ?: 0
         val p = ExoPlayer.Builder(this).build()
         val source = ProgressiveMediaSource.Factory { DdnDataSource(s, ref, size) }.createMediaSource(MediaItem.fromUri(Uri.parse("ddn://file/${c.id}")))
@@ -342,6 +361,9 @@ class DdnViewerActivity : AppCompatActivity() {
     internal fun textForTest(): String = (box.getChildAt(0)?.findViewWithTag<TextView>("ddn-viewer-note"))?.text?.toString() ?: ""
     internal fun actionsForTest(): List<String> = (0 until actions.childCount).map { actions.getChildAt(it) }.filter { it.visibility == View.VISIBLE }.map { it.contentDescription.toString() }
     internal fun shareForTest() = share()
+    internal fun showControlsForTest(): Boolean = (box.getChildAt(0) as? PlayerView)?.let { setChrome(true); it.showController(); true } ?: false
+    /** A video's seek bar and time are on screen and not under the bottom bar (null: no video or no controls yet). */
+    internal fun controlsClearForTest(): Boolean? = VideoFit.clear(box.getChildAt(0) as? PlayerView, bottomBar)
     @Volatile internal var trashedForTest: String? = null
     internal fun hasPictureForTest(): Boolean = (box.getChildAt(0) as? android.widget.ImageView)?.drawable is android.graphics.drawable.BitmapDrawable
 
@@ -400,5 +422,18 @@ class DdnDataSource(private val s: DdnSession, private val ref: String, private 
             uri = null
             transferEnded()
         }
+    }
+}
+
+/** Test helper: the player's seek bar and position text are laid out, visible and above `bar`. */
+internal object VideoFit {
+    fun clear(pv: PlayerView?, bar: View): Boolean? {
+        pv ?: return null
+        val seek = pv.findViewById<View>(androidx.media3.ui.R.id.exo_progress) ?: return null
+        val pos = pv.findViewById<View>(androidx.media3.ui.R.id.exo_position) ?: return null
+        if (!seek.isShown || seek.height == 0) return null
+        fun rect(v: View) = IntArray(2).also { v.getLocationOnScreen(it) }.let { android.graphics.Rect(it[0], it[1], it[0] + v.width, it[1] + v.height) }
+        val b = rect(bar)
+        return listOf(seek, pos).all { v -> rect(v).let { r -> r.bottom <= b.top && r.top >= 0 } }
     }
 }

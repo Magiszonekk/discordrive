@@ -34,6 +34,7 @@ class DdnOpenActivity : AppCompatActivity() {
     private var name = ""
 
     private lateinit var sendButton: com.google.android.material.button.MaterialButton
+    private lateinit var bottomBar: android.view.View
 
     override fun onCreate(savedInstanceState: Bundle?) {
         CobaltUi.theme(this)
@@ -65,15 +66,24 @@ class DdnOpenActivity : AppCompatActivity() {
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(4) })
         }
         sendButton = CobaltUi(this).button(R.string.ddn_open_send, CobaltUi.Kind.PRIMARY, R.drawable.ic_cobalt_upload) { send(uri) }
-        val bottom = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        // The insets pad the outer bar (Insets.apply replaces its padding); the inner one keeps the margins.
+        val bottom = FrameLayout(this).apply {
             setBackgroundResource(R.drawable.bg_cobalt_scrim_bottom)
-            setPadding(dp(16), dp(28), dp(16), dp(16))
-            addView(sendButton, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(LinearLayout(this@DdnOpenActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16), dp(28), dp(16), dp(16))
+                addView(sendButton, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
+            }, FrameLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         root.addView(top, FrameLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
         root.addView(bottom, FrameLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
         setContentView(root)
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+        bottomBar = bottom
+        // A video's controls sit above "Send" (they were under it): the player is padded by the bar's height.
+        bottom.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> (box.getChildAt(0) as? PlayerView)?.let { if (it.paddingBottom != bottom.height) it.setPadding(0, 0, 0, bottom.height) } }
         androidx.core.view.WindowCompat.getInsetsController(window, root).apply { isAppearanceLightStatusBars = false; isAppearanceLightNavigationBars = false }
         Insets.apply(top, top = true, bottom = false)
         Insets.apply(bottom, top = false, bottom = true)
@@ -103,6 +113,7 @@ class DdnOpenActivity : AppCompatActivity() {
     private fun playVideo(uri: Uri) {
         val view = PlayerView(this)
         box.addView(view, FrameLayout.LayoutParams(-1, -1))
+        if (::bottomBar.isInitialized) view.setPadding(0, 0, 0, bottomBar.height)
         val p = ExoPlayer.Builder(this).build()
         p.setMediaItem(MediaItem.fromUri(uri))
         p.prepare()
@@ -153,5 +164,7 @@ class DdnOpenActivity : AppCompatActivity() {
 
     internal fun shownForTest(): Boolean = shown
     internal fun nameForTest(): String = name
+    internal fun showControlsForTest(): Boolean = (box.getChildAt(0) as? PlayerView)?.let { it.showController(); true } ?: false
+    internal fun controlsClearForTest(): Boolean? = VideoFit.clear(box.getChildAt(0) as? PlayerView, bottomBar)
     internal fun sendButtonForTest(): com.google.android.material.button.MaterialButton = sendButton
 }

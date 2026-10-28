@@ -645,6 +645,14 @@ class BrowseUiTest {
             Log.i("ddn-ui", "viewer actions $acts, info $info")
             shot("4-viewer")
         }
+        // A video: its seek bar and time above the bottom bar (they were under it), the bars follow the controls.
+        DdnSession.get(ctx)!!.children("fold-0000000001").firstOrNull { it.name == "film.webm" }?.let { film ->
+            DdnViewerActivity.pending = listOf(film)
+            ActivityScenario.launch<DdnViewerActivity>(Intent(ctx, DdnViewerActivity::class.java).putExtra("id", film.id)).use { v ->
+                r["viewerVideoControlsClear"] = waitUntil(30_000) { var ok: Boolean? = null; v.onActivity { a -> a.showControlsForTest(); ok = a.controlsClearForTest() }; ok == true }
+                shot("4b-viewer-video")
+            }
+        }
         albums(r)
         // Upload from the phone (PR 4): a file shared into the queue and a photo of the camera folder copied
         // automatically, both through the background job (WorkManager, as in the app); the TS device downloads

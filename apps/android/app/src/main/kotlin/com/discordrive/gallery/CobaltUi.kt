@@ -350,10 +350,12 @@ class CobaltUi(private val a: AppCompatActivity) {
                     setBackgroundResource(tv.resourceId)
                     contentDescription = a.getString(label)
                     addView(android.widget.ImageView(a).apply { setImageResource(icon); setColorFilter(tint) }, LinearLayout.LayoutParams(dp(24), dp(24)))
+                    // At a large font the label shrinks to fit its fifth of the bar ("Udostępnij" was cut).
                     addView(TextView(a).apply {
                         setText(label); TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_ActionLabel); setTextColor(tint)
-                        maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-                    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4) })
+                        maxLines = 1; gravity = Gravity.CENTER_HORIZONTAL; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                        TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(this, 9, 12, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
+                    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(18)).apply { topMargin = dp(4) })
                     setOnClickListener { onClick() }
                 }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             }
