@@ -68,6 +68,11 @@ import {
   SafeStore,
   SafeTree,
   SafeBadPasswordError,
+  SafeDamagedError,
+  SafeFileGoneError,
+  SafeMissingError,
+  SafeTooLargeError,
+  safeUsage,
   safeChildren,
   safeTreeOf,
   type SafePieces,
@@ -255,7 +260,21 @@ export interface SafeRow {
   kind: "file" | "folder";
   size: number | null;
 }
-export type SafeState = { exists: false } | { exists: true; open: false } | { exists: true; open: true; closesAt: number };
+/**
+ * `running`: files still going into / out of the Safe (Close cancels them). `usage`: how full the Safe's state is
+ * (0..1 of the most one slot holds: names and keys of every file and folder).
+ */
+export type SafeState =
+  | { exists: false; running: number }
+  | { exists: true; open: false; running: number }
+  | { exists: true; open: true; closesAt: number; running: number; usage: number };
+/** What a move into the Safe takes (the UI says it first). */
+export interface SafeMovePlan {
+  bytes: number;
+  files: number;
+  /** Files in the account's trash inside the moved folders: not moved, deleted for good with the folder. */
+  trashedInside: number;
+}
 /** Automatic cleanup (Q4) in the main tab: first check shortly after opening, then hourly. */
 const CLEANUP_FIRST_MS = 60_000;
 const CLEANUP_EVERY_MS = 60 * 60_000;
@@ -298,6 +317,8 @@ export class AppCore {
   private store: IndexStore | null = null;
   /** The open Safe: its master and state live only here (the worker), dropped on close / idle / sign-out. */
   private safe: { tree: SafeTree; u: import("@ddv4/metadata-client").UnlockedSafe<SafeTreeState>; timer: ReturnType<typeof setTimeout> | null; closesAt: number } | null = null;
+  /** Transfers into / out of the open Safe: Close cancels them (the Safe's key must not stay for them). */
+  private safeRunning = new Set<AbortController>();
   private ctx: ModeCtx | null = null;
   private sub: { close(): void } | null = null;
   private uploads = new Map<string, AbortController>();
@@ -2139,10 +2160,7 @@ export class AppCore {
     if (!s) return;
     if (s.timer) clearTimeout(s.timer);
     s.closesAt = Date.now() + SAFE_IDLE_MS;
-    s.timer = setTimeout(() => {
-      this.safeClose();
-      this.onEvent({ type: "changed" });
-    }, SAFE_IDLE_MS);
+    s.timer = setTimeout(() => this.safeClose(), SAFE_IDLE_MS);
   }
 
   private safeOpen(): NonNullable<AppCore["safe"]> {
@@ -2153,9 +2171,56 @@ export class AppCore {
 
   /** Whether the account has a Safe and whether it is open here (nothing about what is inside). */
   async safeState(): Promise<SafeState> {
-    if (this.safe) return { exists: true, open: true, closesAt: this.safe.closesAt };
+    const running = this.safeRunning.size;
+    if (this.safe) return { exists: true, open: true, closesAt: this.safe.closesAt, running, usage: safeUsage(this.safe.u.state).fraction };
     const exists = await new SafeStore(this.http!, this.key!, this.acct!.accountId).exists();
-    return exists ? { exists: true, open: false } : { exists: false };
+    return exists ? { exists: true, open: false, running } : { exists: false, running };
+  }
+
+  /**
+   * The open Safe as another device left it (polled by the UI while the Safe page is shown, and when the page
+   * comes back into view). true = it changed (the UI paints it again). A Safe deleted meanwhile closes here.
+   */
+  async safeRefresh(): Promise<boolean> {
+    const s = this.safe;
+    if (!s) return false;
+    try {
+      const r = await new SafeStore<SafeTreeState>(this.http!, this.key!, this.acct!.accountId).refresh(s.u);
+      if (!r || this.safe !== s || r.revision <= s.u.revision) return false;
+      s.u = r;
+      return true;
+    } catch (e) {
+      if (e instanceof SafeMissingError || e instanceof SafeDamagedError) {
+        this.safeClose();
+        return true;
+      }
+      return false;
+    }
+  }
+
+  /** The core's Safe errors as codes the UI words (never "wrong password" for a damaged or deleted Safe). */
+  private safeErr(e: unknown): unknown {
+    if (e instanceof SafeBadPasswordError) return new Error("safe_bad_password");
+    if (e instanceof SafeDamagedError) return new Error("safe_damaged");
+    if (e instanceof SafeMissingError) return new Error("safe_missing");
+    if (e instanceof SafeTooLargeError) return new Error("safe_full");
+    if (e instanceof SafeFileGoneError) return new Error("safe_file_gone");
+    return e;
+  }
+
+  /** A transfer of the Safe: cancelled by Close as by its own Cancel. */
+  private async safeTransfer<T>(token: string, map: Map<string, AbortController>, f: (ac: AbortController) => Promise<T>): Promise<T> {
+    const ac = new AbortController();
+    if (token) map.set(token, ac);
+    this.safeRunning.add(ac);
+    try {
+      return await f(ac);
+    } catch (e) {
+      throw this.safeErr(e);
+    } finally {
+      this.safeRunning.delete(ac);
+      if (token) map.delete(token);
+    }
   }
 
   /** A new Safe (the UI asked twice for the password and for "I understand: a forgotten password opens it for nobody"). */
@@ -2165,6 +2230,7 @@ export class AppCore {
     const u = await tree.create(password);
     this.safe = { tree, u, timer: null, closesAt: 0 };
     this.safeTouch();
+    this.onEvent({ type: "changed" });
     return this.safeState();
   }
 
@@ -2175,18 +2241,22 @@ export class AppCore {
       const u = await new SafeStore<SafeTreeState>(this.http!, this.key!, this.acct!.accountId).unlock(password);
       this.safe = { tree, u, timer: null, closesAt: 0 };
     } catch (e) {
-      if (e instanceof SafeBadPasswordError) throw new Error("safe_bad_password");
-      throw e;
+      throw this.safeErr(e);
     }
     this.safeTouch();
     void this.safeCleanup();
+    // Every window / page showing the Safe paints it open (also when unlocked from elsewhere than its form).
+    this.onEvent({ type: "changed" });
     return this.safeState();
   }
 
-  /** Close: the master and every name leave memory. */
+  /** Close: the master and every name leave memory; transfers into / out of the Safe still running are cancelled. */
   safeClose(): void {
     if (this.safe?.timer) clearTimeout(this.safe.timer);
+    const was = !!this.safe;
     this.safe = null;
+    for (const ac of this.safeRunning) ac.abort();
+    if (was) this.onEvent({ type: "changed" });
   }
 
   private async safeCleanup() {
@@ -2212,7 +2282,9 @@ export class AppCore {
 
   private async safeDo<T extends { safe: import("@ddv4/metadata-client").UnlockedSafe<SafeTreeState> }>(f: (s: NonNullable<AppCore["safe"]>) => Promise<T>): Promise<T> {
     const s = this.safeOpen();
-    const r = await f(s);
+    const r = await f(s).catch((e: unknown) => {
+      throw this.safeErr(e);
+    });
     if (this.safe === s) s.u = r.safe;
     this.onEvent({ type: "changed" });
     return r;
@@ -2239,10 +2311,8 @@ export class AppCore {
   }
 
   async safeUpload(file: Blob, name: string, parentId = "root", token = ""): Promise<{ nodeId: string }> {
-    const ac = new AbortController();
-    if (token) this.uploads.set(token, ac);
     let last = 0;
-    try {
+    return this.safeTransfer(token, this.uploads, async (ac) => {
       const taken = (file as File).lastModified || undefined;
       const r = await this.safeDo((s) =>
         s.tree.upload(s.u, this.c(), blobSource(file), name, parentId, {
@@ -2258,18 +2328,15 @@ export class AppCore {
         }),
       );
       return { nodeId: r.nodeId };
-    } finally {
-      this.uploads.delete(token);
-    }
+    });
   }
 
   /** Desktop: a file from disk into the Safe (the window cannot hand a Blob to the agent). */
   async safeUploadPath(path: string, parentId = "root", token = ""): Promise<{ nodeId: string }> {
     if (typeof path !== "string" || !path) throw new Error("bad arguments");
     const src = await this.disk().openSource(path);
-    const ac = new AbortController();
-    if (token) this.uploads.set(token, ac);
-    try {
+    return this.safeTransfer(token, this.uploads, async (ac) => {
+      try {
       const r = await this.safeDo((s) =>
         s.tree.upload(s.u, this.c(), src, src.name, parentId, {
           signal: ac.signal,
@@ -2278,20 +2345,18 @@ export class AppCore {
         }),
       );
       return { nodeId: r.nodeId };
-    } finally {
-      this.uploads.delete(token);
-      await src.close();
-    }
+      } finally {
+        await src.close();
+      }
+    });
   }
 
   async safeDownload(id: string, token = ""): Promise<Blob> {
     const s = this.safeOpen();
     const parts: Uint8Array[] = [];
-    const ac = new AbortController();
-    if (token) this.downloads.set(token, ac);
     let last = 0;
-    try {
-      await s.tree.download(s.u, this.c(), id, { write: async (d) => void parts.push(new Uint8Array(d)) }, {
+    await this.safeTransfer(token, this.downloads, (ac) =>
+      s.tree.download(s.u, this.c(), id, { write: async (d) => void parts.push(new Uint8Array(d)) }, {
         signal: ac.signal,
         onProgress: (done, total) => {
           this.safeTouch();
@@ -2300,12 +2365,15 @@ export class AppCore {
           last = t;
           this.onEvent({ type: "download-progress", token, done, total });
         },
-      });
-    } finally {
-      this.downloads.delete(token);
-    }
+      }),
+    );
     const n = safeTreeOf(s.u).getNode(id);
     return new Blob(parts as BlobPart[], { type: n ? mimeOf(n.name) : "" });
+  }
+
+  /** What a move into the Safe takes: bytes sent again, files, and files of the account's trash inside (deleted with the folder). */
+  safeMovePlan(ids: string[]): SafeMovePlan {
+    return SafeTree.moveInPlan(this.c().store, ids);
   }
 
   /** How many bytes a move would send again (the UI says so before it starts). */
@@ -2324,31 +2392,23 @@ export class AppCore {
 
   /** Files / folders of the account into the Safe (sent again under new keys; the account's copies deleted for good). */
   async safeMoveIn(ids: string[], safeParentId = "root", token = ""): Promise<{ files: number; bytes: number }> {
-    const ac = new AbortController();
-    if (token) this.uploads.set(token, ac);
-    try {
+    return this.safeTransfer(token, this.uploads, async (ac) => {
       const r = await this.safeDo((s) => s.tree.moveIn(s.u, this.c(), ids, safeParentId, { signal: ac.signal, onProgress: (done, total, file) => (this.safeTouch(), this.onEvent({ type: "upload-progress", token, done, total, name: file })) }));
       this.version++;
       void this.snapshotSoon();
       if (!mode.clientSnapshots) void this.gc?.run(false).catch(() => {});
       return { files: r.files, bytes: r.bytes };
-    } finally {
-      this.uploads.delete(token);
-    }
+    });
   }
 
   /** Out of the Safe into a folder of the Drive or the Gallery (sent again; the Safe's copies let go). */
   async safeMoveOut(ids: string[], parentId: string, token = ""): Promise<{ files: number; bytes: number }> {
-    const ac = new AbortController();
-    if (token) this.uploads.set(token, ac);
-    try {
+    return this.safeTransfer(token, this.uploads, async (ac) => {
       const r = await this.safeDo((s) => s.tree.moveOut(s.u, this.c(), ids, parentId, { signal: ac.signal, onProgress: (done, total, file) => (this.safeTouch(), this.onEvent({ type: "upload-progress", token, done, total, name: file })) }));
       this.version++;
       void this.snapshotSoon();
       return { files: r.files, bytes: r.bytes };
-    } finally {
-      this.uploads.delete(token);
-    }
+    });
   }
 
   /** Delete for good (Q3: what another device changed unseen stays in the trash, 30 days again). */

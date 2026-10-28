@@ -109,6 +109,8 @@ export const CORE_METHODS: Record<string, string[]> = {
   safeUploadPath: ["s", "s?", "s?"],
   safeDownload: ["s", "s?"],
   safeMoveSize: ["s[]", "b"],
+  safeMovePlan: ["s[]"],
+  safeRefresh: [],
   safeMoveIn: ["s[]", "s?", "s?"],
   safeMoveOut: ["s[]", "s", "s?"],
   albumCovers: ["s[]"],

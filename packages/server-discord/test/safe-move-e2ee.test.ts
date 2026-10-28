@@ -5,7 +5,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ChannelPacer, DiscordWebhookTransport, DriveClient, EncryptedArbiter, HttpApi, OpCodec, SafeStore, SafeTree, createAccountHttp, decodeManifestRef, generateDeviceKey, memorySource, newAccountKey, releasedUploads, safeChildren, safeTreeOf, type ByteSink, type SafeTreeState } from "@ddv4/metadata-client";
+import { ChannelPacer, DiscordWebhookTransport, DriveClient, EncryptedArbiter, HttpApi, OpCodec, SafeFileGoneError, SafeStore, SafeTree, createAccountHttp, decodeManifestRef, generateDeviceKey, memorySource, newAccountKey, releasedUploads, safeChildren, safeTreeOf, type ByteSink, type SafeTreeState } from "@ddv4/metadata-client";
 import { GALLERY_ID } from "@ddv4/sync-core";
 import { ServerBlobStore } from "@ddv4/metadata-client/server-blobs";
 import { DdnServer, FakeDiscord } from "@ddv4/metadata-client/node";
@@ -54,7 +54,8 @@ async function setup() {
   const tree = new SafeTree(new SafeStore<SafeTreeState>(api, key, c.accountId), { id: c.deviceId, name: "laptop" }, { pieces: { kind: "instance", api }, now: () => clock.t });
   const state = (u: string) => (db.prepare("SELECT state FROM s_uploads WHERE account_id = ? AND upload_id = ?").get(c.accountId, u) as { state: string } | undefined)?.state;
   const liveBlobs = (u: string) => (db.prepare("SELECT count(*) AS n FROM s_blobs WHERE account_id = ? AND upload_id = ? AND deleted_at IS NULL").get(c.accountId, u) as { n: number }).n;
-  return { clock, ext, client, tree, state, liveBlobs };
+  const reopen = () => new SafeStore<SafeTreeState>(api, key, c.accountId).unlock(PW);
+  return { clock, ext, client, tree, state, liveBlobs, db, reopen };
 }
 
 const names = (c: DriveClient, parent = "root") => c.list(parent).map((x) => x.name);
@@ -104,6 +105,46 @@ describe("e2ee: moving into and out of the Safe", () => {
     await S.ext.tick();
     expect(S.liveBlobs(f1.version.uploadId)).toBe(0);
     expect(S.liveBlobs(moved.uploadId)).toBe(4); // 3 fragments + manifest
+  }, 60_000);
+
+  it("an interrupted move started again fills the folder already in the Safe (no \"Teczka (2)\"); the plan counts the trashed files inside", async () => {
+    const S = await setup();
+    const c = S.client;
+    await c.commitOp({ type: "create", kind: "folder", nodeId: "fold-teczka-01", parentId: "root", name: "Teczka" }, "mkdir");
+    for (const n of ["a.pdf", "b.pdf", "c.pdf", "d.pdf"]) await c.upload(memorySource(new Uint8Array(randomBytes(300))), n, "fold-teczka-01");
+    const junk = await c.upload(memorySource(new Uint8Array(randomBytes(100))), "w-koszu.txt", "fold-teczka-01");
+    await c.commitOp({ type: "trash", nodeId: junk.nodeId }, "trash");
+    expect(SafeTree.moveInPlan(c.store, ["fold-teczka-01"])).toEqual({ bytes: 1200, files: 4, trashedInside: 1 });
+    let u = await S.tree.create(PW, FAST);
+    // Stopped while the third file goes.
+    const ac = new AbortController();
+    const first = await S.tree
+      .moveIn(u, c, ["fold-teczka-01"], "root", { signal: ac.signal, onProgress: (_b, _t, f) => void (f === "c.pdf" && ac.abort()) })
+      .catch((e: unknown) => e);
+    expect(first).toBeInstanceOf(Error);
+    u = await S.reopen();
+    expect(safeChildren(u, "root").map((n) => n.name)).toEqual(["Teczka"]);
+    await c.pull();
+    const left = c.list("fold-teczka-01").map((x) => x.name);
+    expect(left.length).toBeGreaterThan(0);
+    const r = await S.tree.moveIn(u, c, ["fold-teczka-01"], "root");
+    u = r.safe;
+    expect(safeChildren(u, "root").map((n) => n.name)).toEqual(["Teczka"]);
+    expect(safeChildren(u, safeChildren(u, "root")[0]!.id).map((n) => n.name)).toEqual(["a.pdf", "b.pdf", "c.pdf", "d.pdf"]);
+    await c.pull();
+    expect(names(c)).toEqual([]);
+  }, 60_000);
+
+  it("a file of the Safe whose pieces are gone (a restored revision, an old database): SafeFileGoneError, not a raw 404", async () => {
+    const S = await setup();
+    const c = S.client;
+    let u = await S.tree.create(PW, FAST);
+    const up = await S.tree.upload(u, c, memorySource(new Uint8Array(randomBytes(2000))), "stary.pdf", "root");
+    u = up.safe;
+    (S.db as unknown as { prepare(q: string): { run(...x: unknown[]): unknown } }).prepare("DELETE FROM s_blobs WHERE upload_id = ?").run(up.version.uploadId);
+    const e = await S.tree.download(u, c, up.nodeId, sink()).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(SafeFileGoneError);
+    expect((e as SafeFileGoneError).fileName).toBe("stary.pdf");
   }, 60_000);
 
   it("out of the Safe into a Gallery album: a new upload in the account, gone from the Safe (its pieces let go)", async () => {

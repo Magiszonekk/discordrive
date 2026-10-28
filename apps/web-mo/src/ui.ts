@@ -195,7 +195,7 @@ const typeOf = (name: string) => EXT.find(([re]) => re.test(name)) ?? [null, "fi
 const VIDEO = EXT[0]![0];
 
 // ── messages and actions ────────────────────────────────────────────
-const KNOWN_ERRORS = ["channel_critical", "need_other_channel", "file_unavailable", "main_tab_only", "move_running", "bad_password", "login_taken", "bad_login", "password_too_short", "invalid_name", "invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone", "instance_busy", "discord_blocked", "webhook_in_use", "too_many_channels", "account_blocked", "not_admin", "last_admin", "self_target"];
+const KNOWN_ERRORS = ["channel_critical", "need_other_channel", "file_unavailable", "main_tab_only", "move_running", "bad_password", "login_taken", "bad_login", "password_too_short", "invalid_name", "invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone", "instance_busy", "discord_blocked", "webhook_in_use", "too_many_channels", "account_blocked", "not_admin", "last_admin", "self_target", "safe_damaged", "safe_missing", "safe_full", "safe_file_gone", "safe_closed"];
 /** Readable text for an error: no technical codes in the message (the raw one goes to the console). */
 const errText = (e: unknown) => {
   const m = String((e as Error)?.message ?? e);
@@ -2542,7 +2542,17 @@ function confirmDanger(title: string, text: string, yes: string, safe?: "lock" |
       d.close();
     };
     ui("cf-no").onclick = () => d.close();
-    d.addEventListener("close", () => resolve(answer), { once: true });
+    // Emptied once closed: a hidden dialog must not keep a file's name in the page (e.g. after the Safe closes).
+    d.addEventListener(
+      "close",
+      () => {
+        ui("cf-title").textContent = "";
+        ui("cf-text").textContent = "";
+        $("confirm-yes").replaceChildren();
+        resolve(answer);
+      },
+      { once: true },
+    );
   });
 }
 
@@ -3268,8 +3278,10 @@ async function renderSafe() {
     $("safe-list").replaceChildren();
     $("safe-crumbs").replaceChildren();
     $("safe-meta").textContent = "";
-    // The upload list too, once nothing is running into the Safe (it names the files).
-    if (!safeQueueRunning) closeSafeQueue();
+    // The upload list too (it names the files): closing cancelled whatever was still going into the Safe.
+    safeEpoch++;
+    closeSafeQueue();
+    stopSafePoll();
     ui("safe-title").textContent = t("safe.h");
     ui("safe-title").title = "";
     $<HTMLInputElement>("safe-name").value = "";
@@ -3304,9 +3316,15 @@ async function renderSafe() {
   }
   $("safe-crumbs").replaceChildren(...kids);
   const folders = rows.filter((r) => r.kind === "folder").length;
-  $("safe-meta").textContent = rows.length
-    ? [tn("files.meta.folders", folders), tn("files.meta.files", rows.length - folders), fmt(rows.reduce((s0, r) => s0 + (r.size ?? 0), 0))].join(" · ")
-    : "";
+  // How full the Safe is (its names and keys share one sealed record of limited size): always while open,
+  // with a warning from 80 %.
+  const pct = Math.min(100, Math.round(st.usage * 100));
+  const usage = t(pct >= 80 ? "safe.usage.warn" : "safe.usage", { pct });
+  const meta = $("safe-meta");
+  meta.textContent = [...(rows.length ? [tn("files.meta.folders", folders), tn("files.meta.files", rows.length - folders), fmt(rows.reduce((s0, r) => s0 + (r.size ?? 0), 0))] : []), usage].join(" · ");
+  meta.title = t("safe.usage.title");
+  meta.dataset.full = pct >= 80 ? "1" : "";
+  startSafePoll();
   $("safe-empty").hidden = rows.length > 0;
   $("safe-list").replaceChildren(...rows.map((r) => safeRow(r)));
 }
@@ -3419,12 +3437,22 @@ async function safeMoveIn(ids: string[], label: string) {
     toast(t("safe.needOpen"), "info");
     return navigate("/safe");
   }
-  const bytes = await core.safeMoveSize(ids, true);
-  if (!(await confirmDanger(t("safe.in.title", { name: label }), t("safe.move.cost", { size: fmt(bytes) }) + " " + t("safe.in.text"), t("safe.in"), "lock"))) return;
-  const r = await core.safeMoveIn(ids, "root");
-  clearSelection();
-  toast(t("safe.in.done", { n: r.files }));
-  void render();
+  // Said first: what is sent again, and the files of the trash inside the folders (deleted with them, not moved).
+  const plan = await core.safeMovePlan(ids);
+  const text = [t("safe.move.costN", { size: fmt(plan.bytes), n: plan.files }), t("safe.in.text"), plan.trashedInside ? tn("safe.in.trashed", plan.trashedInside) : ""].filter(Boolean).join(" ");
+  if (!(await confirmDanger(t("safe.in.title", { name: label }), text, t("safe.in"), "lock"))) return;
+  const epoch = safeEpoch;
+  try {
+    const r = await core.safeMoveIn(ids, "root");
+    clearSelection();
+    toast(t("safe.in.done", { n: r.files }));
+  } catch (e) {
+    // Closed meanwhile: what was moved is in the Safe, the rest stays in the Drive (moving again fills the same folder).
+    if (epoch !== safeEpoch || /safe_closed|abort/i.test(String((e as Error)?.message ?? e))) toast(t("safe.closedStopped"), "info");
+    else throw e;
+  } finally {
+    void render();
+  }
 }
 
 function paintSafeStrength() {
@@ -3457,7 +3485,11 @@ function wireSafe() {
       try {
         await core.safeUnlock(pw.value);
       } catch (x) {
-        if (/safe_bad_password/.test(String((x as Error)?.message ?? x))) throw new Error(t("safe.err.badPassword"));
+        const m = String((x as Error)?.message ?? x);
+        if (/safe_bad_password/.test(m)) throw new Error(t("safe.err.badPassword"));
+        // The password was not the problem: the slot holds something this account cannot open, or nothing.
+        if (/safe_damaged/.test(m)) throw new Error(t("safe.err.damaged"));
+        if (/safe_missing/.test(m)) throw new Error(t("safe.err.missing"));
         throw x;
       } finally {
         pw.value = "";
@@ -3465,7 +3497,20 @@ function wireSafe() {
       void render();
     });
   };
-  $("safe-close").onclick = () => void act($("safe-close"), async () => (await core.safeClose(), void render()));
+  $("safe-close").onclick = () =>
+    void act($("safe-close"), async () => {
+      // Closing drops the Safe's key: transfers still going into / out of it stop (asked first).
+      const st = await core.safeState();
+      if (st.running && !(await confirmDanger(t("safe.close.ask"), tn("safe.close.running", st.running), t("safe.close"), "lock"))) return;
+      safeEpoch++;
+      closeSafeQueue();
+      await core.safeClose();
+      void render();
+    });
+  // Another device's changes: when the page comes back into view (and every SAFE_POLL_MS while it is shown).
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && route.name === "safe") void safePoll();
+  });
   $("safe-new-folder").onclick = () =>
     void act($("safe-new-folder"), async () => {
       const n = await askSafeName("nf.h", "nf.create");
@@ -3484,6 +3529,21 @@ function wireSafe() {
 
 let safeQueueCloser: Closer | null = null;
 let safeQueueRunning = 0;
+/** Bumped when the Safe closes: a queue / move started before stops painting and toasting (no Safe name after Close). */
+let safeEpoch = 0;
+const SAFE_POLL_MS = 20_000;
+let safePollTimer: ReturnType<typeof setInterval> | null = null;
+async function safePoll() {
+  if (route.name !== "safe" || document.visibilityState !== "visible") return;
+  if (await core.safeRefresh().catch(() => false)) void render();
+}
+function startSafePoll() {
+  safePollTimer ??= setInterval(() => void safePoll(), SAFE_POLL_MS);
+}
+function stopSafePoll() {
+  if (safePollTimer) clearInterval(safePollTimer);
+  safePollTimer = null;
+}
 function closeSafeQueue() {
   safeQueueCloser?.stop();
   $("safe-queue").hidden = true;
@@ -3501,6 +3561,8 @@ async function safeUploadFiles(files: File[]) {
   const folder = safeFolder();
   const box = $("safe-queue");
   const list = $("safe-queue-list");
+  const epoch = safeEpoch;
+  const closed = () => epoch !== safeEpoch;
   safeQueueCloser?.stop();
   safeQueueRunning++;
   box.hidden = false;
@@ -3510,9 +3572,10 @@ async function safeUploadFiles(files: File[]) {
     const bar = h("i");
     const token = crypto.randomUUID();
     const cancel = h("button", { class: "iconbtn qcancel", type: "button", "data-ddn": "safe-queue-cancel", "aria-label": t("queue.cancel"), title: t("queue.cancel") }, icon("x"));
-    const li = h("li", { "data-ddn": "safe-queue-item" }, h("span", { class: "qname", title: f.name }, f.name), h("span", { class: "qside" }, cancel, state), h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, fmt(f.size)));
+    const speed = h("span", { "data-ddn": "safe-queue-speed" });
+    const li = h("li", { "data-ddn": "safe-queue-item" }, h("span", { class: "qname", title: f.name }, f.name), h("span", { class: "qside" }, cancel, state), h("span", { class: "bar" }, bar), h("span", { class: "qfoot" }, fmt(f.size), speed));
     list.append(li);
-    const row = { f, state, bar, token, cancel, cancelled: false };
+    const row = { f, state, bar, token, cancel, cancelled: false, speed };
     cancel.onclick = () => {
       row.cancelled = true;
       cancel.hidden = true;
@@ -3523,9 +3586,21 @@ async function safeUploadFiles(files: File[]) {
   let ok = 0;
   let failed = 0;
   let cancelled = 0;
-  const meta = () => ($("safe-queue-meta").textContent = t("queue.running", { done: ok + failed + cancelled, total: files.length }));
+  // Speed and time left as in the Drive's queue: per file, and over the whole batch in the header.
+  const total = files.reduce((s0, f) => s0 + f.size, 0);
+  let sent = 0;
+  const batch = new SpeedMeter(total, Date.now());
+  const meta = () => {
+    if (closed()) return;
+    batch.add(sent, Date.now());
+    const sp = speedText(batch);
+    const m = $("safe-queue-meta");
+    m.textContent = t("queue.running", { done: ok + failed + cancelled, total: files.length }) + (sp.text ? ` · ${sp.text}` : "");
+    m.title = sp.title;
+  };
   meta();
   for (const [i, r] of rows.entries()) {
+    if (closed()) break;
     const { f, state, bar, token } = r;
     if (r.cancelled) {
       cancelled++;
@@ -3537,10 +3612,22 @@ async function safeUploadFiles(files: File[]) {
     }
     state.className = "qstate run";
     state.textContent = t("queue.preparing");
+    const base = sent;
+    const meter = new SpeedMeter(f.size, Date.now());
+    const paintSpeed = () => {
+      const sp = speedText(meter);
+      r.speed.textContent = sp.text ? ` · ${sp.text}` : "";
+      r.speed.title = sp.title;
+    };
+    const tick = window.setInterval(() => (paintSpeed(), meta()), 1000);
     progressHandlers.set(token, (done, tot) => {
       const pct = tot ? Math.floor((done / tot) * 100) : 100;
       state.textContent = `${pct}%`;
       bar.style.width = `${pct}%`;
+      sent = base + done;
+      meter.add(done, Date.now());
+      paintSpeed();
+      meta();
     });
     try {
       if (desktop) await core.safeUploadPath(paths[i]!, folder, token);
@@ -3551,6 +3638,8 @@ async function safeUploadFiles(files: File[]) {
       bar.className = "done";
       bar.style.width = "100%";
     } catch (e) {
+      // Closed meanwhile: the Safe's transfers were cancelled; nothing of it is painted or said any more.
+      if (closed()) break;
       if (r.cancelled) {
         cancelled++;
         state.className = "qstate cancel";
@@ -3567,16 +3656,23 @@ async function safeUploadFiles(files: File[]) {
       }
     } finally {
       progressHandlers.delete(token);
+      clearInterval(tick);
+      meter.finish(Date.now());
+      if (state.className === "qstate done") paintSpeed();
+      else r.speed.textContent = "";
       r.cancel.hidden = true;
+      sent = base + f.size;
       meta();
     }
     void render();
   }
-  if (--safeQueueRunning === 0) {
+  for (const r of rows) progressHandlers.delete(r.token);
+  if (--safeQueueRunning === 0 && !closed()) {
     $("safe-queue-meta").textContent = "";
     $("safe-queue-close").hidden = false;
     safeQueueCloser?.start(failed ? "err" : cancelled ? "cancel" : "ok");
   }
+  if (closed()) return;
   if (ok) toast(tn("safe.uploaded", ok));
 }
 

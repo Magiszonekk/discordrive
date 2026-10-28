@@ -14,6 +14,10 @@ import {
   openSafeMaster,
   padState,
   parseSafeKit,
+  safeUsage,
+  sealSafeSlot,
+  SafeMissingError,
+  SAFE_PAD_MAX,
   safeKitText,
   unpadState,
 } from "../src/index.js";
@@ -170,6 +174,48 @@ describe("the Safe", () => {
     // The new password works; the history keeps working after the change (revisions under the new password).
     expect((await sb.unlock("new password 2026!")).state.files.map((f) => f.name)).toContain("added-after-change.pdf");
   }, 120_000);
+
+  it("the right password on a state that does not open: damaged, not a wrong password", async () => {
+    const { url } = await startServer();
+    const a = await newAccount(url);
+    const b = await addDevice(url, a);
+    const sa = new SafeStore<State>(a.api, a.key, a.accountId);
+    const u = await sa.create("correct horse battery staple", state(), FAST);
+    // A broken client writes a slot whose header is fine (the same password) but whose state is sealed with another master.
+    const blob = await sealSafeSlot({ key: a.key, accountId: a.accountId, revision: 2, header: u.header, master: crypto.getRandomValues(new Uint8Array(32)), state: state() });
+    expect(await b.api.putSlot("safe", 1, 2, blob)).toBeNull();
+    await expect(new SafeStore<State>(a.api, a.key, a.accountId).unlock("correct horse battery staple")).rejects.toBeInstanceOf(SafeDamagedError);
+    await expect(new SafeStore<State>(a.api, a.key, a.accountId).unlock("not the password!!")).rejects.toBeInstanceOf(SafeBadPasswordError);
+  }, 60_000);
+
+  it("refresh: an open Safe sees another device's change; nothing new = null; deleted = missing", async () => {
+    const { srv, url } = await startServer();
+    const a = await newAccount(url);
+    const b = await addDevice(url, a);
+    const sa = new SafeStore<State>(a.api, a.key, a.accountId);
+    const ua = await sa.create("correct horse battery staple", { files: [] }, FAST);
+    expect(await sa.refresh(ua)).toBeNull();
+    const sb = new SafeStore<State>(b.api, a.key, a.accountId);
+    const ub = await sb.unlock("correct horse battery staple");
+    await sb.update(ub, () => state());
+    const got = await sa.refresh(ua);
+    expect(got?.revision).toBe(2);
+    expect(got?.state.files.map((f) => f.name)).toEqual(SECRET_NAMES);
+    expect(await sa.refresh(got!)).toBeNull();
+    const db = (srv as unknown as { db: { prepare(q: string): { run(...a: unknown[]): unknown } } }).db;
+    db.prepare("DELETE FROM slots WHERE account_id = ?").run(a.accountId);
+    await expect(new SafeStore<State>(a.api, a.key, a.accountId).refresh(got!)).rejects.toBeInstanceOf(SafeMissingError);
+  }, 60_000);
+
+  it("usage: the state's size against the slot's limit", () => {
+    const small = safeUsage({ v: 1 });
+    expect(small.max).toBe(SAFE_PAD_MAX - 4);
+    expect(small.fraction).toBeLessThan(0.001);
+    const big = safeUsage({ x: "a".repeat(SAFE_PAD_MAX / 2) });
+    expect(big.fraction).toBeGreaterThan(0.49);
+    expect(big.fraction).toBeLessThan(0.51);
+    expect(safeUsage({ x: "a".repeat(SAFE_PAD_MAX * 2) }).fraction).toBe(1);
+  });
 
   it("padding: 64 KiB · 2^k buckets, round trip, too large refused", () => {
     expect(padState(new Uint8Array(10)).byteLength).toBe(SAFE_PAD_MIN);

@@ -11,6 +11,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -18,6 +19,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import io.github.magiszonekk.discordrive.core.IndexReplica
 import io.github.magiszonekk.discordrive.core.Safe
+import io.github.magiszonekk.discordrive.core.SafeStore
 import kotlin.concurrent.thread
 
 /**
@@ -51,7 +53,27 @@ class DdnSafeActivity : AppCompatActivity() {
         root.addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
         path += "root" to getString(R.string.safe_title)
         DdnSafe.onClosed = { main.post { if (!isFinishing) show() } }
+        // Back inside a folder of the open Safe goes one folder up, as in Files; from its top it leaves the screen.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (stateForTest == "open" && path.size > 1) { path.removeAt(path.size - 1); showOpen() } else finish()
+            }
+        })
         show()
+    }
+
+    /** Tests: the folder shown (its ID; "root" = the Safe's top), and opening one as a tap on its row does. */
+    internal fun folderForTest(): String = path.last().first
+    internal fun openFolderForTest(id: String, name: String) { path += id to name; showOpen() }
+
+    /** A readable message for what went wrong (never "wrong password" for a damaged Safe, never a raw 404). */
+    private fun why(e: Throwable): String = when {
+        e is Safe.BadPasswordException -> getString(R.string.safe_err_password)
+        e is SafeStore.Damaged -> getString(R.string.safe_err_damaged)
+        e is SafeStore.Missing -> getString(R.string.safe_err_missing)
+        e is SafeStore.TooLarge -> getString(R.string.safe_err_full)
+        Regex("404|no_such_blob|Unknown Message|attachment missing").containsMatchIn(e.message ?: "") -> getString(R.string.safe_err_file_gone)
+        else -> getString(R.string.ddn_error, e.message)
     }
 
     override fun onResume() {
@@ -76,7 +98,7 @@ class DdnSafeActivity : AppCompatActivity() {
             val exists = runCatching { DdnSafe.exists(this) }
             main.post {
                 busy(false)
-                exists.onSuccess { if (it) showClosed() else showNew() }.onFailure { body.removeAllViews(); body.addView(ui.note(getString(R.string.ddn_error, it.message))) }
+                exists.onSuccess { if (it) showClosed() else showNew() }.onFailure { body.removeAllViews(); body.addView(ui.note(why(it))) }
             }
         }
     }
@@ -101,7 +123,7 @@ class DdnSafeActivity : AppCompatActivity() {
                     busy(true)
                     thread {
                         val r = runCatching { DdnSafe.create(this, p) }
-                        main.post { busy(false); r.onSuccess { toast(getString(R.string.safe_created)); showOpen() }.onFailure { toast(getString(R.string.ddn_error, it.message)) } }
+                        main.post { busy(false); r.onSuccess { toast(getString(R.string.safe_created)); showOpen() }.onFailure { toast(why(it)) } }
                     }
                 }
             }
@@ -125,7 +147,7 @@ class DdnSafeActivity : AppCompatActivity() {
                 val r = runCatching { DdnSafe.unlock(this, p) }
                 main.post {
                     busy(false)
-                    r.onSuccess { showOpen() }.onFailure { toast(if (it is Safe.BadPasswordException) getString(R.string.safe_err_password) else getString(R.string.ddn_error, it.message)) }
+                    r.onSuccess { showOpen() }.onFailure { toast(why(it)) }
                 }
             }
         }, top = 10)
@@ -138,7 +160,7 @@ class DdnSafeActivity : AppCompatActivity() {
             busy(true)
             thread {
                 val r = runCatching { DdnSafe.unlockWithMaster(this, master) }
-                main.post { busy(false); r.onSuccess { showOpen() }.onFailure { toast(getString(R.string.ddn_error, it.message)) } }
+                main.post { busy(false); r.onSuccess { showOpen() }.onFailure { toast(why(it)) } }
             }
         }
     }
@@ -147,8 +169,22 @@ class DdnSafeActivity : AppCompatActivity() {
         stateForTest = "open"
         body.removeAllViews()
         val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        head.addView(ui.note(path.joinToString(" › ") { it.second }), LinearLayout.LayoutParams(0, -2, 1f))
+        // Crumbs: every folder above the current one can be tapped (back to it).
+        val crumbs = android.text.SpannableStringBuilder()
+        path.forEachIndexed { i, (_, name) ->
+            if (i > 0) crumbs.append(" › ")
+            val start = crumbs.length
+            crumbs.append(name)
+            if (i < path.size - 1) crumbs.setSpan(object : android.text.style.ClickableSpan() {
+                override fun onClick(w: View) { while (path.size > i + 1) path.removeAt(path.size - 1); showOpen() }
+            }, start, crumbs.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        val crumbView = ui.note(crumbs).apply { movementMethod = android.text.method.LinkMovementMethod.getInstance(); tag = "safe-crumbs" }
+        head.addView(crumbView, LinearLayout.LayoutParams(0, -2, 1f))
         body.addView(head, ui.lp(top = 4))
+        // How full the Safe is (its names and keys share one sealed record of at most 1 MiB); a warning from 80 %.
+        val pct = (DdnSafe.usage(this) * 100).toInt()
+        body.addView(ui.note(getString(if (pct >= 80) R.string.safe_usage_warn else R.string.safe_usage, pct)).apply { tag = "safe-usage" }, ui.lp(top = 2))
         val list = RecyclerView(this).apply { layoutManager = LinearLayoutManager(this@DdnSafeActivity); clipToPadding = false }
         body.addView(list, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = ui.dp(8) })
         val device = com.google.android.material.materialswitch.MaterialSwitch(this).apply {
@@ -174,7 +210,7 @@ class DdnSafeActivity : AppCompatActivity() {
             val r = runCatching { DdnSafe.children(this, folder) }
             main.post {
                 busy(false)
-                r.onSuccess { items = it; bind(list) }.onFailure { if (!DdnSafe.isOpen) show() else toast(getString(R.string.ddn_error, it.message)) }
+                r.onSuccess { items = it; bind(list) }.onFailure { if (!DdnSafe.isOpen) show() else if (path.size > 1) { path.removeAt(path.size - 1); showOpen() } else toast(why(it)) }
             }
         }
     }
@@ -197,14 +233,14 @@ class DdnSafeActivity : AppCompatActivity() {
                 r.view.setOnLongClickListener { menu(c); true }
             }
         }
-        if (items.isEmpty()) body.addView(ui.note(getString(R.string.safe_empty)), 1)
+        if (items.isEmpty()) body.addView(ui.note(getString(R.string.safe_empty)), 2)
     }
 
     private fun op(f: () -> Unit) {
         busy(true)
         thread {
             val r = runCatching(f)
-            main.post { busy(false); r.onFailure { toast(getString(R.string.ddn_error, it.message)) }; if (DdnSafe.isOpen) showOpen() else show() }
+            main.post { busy(false); r.onFailure { toast(why(it)) }; if (DdnSafe.isOpen) showOpen() else show() }
         }
     }
 
@@ -241,7 +277,7 @@ class DdnSafeActivity : AppCompatActivity() {
                     val type = contentResolver.getType(uri) ?: android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "*/*"
                     runCatching { startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
                         .onFailure { toast(getString(R.string.safe_no_viewer)) }
-                }.onFailure { toast(getString(R.string.ddn_error, it.message)) }
+                }.onFailure { toast(why(it)) }
             }
         }
     }

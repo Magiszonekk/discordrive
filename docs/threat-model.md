@@ -161,7 +161,12 @@ a copy of the server, the account's Discord channels. All of them hold the accou
   from then) knows the master, which a password change does not replace; the files' keys are in the state.
 - **What leaks**: that the account has a Safe, the padded size of its state (its power-of-two bucket),
   when it changes; with files in it, the size and number of their pieces on Discord and when they were
-  sent. Whoever uses the account can **delete** the Safe's slot (not read it).
+  sent. Whoever uses the account can **delete** the Safe's slot (not read it), and can also clear the
+  instance's earlier revisions of it (any write may ask to drop them, as a password change does): that
+  history protects against a client's mistake, not against someone who uses the account on purpose.
+- **Size**: the state is one sealed record of at most 1 MiB (names, file keys, thumbnails' keys): a few
+  thousand folders, fewer with long names, fewer still with files. The apps show how full it is; a change
+  that would not fit is refused and the Safe stays at its last good revision.
 - Files of the Safe: their pieces are stored like any file's (the account's webhooks, or the instance's pool),
   the reference and the file key only in the Safe's state. When the Safe no longer uses a file (deleted for
   good, replaced, a restored revision without it), its pieces are deleted after 30 days, as for the account:
@@ -187,7 +192,11 @@ a copy of the server, the account's Discord channels. All of them hold the accou
   with the password it had then. A database that lost the slot or went back to an older backup gets the newer
   copy back (the next copy round of a client in metadata only, the instance itself on start in e2ee/plain;
   the instance accepts the jump to the copy's revision). A change made in the last minutes before the loss
-  can be missing. Whoever uses the account can delete the copies on the channels as they can delete the slot.
+  can be missing. Through the instance (e2ee/plain) a database restored from an older backup also lacks the
+  records of pieces stored after that backup: a file added to the Safe after it is listed again (from the
+  newer copy) but its contents cannot be read; the apps show it as "no longer available", like a file of a
+  restored revision whose pieces were already deleted after the 30 days.
+  Whoever uses the account can delete the copies on the channels as they can delete the slot.
   Deleting the account deletes the slot, its history and (e2ee/plain) the copies.
 
 ### 2.6 Operation log
