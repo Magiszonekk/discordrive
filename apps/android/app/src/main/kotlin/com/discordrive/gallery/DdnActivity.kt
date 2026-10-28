@@ -116,7 +116,7 @@ open class DdnActivity : AppCompatActivity() {
 
         status.text = getString(R.string.ddn_opening)
         thread {
-            val s = runCatching { DdnSession.get(this) }.getOrElse { e -> main.post { status.text = getString(R.string.ddn_error, e.message) }; return@thread }
+            val s = runCatching { DdnSession.get(this) }.getOrElse { e -> main.post { status.text = DdnErrors.text(this, e) }; return@thread }
             main.post {
                 if (s == null) {
                     startActivity(Intent(this, JoinActivity::class.java))
@@ -156,7 +156,7 @@ open class DdnActivity : AppCompatActivity() {
             val r = runCatching { DdnUploads.queue(this, uris, folder) }
             main.post {
                 r.onSuccess { android.widget.Toast.makeText(this, plq(R.plurals.ddn_up_queued, it, it), android.widget.Toast.LENGTH_LONG).show(); watchUploads() }
-                    .onFailure { status.text = getString(R.string.ddn_error, it.message) }
+                    .onFailure { status.text = DdnErrors.text(this, it) }
             }
         } }
     }
@@ -178,7 +178,8 @@ open class DdnActivity : AppCompatActivity() {
         refreshing = true
         swipe.isRefreshing = true
         thread {
-            s.refresh()
+            // A failure is in s.lastError (shown by show()); never let it end the app.
+            runCatching { s.refresh() }.onFailure { if (s.lastError == null) s.lastError = it.message }
             main.post {
                 refreshing = false
                 swipe.isRefreshing = false
@@ -199,7 +200,7 @@ open class DdnActivity : AppCompatActivity() {
         crumbs.visibility = if (!gallery && !albumsTab && path.size > 1) View.VISIBLE else View.GONE
         crumbs.text = path.dropLast(1).joinToString(" › ") { it.second }
         crumbs.setOnClickListener { if (path.size > 1) { path.removeAt(path.size - 1); show() } }
-        status.text = s.lastError?.let { getString(R.string.ddn_offline, it) } ?: ""
+        status.text = s.lastError?.let { if (io.github.magiszonekk.discordrive.core.ErrorText.needsUpdate(it)) getString(R.string.ddn_err_update) else getString(R.string.ddn_offline, DdnErrors.bare(this, it)) } ?: ""
         status.visibility = if (status.text.isEmpty()) View.GONE else View.VISIBLE
         thread {
             if (albumsTab) {
@@ -399,7 +400,7 @@ open class DdnActivity : AppCompatActivity() {
         thread {
             val r = runCatching { s.move(listOf(c.id), to) }
             main.post {
-                r.onSuccess { toast(DdnViewerActivity.moveOutcome(this, it, done)) }.onFailure { note(getString(R.string.ddn_error, it.message)) }
+                r.onSuccess { toast(DdnViewerActivity.moveOutcome(this, it, done)) }.onFailure { note(DdnErrors.text(this, it)) }
                 show()
             }
         }
@@ -416,7 +417,7 @@ open class DdnActivity : AppCompatActivity() {
                     val r = runCatching { s.moveToTrash(listOf(c.id)) }
                     main.post {
                         r.onSuccess { android.widget.Toast.makeText(this, if (it == "applied") getString(R.string.ddn_moved_to_trash) else getString(R.string.ddn_trash_not_done, it), android.widget.Toast.LENGTH_SHORT).show() }
-                            .onFailure { status.text = getString(R.string.ddn_error, it.message) }
+                            .onFailure { status.text = DdnErrors.text(this, it) }
                         show()
                     }
                 }
@@ -437,6 +438,8 @@ open class DdnActivity : AppCompatActivity() {
     internal fun findRecycler(): RecyclerView? = if (::list.isInitialized) list else null
     internal fun openFolderForTest(id: String, name: String) { gallery = false; nav.selectedItemId = 1; path += id to name; show() }
     internal fun showGalleryForTest() { nav.selectedItemId = 2 }
+    internal fun statusForTest(): String = status.text.toString()
+    internal fun refreshForTest() = refresh()
     internal fun showAlbumsForTest() { nav.selectedItemId = 3 }
     internal fun openAlbumForTest(id: String, name: String) { album = id to name; show() }
     internal fun isDrawn(): Boolean = list.isLaidOut && list.childCount > 0

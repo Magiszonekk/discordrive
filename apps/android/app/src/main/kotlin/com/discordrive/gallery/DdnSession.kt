@@ -11,6 +11,7 @@ import io.github.magiszonekk.discordrive.core.FileFormat
 import io.github.magiszonekk.discordrive.core.FileReader
 import io.github.magiszonekk.discordrive.core.IndexReplica
 import io.github.magiszonekk.discordrive.core.InstanceApi
+import io.github.magiszonekk.discordrive.core.ErrorText
 import io.github.magiszonekk.discordrive.core.JsEngineException
 import io.github.magiszonekk.discordrive.core.TrashPolicy
 import io.github.magiszonekk.discordrive.core.Vault
@@ -62,7 +63,9 @@ class DdnSession private constructor(private val app: Context, val acct: Account
         try {
             f(replica)
         } catch (e: JsEngineException) {
-            if (engineName == "quickjs") throw e
+            // The sync core refused the account's data (written by a newer app): the engine is fine, another
+            // one would refuse it too.
+            if (engineName == "quickjs" || ErrorText.needsUpdate(e.message)) throw e
             Log.w(TAG, "$engineName failed (${e.message}); continuing on QuickJS")
             runCatching { replica.close() }
             start(quickJsOnly = true)
@@ -109,6 +112,9 @@ class DdnSession private constructor(private val app: Context, val acct: Account
         } catch (e: Exception) {
             lastError = e.message
             Log.w(TAG, "refresh: ${e.message}")
+            // Written by a newer app: not an engine failure. The screen says "update the app" (lastError) and
+            // shows the local copy as it was; nothing is thrown at the caller (a refresh thread has no catch).
+            if (ErrorText.needsUpdate(e.message)) return@ix headSeq
             // Offline: the vault is still needed to read files (last one seen).
             if (e is JsEngineException) throw e
             if (!acct.serverBlobs && Vault.webhooks(sync.vault).isEmpty()) runCatching { sync.loadVault() }

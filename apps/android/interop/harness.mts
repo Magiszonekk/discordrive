@@ -339,6 +339,16 @@ async function handle(q: Req): Promise<unknown> {
     for (const x of parts) h.update(x);
     return { fileSame: h.digest("hex") === a.sha };
   }
+  if (q.m === "rulesNewer") {
+    // Another device, on a newer app, writes an entry with a rules version this build does not replay (the
+    // instance of this build would refuse it, so it goes straight into its log, as a newer instance would keep it).
+    const head = (srv.db.prepare("SELECT MAX(seq) AS s FROM log WHERE account_id = ?").get(r0.accountId) as { s: number }).s;
+    const env = await new OpCodec(key, r0.accountId).encrypt({ opId: `newer${Date.now()}`, rulesVersion: RULES_VERSION + 1, baseSeq: head, device: { id: r0.deviceId, name: "laptop" }, createdAt: Date.now(), op: { type: "rename", nodeId: "fold-0000000002", name: "Nowsza" } } as never);
+    const entry = { ...env, seq: head + 1, serverTime: Date.now() };
+    srv.db.prepare("INSERT INTO log (account_id, seq, op_id, entry) VALUES (?, ?, ?, ?)").run(r0.accountId, entry.seq, entry.opId, JSON.stringify(entry));
+    (srv as unknown as { seqs: Map<string, unknown> }).seqs.delete(r0.accountId);
+    return entry.seq;
+  }
   if (q.m === "done") {
     Object.assign(checks, q.a as Record<string, boolean>);
     return null;

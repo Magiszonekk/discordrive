@@ -78,7 +78,7 @@ import {
   type SafePieces,
   type SafeTreeState,
 } from "@ddv4/metadata-client";
-import { searchItems, type DescriptionRecord } from "@ddv4/metadata-client";
+import { searchItems, takenFromExif, EXIF_HEAD_BYTES, type DescriptionRecord } from "@ddv4/metadata-client";
 import { AccountSettingsStore } from "@ddv4/metadata-client";
 import { NetControl, cleanupLeftovers, discordSpeed, lineSpeed, speedHints, type BaselineData, type LaneFetch, type NetUiState, type SpeedTestProgress, type SpeedTestResult } from "@ddv4/metadata-client";
 import { fromBase64, toBase64 } from "@ddv4/processing";
@@ -240,6 +240,16 @@ export type AuthLost = "blocked" | "gone";
 
 function blobSource(b: Blob): ByteSource {
   return { size: b.size, read: async (o, l) => new Uint8Array(await b.slice(o, o + l).arrayBuffer()) };
+}
+
+/**
+ * When the content of a picked / dropped file was made: the camera's date in a JPEG's EXIF, else `fallback`
+ * (the file's modification time: for a photo copied today that is today, not when it was taken).
+ */
+async function takenOf(src: ByteSource, name: string, fallback: number | undefined): Promise<number | undefined> {
+  if (!/\.(jpe?g|jfif)$/i.test(name) || src.size < 4) return fallback;
+  const head = await src.read(0, Math.min(src.size, EXIF_HEAD_BYTES)).catch(() => null);
+  return (head && takenFromExif(head)) || fallback;
 }
 
 const MIME: Record<string, string> = {
@@ -1161,8 +1171,9 @@ export class AppCore {
     const ac = new AbortController();
     if (token) this.uploads.set(token, ac);
     // A picked file's modification time: for a photo usually when it was taken (search by date).
-    const taken = (file as File).lastModified || undefined;
-    const r = await this.c().upload(blobSource(file), name, parentId, {
+    const source = blobSource(file);
+    const taken = await takenOf(source, name, (file as File).lastModified || undefined);
+    const r = await this.c().upload(source, name, parentId, {
       signal: ac.signal,
       resumeKey,
       takenAt: taken,
@@ -1321,10 +1332,11 @@ export class AppCore {
     try {
       const into = await this.folderPathOf(parentId, folder);
       let last = 0;
+      const taken = await takenOf(src, src.name, Math.floor(src.mtimeMs) || undefined);
       const r = await this.c().upload(src, src.name, into, {
         signal: ac.signal,
         resumeKey: diskResumeKey(into, path, src.size, src.mtimeMs),
-        takenAt: Math.floor(src.mtimeMs) || undefined,
+        takenAt: taken,
         previews: previews ? this.previewsFor(token) : undefined,
         onProgress: (done, total, stages) => {
           const t = Date.now();
@@ -1333,7 +1345,7 @@ export class AppCore {
           this.onEvent({ type: "upload-progress", token, done, total, stages, name: src.name });
         },
       });
-      this.rememberTaken(r.version.manifestRef, Math.floor(src.mtimeMs) || undefined);
+      this.rememberTaken(r.version.manifestRef, taken);
       this.version++;
       void this.snapshotSoon();
       return { nodeId: r.nodeId, resumed: r.resumed, size: src.size };
@@ -2313,9 +2325,10 @@ export class AppCore {
   async safeUpload(file: Blob, name: string, parentId = "root", token = ""): Promise<{ nodeId: string }> {
     let last = 0;
     return this.safeTransfer(token, this.uploads, async (ac) => {
-      const taken = (file as File).lastModified || undefined;
+      const source = blobSource(file);
+      const taken = await takenOf(source, name, (file as File).lastModified || undefined);
       const r = await this.safeDo((s) =>
-        s.tree.upload(s.u, this.c(), blobSource(file), name, parentId, {
+        s.tree.upload(s.u, this.c(), source, name, parentId, {
           signal: ac.signal,
           takenAt: taken,
           onProgress: (done, total, stages) => {
@@ -2337,10 +2350,11 @@ export class AppCore {
     const src = await this.disk().openSource(path);
     return this.safeTransfer(token, this.uploads, async (ac) => {
       try {
+      const taken = await takenOf(src, src.name, Math.floor(src.mtimeMs) || undefined);
       const r = await this.safeDo((s) =>
         s.tree.upload(s.u, this.c(), src, src.name, parentId, {
           signal: ac.signal,
-          takenAt: Math.floor(src.mtimeMs) || undefined,
+          takenAt: taken,
           onProgress: (done, total, stages) => (this.safeTouch(), this.onEvent({ type: "upload-progress", token, done, total, stages, name: src.name })),
         }),
       );

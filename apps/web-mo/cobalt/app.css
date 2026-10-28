@@ -494,6 +494,10 @@ dialog.modal.confirm .modal-b { gap: 1.25rem; }
 .ftable td.c-left { white-space: nowrap; }
 .ftable td.c-left .chip { font-variant-numeric: tabular-nums; }
 .trash-wrap .ftable .acts { align-items: center; gap: .375rem; }
+/* where an item was, under its name on a wide list (the phone card and the tile carry it in their sub-line) */
+@media (min-width: 768px) { .trash-wrap:not([data-view="tiles"]) .ftable .sub.trash-from { display: block; margin-top: .125rem; } }
+.ftable-wrap.trash-wrap[data-view="tiles"] .ftable .sub.trash-from { display: none; }
+@media (max-width: 767.98px) { .ftable-wrap.trash-wrap .ftable .sub.trash-from { display: none; } }
 .files-h .acts .btn:disabled { cursor: not-allowed; opacity: .5; }
 
 @media (max-width: 767.98px) {

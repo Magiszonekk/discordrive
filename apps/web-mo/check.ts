@@ -2054,6 +2054,56 @@ try {
     r.safe = sf;
   }
 
+  // 10c'. the Gallery: one photo a day for a week shares one day heading (a range), a busy day keeps its own;
+  // a JPEG copied today sits at the camera's date from its EXIF; the trash says "from Gallery" on a wide list.
+  step("gallery timeline");
+  {
+    const g: Record<string, unknown> = {};
+    // IFD0 DateTime = 2019:07:14 18:03:22 (big endian) in an APP1 Exif segment.
+    const date = [...Buffer.from("2019:07:14 18:03:22\0", "latin1")];
+    const tiff = [0x4d, 0x4d, 0, 42, 0, 0, 0, 8, 0, 1, 0x01, 0x32, 0, 2, 0, 0, 0, date.length, 0, 0, 0, 26, 0, 0, 0, 0, ...date];
+    const app1 = [...Buffer.from("Exif\0\0", "latin1"), ...tiff];
+    const jpg = [0xff, 0xd8, 0xff, 0xe1, 0, app1.length + 2, ...app1, 0xff, 0xda, 0, 2, 0xff, 0xd9];
+    await p.evaluate(async (jpg) => {
+      const core = (window as unknown as { ddnCore: { upload(f: Blob, n: string, parent: string): Promise<unknown> } }).ddnCore;
+      const day = (d: number, h = 12) => new Date(2025, 2, d, h).getTime();
+      for (let d = 1; d <= 7; d++) await core.upload(new File([new Uint8Array(300 + d)], `g-rzadkie-${d}.png`, { lastModified: day(d) }), `g-rzadkie-${d}.png`, "gallery");
+      for (let h = 9; h <= 12; h++) await core.upload(new File([new Uint8Array(400 + h)], `g-dzien-${h}.png`, { lastModified: day(20, h) }), `g-dzien-${h}.png`, "gallery");
+      await core.upload(new File([new Uint8Array(jpg)], "g-exif.jpg", { lastModified: Date.now() }), "g-exif.jpg", "gallery");
+    }, jpg);
+    await p.evaluate(() => {
+      history.pushState(null, "", "/gallery");
+      dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await p.waitForFunction(() => document.querySelectorAll("[data-ddn=row]").length >= 12, null, { timeout: 30_000 });
+    g.heads = await p.$$eval("[data-ddn-ui^=gallery-]", (els) => els.map((e) => `${(e as HTMLElement).dataset.ddnUi}:${e.textContent}`));
+    g.exifUnder2019 = await p.evaluate(() => {
+      let head = "";
+      for (const el of document.querySelectorAll("[data-ddn-ui=gallery-month], [data-ddn=row]")) {
+        if ((el as HTMLElement).dataset.ddnUi === "gallery-month") head = el.textContent ?? "";
+        else if (el.textContent?.includes("g-exif.jpg")) return head;
+      }
+      return null;
+    });
+    await shot(p, "35-gallery-sparse");
+    // Into the trash (from an album-less photo of the Gallery): the wide list names where it was.
+    await p.evaluate(async () => {
+      const core = (window as unknown as { ddnCore: { list(id: string): Promise<{ rows: { id: string; name: string }[] }>; trash(ids: string[]): Promise<unknown> } }).ddnCore;
+      const row = (await core.list("gallery")).rows.find((x) => x.name === "g-rzadkie-1.png");
+      if (row) await core.trash([row.id]);
+    });
+    await nav(p, "trash");
+    const tr = p.locator("[data-ddn=trash-row]", { hasText: "g-rzadkie-1.png" });
+    await tr.waitFor({ timeout: 30_000 });
+    g.trashFrom = await tr.locator("[data-ddn=trash-from]").isVisible() ? await tr.locator("[data-ddn=trash-from]").textContent() : null;
+    // Tiles: said once (in the sub-line), the separate line hidden.
+    await p.click("[data-page=trash] [data-ddn=view] [data-view=tiles]");
+    await p.waitForSelector("[data-page=trash] .trash-wrap[data-view=tiles]");
+    g.tilesFromOnce = !(await tr.locator("[data-ddn=trash-from]").isVisible()) && /Galler|Galeri/.test((await tr.locator(".sub:not(.trash-from)").textContent()) ?? "");
+    await p.click("[data-page=trash] [data-ddn=view] [data-view=list]");
+    r.galleryTimeline = g;
+  }
+
   // 10d. a browser without Ed25519 in WebCrypto (Chromium before 137): every sign-up card says "too old"
   // with the versions instead of the raw "Algorithm: Unrecognized name", its buttons are off.
   step("old browser");
@@ -2422,6 +2472,13 @@ try {
         /new key|nowym kluczem/i.test(String(o.costText)) && o.goneFromDrive === true && o.inSafe === true && o.serverBlind === true &&
         /\d+\s?%/.test(String(o.usage)) && o.closedNoMovedName === true
       );
+    })(),
+    galleryTimeline: (() => {
+      const o = r.galleryTimeline as { heads: string[]; exifUnder2019: string | null; trashFrom: string | null; tilesFromOnce: boolean } | undefined;
+      if (!o) return false;
+      const days = o.heads.filter((x) => x.startsWith("gallery-day:"));
+      // March 2025: the busy day (20th, 4 photos) and one range over the 7 sparse days (1–7); no heading per sparse day.
+      return days.filter((x) => /20/.test(x)).length >= 1 && days.some((x) => /1\s*[–-]\s*7/.test(x)) && days.length <= 4 && /2019/.test(String(o.exifUnder2019)) && /Galler|Galeri/.test(String(o.trashFrom)) && o.tilesFromOnce === true;
     })(),
     noPageErrors: errors.length === 0,
   };

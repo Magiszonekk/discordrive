@@ -307,6 +307,7 @@ export const en: Record<string, string> = {
   "err.body_too_large": "The request was too large for the server.",
   "err.need_channel": "Add a channel with a webhook first.",
   "err.pointer_hook_gone": "The channel that holds the rescue pointer was removed. Add a channel and show the rescue kit again.",
+  "err.update": "This account uses features of a newer version of the app. Update the app (or reload the page) to open it.",
   "err.generic": "Something went wrong: {msg}",
   // stage 3: mode variants (key@mode) and new texts
   "create.keys@e2ee": "There is no password: the account key is created in this browser and stays on your devices. Next you save a rescue kit.",

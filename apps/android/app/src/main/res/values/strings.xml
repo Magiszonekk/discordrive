@@ -25,6 +25,7 @@
     <string name="ddn_kit_go">Dołącz zestawem ratunkowym</string>
     <string name="ddn_bad_server">Podaj adres instancji (https://…)</string>
     <string name="ddn_error">Błąd: %1$s</string>
+    <string name="ddn_err_update">To konto używa funkcji z nowszej wersji aplikacji. Zaktualizuj aplikację (Ustawienia → Wersja i aktualizacje), żeby je otworzyć.</string>
     <string name="ddn_already">To urządzenie jest już na koncie jako „%1$s” (%2$s).</string>
     <string name="ddn_join_snapshot_skipped">Wskaźnik snapshotów konta jest niedostępny (jego kanał usunięto na Discordzie), więc stan wczytano z pełnego logu na serwerze: wszystko jest, tylko dołączanie trwało dłużej. Napraw w przeglądarce lub na komputerze: dodaj kanał i pokaż zestaw ratunkowy ponownie.</string>
     <string name="ddn_joined">Dołączono (silnik %1$s): stan do operacji %2$d (snapshot do %3$d), %4$d ms. W katalogu głównym: %5$d — %6$s</string>

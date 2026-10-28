@@ -125,7 +125,7 @@ class DdnTrashActivity : AppCompatActivity() {
                 r.onSuccess { outcome ->
                     Toast.makeText(this, if (outcome == "applied") getString(if (restore) R.string.ddn_trash_restored else R.string.ddn_trash_purged) else getString(R.string.ddn_trash_not_done, outcome), Toast.LENGTH_LONG).show()
                     selected.clear()
-                }.onFailure { Toast.makeText(this, getString(R.string.ddn_error, it.message), Toast.LENGTH_LONG).show() }
+                }.onFailure { Toast.makeText(this, DdnErrors.text(this, it), Toast.LENGTH_LONG).show() }
                 load()
             }
         }

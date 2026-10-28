@@ -73,7 +73,7 @@ class DdnFreeUpActivity : AppCompatActivity() {
                         if (Build.VERSION.SDK_INT < 30 && sc.ready.isNotEmpty()) append("\n").append(getString(R.string.ddn_free_old_android))
                     }
                     go.isEnabled = sc.ready.isNotEmpty() && Build.VERSION.SDK_INT >= 30
-                }.onFailure { state.text = getString(R.string.ddn_error, it.message) }
+                }.onFailure { state.text = DdnErrors.text(this, it) }
                 checkedForTest = true
             }
         }

@@ -319,6 +319,7 @@ export const pl: Record<string, string> = {
   "err.body_too_large": "Żądanie było za duże dla serwera.",
   "err.need_channel": "Najpierw dodaj kanał z webhookiem.",
   "err.pointer_hook_gone": "Kanał z wiadomością wskaźnikową został usunięty. Dodaj kanał i pokaż zestaw ratunkowy ponownie.",
+  "err.update": "To konto używa funkcji z nowszej wersji aplikacji. Zaktualizuj aplikację (albo odśwież stronę), żeby je otworzyć.",
   "err.generic": "Coś poszło nie tak: {msg}",
   // stage 3: mode variants (key@mode) and new texts
   "create.keys@e2ee": "Nie ma hasła: klucz konta powstaje w tej przeglądarce i zostaje na Twoich urządzeniach. Potem zapiszesz zestaw ratunkowy.",

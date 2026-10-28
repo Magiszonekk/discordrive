@@ -147,7 +147,7 @@ class DdnOpenActivity : AppCompatActivity() {
             val r = runCatching { DdnUploads.queue(this, listOf(uri), null).also { DdnUploads.markSent(this, uri, name) } }
             main.post {
                 r.onSuccess { Toast.makeText(this, plq(R.plurals.ddn_up_queued, it, it), Toast.LENGTH_LONG).show() }
-                    .onFailure { Toast.makeText(this, getString(R.string.ddn_error, it.message), Toast.LENGTH_LONG).show() }
+                    .onFailure { Toast.makeText(this, DdnErrors.text(this, it), Toast.LENGTH_LONG).show() }
             }
         }
     }
