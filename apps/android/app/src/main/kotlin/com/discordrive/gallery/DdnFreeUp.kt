@@ -52,9 +52,9 @@ object DdnFreeUp {
     }
 
     private fun sha256Of(c: Context, uri: Uri): String {
-        val src = if (Build.VERSION.SDK_INT >= 29) runCatching { MediaStore.setRequireOriginal(uri) }.getOrDefault(uri) else uri
         val md = MessageDigest.getInstance("SHA-256")
-        (runCatching { c.contentResolver.openInputStream(src)!! }.getOrElse { c.contentResolver.openInputStream(uri)!! }).use { inp ->
+        // The bytes the automatic copy sent (the original, with the position, when the app may read it).
+        MediaLocation.open(c, uri).use { inp ->
             val buf = ByteArray(256 * 1024)
             while (true) { val n = inp.read(buf); if (n < 0) break; md.update(buf, 0, n) }
         }

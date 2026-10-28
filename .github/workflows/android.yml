@@ -276,6 +276,10 @@ jobs:
             adb shell am instrument -w -e class com.discordrive.gallery.CobaltScreensTest io.github.magiszonekk.discordrive.test/androidx.test.runner.AndroidJUnitRunner | tee build/cobalt-screens.txt; grep -q "^OK (" build/cobalt-screens.txt
             # The upload notification: one count for a series of runs, its own ID next to the AI descriptions' job.
             adb shell am instrument -w -e class com.discordrive.gallery.BackupProgressTest io.github.magiszonekk.discordrive.test/androidx.test.runner.AndroidJUnitRunner | tee build/backup-progress.txt; grep -q "^OK (6 tests)" build/backup-progress.txt
+            # Photos keep their GPS position: without ACCESS_MEDIA_LOCATION (revoked here, it kills the app) the
+            # app asks for it before reading photos and then reads the original with the position.
+            adb shell pm revoke io.github.magiszonekk.discordrive android.permission.ACCESS_MEDIA_LOCATION
+            adb shell am instrument -w -e class com.discordrive.gallery.MediaLocationTest io.github.magiszonekk.discordrive.test/androidx.test.runner.AndroidJUnitRunner | tee build/media-location.txt; grep -q "^OK (1 test)" build/media-location.txt
 
       - name: Test report
         if: always()
