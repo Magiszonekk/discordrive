@@ -399,7 +399,7 @@ open class DdnActivity : AppCompatActivity() {
         thread {
             val r = runCatching { s.move(listOf(c.id), to) }
             main.post {
-                r.onSuccess { toast(if (it == "applied") done else getString(R.string.ddn_trash_not_done, it)) }.onFailure { note(getString(R.string.ddn_error, it.message)) }
+                r.onSuccess { toast(DdnViewerActivity.moveOutcome(this, it, done)) }.onFailure { note(getString(R.string.ddn_error, it.message)) }
                 show()
             }
         }

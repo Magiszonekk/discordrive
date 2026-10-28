@@ -59,6 +59,23 @@ class ViewerInfoTest {
         assertNull(m.lat)
     }
 
+    /** N60: a photo whose position Android zeroed (no ACCESS_MEDIA_LOCATION): no position, no map. */
+    @Test
+    fun zeroedGpsIsNoPosition() {
+        val f = File(ctx.cacheDir, "exif-zero.jpg")
+        f.outputStream().use { Bitmap.createBitmap(30, 20, Bitmap.Config.ARGB_8888).compress(Bitmap.CompressFormat.JPEG, 80, it) }
+        ExifInterface(f.path).apply {
+            setAttribute(ExifInterface.TAG_GPS_LATITUDE, "0/1,0/1,0/1"); setAttribute(ExifInterface.TAG_GPS_LATITUDE_REF, "N")
+            setAttribute(ExifInterface.TAG_GPS_LONGITUDE, "0/1,0/1,0/1"); setAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF, "E")
+            saveAttributes()
+        }
+        val m = ViewerInfo.photo(f.readBytes())
+        f.delete()
+        assertNull(m.lat)
+        assertNull(m.lon)
+        assertTrue(ViewerInfo.lines(ctx, m).none { it.startsWith(ctx.getString(R.string.ddn_info_place, "").trimEnd()) })
+    }
+
     @Test
     fun videoLocation() {
         assertEquals(52.2297 to 21.0122, ViewerInfo.iso6709("+52.2297+021.0122/"))

@@ -22,7 +22,8 @@ import androidx.work.ForegroundInfo
  *
  * When Android does not let the job start a foreground service (a job started in the background, e.g.
  * by the trigger on new photos), the job runs as a plain one and the notification is a plain one
- * (not ongoing, the user can swipe it away). [end] removes it either way.
+ * (not ongoing, the user can swipe it away). Swiped away, it stays away until the job ends: later updates
+ * are not posted again. [end] removes it either way.
  */
 class FgNotice(
     private val context: Context,
@@ -65,9 +66,18 @@ class FgNotice(
         post()
     }
 
+    /** The user swiped the plain notification away: no more updates for this job. */
+    var dismissed = false
+        private set
+    private var posted = false
+
     private fun post() {
+        // A plain notification gone from the shade since the last update (at least a moment ago: posting is not
+        // instant) was swiped away by the user; posting it again would bring it straight back.
+        if (!foreground && posted && System.currentTimeMillis() - last > 800 && runCatching { nm.activeNotifications.none { it.id == id } }.getOrDefault(false)) dismissed = true
+        if (dismissed) return
         last = System.currentTimeMillis()
-        runCatching { nm.notify(id, build(foreground)) }
+        runCatching { nm.notify(id, build(foreground)) }.onSuccess { posted = true }
     }
 
     @Suppress("DEPRECATION") // still returns the app's own services

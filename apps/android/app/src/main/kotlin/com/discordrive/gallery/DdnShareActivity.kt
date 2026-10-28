@@ -145,7 +145,7 @@ class DdnBackupActivity : AppCompatActivity() {
         page.addView(failedBox)
 
         ui.section(page, R.string.ddn_backup, getString(R.string.ddn_backup_where, DdnBackup.rootName(DdnAccount.load(this)?.deviceName ?: "?"))).also { c ->
-            ui.switchRow(c, R.string.ddn_backup_on, DdnBackup.enabled(this)) { v, on -> if (on && !hasMedia()) { v.isChecked = false; askMedia() } else { DdnBackup.set(this, on = on); if (on) askLocationIfNeeded() } }
+            ui.switchRow(c, R.string.ddn_backup_on, DdnBackup.enabled(this)) { v, on -> if (on && !hasMedia()) { v.isChecked = false; askMedia() } else { DdnBackup.set(this, on = on); paintLocation(); if (on) askLocationIfNeeded() } }
             ui.switchRow(c, R.string.ddn_backup_wifi, DdnBackup.wifiOnly(this)) { _, v -> DdnBackup.set(this, wifi = v) }
             ui.switchRow(c, R.string.ddn_backup_charging, DdnBackup.chargingOnly(this)) { _, v -> DdnBackup.set(this, charging = v) }
             // The GPS position of photos: without the permission the copies would have it zeroed.
@@ -167,7 +167,8 @@ class DdnBackupActivity : AppCompatActivity() {
                 else { DdnBackup.runNow(this, manual = true); Toast.makeText(this, R.string.ddn_backup_started, Toast.LENGTH_SHORT).show() }
             })
         }
-        WorkManager.getInstance(this).getWorkInfosForUniqueWorkLiveData(DdnBackup.WORK_NOW).observe(this) { paintState(it) }
+        // Every job of the upload (Copy now, the periodic one, the trigger on new photos): any of them may be running.
+        WorkManager.getInstance(this).getWorkInfosLiveData(androidx.work.WorkQuery.fromUniqueWorkNames(DdnBackup.WORKS)).observe(this) { infos = it; paintState(it) }
         paintFolders()
         paintState(emptyList())
         // Opened from "the automatic copy waits for the location" (or with the copy on and access to photos
@@ -176,7 +177,8 @@ class DdnBackupActivity : AppCompatActivity() {
     }
 
     private lateinit var location: LinearLayout
-    private val gate = LocationGate(this) { paintLocation() }
+    private val gate = LocationGate(this) { paintLocation(); paintState(infos) }
+    private var infos: List<WorkInfo> = emptyList()
 
     /** Asked once by itself; after a refusal only the screen's "Allow" asks again. */
     private fun askLocationIfNeeded() {
@@ -186,12 +188,14 @@ class DdnBackupActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         paintLocation()
+        paintState(infos)
     }
 
     /** Without the permission: why the copies would lose the position, and "Allow". */
     private fun paintLocation() {
         location.removeAllViews()
-        if (MediaLocation.granted(this) || !hasMedia()) return
+        // With the automatic copy off nothing waits ("Copy now" asks by itself when tapped).
+        if (!DdnBackup.enabled(this) || MediaLocation.granted(this) || !hasMedia()) return
         location.addView(ui.note(getString(if (DdnBackup.locationDeclined(this)) R.string.ddn_loc_declined else R.string.ddn_loc_missing)), ui.lp(top = 8))
         ui.add(location, ui.button(R.string.ddn_loc_allow, CobaltUi.Kind.TONAL) {
             gate.ask {
@@ -257,13 +261,27 @@ class DdnBackupActivity : AppCompatActivity() {
     private fun paintState(infos: List<WorkInfo>) {
         paintFailed()
         val run = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
-        val st = DdnBackup.status(this)
-        state.text = buildString {
-            if (run != null) append(getString(R.string.ddn_backup_running, run.progress.getInt("done", 0), run.progress.getInt("total", 0), run.progress.getString("line") ?: "")).append("\n")
+        state.text = stateText(this, run?.let { Running(it.progress.getInt("done", 0), it.progress.getInt("total", 0), it.progress.getString("line")) }, DdnBackup.status(this))
+    }
+
+    internal fun stateForTest(): String = state.text.toString()
+    internal fun locationNoteForTest(): Boolean = location.childCount > 0
+
+    /** A run in progress: the series' count (see [BackupSeries]) and the file being sent. */
+    internal data class Running(val done: Int, val total: Int, val line: String?)
+
+    companion object {
+        /**
+         * The state section: a run in progress first (its series count), then the last finished run. While a
+         * run goes on, the last run's error is not shown: it belongs to the run before (a network failure, the
+         * wait for the photos' location) and the current one is trying again.
+         */
+        internal fun stateText(c: android.content.Context, run: Running?, st: DdnBackup.Status?): String = buildString {
+            if (run != null) append(if (run.total > 0) c.getString(R.string.ddn_backup_running, run.done, run.total, run.line ?: "") else c.getString(R.string.ddn_backup_running_start)).append("\n")
             if (st != null) {
-                append(getString(R.string.ddn_backup_last, Ago.of(this@DdnBackupActivity, st.at), st.copied, st.waiting))
-                st.error?.let { append("\n").append(getString(R.string.ddn_error, it)) }
-            } else append(getString(R.string.ddn_backup_never))
-        }
+                append(c.getString(R.string.ddn_backup_last, Ago.of(c, st.at), st.copied, st.waiting))
+                if (run == null) st.error?.let { append("\n").append(c.getString(R.string.ddn_error, it)) }
+            } else if (run == null) append(c.getString(R.string.ddn_backup_never))
+        }.trimEnd()
     }
 }

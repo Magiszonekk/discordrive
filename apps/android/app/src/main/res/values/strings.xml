@@ -410,6 +410,7 @@ Tekst: %3$s</string>
     <string name="ddn_backup_started">Kopiowanie w tle — postęp w powiadomieniu.</string>
     <string name="ddn_backup_running">Trwa: %1$d z %2$d · %3$s</string>
     <string name="ddn_backup_last">Ostatnio: %1$s · skopiowano %2$d · czeka %3$d</string>
+    <string name="ddn_backup_running_start">Trwa kopiowanie…</string>
     <string name="ddn_backup_never">Jeszcze nie kopiowano.</string>
     <string name="ddn_loc_wait">Auto-kopia czeka na dostęp do lokalizacji zdjęć</string>
     <string name="ddn_loc_tap">Bez niego Android wysyła zdjęcia z wyzerowaną pozycją GPS i kopia na koncie straciłaby ją na zawsze. Dotknij, żeby zezwolić.</string>
@@ -465,6 +466,7 @@ Tekst: %3$s</string>
     </plurals>
     <string name="ddn_trash_restored">Przywrócono.</string>
     <string name="ddn_trash_purged">Usunięto na stałe.</string>
+    <string name="ddn_move_noop">Już tam jest.</string>
     <string name="ddn_trash_not_done">Nie wykonano (%1$s) — inne urządzenie zmieniło te elementy w międzyczasie.</string>
     <string name="ddn_to_trash">Przenieś do kosza</string>
     <string name="ddn_to_trash_ask">Przenieść „%1$s” do kosza? Przez 30 dni można go przywrócić.</string>

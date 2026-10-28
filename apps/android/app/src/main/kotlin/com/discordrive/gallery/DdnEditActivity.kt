@@ -4,13 +4,18 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.graphics.RectF
 import android.os.Bundle
+import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.google.android.material.appbar.MaterialToolbar
-import com.google.android.material.button.MaterialButton
+import androidx.core.view.WindowCompat
+import androidx.core.widget.TextViewCompat
 import io.github.magiszonekk.discordrive.core.FileWrite
 import java.io.ByteArrayOutputStream
 import kotlin.concurrent.thread
@@ -24,26 +29,71 @@ class DdnEditActivity : AppCompatActivity() {
     private lateinit var image: ImageView
     private lateinit var overlay: CropOverlayView
     private lateinit var loading: ProgressBar
-    private lateinit var buttons: List<MaterialButton>
+    private lateinit var buttons: List<View>
     private var original: Bitmap? = null
     private var working: Bitmap? = null
     @Volatile private var saving = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        CobaltUi.theme(this)
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_edit)
-        Insets.apply(findViewById(R.id.editRoot))
-        findViewById<MaterialToolbar>(R.id.editToolbar).setNavigationOnClickListener { finish() }
-        image = findViewById(R.id.editImage)
-        overlay = findViewById(R.id.cropOverlay)
-        loading = findViewById(R.id.editLoading)
-        buttons = listOf(
-            findViewById<MaterialButton>(R.id.rotateButton).apply { setOnClickListener { transform { m -> m.postRotate(90f) } } },
-            findViewById<MaterialButton>(R.id.flipButton).apply { setOnClickListener { transform { m -> m.postScale(-1f, 1f) } } },
-            findViewById<MaterialButton>(R.id.resetButton).apply { setOnClickListener { original?.let { setWorking(it) } } },
-            findViewById<MaterialButton>(R.id.saveButton).apply { setText(R.string.ddn_edit_save); setOnClickListener { save() } },
-        )
-        buttons.forEach { it.isEnabled = false }
+        val ui = CobaltUi(this)
+        // As the viewer: the photo on black, a bar with back at the top, the tools and "Save a copy" at the bottom.
+        val onScrim = getColor(R.color.cobalt_on_scrim)
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundResource(R.drawable.bg_cobalt_scrim_top)
+            setPadding(ui.dp(4), ui.dp(4), ui.dp(4), ui.dp(8))
+            addView(ImageView(this@DdnEditActivity).apply {
+                setImageResource(R.drawable.ic_cobalt_back); setColorFilter(onScrim); contentDescription = getString(R.string.cobalt_back)
+                setPadding(ui.dp(12), ui.dp(12), ui.dp(12), ui.dp(12))
+                val tv = android.util.TypedValue(); theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, tv, true); setBackgroundResource(tv.resourceId)
+                setOnClickListener { finish() }
+            }, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
+            addView(TextView(this@DdnEditActivity).apply {
+                setText(R.string.edit_title); TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowTitle); setTextColor(onScrim)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = ui.dp(4) })
+        }
+        // Generous side margins: the crop handles stay clear of the system back-gesture zones at the edges.
+        val stage = FrameLayout(this)
+        image = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER; contentDescription = getString(R.string.edit_title) }
+        overlay = CropOverlayView(this)
+        loading = ProgressBar(this)
+        stage.addView(image, FrameLayout.LayoutParams(-1, -1))
+        stage.addView(overlay, FrameLayout.LayoutParams(-1, -1))
+        stage.addView(loading, FrameLayout.LayoutParams(ui.dp(48), ui.dp(48), Gravity.CENTER))
+        // The tools as the viewer's actions (icon over label), then the main button.
+        val tools = ui.viewerActions(
+            Triple(R.string.edit_rotate, R.drawable.ic_cobalt_rotate) { transform { m -> m.postRotate(90f) } },
+            Triple(R.string.edit_flip, R.drawable.ic_cobalt_flip) { transform { m -> m.postScale(-1f, 1f) } },
+            Triple(R.string.edit_reset, R.drawable.ic_cobalt_restore) { original?.let { setWorking(it) } },
+            dangerLast = false,
+        ).apply { background = null; setPadding(ui.dp(8), ui.dp(4), ui.dp(8), ui.dp(4)) }
+        val save = ui.button(R.string.ddn_edit_save, CobaltUi.Kind.PRIMARY, R.drawable.ic_cobalt_upload) { save() }.apply { id = R.id.saveButton }
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.bg_cobalt_scrim_bottom)
+            setPadding(ui.dp(16), ui.dp(16), ui.dp(16), ui.dp(12))
+            addView(tools, ui.lp())
+            addView(save, ui.lp(top = 8))
+        }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(android.graphics.Color.BLACK)
+            addView(top, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(stage, LinearLayout.LayoutParams(-1, 0, 1f).apply { setMargins(ui.dp(28), ui.dp(12), ui.dp(28), ui.dp(12)) })
+            addView(bottom, LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        setContentView(root)
+        // Light icons on black in both themes.
+        window.statusBarColor = android.graphics.Color.BLACK
+        window.navigationBarColor = android.graphics.Color.BLACK
+        WindowCompat.getInsetsController(window, window.decorView).apply { isAppearanceLightStatusBars = false; isAppearanceLightNavigationBars = false }
+        Insets.apply(root)
+        // The tool cells (clickable, enabled with the picture) and the main button.
+        buttons = (0 until tools.childCount).map { tools.getChildAt(it) } + save
+        enable(false)
         load()
     }
 
@@ -59,14 +109,17 @@ class DdnEditActivity : AppCompatActivity() {
             }.getOrNull()
             runOnUiThread {
                 loading.visibility = View.GONE
-                if (b == null) { Toast.makeText(this, R.string.ddn_edit_cannot, Toast.LENGTH_LONG).show(); finish(); return@runOnUiThread }
+                if (b == null) { Toast.makeText(this, R.string.ddn_edit_cannot, Toast.LENGTH_LONG).show(); if (!intent.getBooleanExtra(KEEP_OPEN_FOR_TEST, false)) finish(); return@runOnUiThread }
                 original = b
                 setWorking(b)
-                buttons.forEach { it.isEnabled = true }
+                enable(true)
                 loadedForTest = true
             }
         }
     }
+
+    /** The tools and Save work once the picture is there (and not while saving); dimmed when they do not. */
+    private fun enable(on: Boolean) = buttons.forEach { it.isEnabled = on; it.alpha = if (on) 1f else 0.38f }
 
     private fun setWorking(b: Bitmap) {
         working = b
@@ -99,13 +152,14 @@ class DdnEditActivity : AppCompatActivity() {
     }
 
     internal fun rotateForTest() = transform { m -> m.postRotate(90f) }
+    internal fun toolsEnabledForTest(): Boolean = buttons.all { it.isEnabled }
 
     private fun save() {
         if (saving) return
         commitCrop()
         val b = working ?: return
         saving = true
-        buttons.forEach { it.isEnabled = false }
+        enable(false)
         loading.visibility = View.VISIBLE
         val id = intent.getStringExtra(EXTRA_ID)!!
         thread {
@@ -120,7 +174,7 @@ class DdnEditActivity : AppCompatActivity() {
             runOnUiThread {
                 saving = false
                 loading.visibility = View.GONE
-                buttons.forEach { it.isEnabled = true }
+                enable(true)
                 // The app's context: the toast stays after this screen closes.
                 r.onSuccess { Toast.makeText(applicationContext, getString(R.string.ddn_edit_saved, it), Toast.LENGTH_LONG).show(); savedForTest = it; finish() }
                     .onFailure { Toast.makeText(this, getString(R.string.ddn_error, it.message), Toast.LENGTH_LONG).show() }
@@ -136,6 +190,8 @@ class DdnEditActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_ID = "id"
+        /** Tests of the look: without an account the screen stays open (no picture) instead of closing. */
+        internal const val KEEP_OPEN_FOR_TEST = "keepOpenForTest"
         private const val FULL_MAX = 40L * 1024 * 1024
         private const val MAX_PX = 4096
 
