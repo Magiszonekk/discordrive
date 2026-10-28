@@ -2039,9 +2039,18 @@ try {
     // The server never sees a name of the Safe (the slot is sealed; in plain too).
     if (srv) sf.serverBlind = !JSON.stringify(srv.db.prepare("SELECT * FROM slots").all()).includes("tajne-skany");
     else sf.serverBlind = true;
+    // How full the Safe is: shown while open.
+    sf.usage = await p.textContent("[data-ddn=safe-meta]");
     await shot(p, "34-safe");
     await p.click("[data-ddn=safe-close]");
     await p.waitForSelector("[data-ddn=safe-locked]:not([hidden])");
+    // Closed: no name of the Safe left anywhere in the page (the move's confirm dialog included).
+    // (The Drive's own upload list may still name it: it was uploaded there first.)
+    sf.closedNoMovedName = await p.evaluate(() => {
+      const leaves = [...document.querySelectorAll("body *")].filter((e) => e.children.length === 0 && e.closest("[data-ddn-ui=queue]") === null);
+      return !leaves.some((e) => (e.textContent ?? "").includes("do-sejfu"));
+    });
+    if (!sf.closedNoMovedName) sf.movedNameWhere = await p.evaluate(() => [...document.querySelectorAll("body *")].filter((e) => e.children.length === 0 && e.textContent?.includes("do-sejfu")).map((e) => e.outerHTML.slice(0, 200)));
     r.safe = sf;
   }
 
@@ -2410,7 +2419,8 @@ try {
       return (
         !!o && o.newShown === true && o.ackRequired === true && o.emptyShown === true && (o.rows as string[]).some((x) => x.includes("tajne-skany.pdf")) && o.downloadSame === true &&
         o.closedNoNames === true && o.closedAfterReload === true && /wrong safe password|złe hasło sejfu/i.test(String(o.badText)) && o.stillClosed === true && o.backAfterUnlock === true &&
-        /new key|nowym kluczem/i.test(String(o.costText)) && o.goneFromDrive === true && o.inSafe === true && o.serverBlind === true
+        /new key|nowym kluczem/i.test(String(o.costText)) && o.goneFromDrive === true && o.inSafe === true && o.serverBlind === true &&
+        /\d+\s?%/.test(String(o.usage)) && o.closedNoMovedName === true
       );
     })(),
     noPageErrors: errors.length === 0,

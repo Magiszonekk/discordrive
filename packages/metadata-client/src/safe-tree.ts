@@ -98,6 +98,29 @@ function boundRefs(t: IndexStore): Map<string, string> {
 
 const isGoneError = (e: unknown) => /404|Unknown Message|attachment missing/.test(String((e as Error)?.message ?? e));
 
+/**
+ * A file of the Safe whose pieces are no longer stored: deleted 30 days after the Safe let it go, and then
+ * brought back by a restored earlier revision, or a database restored from a backup older than the file.
+ * Not a server fault: the file cannot be read any more.
+ */
+export class SafeFileGoneError extends Error {
+  constructor(readonly fileName: string, why: string) {
+    super(`the file is no longer stored (${why})`);
+    this.name = "SafeFileGoneError";
+  }
+}
+
+/** Files under a folder, wherever they are (its trashed subtree included). */
+function countFiles(t: IndexStore, id: NodeId): number {
+  let n = 0;
+  for (const c of t.childIds(id)) {
+    const k = t.getNode(c);
+    if (!k) continue;
+    n += k.kind === "file" ? 1 : countFiles(t, c);
+  }
+  return n;
+}
+
 export const emptySafeTree = (): SafeTreeState => ({ v: 1, tree: takeSnapshot(initIndex(new MemoryIndexStore())) });
 
 const newId = () => {
@@ -294,7 +317,10 @@ export class SafeTree {
   async download(u: UnlockedSafe<SafeTreeState>, client: DriveClient, nodeId: NodeId, sink: ByteSink, opts: Omit<DownloadOptions, "content"> = {}) {
     const n = safeTreeOf(u).getNode(nodeId);
     if (!n || n.kind !== "file" || !n.content) throw new Error("not a file of the Safe");
-    return client.download(nodeId, sink, { ...opts, content: { version: n.content, name: n.name } });
+    return client.download(nodeId, sink, { ...opts, content: { version: n.content, name: n.name } }).catch((e: unknown) => {
+      if (isGoneError(e) && !opts.signal?.aborted) throw new SafeFileGoneError(n.name, e instanceof Error ? e.message : String(e));
+      throw e;
+    });
   }
 
   /**
@@ -338,6 +364,13 @@ export class SafeTree {
       o.signal?.throwIfAborted();
       const parent = it.parent === null ? safeParentId : where.get(it.parent)!;
       if (it.kind === "folder") {
+        // A folder of that name already there (a move that was interrupted and started again): fill it, so the
+        // rest of the files do not land in a second "Name (2)".
+        const same = safeChildren(safe, parent).find((n) => n.kind === "folder" && nameKey(n.name) === nameKey(it.name));
+        if (same) {
+          where.set(it.id, same.id);
+          continue;
+        }
         const id = newId();
         const r = await this.commit(safe, { type: "create", kind: "folder", nodeId: id, parentId: parent, name: it.name });
         if (r.result.outcome !== "applied") throw new Error(`Safe: the folder was not added (${r.result.outcome})`);
@@ -363,6 +396,29 @@ export class SafeTree {
     const topFolders = ids.filter((id) => acct.getNode(id)?.kind === "folder");
     if (topFolders.length) await client.commitOp({ type: "group", ops: topFolders.flatMap((id) => [{ type: "trash" as const, nodeId: id }, { type: "purge" as const, nodeId: id }]) }, "move into the Safe");
     return { safe, files, bytes: done };
+  }
+
+  /**
+   * What moving `ids` of the account into the Safe would take: the bytes sent again, the files moved, and the
+   * files in the account's trash inside the moved folders (they are not moved: deleted for good with the folder).
+   */
+  static moveInPlan(acct: IndexStore, ids: NodeId[]): { bytes: number; files: number; trashedInside: number } {
+    let bytes = 0;
+    let files = 0;
+    let trashedInside = 0;
+    const walk = (id: NodeId, top: boolean) => {
+      const n = acct.getNode(id);
+      if (!n) return;
+      if (n.trashed) {
+        if (!top) trashedInside += n.kind === "file" ? 1 : countFiles(acct, id);
+        return;
+      }
+      if (n.kind === "file") {
+        if (n.content) (bytes += n.content.sizeBytes), files++;
+      } else for (const c of acct.childIds(id)) walk(c, false);
+    };
+    for (const id of ids) walk(id, true);
+    return { bytes, files, trashedInside };
   }
 
   /**

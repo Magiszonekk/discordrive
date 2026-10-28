@@ -128,6 +128,14 @@ class ServerModeTest {
             val pid = tree.children(u, folder).first().uploadId!!
             u = tree.delete(u, listOf(tree.children(u, folder).first().id)).safe
             r["safeDeleteReleases"] = sc.rpc("uploadState", JsonPrimitive(pid)).jsonPrimitive.content == "released" && tree.children(u, folder).isEmpty()
+            r["safeUsageSmall"] = tree.usage(u) in 0.0..0.1
+            // A slot this account cannot open (another device wrote junk), or a state under another master with the
+            // right password: "damaged", never "wrong password".
+            val stateOther = Safe.sealSlot(AccountKey.fromB64(acct.accountKey), acct.accountId, u.revision + 1, u.header, randomBytes(32), u.state)
+            api.putSlot(Safe.SLOT, u.revision, u.revision + 1, stateOther)
+            r["safeDamagedNotPassword"] = runCatching { SafeStore(api, AccountKey.fromB64(acct.accountKey), acct.accountId).unlock(pw) }.exceptionOrNull() is SafeStore.Damaged
+            api.putSlot(Safe.SLOT, u.revision + 1, u.revision + 2, java.util.Base64.getEncoder().encodeToString("junk junk".toByteArray()))
+            r["safeJunkDamaged"] = runCatching { SafeStore(api, AccountKey.fromB64(acct.accountKey), acct.accountId).unlock(pw) }.exceptionOrNull() is SafeStore.Damaged
         }
 
         // A rescue kit of an e2ee / plain instance opens.

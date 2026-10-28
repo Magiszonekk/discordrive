@@ -564,6 +564,22 @@ class BrowseUiTest {
         r["safeWrongPassword"] = runCatching { DdnSafe.unlock(ctx, "zle haslo zle haslo") }.exceptionOrNull() is io.github.magiszonekk.discordrive.core.Safe.BadPasswordException
         DdnSafe.unlock(ctx, pw)
         r["safeReopened"] = DdnSafe.children(ctx, "root").map { it.name } == listOf("do-sejfu.pdf")
+        // N52: Back inside a folder of the Safe goes one folder up (the Safe stays on screen), from the top it leaves.
+        val sub = DdnSafe.mkdir(ctx, "Teczka", "root").nodeId!!
+        ActivityScenario.launch<DdnSafeActivity>(Intent(ctx, DdnSafeActivity::class.java)).use { a ->
+            waitUntil { var st = ""; a.onActivity { x -> st = x.stateForTest }; st == "open" }
+            a.onActivity { x -> x.openFolderForTest(sub, "Teczka") }
+            var inSub = ""
+            a.onActivity { x -> inSub = x.folderForTest() }
+            InstrumentationRegistry.getInstrumentation().runOnMainSync { a.onActivity { x -> x.onBackPressedDispatcher.onBackPressed() } }
+            var after = ""
+            var finishing = true
+            var usage = ""
+            a.onActivity { x -> after = x.folderForTest(); finishing = x.isFinishing; usage = x.window.decorView.findViewWithTag<android.widget.TextView>("safe-usage")?.text?.toString().orEmpty() }
+            r["safeBackGoesUp"] = inSub == sub && after == "root" && !finishing
+            r["safeShowsUsage"] = Regex("\\d+%").containsMatchIn(usage)
+        }
+        DdnSafe.delete(ctx, listOf(sub))
         val web = sc.rpc("safeWeb", buildJsonObject { put("password", pw); put("file", "do-sejfu.pdf"); put("sha", up.sha256) }).jsonObject
         r["safeWebOpensPhoneSafe"] = web["fileSame"]?.jsonPrimitive?.content == "true"
         // A file opened from the Safe sits in the cache only while it is open: past the idle time it closes and the

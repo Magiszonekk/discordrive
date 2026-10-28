@@ -156,6 +156,16 @@ export function unpadState(padded: Uint8Array): Uint8Array {
   return padded.subarray(4, 4 + n);
 }
 
+/**
+ * How full the Safe's state is: its JSON against the most one slot holds (names, keys and thumbnails' keys
+ * of every file and folder; a few thousand of them, fewer with long names). `fraction` 0..1.
+ */
+export function safeUsage(state: unknown): { bytes: number; max: number; fraction: number } {
+  const bytes = enc.encode(JSON.stringify(state)).byteLength;
+  const max = SAFE_PAD_MAX - 4;
+  return { bytes, max, fraction: Math.min(1, bytes / max) };
+}
+
 // ── the slot's blob ──
 
 /** The slot's blob (base64) for `revision`: the header under the account key, the state under the master. */
@@ -195,6 +205,8 @@ export interface SlotApi {
   getSlot(name: string): Promise<{ revision: number; blob: string | null }>;
   /** null = stored; else the current one that won. `dropHistory`: forget the earlier revisions (a new password). */
   putSlot(name: string, expectedRevision: number, revision: number, blob: string, opts?: { dropHistory?: boolean }): Promise<{ revision: number; blob: string | null } | null>;
+  /** The slot's revision only (cheap: polled while the Safe is open). */
+  slotMeta?(name: string): Promise<{ revision: number }>;
   /** Earlier revisions the instance keeps (newest first), and one of them. */
   slotHistory?(name: string): Promise<{ revision: number; replacedAt: number; chars: number }[]>;
   slotRevision?(name: string, revision: number): Promise<{ revision: number; blob: string }>;
@@ -228,14 +240,17 @@ export class SafeStore<S = unknown> {
     return (await this.read()).blob !== null;
   }
 
-  private async open(revision: number, blob: string, master: (h: SafeHeader) => Promise<Uint8Array>): Promise<UnlockedSafe<S>> {
+  /** `masterChecked`: the master came from the password (the header's seal proved it), so a state that does not open is damaged. */
+  private async open(revision: number, blob: string, master: (h: SafeHeader) => Promise<Uint8Array>, masterChecked = false): Promise<UnlockedSafe<S>> {
     // What the account key must open (the outer layer): failing here is a damaged / replaced Safe.
     const opened = await openSafeHeader(this.key, this.accountId, revision, blob).catch((e: unknown) => {
       throw new SafeDamagedError(e instanceof Error ? e.message : String(e));
     });
     const { header, sealedState } = opened;
     const m = await master(header);
-    const state = await openSafeState<S>(m, this.accountId, revision, sealedState);
+    const state = await openSafeState<S>(m, this.accountId, revision, sealedState).catch((e: unknown) => {
+      throw masterChecked ? new SafeDamagedError(e instanceof Error ? e.message : String(e)) : e;
+    });
     this.seenRevision = Math.max(this.seenRevision, revision);
     return { master: m, revision, header, state };
   }
@@ -254,7 +269,7 @@ export class SafeStore<S = unknown> {
   async unlock(password: string): Promise<UnlockedSafe<S>> {
     const r = await this.read();
     if (r.blob === null) throw new SafeMissingError();
-    return this.open(r.revision, r.blob, (h) => openSafeMaster(h, password, this.accountId));
+    return this.open(r.revision, r.blob, (h) => openSafeMaster(h, password, this.accountId), true);
   }
 
   /** With the master kept by this device (key store) or from a Safe kit. */
@@ -262,6 +277,19 @@ export class SafeStore<S = unknown> {
     const r = await this.read();
     if (r.blob === null) throw new SafeMissingError();
     return this.open(r.revision, r.blob, async () => master);
+  }
+
+  /**
+   * Another device changed the Safe since `u`: its newer state (opened with the master `u` holds), else null.
+   * A Safe deleted meanwhile is SafeMissingError.
+   */
+  async refresh(u: UnlockedSafe<S>): Promise<UnlockedSafe<S> | null> {
+    // The same revision: nothing new (a lower one or none is read: rollback / deleted are errors).
+    if (this.api.slotMeta && (await this.api.slotMeta(SAFE_SLOT)).revision === u.revision) return null;
+    const r = await this.read();
+    if (r.blob === null) throw new SafeMissingError();
+    if (r.revision === u.revision) return null;
+    return this.open(r.revision, r.blob, async () => u.master);
   }
 
   /** Apply `change` to the newest state and store it; on a concurrent edit re-read and apply again. */

@@ -34,6 +34,8 @@ class SafeStore(
     class Missing : Exception("the account has no Safe")
     class Exists : Exception("the account has a Safe already")
     class Damaged(msg: String) : Exception("the Safe cannot be read: $msg")
+    /** The state no longer fits one slot (names and keys of every file and folder; at most [Safe.PAD_MAX]). */
+    class TooLarge(bytes: Int) : Exception("the Safe's state is too large ($bytes bytes)")
 
     /** An open Safe: the master (memory or the device's key store only), the header and the state. */
     class Unlocked(val master: ByteArray, val revision: Long, val header: Safe.Header, val state: JsonObject)
@@ -46,10 +48,11 @@ class SafeStore(
 
     fun exists(): Boolean = read().second != null
 
-    private fun open(rev: Long, blob: String, master: (Safe.Header) -> ByteArray): Unlocked {
+    /** [masterChecked]: the master came from the password (its seal proved it), so a state that does not open is damaged. */
+    private fun open(rev: Long, blob: String, masterChecked: Boolean = false, master: (Safe.Header) -> ByteArray): Unlocked {
         val (h, sealed) = try { Safe.openHeader(key, accountId, rev, blob) } catch (e: Exception) { throw Damaged(e.message ?: "$e") }
         val m = master(h)
-        val st = Safe.openState(m, accountId, rev, sealed).jsonObject
+        val st = try { Safe.openState(m, accountId, rev, sealed).jsonObject } catch (e: Exception) { if (masterChecked) throw Damaged(e.message ?: "$e") else throw e }
         seenRevision = maxOf(seenRevision, rev)
         return Unlocked(m, rev, h, st)
     }
@@ -64,7 +67,7 @@ class SafeStore(
 
     fun unlock(password: String): Unlocked {
         val (rev, blob) = read()
-        return open(rev, blob ?: throw Missing()) { h -> Safe.openMaster(h, password, accountId) }
+        return open(rev, blob ?: throw Missing(), masterChecked = true) { h -> Safe.openMaster(h, password, accountId) }
     }
 
     fun unlockWithMaster(master: ByteArray): Unlocked {
@@ -77,6 +80,8 @@ class SafeStore(
         var cur = u
         repeat(5) {
             val next = change(cur.state)
+            val bytes = json.encodeToString(JsonElement.serializer(), next).toByteArray(Charsets.UTF_8).size
+            if (bytes + 4 > Safe.PAD_MAX) throw TooLarge(bytes)
             val rev = cur.revision + 1
             val won = api.putSlot(Safe.SLOT, cur.revision, rev, Safe.sealSlot(key, accountId, rev, cur.header, cur.master, next))
                 ?: return Unlocked(cur.master, rev, cur.header, next).also { seenRevision = rev }
@@ -118,6 +123,10 @@ class SafeTree(
         }
         return out
     }
+
+    /** How full the state is (0..1 of what one slot holds). */
+    fun usage(u: SafeStore.Unlocked): Double =
+        minOf(1.0, json.encodeToString(JsonElement.serializer(), u.state).toByteArray(Charsets.UTF_8).size.toDouble() / (Safe.PAD_MAX - 4))
 
     /** Folders first, by name; nothing in the trash. */
     fun children(u: SafeStore.Unlocked, parentId: String = "root"): List<IndexReplica.Child> = replica.safeChildren(treeOf(u.state), parentId)

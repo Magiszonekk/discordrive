@@ -167,6 +167,9 @@ object DdnSafe {
 
     fun children(c: Context, parentId: String): List<IndexReplica.Child> { touch(); return parts(c).second.children(cur(), parentId) }
 
+    /** How full the open Safe is (0..1); 0 when closed. */
+    fun usage(c: Context): Double = open?.let { parts(c).second.usage(it) } ?: 0.0
+
     private fun change(c: Context, f: (SafeTree, SafeStore.Unlocked) -> SafeTree.Change): SafeTree.Change {
         touch()
         val r = f(parts(c).second, cur())
@@ -204,7 +207,9 @@ object DdnSafe {
         var files = 0
         fun one(it: IndexReplica.Child, into: String) {
             if (it.isFolder) {
-                val id = mkdir(c, it.name, into).nodeId!!
+                // A folder of that name already there (a move interrupted and started again): fill it, no "Name (2)".
+                val same = children(c, into).firstOrNull { k -> k.isFolder && k.name.equals(it.name, ignoreCase = true) }
+                val id = same?.id ?: mkdir(c, it.name, into).nodeId!!
                 for (k in s.children(it.id)) one(k, id)
                 return
             }
