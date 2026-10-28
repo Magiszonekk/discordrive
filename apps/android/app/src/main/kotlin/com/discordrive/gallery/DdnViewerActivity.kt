@@ -332,7 +332,7 @@ class DdnViewerActivity : AppCompatActivity() {
             }
             main.post {
                 busy(false)
-                Toast.makeText(this, r.fold({ getString(R.string.ddn_saved, c.name) }, { getString(R.string.ddn_error, it.message) }), Toast.LENGTH_LONG).show()
+                Toast.makeText(this, r.fold({ getString(R.string.ddn_saved, c.name) }, { DdnErrors.text(this, it) }), Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -364,7 +364,7 @@ class DdnViewerActivity : AppCompatActivity() {
                     val send = Intent(Intent.ACTION_SEND).setType(type).putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         .also { it.clipData = android.content.ClipData.newRawUri(c.name, uri) }
                     startActivity(Intent.createChooser(send, getString(R.string.ddn_share)))
-                }.onFailure { Toast.makeText(this, getString(R.string.ddn_error, it.message), Toast.LENGTH_LONG).show() }
+                }.onFailure { Toast.makeText(this, DdnErrors.text(this, it), Toast.LENGTH_LONG).show() }
             }
         }
     }
@@ -405,7 +405,7 @@ class DdnViewerActivity : AppCompatActivity() {
         val c = current() ?: return
         menuOpen = true
         thread {
-            val entries = runCatching { menuItems(s, c) }.getOrElse { listOf(getString(R.string.ddn_error, it.message) to {}) }
+            val entries = runCatching { menuItems(s, c) }.getOrElse { listOf(DdnErrors.text(this, it) to {}) }
             main.post {
                 if (isFinishing || current()?.id != c.id) { menuOpen = false; return@post }
                 val pm = androidx.appcompat.widget.PopupMenu(this, anchor, Gravity.END)
@@ -426,7 +426,7 @@ class DdnViewerActivity : AppCompatActivity() {
             main.post {
                 if (now != null) moved(now)
                 r.onSuccess { Toast.makeText(this, moveOutcome(this, it, done), Toast.LENGTH_SHORT).show() }
-                    .onFailure { Toast.makeText(this, getString(R.string.ddn_error, it.message), Toast.LENGTH_LONG).show() }
+                    .onFailure { Toast.makeText(this, DdnErrors.text(this, it), Toast.LENGTH_LONG).show() }
             }
         }
     }
@@ -467,7 +467,7 @@ class DdnViewerActivity : AppCompatActivity() {
                     val r = runCatching { s.galleryAlbum(name) }
                     main.post {
                         r.onSuccess { move(c, it, getString(R.string.ddn_moved_to_album, name)) }
-                            .onFailure { Toast.makeText(this, getString(R.string.ddn_error, it.message), Toast.LENGTH_LONG).show() }
+                            .onFailure { Toast.makeText(this, DdnErrors.text(this, it), Toast.LENGTH_LONG).show() }
                     }
                 }
             }
@@ -498,7 +498,7 @@ class DdnViewerActivity : AppCompatActivity() {
         val s = DdnSession.get(this) ?: return
         thread {
             val meta = runCatching { ViewerInfo.read(s, c) }.getOrNull()
-            val lines = runCatching { infoLines(s, c, meta) }.getOrElse { listOf(getString(R.string.ddn_error, it.message)) }
+            val lines = runCatching { infoLines(s, c, meta) }.getOrElse { listOf(DdnErrors.text(this, it)) }
             main.post {
                 val d = MaterialAlertDialogBuilder(this).setTitle(c.name).setMessage(lines.joinToString("\n")).setPositiveButton(R.string.cobalt_ok, null)
                 val lat = meta?.lat
@@ -553,7 +553,7 @@ class DdnViewerActivity : AppCompatActivity() {
                         r.onSuccess {
                             Toast.makeText(this, if (it == "applied") getString(R.string.ddn_moved_to_trash) else getString(R.string.ddn_trash_not_done, it), Toast.LENGTH_SHORT).show()
                             if (it == "applied") { trashedForTest = c.id; dropped(c) }
-                        }.onFailure { Toast.makeText(this, getString(R.string.ddn_error, it.message), Toast.LENGTH_LONG).show() }
+                        }.onFailure { Toast.makeText(this, DdnErrors.text(this, it), Toast.LENGTH_LONG).show() }
                     }
                 }
             }

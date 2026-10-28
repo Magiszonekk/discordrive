@@ -141,7 +141,7 @@ class DdnWallpaperActivity : AppCompatActivity() {
                     applying = false
                     loading.visibility = View.GONE
                     buttons.forEach { b -> b.isEnabled = true }
-                    Toast.makeText(this, getString(R.string.ddn_error, it.message), Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, DdnErrors.text(this, it), Toast.LENGTH_LONG).show()
                 }
             }
         }

@@ -145,7 +145,7 @@ class JoinActivity : AppCompatActivity() {
      * unavailable: fix it on another device) stays until they tap OK instead of disappearing with the screen.
      */
     private fun joined(out: Result<Pair<String, Boolean>>, hide: List<Button>) {
-        status.text = out.fold({ it.first }, { getString(R.string.ddn_error, it.message) })
+        status.text = out.fold({ it.first }, { DdnErrors.text(this, it) })
         val (_, note) = out.getOrNull() ?: return
         if (!note) { openAccount(); return }
         // The pairing's buttons are done with: only OK, which opens the files.
@@ -219,7 +219,7 @@ class JoinActivity : AppCompatActivity() {
                             status.text = getString(R.string.ddn_sas, it.sas, it.fromDevice)
                             yes.visibility = View.VISIBLE
                             no.visibility = View.VISIBLE
-                        }.onFailure { status.text = getString(R.string.ddn_error, it.message) }
+                        }.onFailure { status.text = DdnErrors.text(this, it) }
                     }
                     break
                 }

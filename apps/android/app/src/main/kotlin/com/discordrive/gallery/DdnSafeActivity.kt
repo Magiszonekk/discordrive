@@ -73,7 +73,7 @@ class DdnSafeActivity : AppCompatActivity() {
         e is SafeStore.Missing -> getString(R.string.safe_err_missing)
         e is SafeStore.TooLarge -> getString(R.string.safe_err_full)
         Regex("404|no_such_blob|Unknown Message|attachment missing").containsMatchIn(e.message ?: "") -> getString(R.string.safe_err_file_gone)
-        else -> getString(R.string.ddn_error, e.message)
+        else -> DdnErrors.text(this, e)
     }
 
     override fun onResume() {
@@ -314,7 +314,7 @@ class DdnSafeActivity : AppCompatActivity() {
                         val r = runCatching { DdnSafe.moveIn(a, items) }
                         Handler(Looper.getMainLooper()).post {
                             r.onSuccess { Toast.makeText(a, a.resources.getQuantityString(R.plurals.safe_moved_in, it, it), Toast.LENGTH_LONG).show() }
-                                .onFailure { Toast.makeText(a, a.getString(R.string.ddn_error, it.message), Toast.LENGTH_LONG).show() }
+                                .onFailure { Toast.makeText(a, DdnErrors.text(a, it), Toast.LENGTH_LONG).show() }
                             done()
                         }
                     }

@@ -147,4 +147,28 @@ describe("the Gallery (a second space of the account)", () => {
     const after = (await versions(url, core)).slice(before);
     expect(after.map((e) => e.rulesVersion)).toEqual([3]);
   }, 120_000);
+  it("a JPEG copied today is placed by the camera's date in its EXIF, not by the file's modification time", async () => {
+    const origin = await fake.listen();
+    const srv = new DdnServer({ rateLimits: false, signup: "open" });
+    servers.push(srv);
+    const { url } = await srv.listen(0);
+    const base = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-gallery-exif-"));
+    const core = new AppCore({ discordApiOrigin: origin }, nodePlatform({ dataDir: join(base, "data") }));
+    await core.createAccount(url, "gallery exif");
+    await core.open();
+    await core.addWebhook(fake.addWebhook("1550000000000000502").url);
+    // SOI, APP1 "Exif" with IFD0 DateTime = 2019:07:14 18:03:22 (big endian), start of scan, end.
+    const date = [...Buffer.from("2019:07:14 18:03:22\0", "latin1")];
+    const tiff = [0x4d, 0x4d, 0, 42, 0, 0, 0, 8, 0, 1, 0x01, 0x32, 0, 2, 0, 0, 0, date.length, 0, 0, 0, 26, 0, 0, 0, 0, ...date];
+    const app1 = [...Buffer.from("Exif\0\0", "latin1"), ...tiff];
+    const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0, app1.length + 2, ...app1, 0xff, 0xda, 0, 2, 0xff, 0xd9]);
+    const today = Date.now();
+    await core.upload(new File([jpg], "old.jpg", { lastModified: today }), "old.jpg", GALLERY_ID);
+    await core.upload(new File([new Uint8Array(500)], "new.png", { lastModified: today - 1000 }), "new.png", GALLERY_ID);
+    const rows = core.list(GALLERY_ID).rows.map((r) => [r.name, r.modifiedAt]);
+    expect(rows).toEqual([
+      ["new.png", today - 1000],
+      ["old.jpg", new Date(2019, 6, 14, 18, 3, 22).getTime()],
+    ]);
+  }, 60_000);
 });

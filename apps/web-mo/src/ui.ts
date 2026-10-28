@@ -12,7 +12,8 @@ import { uploadResumeKey } from "./resume-idb.js";
 import { renderSVG } from "uqr";
 import type { CoreEvent, OpOutcome, TrashRow, UiNotice } from "./app-core.js";
 import type { SpeedTestProgress, SpeedTestResult } from "@ddv4/metadata-client";
-import { applyStatic, fmtDate, fmtDateTime, fmtNum, fmtSize, getLang, isLang, setLang, storeLang, storedLang, t, tn, type Lang } from "./i18n.js";
+import { applyStatic, fmtDate, fmtDateTime, fmtNum, fmtSize, getLang, isLang, locale, setLang, storeLang, storedLang, t, tn, type Lang } from "./i18n.js";
+import { galleryDayGroups } from "./gallery-days.js";
 import { connect } from "./rpc.js";
 import { createPreview, type PreviewRow } from "./preview.js";
 import { createChannelsUi, storedShowUnavailable } from "./channels-ui.js";
@@ -201,6 +202,8 @@ const errText = (e: unknown) => {
   const m = String((e as Error)?.message ?? e);
   console.warn("ddn:", m);
   if (isOldCryptoError(m)) return `${t("old.h")} ${t("old.t")}`;
+  // The account's log or snapshot was written by a newer app (a newer rules version).
+  if (/UnsupportedRulesVersionError|uses rules version \d+; this build supports|snapshot needs rules version/.test(m)) return t("err.update");
   if (/fetch|network/i.test(m)) return t("err.network");
   if (/not a pairing code|bad pairing code/i.test(m)) return t("err.pairCode");
   const code = KNOWN_ERRORS.find((c) => m.includes(c));
@@ -1314,19 +1317,23 @@ function galleryDay(ms: number) {
   if (diff === -1) return t("gal.yesterday");
   return capFirst(fmtDate(ms, { weekday: "long", day: "numeric", month: "long" }));
 }
+function galleryDays(g: { from: number; to: number; days: number }) {
+  if (g.days === 1) return galleryDay(g.to);
+  return new Intl.DateTimeFormat(locale(), { day: "numeric", month: "long" }).formatRange(new Date(g.from), new Date(g.to));
+}
 function galleryRows(rows: Parameters<typeof fileRow>[0][], enter: boolean, dated: boolean): Node[] {
   const out: Node[] = [];
   let month = "";
-  let day = "";
   let albums = false;
+  const groups = dated ? galleryDayGroups(rows.map((r) => (r.kind === "file" && r.modifiedAt ? r.modifiedAt : null))) : new Map();
   rows.forEach((r, i) => {
     if (r.kind === "folder" && !albums) ((albums = true), out.push(galleryHead("albums", t("gal.albums"))));
     if (r.kind === "file" && dated && r.modifiedAt) {
       const d = new Date(r.modifiedAt);
       const mk = `${d.getFullYear()}-${d.getMonth()}`;
-      if (mk !== month) ((month = mk), (day = ""), out.push(galleryHead("month", capFirst(fmtDate(r.modifiedAt, { month: "long", year: "numeric" })))));
-      const dk = d.toDateString();
-      if (dk !== day) ((day = dk), out.push(galleryHead("day", galleryDay(r.modifiedAt))));
+      if (mk !== month) ((month = mk), out.push(galleryHead("month", capFirst(fmtDate(r.modifiedAt, { month: "long", year: "numeric" })))));
+      const g = groups.get(i);
+      if (g) out.push(galleryHead("day", galleryDays(g)));
     }
     out.push(fileRow(r, i, enter));
   });
@@ -3206,7 +3213,9 @@ function trashRow(x: TrashRow, i: number) {
     { class: "c-name" },
     h("span", { class: "nm" }, lead, h("span", { title: x.name }, x.name)),
     // Phone: the date column is hidden, so the sub-line carries the days left too.
-    h("span", { class: "sub" }, [x.kind === "file" ? fmt(x.size) : t("files.folder"), t("trash.from", { path: where }), tn("trash.left", days)].filter(Boolean).join(" · ")),
+    h("span", { class: "sub" }, [x.kind === "file" ? fmt(x.size) : t("files.folder"), where ? t("trash.from", { path: where }) : "", tn("trash.left", days)].filter(Boolean).join(" · ")),
+    // Wide list: no sub-line (size and days have columns), so where it was (“from Gallery / album”) on its own.
+    where ? h("span", { class: "sub trash-from", "data-ddn": "trash-from" }, t("trash.from", { path: where })) : "",
   );
   const left = h("span", { class: `chip${days <= 3 ? " chip--warning" : ""}`, "data-ddn": "trash-left", title: fmtDate(x.purgeAt) }, tn("trash.left", days));
   const restore = h("button", { class: "btn sm", type: "button", "data-ddn": "trash-restore", "aria-label": t("trash.restore.aria", { name: x.name }), title: t("trash.restore") }, icon("restore"), h("span", { class: "lbl-md" }, t("trash.restore")));

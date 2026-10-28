@@ -177,7 +177,7 @@ class DdnEditActivity : AppCompatActivity() {
                 enable(true)
                 // The app's context: the toast stays after this screen closes.
                 r.onSuccess { Toast.makeText(applicationContext, getString(R.string.ddn_edit_saved, it), Toast.LENGTH_LONG).show(); savedForTest = it; finish() }
-                    .onFailure { Toast.makeText(this, getString(R.string.ddn_error, it.message), Toast.LENGTH_LONG).show() }
+                    .onFailure { Toast.makeText(this, DdnErrors.text(this, it), Toast.LENGTH_LONG).show() }
             }
         }
     }

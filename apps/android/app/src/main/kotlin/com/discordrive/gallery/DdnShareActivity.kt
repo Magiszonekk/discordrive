@@ -56,7 +56,7 @@ class DdnShareActivity : AppCompatActivity() {
         val uris = uris()
         val folder = intent.getStringExtra(EXTRA_FOLDER)
         thread {
-            val n = runCatching { DdnUploads.queue(this, uris, folder) }.getOrElse { e -> runOnUiThread { Toast.makeText(this, getString(R.string.ddn_error, e.message), Toast.LENGTH_LONG).show(); finish() }; return@thread }
+            val n = runCatching { DdnUploads.queue(this, uris, folder) }.getOrElse { e -> runOnUiThread { Toast.makeText(this, DdnErrors.text(this, e), Toast.LENGTH_LONG).show(); finish() }; return@thread }
             runOnUiThread {
                 Toast.makeText(this, plq(R.plurals.ddn_up_queued, n, n), Toast.LENGTH_LONG).show()
                 finish()
@@ -280,7 +280,7 @@ class DdnBackupActivity : AppCompatActivity() {
             if (run != null) append(if (run.total > 0) c.getString(R.string.ddn_backup_running, run.done, run.total, run.line ?: "") else c.getString(R.string.ddn_backup_running_start)).append("\n")
             if (st != null) {
                 append(c.getString(R.string.ddn_backup_last, Ago.of(c, st.at), st.copied, st.waiting))
-                if (run == null) st.error?.let { append("\n").append(c.getString(R.string.ddn_error, it)) }
+                if (run == null) st.error?.let { append("\n").append(DdnErrors.text(c, it)) }
             } else if (run == null) append(c.getString(R.string.ddn_backup_never))
         }.trimEnd()
     }
