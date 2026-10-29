@@ -365,7 +365,9 @@ class BrowseUiTest {
      */
     private fun cameraAlbum(r: LinkedHashMap<String, Boolean>) {
         val s = DdnSession.get(ctx)!!
-        val name = ctx.getString(R.string.ddn_album_camera)
+        // The card has the phone's own name of the camera folder (the copy above took "Camera").
+        val name = DdnBackup.cameraName(ctx, "?")
+        r["cameraAlbumPhoneName"] = name == "Camera"
         val inRoot = s.albumMedia(s.galleryRoot)
         val cam = s.cameraAlbum(name)
         r["cameraAlbumListed"] = inRoot.isNotEmpty() && cam != null && cam.id == s.galleryRoot && cam.count == inRoot.size

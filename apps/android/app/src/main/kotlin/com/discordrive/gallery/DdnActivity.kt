@@ -209,7 +209,7 @@ open class DdnActivity : AppCompatActivity() {
                     val items = s.albumMedia(open.first)
                     main.post { if (albumsTab && album == open) showGrid(s, items) }
                 } else {
-                    val albums = listOfNotNull(s.cameraAlbum(getString(R.string.ddn_album_camera))) + s.albums()
+                    val albums = listOfNotNull(s.cameraAlbum(DdnBackup.cameraName(this, getString(R.string.ddn_album_camera)))) + s.albums()
                     main.post { if (albumsTab && album == null) showAlbums(s, albums) }
                 }
             } else if (gallery) {
