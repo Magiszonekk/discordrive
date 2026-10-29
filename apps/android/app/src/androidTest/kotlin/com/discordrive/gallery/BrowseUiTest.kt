@@ -339,7 +339,7 @@ class BrowseUiTest {
         val a = al.firstOrNull { it.id == "fold-0000000001" }
         r["albumListed"] = a != null && a.count == 2 && a.name == "Zdjęcia 1"
         // Nothing right in the Gallery's root yet: no camera album.
-        r["noCameraAlbumWhenEmpty"] = s.cameraAlbum("Aparat") == null
+        r["noCameraAlbumWhenEmpty"] = s.cameraAlbum(ctx.getString(R.string.ddn_album_camera)) == null
         PrivateAlbums.setPin(ctx, "4321")
         DdnPrivate.set(ctx, "fold-0000000001", true)
         try {
