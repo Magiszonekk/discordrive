@@ -185,6 +185,17 @@ class DdnSession private constructor(private val app: Context, val acct: Account
     fun albums(): List<IndexReplica.Album> = ix { it.albums(MEDIA_EXT, if (gallerySpace) "gallery" else null) }
 
     /**
+     * The camera's photos as an album: the media right in the Gallery's root (the automatic copy puts the
+     * camera folder there, without an album), so the album list has them too. Null without the Gallery space
+     * (there the camera folder is an ordinary folder, listed by [albums]) or when the root has no media.
+     */
+    fun cameraAlbum(name: String): IndexReplica.Album? {
+        if (!gallerySpace) return null
+        val items = albumMedia(galleryRoot)
+        return items.firstOrNull()?.let { IndexReplica.Album(galleryRoot, name, items.size, it) }
+    }
+
+    /**
      * The account has the Gallery space (the instance replays rules 4): the Gallery tab shows only it, uploads
      * from the Gallery, Share of photos and the automatic copy go there. Older instance: everything as before.
      */

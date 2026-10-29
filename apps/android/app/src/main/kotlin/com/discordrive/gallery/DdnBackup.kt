@@ -184,6 +184,17 @@ object DdnBackup {
         }
     }
 
+    /**
+     * The name of this phone's camera folder, as the phone shows it (the folder the automatic copy puts on the
+     * Gallery's timeline): the one chosen for the copy, else the first such folder on the phone, else [fallback].
+     * Reads MediaStore, so not on the main thread.
+     */
+    fun cameraName(c: Context, fallback: String): String {
+        buckets(c).filter { it in CAMERA_BUCKETS }.minByOrNull { CAMERA_BUCKETS.indexOf(it) }?.let { return it }
+        val onPhone = runCatching { allBuckets(c).keys }.getOrDefault(emptySet())
+        return CAMERA_BUCKETS.firstOrNull { it in onPhone } ?: fallback
+    }
+
     /** Media of the chosen camera folders, oldest first (what an automatic copy takes). */
     data class Media(val id: Long, val uri: Uri, val name: String, val bucket: String, val size: Long, val modified: Long, val video: Boolean)
     fun scan(c: Context, buckets: Set<String>): List<Media> {
