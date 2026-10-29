@@ -209,7 +209,7 @@ open class DdnActivity : AppCompatActivity() {
                     val items = s.albumMedia(open.first)
                     main.post { if (albumsTab && album == open) showGrid(s, items) }
                 } else {
-                    val albums = s.albums()
+                    val albums = listOfNotNull(s.cameraAlbum(getString(R.string.ddn_album_camera))) + s.albums()
                     main.post { if (albumsTab && album == null) showAlbums(s, albums) }
                 }
             } else if (gallery) {
@@ -330,7 +330,8 @@ open class DdnActivity : AppCompatActivity() {
                 (v.getChildAt(1) as TextView).text = a.name
                 (v.getChildAt(2) as TextView).text = if (priv) getString(R.string.ddn_album_private) else plq(R.plurals.ddn_album_count, a.count, a.count)
                 v.setOnClickListener { if (priv) PrivateUnlock.unlock(this@DdnActivity) { openAlbum(a) } else openAlbum(a) }
-                v.setOnLongClickListener { albumMenu(a, priv); true }
+                // The camera's photos (the Gallery's root): no menu, it can neither be private nor moved.
+                v.setOnLongClickListener { if (a.id != s.galleryRoot) albumMenu(a, priv); true }
             }
         }
         if (list.isEmpty()) note(getString(R.string.ddn_albums_empty))

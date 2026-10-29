@@ -338,6 +338,8 @@ class BrowseUiTest {
         val al = s.albums()
         val a = al.firstOrNull { it.id == "fold-0000000001" }
         r["albumListed"] = a != null && a.count == 2 && a.name == "Zdjęcia 1"
+        // Nothing right in the Gallery's root yet: no camera album.
+        r["noCameraAlbumWhenEmpty"] = s.cameraAlbum("Aparat") == null
         PrivateAlbums.setPin(ctx, "4321")
         DdnPrivate.set(ctx, "fold-0000000001", true)
         try {
@@ -355,6 +357,25 @@ class BrowseUiTest {
             SecureStore(ctx).remove(SecureStore.PRIVATE_PIN)
         }
         r["publicAgain"] = s.media(100, null, DdnPrivate.all(ctx)).any { it.parentId == "fold-0000000001" }
+    }
+
+    /**
+     * The camera's photos (the automatic copy puts them right in the Gallery's root, without an album) are the
+     * first card of the album list; it opens to exactly them, and has no long-press menu.
+     */
+    private fun cameraAlbum(r: LinkedHashMap<String, Boolean>) {
+        val s = DdnSession.get(ctx)!!
+        val name = ctx.getString(R.string.ddn_album_camera)
+        val inRoot = s.albumMedia(s.galleryRoot)
+        val cam = s.cameraAlbum(name)
+        r["cameraAlbumListed"] = inRoot.isNotEmpty() && cam != null && cam.id == s.galleryRoot && cam.count == inRoot.size
+        ActivityScenario.launch<DdnActivity>(Intent(ctx, DdnActivity::class.java)).use { sc ->
+            sc.onActivity { x -> x.showAlbumsForTest() }
+            r["cameraAlbumFirst"] = waitUntil { items(sc) == s.albums().size + 1 }
+            shot("11b-albums-camera")
+            sc.onActivity { x -> x.openAlbumForTest(s.galleryRoot, name) }
+            r["cameraAlbumOpens"] = waitUntil { items(sc) == inRoot.size }
+        }
     }
 
     /**
@@ -766,6 +787,7 @@ class BrowseUiTest {
         // automatically, both through the background job (WorkManager, as in the app); the TS device downloads
         // them and checks the bytes and the thumbnail made on the phone.
         uploads(sc, r)
+        cameraAlbum(r)
         trashAndSettings(sc, r, args.getString("ddnUpdates"))
         // Last: the edited copy adds a file to the photo folder (the counts above stay as they were).
         editAndPicker(sc, r)
