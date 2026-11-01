@@ -151,6 +151,7 @@ function state(s: string) {
 
 const parent = process.parentPort;
 let setDownloadsDir: (d: string) => void = () => {};
+let closeIndexes: () => void = () => {};
 const ports = new Set<Port>();
 let core: AppCore | null = null;
 let ready: Promise<AppCore> | null = null;
@@ -232,6 +233,7 @@ async function start(init: AgentInit): Promise<AppCore> {
     serverUrl: init.serverUrl ? () => init.serverUrl : undefined,
   });
   setDownloadsDir = (d) => platform.files?.setDownloadsDir?.(d);
+  closeIndexes = () => platform.closeIndexes();
   const c = new AppCore({ discordApiOrigin: init.discordApiOrigin }, platform);
   // What the network checks learned (the reference speed, the automatic pieces in flight) is kept by the
   // agent itself: in the browser the page keeps it, but the agent also runs with no window open.
@@ -335,11 +337,21 @@ parent?.on("message", (e) => {
     // Tray: pause / resume every transfer. Requests wait at the network gate (as when offline) and
     // continue where they were; nothing is cancelled.
     void ready?.then((c) => c.setOnline(!(m as { on?: boolean }).on));
-  } else if (m?.type === "quit") {
-    // The disk first: a mount left behind would show "not connected" in the file manager.
-    void (disk ? disk.stop().catch(() => {}) : Promise.resolve()).then(() => {
-      core?.close();
-      process.exit(0);
-    });
-  }
+  } else if (m?.type === "quit") quit("asked by the app");
 });
+
+let quitStarted = false;
+/** The disk first (a mount left behind would show "not connected" in the file manager), then the database. */
+function quit(why: string) {
+  if (quitStarted) return;
+  quitStarted = true;
+  if (process.env.DDN_DESKTOP_DEBUG || process.env.DDN_DESKTOP_DATA) console.error(`[ddn] agent quits: ${why}`);
+  void (disk ? disk.stop().catch(() => {}) : Promise.resolve()).then(() => {
+    core?.close();
+    closeIndexes();
+    process.exit(0);
+  });
+}
+// The session ends (shut down, log out): the system sends SIGTERM to every process of the app at once,
+// this one included. Close the same way as when the app asks, instead of dying with the database open.
+for (const s of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(s, () => quit(s));

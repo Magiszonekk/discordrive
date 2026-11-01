@@ -45,7 +45,26 @@ parent?.on("message", (e) => {
     // The first account was made: nobody else may sign up here.
     srv.admin.setSignup("closed", null);
     parent.postMessage({ type: "signup-closed" });
-  } else if (m?.type === "quit") {
-    void srv?.close().finally(() => process.exit(0));
-  }
+  } else if (m?.type === "quit") quit("asked by the app");
 });
+
+let quitStarted = false;
+function quit(why: string) {
+  if (quitStarted) return;
+  quitStarted = true;
+  if (process.env.DDN_DESKTOP_DEBUG || process.env.DDN_DESKTOP_DATA) console.error(`[ddn] instance quits: ${why}`);
+  // Open connections (a window's notifications) can hold the HTTP server's close: the database is what
+  // matters, so it is closed after 2 s at the latest.
+  const t = setTimeout(() => {
+    try {
+      srv?.db.close();
+    } catch {
+      /* closed already */
+    }
+    process.exit(0);
+  }, 2000);
+  void (srv ? srv.close() : Promise.resolve()).catch(() => {}).finally(() => (clearTimeout(t), process.exit(0)));
+}
+// The session ends (shut down, log out): the system sends SIGTERM to every process of the app at once,
+// this one included. Close the database the same way as when the app asks.
+for (const s of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(s, () => quit(s));

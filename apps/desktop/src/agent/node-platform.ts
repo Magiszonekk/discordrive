@@ -340,14 +340,26 @@ export function freeName(dir: string, name: string): string {
   }
 }
 
-export function nodePlatform(o: NodePlatformOptions): CorePlatform & { dataDir: string; sealer: Sealer } {
+export function nodePlatform(o: NodePlatformOptions): CorePlatform & { dataDir: string; sealer: Sealer; closeIndexes(): void } {
   const root = ensureDir(o.dataDir);
   const sealer = o.sealer ?? plainSealer;
   let tlog: FileTransferLog | null = null;
+  const indexes = new Set<SqliteIndexStore>();
   return {
     kind: "desktop",
     dataDir: root,
     sealer,
+    /** The agent quits: close the account indexes (SQLite writes its log into the database file). */
+    closeIndexes() {
+      for (const s of indexes) {
+        try {
+          s.close();
+        } catch {
+          /* closed already */
+        }
+      }
+      indexes.clear();
+    },
     discordFetch: o.discordFetch,
     cdnLanes: o.cdnLanes,
     files: nodeDiskFiles(o.downloadsDir ?? join(homedir(), "Downloads")),
@@ -361,7 +373,9 @@ export function nodePlatform(o: NodePlatformOptions): CorePlatform & { dataDir: 
     },
     async openIndex(accountId) {
       const dir = ensureDir(join(root, "index"));
-      return { store: new SqliteIndexStore(join(dir, `${accountId.replace(/[^A-Za-z0-9_-]/g, "_")}.db`)), persistent: true };
+      const store = new SqliteIndexStore(join(dir, `${accountId.replace(/[^A-Za-z0-9_-]/g, "_")}.db`));
+      indexes.add(store);
+      return { store, persistent: true };
     },
     resume: (accountId) => new FileResumeStore(root, accountId),
     transferLog: () => (tlog ??= new FileTransferLog(root)),
