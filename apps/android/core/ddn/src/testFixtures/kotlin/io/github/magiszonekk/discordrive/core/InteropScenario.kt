@@ -72,7 +72,7 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
         override fun safeChildren(tree: String, parentId: String): List<IndexReplica.Child> = rows(rpc("safeChildren", buildJsonObject { put("tree", tree); put("parent", parentId) }))
         private fun rows(e: JsonElement) = e.jsonArray.map {
             val o = it.jsonObject
-            IndexReplica.Child(o.str("id"), o.str("name"), o.str("kind"), o.longOrNull("size"), o.strOrNull("ref"), o.strOrNull("sha"), o.longOrNull("at") ?: 0, o.strOrNull("parent"), o.longOrNull("tat"), o.strOrNull("up"))
+            IndexReplica.Child(o.str("id"), o.str("name"), o.str("kind"), o.longOrNull("size"), o.strOrNull("ref"), o.strOrNull("sha"), o.longOrNull("at") ?: 0, o.strOrNull("parent"), o.longOrNull("tat"), o.strOrNull("up"), o.longOrNull("th") == 1L)
         }
         override fun close() {}
     }
@@ -228,6 +228,17 @@ class InteropScenario(private val rpcUrl: String, private val server: String, pr
             sync.replica.rulesVersionFor(buildJsonObject { put("type", "move"); put("nodeId", phoneFolder); put("parentId", GALLERY_ID) }) == 4
         val gs = rpc("gallery", buildJsonObject { put("name", "IMG_G1.jpg"); put("album", "Wakacje Galeria") }).jsonObject
         results["webSeesPhoneGallery"] = gs.getValue("inGallery").jsonPrimitive.boolean && gs.getValue("notUnderFiles").jsonPrimitive.boolean && gs.getValue("rules4").jsonPrimitive.int >= 2
+
+        // 3e. Rules 5: the phone hides the photo's thumbnail (an attribute in the index, op of rules 5): the TS
+        // device sees it hidden; the TS device shows it again and the phone sees that after a pull.
+        results["attrsAvailable"] = sync.attrsAvailable()
+        results["phoneHidesThumb"] = sync.setThumbHidden(listOf(gup.nodeId), true).str("outcome") == "applied" && sync.replica.node(gup.nodeId)?.thumbHidden == true
+        val ta = rpc("thumbAttr", buildJsonObject { put("name", "IMG_G1.jpg") }).jsonObject
+        results["webSeesHiddenThumb"] = ta.getValue("hidden").jsonPrimitive.content == "true" && ta.getValue("rules5").jsonPrimitive.int >= 1
+        rpc("thumbAttr", buildJsonObject { put("name", "IMG_G1.jpg"); put("hide", false) })
+        sync.pull()
+        results["phoneSeesShownThumb"] = sync.replica.node(gup.nodeId)?.thumbHidden == false &&
+            sync.replica.albums(listOf(".jpg"), "gallery").first { it.id == album }.cover.thumbHidden == false
 
         // A rollback by the server is refused.
         val stale = AccountSync(acct, api, Discord(apiOrigin = discordOrigin.takeUnless { it.isEmpty() || it == "none" }), newReplica(), vaultRevision = sync.vaultRevision + 5)

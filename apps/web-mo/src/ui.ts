@@ -549,7 +549,7 @@ function setSort(by: SortBy, desc: boolean) {
   void render();
 }
 /** Selected rows of the current folder (cleared on navigation): id -> what the bulk actions need. */
-const selected = new Map<string, { name: string; kind: "file" | "folder" }>();
+const selected = new Map<string, { name: string; kind: "file" | "folder"; media?: boolean; thumbHidden?: boolean }>();
 /** The open folder lives under „Recovered” (rule 4): set by render from the path. */
 let underRecovered = false;
 const inRecovered = () => underRecovered;
@@ -557,6 +557,8 @@ const inRecovered = () => underRecovered;
 let underGallery = false;
 /** The instance replays rules 4 (the Gallery is offered): asked once. */
 let galleryOn = false;
+/** The instance replays rules 5: a file's thumbnail can be hidden for the whole account. */
+let attrsOn = false;
 const DRAG_TYPE = "application/x-ddn-nodes";
 /** Address of a folder: the Drive's root "/", the Gallery's root "/gallery", any other "/folder/<id>". */
 const folderHref = (id: string) => (id === "root" ? "/" : id === "gallery" ? "/gallery" : `/folder/${id}`);
@@ -646,13 +648,13 @@ function refocus(k: { row: string; ddn: string } | null) {
   row?.querySelector<HTMLElement>(`[data-ddn="${CSS.escape(k.ddn)}"]`)?.focus({ preventScroll: true });
 }
 /** Row element -> its data (the context menu of a row). */
-const rowData = new WeakMap<HTMLElement, { id: string; name: string; kind: "file" | "folder"; size: number | null; unavailable?: string[] }>();
+const rowData = new WeakMap<HTMLElement, { id: string; name: string; kind: "file" | "folder"; size: number | null; unavailable?: string[]; thumbHidden?: true }>();
 const trashData = new WeakMap<HTMLElement, TrashRow>();
 /** Removed channels by webhook ID (label + channel), for the "unavailable" explanation in the file list. */
 const removedLabels = new Map<string, string>();
 const channelName = (id: string) => removedLabels.get(id) ?? `#…${id.slice(-6)}`;
 
-function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: number | null; modifiedAt?: number | null; unavailable?: string[] }, i: number, enter = false) {
+function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: number | null; modifiedAt?: number | null; unavailable?: string[]; thumbHidden?: true }, i: number, enter = false) {
   const tr = enter ? h("tr", { class: "reveal", style: `--i:${Math.min(i, 12)}` }) : h("tr");
   tr.dataset.ddn = "row";
   tr.dataset.id = r.id;
@@ -665,7 +667,7 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
   const box = h("input", { type: "checkbox", "data-ddn": "select", "aria-label": t("bulk.one", { name: r.name }) }) as HTMLInputElement;
   box.checked = selected.has(r.id);
   box.onchange = () => {
-    if (box.checked) selected.set(r.id, { name: r.name, kind: r.kind });
+    if (box.checked) selected.set(r.id, { name: r.name, kind: r.kind, media: isMedia(r), thumbHidden: !!r.thumbHidden });
     else selected.delete(r.id);
     tr.classList.toggle("sel", box.checked);
     paintBulk();
@@ -714,7 +716,9 @@ function fileRow(r: { id: string; name: string; kind: "file" | "folder"; size: n
   } else {
     const [, label, tone] = typeOf(r.name);
     const badge = h("span", { class: `badge ${tone}` }, label);
-    if (tone === "media" && !r.unavailable?.length) showThumb(badge, r.id, r.modifiedAt ?? 0);
+    // Thumbnail hidden for this file (any device of the account): the type badge stays.
+    if (r.thumbHidden) tr.dataset.thumbHidden = "1";
+    if (tone === "media" && !r.unavailable?.length && !r.thumbHidden) showThumb(badge, r.id, r.modifiedAt ?? 0);
     const open = h("span", { title: r.name, role: "button", tabindex: "0", "data-ddn": "preview-open", "aria-label": t("pv.open.aria", { name: r.name }) }, r.name);
     open.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") {
@@ -1197,6 +1201,7 @@ async function renderNow() {
 
   ui("nav-recovered").hidden = (await core.recoveredCount()) === 0;
   galleryOn = await core.galleryAvailable();
+  attrsOn = await core.attrsAvailable();
   $("nav-gallery").hidden = !galleryOn;
   if (page === "trash") return renderTrash();
   if (page === "safe") return renderSafe();
@@ -2152,7 +2157,7 @@ async function moveItems(ids: string[], target: string, targetName: string, firs
 // ── menus: the row menu (⋯) and the context menu (right click, Menu key / Shift+F10, long press) ──
 // One floating menu ([data-ddn=row-menu]) for all of them. Under a button
 // (⋯) or at the pointer; arrows / Home / End move, Esc closes, focus goes back to where it came from.
-type MenuRow = { id: string; name: string; kind: "file" | "folder"; size: number | null; unavailable?: string[] };
+type MenuRow = { id: string; name: string; kind: "file" | "folder"; size: number | null; unavailable?: string[]; thumbHidden?: true };
 type MenuEntry = { ic: string; label: string; key: string; run: () => void; danger?: boolean; checked?: boolean } | "sep" | { group: string };
 let menuFor: HTMLElement | null = null;
 let menuAt: { x: number; y: number } | null = null;
@@ -2242,6 +2247,7 @@ function rowEntries(r: MenuRow): MenuEntry[] {
       ...(files ? [{ ic: "download", label: t("files.download"), key: "download", run: () => void act(null, bulkDownload) }] : []),
       { ic: "move", label: t("act.move"), key: "move", run: bulkMove },
       ...otherSpaceEntry([...selected.keys()], selected.get([...selected.keys()][0]!)?.name ?? ""),
+      ...bulkThumbEntry(),
       { ic: "lock", label: t("safe.in"), key: "to-safe", run: () => void act(null, () => safeMoveIn([...selected.keys()], tn("bulk.count", n))) },
       { ic: "x", label: t("bulk.clear"), key: "clear", run: clearSelection },
       { ic: "trash", label: t("act.trash"), key: "trash", run: () => void act(null, bulkTrash), danger: true },
@@ -2256,9 +2262,42 @@ function rowEntries(r: MenuRow): MenuEntry[] {
     { ic: "pencil", label: t("act.rename"), key: "rename", run: () => openRename(r) },
     { ic: "move", label: t("act.move"), key: "move", run: () => void openMove([r.id], r.name) },
     ...otherSpaceEntry([r.id], r.name),
+    ...thumbEntry(r),
     ...(inRecovered() ? [] : ["sep" as const, { ic: "lock", label: t("safe.in"), key: "to-safe", run: () => void act(null, () => safeMoveIn([r.id], r.name)) }]),
     { ic: "trash", label: t("act.trash"), key: "trash", run: () => void act(null, () => trashItems([r])), danger: true },
   ];
+}
+// ── hide / show the thumbnail of a photo or video (rules 5: an attribute of the file, every device) ──
+const isMedia = (r: { kind: string; name: string }) => r.kind === "file" && typeOf(r.name)[2] === "media";
+function thumbEntry(r: MenuRow): MenuEntry[] {
+  if (!attrsOn || !isMedia(r)) return [];
+  const hide = !r.thumbHidden;
+  return [{ ic: hide ? "file" : "images", label: t(hide ? "thumb.hide" : "thumb.show"), key: hide ? "thumb-hide" : "thumb-show", run: () => void act(null, () => setThumbs([{ id: r.id, name: r.name }], hide)) }];
+}
+/** Several selected: "Hide thumbnails" while any selected photo shows one, else "Show thumbnails". */
+function bulkThumbEntry(): MenuEntry[] {
+  const media = [...selected.entries()].filter(([, x]) => x.media);
+  if (!attrsOn || !media.length) return [];
+  const hide = media.some(([, x]) => !x.thumbHidden);
+  return [{ ic: hide ? "file" : "images", label: t(hide ? "thumb.hideN" : "thumb.showN"), key: hide ? "thumb-hide" : "thumb-show", run: () => void act(null, () => setThumbs(media.map(([id, x]) => ({ id, name: x.name })), hide)) }];
+}
+async function setThumbs(items: { id: string; name: string }[], hide: boolean) {
+  const r = await core.setThumbHidden(items.map((x) => x.id), hide);
+  for (const x of items) {
+    const s = selected.get(x.id);
+    if (s) s.thumbHidden = hide;
+  }
+  // Album covers are worked out again (a hidden photo is not a cover).
+  albumCovers.clear();
+  shownList = "";
+  await render();
+  const msg = items.length === 1 ? t(hide ? "thumb.hidden" : "thumb.shown", { name: items[0]!.name }) : tn(hide ? "thumb.hiddenN" : "thumb.shownN", r.changed || items.length);
+  report(r, msg, async () => {
+    await core.setThumbHidden(items.map((x) => x.id), !hide);
+    albumCovers.clear();
+    shownList = "";
+    await render();
+  });
 }
 /** "Move to the Gallery" (from the Drive) / "Move to the Drive" (from the Gallery): the picker opens in the other space. */
 function otherSpaceEntry(ids: string[], label: string): MenuEntry[] {

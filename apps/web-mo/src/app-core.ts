@@ -1005,7 +1005,7 @@ export class AppCore {
       if (!n || n.trashed) continue;
       const fo = n.kind === "folder" ? 0 : 1;
       const k: K = [fo, by === "size" ? (n.content?.sizeBytes ?? 0) : by === "date" ? (n.content?.createdAt ?? 0) : null, nameKey(n.name), id];
-      all.push({ id, name: n.name, kind: n.kind as "file" | "folder", size: n.content?.sizeBytes ?? null, modifiedAt: n.content?.createdAt ?? null, trashed: false, cursor: JSON.stringify(k), k });
+      all.push({ id, name: n.name, kind: n.kind as "file" | "folder", size: n.content?.sizeBytes ?? null, modifiedAt: n.content?.createdAt ?? null, trashed: false, cursor: JSON.stringify(k), k, ...(n.attrs?.thumbHidden ? { thumbHidden: true as const } : {}) });
     }
     const c1 = (a: number | string | null, b: number | string | null) => (a === b ? 0 : (a ?? 0) < (b ?? 0) ? -1 : 1);
     // Folders first in either direction; the rest of the key follows the direction.
@@ -1048,7 +1048,7 @@ export class AppCore {
         if (n.kind !== "file" || !n.content || inTrash(tree, n.id) || spaceOf(tree, n.id) !== "gallery") continue;
         if (hide && this.unavailableInfo(n.id)) continue;
         const at = this.descMem.get(n.content.manifestRef)?.taken || n.content.createdAt;
-        all.push({ id: n.id, name: n.name, kind: "file", size: n.content.sizeBytes, modifiedAt: at, trashed: false, cursor: JSON.stringify([1, at, "", n.id]) });
+        all.push({ id: n.id, name: n.name, kind: "file", size: n.content.sizeBytes, modifiedAt: at, trashed: false, cursor: JSON.stringify([1, at, "", n.id]), ...(n.attrs?.thumbHidden ? { thumbHidden: true as const } : {}) });
       }
       const key = (r: ChildRow) => JSON.parse(r.cursor) as [number, number, string, string];
       const sg = asc ? -1 : 1;
@@ -1073,7 +1073,8 @@ export class AppCore {
       if (!n || n.kind !== "folder" || spaceOf(this.c().store, id) !== "gallery") continue;
       const st = this.folderStats(id);
       const pg = this.list(id, undefined, 24, { by: "date", desc: true });
-      const f = pg.rows.find((x) => x.kind === "file" && media.test(x.name) && !x.unavailable?.length);
+      // A photo whose thumbnail is hidden is not a cover: the next one is (none: the album icon).
+      const f = pg.rows.find((x) => x.kind === "file" && media.test(x.name) && !x.unavailable?.length && !x.thumbHidden);
       out[id] = { n: st.files, cover: f ? { id: f.id, at: f.modifiedAt ?? 0 } : null };
     }
     return out;
@@ -1529,9 +1530,9 @@ export class AppCore {
     void this.descSync();
     const found = searchItems(items, q).slice(0, 500);
     const byId = new Set(found.map((x) => x.id));
-    let hits: { id: string; name: string; kind: "file" | "folder"; parentId: string | null; size: number | null }[] = found.map((x) => {
+    let hits: { id: string; name: string; kind: "file" | "folder"; parentId: string | null; size: number | null; thumbHidden?: true }[] = found.map((x) => {
       const n = tree.getNode(x.id)!;
-      return { id: n.id, name: n.name, kind: "file" as const, parentId: n.parentId, size: n.content?.sizeBytes ?? null };
+      return { id: n.id, name: n.name, kind: "file" as const, parentId: n.parentId, size: n.content?.sizeBytes ?? null, ...(n.attrs?.thumbHidden ? { thumbHidden: true as const } : {}) };
     });
     if (mode.search) for (const h of await mode.search(this.ctx!, q).catch(() => [])) if (!byId.has(h.id)) hits.push(h);
     hits = hits.filter((h) => tree.getNode(h.id) && spaceOf(tree, h.id) === space);
@@ -2044,8 +2045,10 @@ export class AppCore {
 
   /** The stored thumbnail / preview of a file for the disk's thumbnails (no download of the file). */
   async vdiskPreview(id: string, kind: "t" | "p"): Promise<{ data: Uint8Array; mime: string } | null> {
-    const ref = this.c().store.getNode(id)?.content?.manifestRef;
-    if (!ref) return null;
+    const n = this.c().store.getNode(id);
+    const ref = n?.content?.manifestRef;
+    // Thumbnail hidden on the account: the file manager shows its own icon.
+    if (!ref || n.attrs?.thumbHidden) return null;
     const img = await this.c().readPreview(ref, kind).catch(() => null);
     return img ? { data: img.data, mime: img.mime } : null;
   }
@@ -2164,6 +2167,31 @@ export class AppCore {
     const ops = Object.entries(from).map(([nodeId, parentId]) => ({ type: "move" as const, nodeId, parentId }));
     if (!ops.length) return { outcome: "noop", notices: [] };
     return this.commit(ops.length === 1 ? ops[0]! : { type: "group", ops }, "move back");
+  }
+
+  /**
+   * Hide (or show again) the thumbnail of files on every device of the account (rules 5, set_attr): the
+   * type icon instead of the picture. Folders are left out. One operation (a group for several).
+   */
+  async setThumbHidden(nodeIds: string[], hidden: boolean): Promise<OpOutcome & { changed: number }> {
+    const tree = this.c().store;
+    const ids = nodeIds.filter((id) => tree.getNode(id)?.kind === "file" && (tree.getNode(id)!.attrs?.thumbHidden === true) !== hidden);
+    if (!ids.length) return { outcome: "noop", notices: [], changed: 0 };
+    const ops = ids.map((nodeId) => ({ type: "set_attr" as const, nodeId, attr: "thumbHidden" as const, value: hidden }));
+    const r = await this.commit(ops.length === 1 ? ops[0]! : { type: "group", ops }, hidden ? "hide thumbnail" : "show thumbnail");
+    return { ...r, changed: ids.length };
+  }
+
+  /** The instance replays rules 5 (file attributes): only then the thumbnail can be hidden per file. */
+  private attrsKnown: Promise<boolean> | null = null;
+  attrsAvailable(): Promise<boolean> {
+    this.attrsKnown ??= getHealth(this.http?.baseUrl ?? this.platform.homeOrigin() ?? "")
+      .then((h) => Number(h.rulesVersion) >= 5)
+      .catch(() => {
+        this.attrsKnown = null;
+        return false;
+      });
+    return this.attrsKnown;
   }
 
   async trash(nodeIds: string | string[]): Promise<OpOutcome> {

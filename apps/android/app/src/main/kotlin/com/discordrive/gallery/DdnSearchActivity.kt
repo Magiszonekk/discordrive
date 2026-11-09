@@ -145,7 +145,7 @@ class DdnSearchActivity : AppCompatActivity() {
                 val img = f.getChildAt(0) as ImageView
                 // Thumbnails off (Settings): photos and videos are shown like other files (type icon above the name),
                 // so the results stay tellable apart without opening them.
-                val media = (DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) && com.discordrive.gallery.Settings.thumbsOn(this@DdnSearchActivity)
+                val media = (DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) && com.discordrive.gallery.Settings.thumbsOn(this@DdnSearchActivity) && !c.thumbHidden
                 f.getChildAt(1).visibility = if (media && DdnSession.isVideo(c.name)) View.VISIBLE else View.GONE
                 val label = f.getChildAt(2) as TextView
                 label.visibility = if (media) View.GONE else View.VISIBLE

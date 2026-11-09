@@ -516,6 +516,10 @@ Tekst: %3$s</string>
     <string name="album_private_unmark_action">Nie prywatny</string>
     <string name="album_private_mark_action">Ustaw jako prywatny</string>
     <string name="ddn_to_gallery">Przenieś do Galerii</string>
+    <string name="ddn_thumb_hide">Ukryj miniaturę</string>
+    <string name="ddn_thumb_show">Pokaż miniaturę</string>
+    <string name="ddn_thumb_hidden">Miniatura ukryta na wszystkich Twoich urządzeniach</string>
+    <string name="ddn_thumb_shown">Miniatura znowu widoczna</string>
     <string name="ddn_to_drive">Przenieś do Dysku</string>
     <string name="ddn_moved_to_gallery">Przeniesiono do Galerii.</string>
     <string name="ddn_moved_to_drive">Przeniesiono do Dysku.</string>

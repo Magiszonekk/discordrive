@@ -804,6 +804,18 @@ class BrowseUiTest {
             com.discordrive.gallery.Settings.setThumbsOn(ctx, true)
             s.onActivity { a -> a.showForTest() }
             if (drawn) r["thumbsOnAgain"] = waitUntil { var ok = false; s.onActivity { a -> ok = a.firstCellHasPicture() }; ok }
+            // One photo's thumbnail hidden for the account (rules 5, menu "Hide thumbnail"): its cell shows the type
+            // icon (the video has no thumbnail, so no cell has a picture); shown again: the picture is back.
+            r["thumbHideApplied"] = sess.attrsKnown && sess.setThumbHidden(listOf(photoRow.id), true) == "applied" && sess.node(photoRow.id)?.thumbHidden == true
+            s.onActivity { a -> a.showForTest() }
+            if (drawn) r["thumbHiddenNoPicture"] = waitUntil { items(s) == 2 } && run {
+                Thread.sleep(1500)
+                var pic = true; s.onActivity { a -> pic = a.firstCellHasPicture() }; !pic
+            }
+            shot("3c-gallery-thumb-hidden")
+            r["thumbShowApplied"] = sess.setThumbHidden(listOf(photoRow.id), false) == "applied"
+            s.onActivity { a -> a.showForTest() }
+            if (drawn) r["thumbShownAgain"] = waitUntil { var ok = false; s.onActivity { a -> ok = a.firstCellHasPicture() }; ok }
             Log.i("ddn-ui", "window drawn: $drawn")
             shot("3-gallery")
         }

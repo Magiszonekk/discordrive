@@ -160,6 +160,7 @@ class JsIndexReplica(private val engine: JsEngine) : IndexReplica {
             manifestRef = s("ref"), sha256 = s("sha"),
             createdAt = o["at"]?.jsonPrimitive?.content?.toLongOrNull() ?: 0, parentId = s("parent"),
             trashedAt = o["tat"]?.jsonPrimitive?.content?.toLongOrNull(), uploadId = s("up"),
+            thumbHidden = o["th"]?.jsonPrimitive?.content == "1",
         )
     }
 
@@ -199,7 +200,7 @@ globalThis.__ddnSafe = (function () {
         var n = t.getNode(id);
         if (!n || n.trashed) continue;
         var c = n.content;
-        list.push({ id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: c ? c.sizeBytes : null, ref: c ? c.manifestRef : null, sha: c ? c.plaintextSha256 : null, at: c ? c.createdAt : 0, up: c ? c.uploadId : null });
+        list.push({ id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: c ? c.sizeBytes : null, ref: c ? c.manifestRef : null, sha: c ? c.plaintextSha256 : null, at: c ? c.createdAt : 0, up: c ? c.uploadId : null, th: n.attrs && n.attrs.thumbHidden ? 1 : 0 });
       }
       list.sort(function (a, b) {
         if (a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
@@ -214,7 +215,8 @@ globalThis.__ddnIx = (function () {
   var S = SyncCore, st = S.initIndex(new S.MemoryIndexStore()), snap = null, state = null, mediaCache = null;
   function row(n) {
     var c = n.content;
-    return { id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: c ? c.sizeBytes : null, ref: c ? c.manifestRef : null, sha: c ? c.plaintextSha256 : null, at: c ? c.createdAt : 0, up: c ? c.uploadId : null };
+    // th: rules 5, the thumbnail is hidden (the type icon is shown instead).
+    return { id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: c ? c.sizeBytes : null, ref: c ? c.manifestRef : null, sha: c ? c.plaintextSha256 : null, at: c ? c.createdAt : 0, up: c ? c.uploadId : null, th: n.attrs && n.attrs.thumbHidden ? 1 : 0 };
   }
   return {
     reset: function () { st = S.initIndex(new S.MemoryIndexStore()); return "ok"; },
@@ -278,6 +280,8 @@ globalThis.__ddnIx = (function () {
         if (space === "gallery" && n.parentId === S.GALLERY_ID) continue;
         var a = by[n.parentId];
         if (!a) { var f = st.getNode(n.parentId); if (!f) continue; a = by[n.parentId] = { id: f.id, name: f.name, count: 0, cover: row(n) }; order.push(a); }
+        // The cover: the newest photo whose thumbnail is not hidden (all hidden: the newest, shown as an icon).
+        else if (a.cover.th && !(n.attrs && n.attrs.thumbHidden)) a.cover = row(n);
         a.count++;
       }
       return JSON.stringify(order);

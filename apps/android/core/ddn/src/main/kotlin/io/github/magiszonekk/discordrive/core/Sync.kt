@@ -118,6 +118,8 @@ interface IndexReplica : AutoCloseable {
         val trashedAt: Long? = null,
         /** The upload holding this version (e2ee / plain: extras added later go to it). */
         val uploadId: String? = null,
+        /** Rules 5: the thumbnail is hidden on the account (the type icon is shown instead). */
+        val thumbHidden: Boolean = false,
     ) {
         val isFolder: Boolean get() = kind == "folder"
     }
@@ -305,6 +307,9 @@ class AccountSync(
     /** Move nodes into `parentId` (one operation; a group for several). Drive <-> Gallery is a plain move (rules 4). */
     fun move(ids: List<String>, parentId: String): JsonObject = commit(group(ids.map { id -> buildJsonObject { put("type", "move"); put("nodeId", id); put("parentId", parentId) } }))
 
+    /** Rules 5: hide (or show again) the thumbnail of files on every device of the account. */
+    fun setThumbHidden(ids: List<String>, hidden: Boolean): JsonObject = commit(group(ids.map { id -> buildJsonObject { put("type", "set_attr"); put("nodeId", id); put("attr", "thumbHidden"); put("value", hidden) } }))
+
     /** Back from the trash to where they were (or "Odzyskane" when that folder is gone). */
     fun restore(ids: List<String>): JsonObject = commit(group(ids.map { id -> buildJsonObject { put("type", "restore"); put("nodeId", id) } }))
 
@@ -351,6 +356,12 @@ class AccountSync(
         private set
     fun galleryAvailable(): Boolean = galleryKnown ?: runCatching { (api.health()["rulesVersion"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0) >= 4 }
         .getOrElse { return false }.also { galleryKnown = it }
+
+    /** The instance replays rules 5 (file attributes: a hidden thumbnail). Asked like [galleryAvailable]. */
+    @Volatile var attrsKnown: Boolean? = null
+        private set
+    fun attrsAvailable(): Boolean = attrsKnown ?: runCatching { (api.health()["rulesVersion"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0) >= 5 }
+        .getOrElse { return false }.also { attrsKnown = it }
 
     /** A folder named `name` in `parentId` (outside the trash), made when there is none. Returns its ID. */
     fun folder(name: String, parentId: String = "root"): String {

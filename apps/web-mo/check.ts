@@ -1648,6 +1648,44 @@ try {
       await p.waitForSelector("body[data-ready='1']");
       await tile("foto.jpg").locator("img[data-ddn=thumb]").waitFor({ timeout: 30_000 }).catch(() => {});
       th.onAgain = await shown();
+      // One file's thumbnail hidden for the account (menu of the tile): its badge comes back, the other photo
+      // keeps its picture; kept after a reload (an attribute in the index, not a setting of this browser);
+      // two selected -> "Show thumbnails" brings it back.
+      const menuOf = async (name: string) => {
+        await tile(name).click({ button: "right", position: { x: 10, y: 10 } });
+        await p.waitForSelector("[data-ddn=row-menu]:not([hidden])");
+        return p.$$eval("[data-ddn=row-menu] button", (b) => b.map((x) => x.getAttribute("data-ddn")));
+      };
+      th.hideOffered = (await menuOf("foto.jpg")).includes("menu-thumb-hide");
+      await p.click("[data-ddn=menu-thumb-hide]");
+      await p.waitForFunction(() => document.querySelector("[data-ddn=row][data-thumb-hidden='1']"), null, { timeout: 15_000 }).catch(() => {});
+      const one = () =>
+        p.evaluate(() => {
+          const r = (n: string) => [...document.querySelectorAll<HTMLElement>("[data-ddn=row]")].find((x) => x.textContent?.includes(n));
+          const f = r("foto.jpg");
+          const v = r("film.webm");
+          return { photoImg: !!f?.querySelector("img[data-ddn=thumb]"), photoBadge: !!f?.querySelector(".badge.media"), photoHidden: f?.dataset.thumbHidden === "1", videoImg: !!v?.querySelector("img[data-ddn=thumb]") };
+        });
+      th.hidden = await one();
+      await shot(p, "27c-tiles-thumb-hidden");
+      await p.goto(here);
+      await p.waitForSelector("body[data-ready='1']");
+      await tile("film.webm").locator("img[data-ddn=thumb]").waitFor({ timeout: 30_000 }).catch(() => {});
+      await p.waitForTimeout(1000);
+      th.hiddenKept = await one();
+      th.showOffered = (await menuOf("foto.jpg")).includes("menu-thumb-show");
+      await p.keyboard.press("Escape");
+      for (const n of ["foto.jpg", "film.webm"]) await tile(n).locator("[data-ddn=select]").check({ force: true });
+      // Two selected, one of them still with its picture: "Hide thumbnails" (both), then "Show thumbnails".
+      th.bulkHideOffered = (await menuOf("foto.jpg")).includes("menu-thumb-hide");
+      await p.click("[data-ddn=menu-thumb-hide]");
+      await p.waitForFunction(() => document.querySelectorAll("[data-ddn=row][data-thumb-hidden='1']").length === 2, null, { timeout: 15_000 }).catch(() => {});
+      th.bulkHidden = await p.evaluate(() => document.querySelectorAll("[data-ddn=row][data-thumb-hidden='1']").length);
+      th.bulkShowOffered = (await menuOf("foto.jpg")).includes("menu-thumb-show");
+      await p.click("[data-ddn=menu-thumb-show]");
+      await tile("foto.jpg").locator("img[data-ddn=thumb]").waitFor({ timeout: 30_000 }).catch(() => {});
+      th.shownAgain = await one();
+      await p.click("[data-ddn=bulk-clear]").catch(() => {});
     }
     // Stored encrypted next to the manifest, readable again after a reload (from the browser's cache or Discord).
     th.stored = await p.evaluate(async () => {
@@ -2554,7 +2592,10 @@ try {
         o.lowresFirst === true && o.fullAfter === 3000 &&
         o.oldBefore === false && o.oldAfter > 0 && o.backfillLeft === 0 &&
         o.switchDefault === true && o.switchOff === true && o.offKept === true &&
-        o.off?.imgs === 0 && o.off?.queued === 0 && o.off?.badges === 3 && o.onAgain?.imgs === 2
+        o.off?.imgs === 0 && o.off?.queued === 0 && o.off?.badges === 3 && o.onAgain?.imgs === 2 &&
+        o.hideOffered === true && o.hidden?.photoHidden && !o.hidden.photoImg && o.hidden.photoBadge && o.hidden.videoImg &&
+        o.hiddenKept?.photoHidden && !o.hiddenKept.photoImg && o.hiddenKept.videoImg && o.showOffered === true &&
+        o.bulkHideOffered === true && o.bulkHidden === 2 && o.bulkShowOffered === true && o.shownAgain?.photoImg === true && !o.shownAgain.photoHidden && o.shownAgain.videoImg
       );
     })(),
     queueCloses: (() => {
