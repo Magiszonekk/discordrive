@@ -410,6 +410,19 @@ class BrowseUiTest {
         val all = s.media(100, null).filter { it.manifestRef in described.keys }.map { it.name }.toSet()
         r["searchByDescription"] = results("obraz testowy").toSet() == all
         r["searchByPictureText"] = results("discordrive 42").toSet() == all
+        // Thumbnails off (Settings): every result has its name under the type icon (not a grid of equal icons).
+        com.discordrive.gallery.Settings.setThumbsOn(ctx, false)
+        try {
+            ActivityScenario.launch<DdnSearchActivity>(Intent(ctx, DdnSearchActivity::class.java).putExtra(DdnSearchActivity.QUERY, "obraz testowy")).use { a ->
+                waitUntil { var ok = false; a.onActivity { x -> ok = x.readyForTest() }; ok }
+                r["searchThumbsOffNames"] = waitUntil(10_000) {
+                    var names: List<String> = emptyList(); var shown: List<String> = emptyList()
+                    a.onActivity { x -> names = x.labelsForTest(); shown = x.resultsForTest() }
+                    shown.isNotEmpty() && names.isNotEmpty() && names.all { it in shown }
+                }
+                shot("15b-search-thumbs-off")
+            }
+        } finally { com.discordrive.gallery.Settings.setThumbsOn(ctx, true) }
         // Search by the date the content was made, not when it was sent: a file shared from the phone with an
         // mtime of 2024-05-17 (today's upload) is found under "2024-05"; the web client reads its takenAt.
         val old = File(ctx.cacheDir, "stare zdjecie.txt").apply { writeText("x".repeat(5000)); setLastModified(1715940000000L) }

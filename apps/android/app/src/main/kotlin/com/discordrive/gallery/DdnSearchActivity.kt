@@ -143,8 +143,10 @@ class DdnSearchActivity : AppCompatActivity() {
                 val c = list[i]
                 val f = h.itemView as FrameLayout
                 val img = f.getChildAt(0) as ImageView
-                val media = DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)
-                f.getChildAt(1).visibility = if (DdnSession.isVideo(c.name)) View.VISIBLE else View.GONE
+                // Thumbnails off (Settings): photos and videos are shown like other files (type icon above the name),
+                // so the results stay tellable apart without opening them.
+                val media = (DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) && com.discordrive.gallery.Settings.thumbsOn(this@DdnSearchActivity)
+                f.getChildAt(1).visibility = if (media && DdnSession.isVideo(c.name)) View.VISIBLE else View.GONE
                 val label = f.getChildAt(2) as TextView
                 label.visibility = if (media) View.GONE else View.VISIBLE
                 label.text = c.name + "\n" + Formatter.formatShortFileSize(this@DdnSearchActivity, c.size ?: 0)
@@ -156,7 +158,7 @@ class DdnSearchActivity : AppCompatActivity() {
                 // Media: the thumbnail (the type icon until it comes); other files: their type icon above the name.
                 fun typeIcon() { img.setImageResource(CobaltUi.typeIconOf(c.name, false)); img.setColorFilter(getColor(R.color.cobalt_muted)); img.scaleType = ImageView.ScaleType.CENTER_INSIDE; img.setPadding(0, 0, 0, if (media) 0 else cell / 4) }
                 img.tag = null
-                if (media && com.discordrive.gallery.Settings.thumbsOn(this@DdnSearchActivity)) DdnThumbs.into(s, c.manifestRef, img, cell) { typeIcon() } else typeIcon()
+                if (media) DdnThumbs.into(s, c.manifestRef, img, cell) { typeIcon() } else typeIcon()
                 f.setOnClickListener { open(c) }
             }
         }
@@ -174,6 +176,10 @@ class DdnSearchActivity : AppCompatActivity() {
     internal fun resultsForTest(): List<String> = shown.map { it.name }
     internal fun resultIdsForTest(): List<String> = shown.map { it.id }
     internal fun readyForTest(): Boolean = items != null
+    /** Names shown under the cells of the results (laid out ones). */
+    internal fun labelsForTest(): List<String> = (0 until grid.childCount).mapNotNull { i ->
+        ((grid.getChildAt(i) as? FrameLayout)?.getChildAt(2) as? TextView)?.takeIf { it.visibility == View.VISIBLE }?.text?.toString()?.substringBefore("\n")
+    }
     @Volatile internal var refreshForTest = false
 
     companion object {
