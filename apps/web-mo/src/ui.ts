@@ -10,7 +10,7 @@
 // (an `e.key === "Enter" && …` arrow blocked typing in the webhook field); check.ts greps for it.
 import { uploadResumeKey } from "./resume-idb.js";
 import { renderSVG } from "uqr";
-import type { CoreEvent, OpOutcome, TrashRow, UiNotice } from "./app-core.js";
+import type { AuthStage, CoreEvent, OpOutcome, TrashRow, UiNotice } from "./app-core.js";
 import type { SpeedTestProgress, SpeedTestResult } from "@ddv4/metadata-client";
 import { applyStatic, fmtDate, fmtDateTime, fmtNum, fmtSize, getLang, isLang, locale, setLang, storeLang, storedLang, t, tn, type Lang } from "./i18n.js";
 import { galleryDayGroups } from "./gallery-days.js";
@@ -125,7 +125,9 @@ function onCoreEvent(e: CoreEvent) {
   else if (e.type === "net-tune") storeNet({ tune: e.data });
   else if (e.type === "auth-lost") void render();
   else if (e.type === "speed-progress") paintSpeedProgress(e.p);
+  else if (e.type === "auth-stage") onAuthStage(e.stage);
 }
+let onAuthStage: (s: AuthStage) => void = () => {};
 // Desktop: a File/Blob argument cannot reach the agent (another process); such a call fails at once with a
 // readable error instead of hanging. The window passes paths (desktop.pathsOf) instead.
 export const core = connect(worker, onCoreEvent, { blobArgs: !desktop });
@@ -3874,6 +3876,35 @@ function wireDevices() {
   };
 }
 
+/**
+ * Joining this device (password, rescue kit, pairing): the step in progress is shown under the button and
+ * every field and button of the card is locked until it ends, so a slow step never looks like nothing happened.
+ */
+async function withAuthStage(stageSel: string, first: AuthStage, fn: () => Promise<void>) {
+  const el = $(stageSel);
+  const card = el.closest<HTMLElement>(".auth-card")!;
+  const locked = [...card.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLTextAreaElement>("input, button, textarea")].filter((x) => !x.disabled);
+  const show = (s: AuthStage) => {
+    el.dataset.stage = s;
+    el.textContent = t(`authStage.${s}`);
+    el.hidden = false;
+  };
+  for (const x of locked) x.disabled = true;
+  card.setAttribute("aria-busy", "true");
+  show(first);
+  onAuthStage = show;
+  try {
+    await fn();
+  } finally {
+    onAuthStage = () => {};
+    el.hidden = true;
+    el.textContent = "";
+    delete el.dataset.stage;
+    for (const x of locked) x.disabled = false;
+    card.removeAttribute("aria-busy");
+  }
+}
+
 // ── signed out: create account, join this device (QR + 6 digits), restore from a kit ──
 function wireSignedOut(server: () => string) {
   $("create").onclick = (e) =>
@@ -3939,39 +3970,45 @@ function wireSignedOut(server: () => string) {
       }, 2000);
     });
   $("join-confirm").onclick = (e) =>
-    void act(e.currentTarget as HTMLElement, async () => {
-      await core.pairConfirm();
-      await core.open();
-      await applyTransferLog();
-      navigate("/", true);
-      toast(t("dev.paired"));
-    });
+    void act(e.currentTarget as HTMLElement, () =>
+      withAuthStage("join-stage", "files", async () => {
+        await core.pairConfirm();
+        await core.open();
+        await applyTransferLog();
+        navigate("/", true);
+        toast(t("dev.paired"));
+      }),
+    );
   $("join-reject").onclick = () => {
     void core.pairCancel();
     reset();
     toast(t("joinD.rejected"), "err");
   };
   $("rescue-go").onclick = (e) =>
-    void act(e.currentTarget as HTMLElement, async () => {
-      await core.joinWithKit(server(), $<HTMLTextAreaElement>("rescue-text").value, $<HTMLInputElement>("rescue-name").value.trim() || defaultDeviceName());
-      $<HTMLTextAreaElement>("rescue-text").value = "";
-      await core.open();
-      await applyTransferLog();
-      navigate("/", true);
-      toast(t("rescueD.done"));
-    });
+    void act(e.currentTarget as HTMLElement, () =>
+      withAuthStage("rescue-stage", "device", async () => {
+        await core.joinWithKit(server(), $<HTMLTextAreaElement>("rescue-text").value, $<HTMLInputElement>("rescue-name").value.trim() || defaultDeviceName());
+        $<HTMLTextAreaElement>("rescue-text").value = "";
+        await core.open();
+        await applyTransferLog();
+        navigate("/", true);
+        toast(t("rescueD.done"));
+      }),
+    );
   $<HTMLInputElement>("rescue-name").value ||= defaultDeviceName();
   $<HTMLInputElement>("signin-name").value ||= defaultDeviceName();
   ui<HTMLFormElement>("signin-form").onsubmit = (e) => {
     e.preventDefault();
-    void act($("signin-go"), async () => {
-      await core.joinWithPassword(server(), $<HTMLInputElement>("signin-login").value, $<HTMLInputElement>("signin-password").value, $<HTMLInputElement>("signin-name").value.trim() || defaultDeviceName());
-      $<HTMLInputElement>("signin-password").value = "";
-      await core.open();
-      await applyTransferLog();
-      navigate("/", true);
-      toast(t("signin.done"));
-    });
+    void act($("signin-go"), () =>
+      withAuthStage("signin-stage", "password", async () => {
+        await core.joinWithPassword(server(), $<HTMLInputElement>("signin-login").value, $<HTMLInputElement>("signin-password").value, $<HTMLInputElement>("signin-name").value.trim() || defaultDeviceName());
+        $<HTMLInputElement>("signin-password").value = "";
+        await core.open();
+        await applyTransferLog();
+        navigate("/", true);
+        toast(t("signin.done"));
+      }),
+    );
   };
   if (route.name === "join") reset();
 }

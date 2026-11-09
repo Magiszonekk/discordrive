@@ -271,6 +271,10 @@ export const en: Record<string, string> = {
   "rescueD.code": "Kit code (<span class=\"mono\">ddn-kit1:…</span>)",
   "rescueD.go": "Restore account",
   "rescueD.done": "Account restored on this device.",
+  // joining this device: the step in progress (password, rescue kit, pairing)
+  "authStage.password": "Checking the password…",
+  "authStage.device": "Adding this device to the account…",
+  "authStage.files": "Fetching the list of files…",
 
   // share dialog
   "shareD.h": "Share link",

@@ -131,10 +131,14 @@ export function passwordStrength(pw: string): { score: 0 | 1 | 2 | 3; bits: numb
   return { score, bits };
 }
 
+/** Where a password sign-in is (the UI shows it: the key derivation alone takes about a second). */
+export type PasswordSignInStage = "password" | "device";
+
 /**
  * New device: login + password -> account key (opened locally) -> this device registered with the
  * rescue key derived from it (same path as a rescue kit). Wrong password: ServerError 401
- * bad_password; too many attempts: 429 rate_limited.
+ * bad_password; too many attempts: 429 rate_limited. `onStage`: "password" before the parameters are
+ * fetched and the key derived, "device" once the account key is open and the device is being registered.
  */
 export async function signInWithPassword(
   baseUrl: string,
@@ -142,14 +146,16 @@ export async function signInWithPassword(
   password: string,
   device: DeviceKey,
   f?: typeof fetch,
+  onStage?: (s: PasswordSignInStage) => void,
 ): Promise<{ accountId: string; deviceId: string; instanceId: string; key: AccountKey }> {
-  const { passwordParams, passwordSealedKey, rescueRegisterDevice, getChallenge } = await import("./http-api.js");
+  const { passwordParams, passwordSealedKey, rescueRegisterDevice } = await import("./http-api.js");
   const l = normalizeLogin(login);
+  onStage?.("password");
   const { kdf } = await passwordParams(baseUrl, l, f);
   const pp = await passwordProof(password, checkArgon2Params(kdf));
   const got = await passwordSealedKey(baseUrl, l, pp.proof, f);
   const key = await pp.open(got.accountId, got.sealedKey);
-  const { deviceId } = await rescueRegisterDevice(baseUrl, key, got.accountId, device, f);
-  const { instanceId } = await getChallenge(baseUrl, f);
+  onStage?.("device");
+  const { deviceId, instanceId } = await rescueRegisterDevice(baseUrl, key, got.accountId, device, f);
   return { accountId: got.accountId, deviceId, instanceId, key };
 }

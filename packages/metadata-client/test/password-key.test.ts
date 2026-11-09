@@ -39,7 +39,11 @@ describe("password-protected account key", () => {
     const st = await a.api.setPasswordKey(up);
     expect(st).toMatchObject({ enabled: true, login: "ola.testowa" });
     const dk = await generateDeviceKey();
-    const r = await signInWithPassword(url, "OLA.testowa", PW, dk);
+    const stages: string[] = [];
+    const r = await signInWithPassword(url, "OLA.testowa", PW, dk, undefined, (s) => stages.push(s));
+    // The UI shows the step: the password check first, then this device being added.
+    expect(stages).toEqual(["password", "device"]);
+    expect(r.instanceId).toMatch(/\S/);
     expect(r.accountId).toBe(a.accountId);
     expect(r.key.rawB64).toBe(a.key.rawB64);
     // The new device is a real device of the account: it can sign in and list devices.

@@ -114,6 +114,7 @@
         <div class="row-btns" style="justify-content:center"><button class="btn primary" data-ddn="join-confirm" type="button" data-i18n="joinD.yes">Yes, the same</button><button class="btn" data-ddn="join-reject" type="button" data-i18n="joinD.no">No, different</button></div>
       </div>
       <button class="btn primary block" data-ddn="join-start" data-ddn-ui="join-actions" type="button" data-i18n="joinD.show">Show code</button>
+      <p class="hint auth-stage" data-ddn="join-stage" role="status" aria-live="polite" hidden></p>
     </div>
     <div class="auth-foot"><a class="link" href="/" data-ddn="join-cancel" data-link data-i18n="auth.back">Back to sign-up</a></div>
   </section>
@@ -128,6 +129,7 @@
       <label class="field"><span class="lab" data-i18n="signin.password">Password</span><input class="input" type="password" data-ddn="signin-password" name="password" autocomplete="current-password"></label>
       <label class="field"><span class="lab" data-i18n="joinD.name">Name of this device</span><input class="input" data-ddn="signin-name" data-i18n-attr="placeholder=create.device.ph" autocomplete="off"></label>
       <button class="btn primary block" data-ddn="signin-go" type="submit" data-i18n="signin.go">Sign in</button>
+      <p class="hint auth-stage" data-ddn="signin-stage" role="status" aria-live="polite" hidden></p>
       <p class="hint signin-hint" data-i18n="signin.hint"></p>
     </form>
     <div class="auth-foot"><a class="link" href="/" data-link data-i18n="auth.back">Back to sign-up</a></div>
@@ -167,6 +169,7 @@
       <label class="field"><span class="lab" data-i18n-html="rescueD.code"></span><textarea class="codebox" data-ddn="rescue-text" rows="4" spellcheck="false"></textarea></label>
       <label class="field"><span class="lab" data-i18n="joinD.name">Name of this device</span><input class="input" data-ddn="rescue-name" data-i18n-attr="placeholder=create.device.ph" autocomplete="off"></label>
       <button class="btn primary block" data-ddn="rescue-go" type="button" data-i18n="rescueD.go">Restore account</button>
+      <p class="hint auth-stage" data-ddn="rescue-stage" role="status" aria-live="polite" hidden></p>
     </div>
     <div class="auth-foot"><a class="link" href="/" data-ddn="rescue-cancel" data-link data-i18n="auth.back">Back to sign-up</a></div>
   </section>
