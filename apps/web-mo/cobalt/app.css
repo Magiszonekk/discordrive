@@ -546,6 +546,77 @@ dialog.modal.confirm .modal-b { gap: 1.25rem; }
 .auth-foot .alt-ways { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; max-width: 20rem; }
 .auth-foot .alt-ways .btn { width: 100%; padding-top: .625rem; padding-bottom: .625rem; }
 
+/* Joining this device (password, rescue kit, pairing), the step in progress: not a grey footnote but a live
+ * row in the accent under the button. A spinner, the step's text in ink, the step count in mono on the right
+ * (1/3 on the password card, 1/2 on the rescue kit, none when pairing has one step) and a segmented 3 px bar
+ * under it: done steps full accent, the current one breathing. Everything comes from data-ddn (which card,
+ * so how many steps) and data-stage (which step), the logic only sets those and the text. The bar is drawn
+ * in the row's own background (the text node is replaced on every step, so no child elements); its layers sit
+ * in the content box (background-origin) and paint into the bottom padding. */
+@property --ddn-stage-k { syntax: "<percentage>"; inherits: false; initial-value: 100%; }
+.auth-stage {
+  --t: 1; --s: 1; --gap: 3px;
+  --stage-bg: color-mix(in oklch, var(--color-accent) 5%, var(--color-paper));
+  --stage-track: color-mix(in oklch, var(--color-accent) 18%, var(--color-rule-2));
+}
+.auth-stage:not([hidden]) {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); grid-auto-columns: auto; grid-auto-flow: column; align-items: start; column-gap: .625rem;
+  margin: 0; padding: .625rem .75rem 1.125rem;
+  border: 1px solid color-mix(in oklch, var(--color-accent) 24%, var(--color-rule)); border-radius: var(--radius-input);
+  font: 500 .8125rem/1.25rem var(--font-body); color: var(--color-ink); text-align: left;
+  background-color: var(--stage-bg);
+  background-image:
+    repeating-linear-gradient(90deg, transparent 0 calc(100% / var(--t) - var(--gap)), var(--stage-bg) calc(100% / var(--t) - var(--gap)) calc(100% / var(--t))),
+    linear-gradient(var(--color-accent), var(--color-accent)),
+    linear-gradient(color-mix(in oklch, var(--color-accent) var(--ddn-stage-k, 60%), var(--stage-track)), color-mix(in oklch, var(--color-accent) var(--ddn-stage-k, 60%), var(--stage-track))),
+    linear-gradient(var(--stage-track), var(--stage-track));
+  background-size:
+    calc(100% + var(--gap)) 3px,
+    max(0px, calc((100% + var(--gap)) * (var(--s) - 1) / var(--t) - var(--gap))) 3px,
+    calc((100% + var(--gap)) * var(--s) / var(--t) - var(--gap)) 3px,
+    100% 3px;
+  background-position: 0 calc(100% + .5rem + 3px);
+  background-repeat: no-repeat; background-origin: content-box; background-clip: border-box;
+  transition: background-size var(--duration-long) var(--ease-out);
+  animation: auth-stage-in .22s var(--ease-out), auth-stage-k 1s var(--ease-in-out) infinite alternate;
+}
+/* the spinner: a 14 px ring, accent arc on a pale track, at the first line's middle */
+.auth-stage:not([hidden])::before {
+  content: ""; width: .875rem; height: .875rem; margin-top: .1875rem; box-sizing: border-box; border-radius: 9999px;
+  border: 2px solid var(--stage-track); border-top-color: var(--color-accent);
+  animation: auth-stage-spin .75s linear infinite;
+}
+/* the step count (data, so mono; hidden from screen readers, the live text already says what happens) */
+.auth-stage:not([hidden])::after {
+  content: ""; font: 500 .75rem/1.25rem var(--font-mono); color: var(--color-muted); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+[data-ddn="signin-stage"] { --t: 3; }
+[data-ddn="signin-stage"][data-stage="device"] { --s: 2; }
+[data-ddn="signin-stage"][data-stage="files"] { --s: 3; }
+[data-ddn="signin-stage"][data-stage="password"]::after { content: "1/3"; content: "1/3" / ""; }
+[data-ddn="signin-stage"][data-stage="device"]::after { content: "2/3"; content: "2/3" / ""; }
+[data-ddn="signin-stage"][data-stage="files"]::after { content: "3/3"; content: "3/3" / ""; }
+[data-ddn="rescue-stage"] { --t: 2; }
+[data-ddn="join-stage"]::after { display: none; }
+[data-ddn="rescue-stage"][data-stage="files"] { --s: 2; }
+[data-ddn="rescue-stage"][data-stage="device"]::after { content: "1/2"; content: "1/2" / ""; }
+[data-ddn="rescue-stage"][data-stage="files"]::after { content: "2/2"; content: "2/2" / ""; }
+@keyframes auth-stage-spin { to { transform: rotate(1turn); } }
+@keyframes auth-stage-in { from { opacity: 0; transform: translateY(-3px); } }
+@keyframes auth-stage-k { from { --ddn-stage-k: 30%; } to { --ddn-stage-k: 100%; } }
+/* While a step runs the card is locked: the fields go quiet (the step row is the only live thing), the busy
+ * button stays readable instead of fading to half, and the "no password sign-in?" note steps aside so the
+ * row takes its place and the card barely grows. */
+.auth-card[aria-busy="true"] :is(.input, .codebox):disabled { background: var(--color-paper-2); color: var(--color-ink-2); cursor: progress; opacity: .75; }
+.auth-card[aria-busy="true"] .field:has(:disabled) > .lab { color: var(--color-muted); }
+.auth-card[aria-busy="true"] .btn:disabled { cursor: progress; }
+.auth-card[aria-busy="true"] .btn.primary[aria-busy="true"]:disabled { opacity: .72; }
+.auth-card[aria-busy="true"] .signin-hint { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  /* no slide-in, no sliding bar; the spinner keeps turning (it is the indicator) and the current step holds still */
+  .auth-stage:not([hidden]) { transition: none; animation: none; --ddn-stage-k: 60%; }
+}
+
 /* ── file preview: the player dialog on paper; full screen on a phone ── */
 dialog.preview { width: min(1100px, 96vw); height: min(90dvh, 900px); max-width: 100vw; max-height: 100dvh; background: var(--color-paper); color: var(--color-ink-2); flex-direction: column; }
 dialog.preview[open] { display: flex; }
