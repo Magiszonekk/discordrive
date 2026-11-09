@@ -2824,8 +2824,33 @@ function paintSpeedProgress(p: SpeedTestProgress) {
     // Nothing finished yet: the first pieces are on their way (a 10 MiB piece takes seconds on a usual line).
     if (!p.pieces && (p.ms ?? 0) >= 2000) text += ` · ${t("sp.firstPieces")}`;
   }
-  $("speed-live").textContent = step + text;
-  $("speed-live").dataset.stage = p.stage;
+  paintSpeedLive(step, stage, text, i, p);
+}
+/** The live line's look; its text stays exactly `step + text` (what a screen reader and the tests read). The stage
+ * on the left, the step on the right, the numbers below as pieces that keep their width (a digit more does not
+ * push the rest), a step bar at the bottom: done steps full, the current one filling with its own progress. */
+function paintSpeedLive(step: string, stage: string, text: string, i: number, p: SpeedTestProgress) {
+  const el = $("speed-live");
+  const hidden = (s: string) => h("span", { class: "sr" }, s);
+  const kids: (Node | string)[] = [];
+  if (step) kids.push(h("span", { class: "sl-step" }, step.replace(/ · $/, "")), hidden(" · "));
+  const sep = text.startsWith(stage) ? /^(: | · )/.exec(text.slice(stage.length))?.[1] : undefined;
+  if (sep) {
+    const nums = h("span", { class: "sl-nums" });
+    text.slice(stage.length + sep.length).split(" · ").forEach((x, k) => {
+      // Room for two digits in every number: "5 of 32" -> "12 of 32", "9 s" -> "10 s" without a shift.
+      const v = /\d/.test(x) ? h("span", { class: "sl-n", style: `min-width:${x.replace(/\d+/g, (d) => d.padStart(2, "0")).length}ch` }, x) : h("span", { class: "sl-note" }, x);
+      // A number wraps with its dot (no dot left alone at the end of a line).
+      nums.append(k ? h("span", { class: "sl-item" }, h("span", { class: "sl-dot" }, " · "), v) : v);
+    });
+    kids.push(h("span", { class: "sl-stage" }, stage), hidden(sep), nums);
+  } else kids.push(h("span", { class: "sl-stage" }, text));
+  el.replaceChildren(...kids);
+  const f = p.stage === "line-down" || p.stage === "line-up" ? (p.ms ?? 0) / (p.planMs || 8000) : (p.pieces ?? p.bytes) / ((p.of ?? p.total) || 1);
+  el.style.setProperty("--t", String(Math.max(1, speedSteps.length)));
+  el.style.setProperty("--s", String(Math.max(1, i + 1)));
+  el.style.setProperty("--f", String(Math.min(1, Math.max(0, f || 0))));
+  el.dataset.stage = p.stage;
 }
 /** "Discord: 84% of your line's speed (line 7.4 MB/s, 1.2 MB/s less)": the comparison of one direction. */
 function shareText(v: number | null, share: number | null, line: number | undefined): string {
@@ -2886,9 +2911,15 @@ function paintSpeedResult(r: SpeedTestResult) {
   const share = (v: number | null, x: number | null, line: number | undefined) => {
     if (x == null) return [];
     const p = Math.round(x * 100);
-    return [h("span", { class: "share", "data-ddn": "speed-share" }, shareText(v, x, line)), h("span", { class: "share-bar", style: `--p:${Math.min(100, Math.max(0, p))}%`, "aria-hidden": "true" })];
+    // Same text, in parts: "84%" + the words, the bar, then the line's numbers on their own line (brackets kept for readers).
+    const s = shareText(v, x, line);
+    const m = /^(.*?%)(.*?) \((.*)\)$/.exec(s);
+    const words = m ? [h("span", { class: "share-main" }, h("b", {}, m[1]!), m[2]!), " ", h("span", { class: "share-ref" }, h("span", { class: "sr" }, "("), m[3]!, h("span", { class: "sr" }, ")"))] : [h("span", { class: "share-main" }, s)];
+    return [h("span", { class: "share", "data-ddn": "speed-share" }, ...words), h("span", { class: "share-bar", style: `--p:${Math.min(100, Math.max(0, p))}%`, "aria-hidden": "true" })];
   };
-  const lineRow = r.line ? row("sp.line", lineValue(r), "line") : null;
+  // "· test of <date>" (a line result from an earlier test) quieter than the numbers.
+  const lineAt = (s: string) => (r.lineAt ? [s.slice(0, s.lastIndexOf(" · ")), h("span", { class: "line-at" }, s.slice(s.lastIndexOf(" · ")))] : s);
+  const lineRow = r.line ? row("sp.line", lineAt(lineValue(r)), "line") : null;
   $("speed-result").replaceChildren(
     ...(lineRow ? [lineRow] : []),
     ...(d.up != null ? [row("sp.discordUp", mbps(d.up), "up", ...share(d.up, d.upShare, r.line?.up))] : []),
