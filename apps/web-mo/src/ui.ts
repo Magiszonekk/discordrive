@@ -808,8 +808,36 @@ const thumbSeen = new IntersectionObserver(
   },
   { rootMargin: "400px" },
 );
+/**
+ * Settings -> Appearance -> Thumbnails (this device, like the colour mode). Off: lists, tiles and album
+ * covers keep the type icon and no thumbnail is fetched at all (opening a file still shows it).
+ */
+const THUMBS_KEY = "ddn.thumbs";
+let thumbsOn = (() => {
+  try {
+    return localStorage.getItem(THUMBS_KEY) !== "0";
+  } catch {
+    return true;
+  }
+})();
+function wireThumbsSwitch() {
+  const box = $<HTMLInputElement>("thumbs-on");
+  box.checked = thumbsOn;
+  box.onchange = () => {
+    thumbsOn = box.checked;
+    try {
+      localStorage.setItem(THUMBS_KEY, thumbsOn ? "1" : "0");
+    } catch {
+      /* private mode: this tab only */
+    }
+    albumCovers.clear();
+    shownList = ""; // no row animation on this refresh
+    void render();
+  };
+}
 /** `id@version time`: a new version of the file (same node) is another picture. */
 function showThumb(badge: HTMLElement, id: string, at: number) {
+  if (!thumbsOn) return;
   badge.dataset.thumbFor = `${id}@${at}`;
   thumbSeen.observe(badge);
 }
@@ -1351,7 +1379,7 @@ function decorateAlbum(tr: HTMLElement, id: string) {
   const paint = (x: { n: number; cover: { id: string; at: number } | null }) => {
     const sub = tr.querySelector(".sub");
     if (sub) sub.textContent = tn("gal.photos", x.n);
-    if (!x.cover) {
+    if (!x.cover || !thumbsOn) {
       delete cover.dataset.key;
       return cover.replaceChildren(icon("images"));
     }
@@ -4245,6 +4273,7 @@ async function main() {
   document.body.dataset.mode = __DDN_MODE__;
   wireLang();
   wireTheme();
+  wireThumbsSwitch();
   wireLinks();
   wireDrawer();
   // Desktop: downloads go straight to disk through the agent; no service worker is needed (or allowed: app://).

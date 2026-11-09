@@ -1004,6 +1004,20 @@ input.switch:focus-visible { outline: 2px solid var(--color-focus); outline-offs
 @media (prefers-reduced-motion: reduce) {
   input.switch, input.switch::before, label.dapp-row { transition: none; }
 }
+/* Settings -> Appearance: the thumbnails switch is one more setting in the column, not a Desktop-app card.
+ * Every other group there (mode, accent, language) sits unframed on the paper with its control on the left
+ * edge, so the row drops the frame and padding, and the switch comes first (order, the DOM stays as it is),
+ * level with the title line (20 px each). The caption hangs under the title, 4 px below, at a reading width. */
+#appearance .dapp-list { border: 0; border-radius: 0; overflow: visible; }
+#appearance .dapp-row { justify-content: flex-start; align-items: flex-start; gap: .75rem; min-height: 0; padding: 0; border: 0; }
+#appearance label.dapp-row:hover { background: none; }
+#appearance .dapp-row > input.switch { order: -1; }
+#appearance .dapp-row > span { display: grid; gap: .25rem; min-width: 0; }
+#appearance .dapp-row > span > span:first-child { font-weight: 500; }
+#appearance .dapp-row .hint { margin-top: 0; max-width: 68ch; }
+#appearance label.dapp-row:hover > input.switch:not(:checked, :focus-visible) { outline-color: var(--color-ink-2); }
+#appearance label.dapp-row:hover > input.switch:checked { background: var(--color-accent-hover); }
+#appearance label.dapp-row:hover > input.switch:checked:not(:focus-visible) { outline-color: var(--color-accent-hover); }
 
 /* Accent colour swatches (Settings -> Appearance). Logic: theme.js (ddnAccent), ui.ts paintAccent.
  * As discordrive's Settings "Accent Colour": a row of round swatches with a mono caption. The ring sits

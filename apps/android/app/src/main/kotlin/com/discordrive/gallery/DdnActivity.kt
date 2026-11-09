@@ -188,8 +188,12 @@ open class DdnActivity : AppCompatActivity() {
         }
     }
 
+    /** Settings -> Thumbnails (read again on every show: back from Settings the lists follow it). */
+    private var thumbsOn = true
+
     private fun show() {
         val s = session ?: return
+        thumbsOn = com.discordrive.gallery.Settings.thumbsOn(this)
         title.text = when {
             albumsTab -> album?.second ?: getString(R.string.ddn_albums)
             gallery -> getString(R.string.ddn_gallery)
@@ -245,7 +249,7 @@ open class DdnActivity : AppCompatActivity() {
                 ui.thumb(r, null, type)
                 ui.folderTile(r, c.isFolder)
                 r.icon.tag = null
-                if (!c.isFolder && (DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) && c.manifestRef != null) {
+                if (thumbsOn && !c.isFolder && (DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) && c.manifestRef != null) {
                     r.icon.tag = c.manifestRef
                     val ref = c.manifestRef
                     DdnThumbs.pool.execute {
@@ -281,9 +285,11 @@ open class DdnActivity : AppCompatActivity() {
                 f.getChildAt(1).visibility = if (DdnSession.isVideo(c.name)) View.VISIBLE else View.GONE
                 img.setImageDrawable(null)
                 img.contentDescription = c.name
-                DdnThumbs.into(s, c.manifestRef, img, cell) { img.setImageResource(R.drawable.ic_cobalt_image); img.setColorFilter(getColor(R.color.cobalt_muted)); img.scaleType = ImageView.ScaleType.CENTER_INSIDE }
                 img.clearColorFilter()
                 img.scaleType = ImageView.ScaleType.CENTER_CROP
+                fun typeIcon() { img.setImageResource(R.drawable.ic_cobalt_image); img.setColorFilter(getColor(R.color.cobalt_muted)); img.scaleType = ImageView.ScaleType.CENTER_INSIDE }
+                // Thumbnails off (Settings): the type icon, nothing fetched (tag cleared: a late load of a recycled cell is dropped).
+                if (thumbsOn) DdnThumbs.into(s, c.manifestRef, img, cell) { typeIcon() } else { img.tag = null; typeIcon() }
                 f.setOnClickListener { open(c, items) }
                 f.setOnLongClickListener { rowMenu(c); true }
             }
@@ -325,8 +331,11 @@ open class DdnActivity : AppCompatActivity() {
                 box.getChildAt(1).visibility = if (priv) View.VISIBLE else View.GONE
                 img.setImageDrawable(null)
                 img.contentDescription = a.name
-                if (!priv) DdnThumbs.into(s, a.cover.manifestRef, img, cell) { img.setImageResource(R.drawable.ic_cobalt_image); img.setColorFilter(getColor(R.color.cobalt_muted)); img.scaleType = ImageView.ScaleType.CENTER_INSIDE }
+                img.clearColorFilter()
                 img.scaleType = ImageView.ScaleType.CENTER_CROP
+                fun typeIcon() { img.setImageResource(R.drawable.ic_cobalt_image); img.setColorFilter(getColor(R.color.cobalt_muted)); img.scaleType = ImageView.ScaleType.CENTER_INSIDE }
+                img.tag = null
+                if (!priv) { if (thumbsOn) DdnThumbs.into(s, a.cover.manifestRef, img, cell) { typeIcon() } else typeIcon() }
                 (v.getChildAt(1) as TextView).text = a.name
                 (v.getChildAt(2) as TextView).text = if (priv) getString(R.string.ddn_album_private) else plq(R.plurals.ddn_album_count, a.count, a.count)
                 v.setOnClickListener { if (priv) PrivateUnlock.unlock(this@DdnActivity) { openAlbum(a) } else openAlbum(a) }
@@ -446,6 +455,8 @@ open class DdnActivity : AppCompatActivity() {
     internal fun isDrawn(): Boolean = list.isLaidOut && list.childCount > 0
     /** The long-press menu of a row, as it would be shown (labels), built on the main thread like the real one. */
     internal fun rowMenuForTest(c: IndexReplica.Child): List<String> = session?.let { s -> rowMenuItems(s, c, gallery || albumsTab).map { it.first } } ?: emptyList()
+
+    internal fun showForTest() = show()
 
     /** A cell of the grid shows a decoded picture (a thumbnail, not the type icon). */
     internal fun firstCellHasPicture(): Boolean = (0 until list.childCount).any { i ->

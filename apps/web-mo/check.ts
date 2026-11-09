@@ -1621,6 +1621,34 @@ try {
     th.damaged = await thumbOf("zepsute.jpg");
     th.text = await thumbOf("opis.txt");
     await shot(p, "27-tiles-thumbnails");
+    // Settings -> Appearance -> Thumbnails off (this device): after a reload the tiles keep the type badges and
+    // no badge is even queued for a thumbnail; on again: the pictures come back.
+    {
+      const here = `${base}/folder/${thId}`;
+      const shown = () =>
+        p.evaluate(() => ({
+          imgs: document.querySelectorAll("[data-ddn=row] img[data-ddn=thumb]").length,
+          queued: document.querySelectorAll("[data-ddn=row] [data-thumb-for]").length,
+          badges: document.querySelectorAll("[data-ddn=row] .badge.media").length,
+        }));
+      await nav(p, "settings", "appearance");
+      th.switchDefault = await p.isChecked("[data-ddn=thumbs-on]");
+      await p.click("label:has([data-ddn=thumbs-on])");
+      th.switchOff = !(await p.isChecked("[data-ddn=thumbs-on]"));
+      await p.goto(here);
+      await p.waitForSelector("body[data-ready='1']");
+      await count(p, /^4 /);
+      await p.waitForTimeout(1500);
+      th.off = await shown();
+      await shot(p, "27b-tiles-thumbnails-off");
+      await nav(p, "settings", "appearance");
+      th.offKept = !(await p.isChecked("[data-ddn=thumbs-on]"));
+      await p.click("label:has([data-ddn=thumbs-on])");
+      await p.goto(here);
+      await p.waitForSelector("body[data-ready='1']");
+      await tile("foto.jpg").locator("img[data-ddn=thumb]").waitFor({ timeout: 30_000 }).catch(() => {});
+      th.onAgain = await shown();
+    }
     // Stored encrypted next to the manifest, readable again after a reload (from the browser's cache or Discord).
     th.stored = await p.evaluate(async () => {
       const c = (window as unknown as { ddnCore: { list(f: string): Promise<{ rows: { id: string; name: string }[] }>; preview(id: string, k: string): Promise<Blob | null> } }).ddnCore;
@@ -2524,7 +2552,9 @@ try {
         o.stored["foto.jpg"].t > 0 && o.stored["foto.jpg"].t <= 48 * 1024 && o.stored["foto.jpg"].p > o.stored["foto.jpg"].t && o.stored["foto.jpg"].p <= 400 * 1024 &&
         /image\/(webp|jpeg)/.test(o.stored["foto.jpg"].type) && o.stored["film.webm"].t > 0 && o.stored["zepsute.jpg"].t === null && o.stored["opis.txt"].t === null &&
         o.lowresFirst === true && o.fullAfter === 3000 &&
-        o.oldBefore === false && o.oldAfter > 0 && o.backfillLeft === 0
+        o.oldBefore === false && o.oldAfter > 0 && o.backfillLeft === 0 &&
+        o.switchDefault === true && o.switchOff === true && o.offKept === true &&
+        o.off?.imgs === 0 && o.off?.queued === 0 && o.off?.badges === 3 && o.onAgain?.imgs === 2
       );
     })(),
     queueCloses: (() => {

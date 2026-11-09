@@ -57,6 +57,7 @@ class DdnSettingsActivity : AppCompatActivity() {
         // Look: the accent colour (the same choice as the gallery's, applied to every screen).
         ui.section(page, R.string.ddn_set_look, getString(R.string.ddn_set_look_note)).also { c ->
             ui.add(c, ui.button(R.string.accent_picker_title, icon = R.drawable.ic_palette) { pickAccent() })
+            ui.switchRow(c, R.string.ddn_set_thumbs, com.discordrive.gallery.Settings.thumbsOn(this), getString(R.string.ddn_set_thumbs_note)) { _, on -> com.discordrive.gallery.Settings.setThumbsOn(this, on) }
         }
 
         // Copies, AI, trash, freeing space.
