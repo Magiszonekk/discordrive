@@ -25,8 +25,12 @@ export type NodeKind = "file" | "folder";
  *      4 put a node into „Odzyskane”, a node of the Gallery goes to the Gallery's root
  *      instead (the intended parent's space, else the op's optional `space`). Logs of
  *      rules 2 and 3 replay exactly as before ("gallery" is never a client ID: 7 chars).
+ *  5 - node attributes: `set_attr` sets or clears a display attribute of a file (`thumbHidden`: show the
+ *      file-type icon instead of its thumbnail on every device). The later op wins; no conflict, no
+ *      notice. Kept through renames, moves, the trash and new versions; a rule-7 copy keeps it too.
+ *      Nodes without attributes keep exactly their old state (the field is absent).
  */
-export const RULES_VERSION = 4;
+export const RULES_VERSION = 5;
 /**
  * Rules version clients write. Lags RULES_VERSION while a new version rolls out: every reader
  * (web, desktop, phone, the plain server) learns to replay it first, writers switch later, so a
@@ -146,7 +150,17 @@ export interface NodeRecord {
   recoveredFrom: { parentId: NodeId | null; path: string[] | null; seq: number } | null;
   /** Set on rule-7 conflict copies. */
   conflictOf: { nodeId: NodeId; seq: number } | null;
+  /** Rules 5: display attributes (files only). Absent = none set (a node of older rules never has it). */
+  attrs?: NodeAttrs;
 }
+
+/** Rules 5: attributes a `set_attr` op can set. Only set ones are stored (`true`); clearing removes the key. */
+export interface NodeAttrs {
+  /** Show the file-type icon instead of the thumbnail (every device of the account). */
+  thumbHidden?: true;
+}
+export type NodeAttr = keyof NodeAttrs;
+export const NODE_ATTRS: readonly NodeAttr[] = ["thumbHidden"];
 
 export type UploadStatus =
   /** upload_begin applied, fragments may be in flight. */
@@ -265,6 +279,13 @@ export interface RelocateOp {
   manifestRef: string;
   pieces?: PieceLoc[];
 }
+/** Rules 5: set (`value` true) or clear a display attribute of a file. The later op wins. */
+export interface SetAttrOp {
+  type: "set_attr";
+  nodeId: NodeId;
+  attr: NodeAttr;
+  value: boolean;
+}
 /**
  * Group operation (Q9): members skipped by a conflict rule are left out and
  * the rest applies; a rejected (invalid) member rolls back the whole group.
@@ -285,7 +306,8 @@ export type SingleOp =
   | UploadBeginOp
   | UploadCommitOp
   | UploadAbortOp
-  | RelocateOp;
+  | RelocateOp
+  | SetAttrOp;
 
 export type Operation = SingleOp | GroupOp;
 

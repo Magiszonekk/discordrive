@@ -24,7 +24,7 @@ const V3 = { rulesVersion: 3 };
 
 describe("rules 4: the Gallery space", () => {
   it("versions: replays 4, writes 3 until every reader has rules 4", () => {
-    expect(RULES_VERSION).toBe(4);
+    expect(RULES_VERSION).toBeGreaterThanOrEqual(4);
     expect(WRITE_RULES_VERSION).toBe(3);
   });
 

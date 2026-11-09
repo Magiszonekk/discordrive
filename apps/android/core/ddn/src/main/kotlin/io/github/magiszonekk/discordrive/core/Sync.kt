@@ -95,7 +95,7 @@ interface IndexReplica : AutoCloseable {
      * apart from the account's. `safeApply` applies one entry to `tree` and returns
      * { tree, result, released: [[uploadId, manifestRef]] } (uploads that entry released); `safeChildren` lists a
      * folder of `tree`; `safeEmpty` is a new empty tree. JSON text in and out. The entry is applied under the
-     * core's own RULES_VERSION (the Safe has no older readers to wait for): its `rulesVersion` is overwritten.
+     * rules 4, or the newer rules the op needs (as the web app's Safe does): its `rulesVersion` is overwritten.
      */
     fun safeEmpty(): String = throw UnsupportedOperationException("safeEmpty")
     fun safeApply(tree: String, entry: JsonObject): String = throw UnsupportedOperationException("safeApply")

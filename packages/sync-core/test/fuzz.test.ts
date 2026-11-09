@@ -54,6 +54,7 @@ describe("randomized multi-device sync", () => {
       expect(stats.leaseRejected, "leaseRejected").toBeGreaterThan(0);
       expect(stats.fragmentsDeleted, "fragmentsDeleted").toBeGreaterThan(0);
       expect(stats.joins, "joins").toBeGreaterThan(0);
+      expect(stats.attrs, "attrs").toBeGreaterThan(0);
       expect(stats.entries / stats.runs, "avg log length").toBeGreaterThan(30);
     }
   });

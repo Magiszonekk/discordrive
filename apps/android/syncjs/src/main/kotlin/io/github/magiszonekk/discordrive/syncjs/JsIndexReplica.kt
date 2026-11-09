@@ -187,7 +187,7 @@ globalThis.__ddnSafe = (function () {
     empty: function () { out = JSON.stringify(S.takeSnapshot(S.initIndex(new S.MemoryIndexStore()))); return String(out.length); },
     apply: function (e) {
       var t = load(), before = bound(t);
-      e.rulesVersion = S.RULES_VERSION;
+      e.rulesVersion = S.rulesVersionFor(t, e.op, 4);
       var r = S.applyEntry(t, e), released = [];
       for (var u of t.allUploads()) if (u.status === "released" && u.ended && u.ended.seq === e.seq && before[u.id]) released.push([u.id, before[u.id]]);
       out = JSON.stringify({ tree: S.takeSnapshot(t), result: r, released: released });
