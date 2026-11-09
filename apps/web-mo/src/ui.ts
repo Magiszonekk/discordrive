@@ -2776,6 +2776,8 @@ function renderNetwork() {
 }
 
 // ── Speed test (Settings → Network & transfers) ──
+// Two tests run apart: the line (speed.cloudflare.com) and Discord through the account's channels. A Discord
+// result is compared with the last line result on this device (MB/s and %), so either can be run again alone.
 const SPEED_KEY = "ddn.speed.history";
 const speedHistory = (): SpeedTestResult[] => {
   try {
@@ -2784,38 +2786,66 @@ const speedHistory = (): SpeedTestResult[] => {
     return [];
   }
 };
+/** The last line measured on this device (a result of the line test, or a Discord test that ran it too). */
+const lastLine = (): { down: number; up: number; at: number } | null => {
+  const r = speedHistory().find((x) => x.line && !x.lineAt);
+  return r?.line ? { ...r.line, at: r.at } : null;
+};
+const DISCORD_SPEED = __DDN_MODE__ === "metadata-only";
 function speedOpts() {
   const n = (sel: string, lo: number, hi: number, d: number) => Math.max(lo, Math.min(hi, Math.round(Number($<HTMLInputElement>(sel).value) || d)));
-  return { count: n("speed-count", 4, 200, 32), sizeMb: n("speed-size", 1, 24, 10), noLine: $<HTMLInputElement>("speed-noline").checked, only: $<HTMLInputElement>("speed-uponly").checked ? ("up" as const) : undefined };
+  return { count: n("speed-count", 4, 200, 32), sizeMb: n("speed-size", 1, 24, 10), only: $<HTMLInputElement>("speed-uponly").checked ? ("up" as const) : undefined };
 }
+const LINE_BYTES = 400 * 1024 * 1024;
+const discordBytes = (o: ReturnType<typeof speedOpts>) => o.count * o.sizeMb * 1024 * 1024 * (o.only ? 1 : 2);
 function paintSpeedIntro() {
   const o = speedOpts();
-  const total = fmtSize(o.count * o.sizeMb * 1024 * 1024 * (o.only ? 1 : 2) + (o.noLine ? 0 : 400e6));
-  $("speed-lead").textContent = t("sp.lead", { n: o.count, mb: o.sizeMb, total });
-  // e2ee / plain: pieces go through the instance; only the line is measured (the Discord options do not apply).
-  $("speed-adv").hidden = __DDN_MODE__ !== "metadata-only";
+  $("speed-lead").textContent = t("sp.lead", { n: o.count, mb: o.sizeMb, total: fmtSize(discordBytes(o)), line: fmtSize(LINE_BYTES) });
+  // e2ee / plain: pieces go through the instance; only the line is measured (the Discord test and its options do not apply).
+  $("speed-adv").hidden = !DISCORD_SPEED;
+  $("speed-run").hidden = !DISCORD_SPEED || !$("speed-cancel").hidden;
   void core.netStatus().then((st) => ($("speed-metered").hidden = !st?.leanWhy), () => null);
   paintSpeedHistory();
 }
 const spf = (v: number | null | undefined) => (v == null ? "—" : fmtNum(Math.round(v * 10) / 10));
+/** Steps of the running test, in order: "Step 2 of 3" in the live line. */
+let speedSteps: SpeedTestProgress["stage"][] = [];
 function paintSpeedProgress(p: SpeedTestProgress) {
   const stage = t(`sp.stage.${p.stage}`);
-  const mbps = spf(p.mbps);
-  $("speed-live").textContent =
-    p.stage === "cleanup"
-      ? `${stage}: ${p.bytes} / ${p.total}`
-      : p.total
-        ? t("sp.liveN", { stage, done: fmtSize(p.bytes), total: fmtSize(p.total), mbps, inflight: p.inFlight ?? 0 })
-        : t("sp.live", { stage, mbps });
+  const i = speedSteps.indexOf(p.stage);
+  const step = i >= 0 && speedSteps.length > 1 ? `${t("sp.step", { i: i + 1, n: speedSteps.length })} · ` : "";
+  const time = fmtDuration(p.ms ?? 0);
+  let text: string;
+  if (p.stage === "line-down" || p.stage === "line-up") text = t("sp.liveLine", { stage, time, plan: fmtDuration(p.planMs ?? 8000), mbps: spf(p.mbps) });
+  else if (p.stage === "cleanup") text = t("sp.liveClean", { stage, done: p.pieces ?? p.bytes, of: p.of ?? p.total, time });
+  else {
+    text = t("sp.liveN", { stage, done: p.pieces ?? 0, of: p.of ?? 0, time, mbps: spf(p.mbps), inflight: p.inFlight ?? 0 });
+    // Nothing finished yet: the first pieces are on their way (a 10 MiB piece takes seconds on a usual line).
+    if (!p.pieces && (p.ms ?? 0) >= 2000) text += ` · ${t("sp.firstPieces")}`;
+  }
+  $("speed-live").textContent = step + text;
+  $("speed-live").dataset.stage = p.stage;
 }
+/** "Discord: 84% of your line's speed (line 7.4 MB/s, 1.2 MB/s less)": the comparison of one direction. */
+function shareText(v: number | null, share: number | null, line: number | undefined): string {
+  if (v == null || share == null || !line) return "";
+  const d = v - line;
+  const diff = Math.abs(d) < 0.05 ? t("sp.diffSame") : t(d < 0 ? "sp.diffLess" : "sp.diffMore", { d: spf(Math.abs(d)) });
+  return t("sp.ofLine", { p: Math.round(share * 100), line: spf(line), diff });
+}
+/** The line's numbers; from an earlier line test: with its date. */
+const lineValue = (r: SpeedTestResult) => {
+  const v = t("sp.lineV", { d: spf(r.line?.down), u: spf(r.line?.up) });
+  return r.lineAt ? `${v} · ${t("sp.lineFrom", { when: fmtDateTime(r.lineAt) })}` : v;
+};
 /** The result as text (the Copy button; one line per value, no addresses or tokens). */
 function speedResultText(r: SpeedTestResult): string {
   const d = r.discord;
   return [
     `discordrive speed test ${new Date(r.at).toISOString()} · ${t(`sp.where.${r.platform === "desktop" ? "desktop" : "web"}`)} · ${r.build ?? "?"}`,
-    r.line ? `${t("sp.line")}: ${t("sp.lineV", { d: spf(r.line.down), u: spf(r.line.up) })}` : "",
-    d.up != null ? `${t("sp.discordUp")}: ${spf(d.up)} MB/s${d.upShare != null ? ` (${t("sp.ofLine", { p: Math.round(d.upShare * 100) })})` : ""}` : "",
-    d.down != null ? `${t("sp.discordDown")}: ${spf(d.down)} MB/s${d.downShare != null ? ` (${t("sp.ofLine", { p: Math.round(d.downShare * 100) })})` : ""}` : "",
+    r.line ? `${t("sp.line")}: ${lineValue(r)}` : "",
+    d.up != null ? `${t("sp.discordUp")}: ${spf(d.up)} MB/s${d.upShare != null ? ` — ${shareText(d.up, d.upShare, r.line?.up)}` : ""}` : "",
+    d.down != null ? `${t("sp.discordDown")}: ${spf(d.down)} MB/s${d.downShare != null ? ` — ${shareText(d.down, d.downShare, r.line?.down)}` : ""}` : "",
     ...(d.fragments > 0 ? [`${t("sp.channels")}: ${d.channels} · ${d.fragments} × ${fmtSize(d.fragmentBytes)}`, `${t("sp.conc")}: ${concText(r)}`, `${t("sp.problems")}: ${d.rateLimited} / ${d.errors}`] : []),
     ...r.hints.map(hintText),
   ].filter(Boolean).join("\n");
@@ -2849,23 +2879,30 @@ function paintSpeedResult(r: SpeedTestResult) {
     const [pre = "", post = ""] = t("sp.mbps", { v: "\u0000" }).split("\u0000");
     return [pre, h("span", { class: "num" }, spf(v)), h("span", { class: "unit" }, post)] as (Node | string)[];
   };
-  // The share of the line under it: words + a bar.
-  const share = (x: number | null) => {
+  // The comparison with the line under it: words (%, the line's MB/s and the difference) + a bar.
+  const share = (v: number | null, x: number | null, line: number | undefined) => {
     if (x == null) return [];
     const p = Math.round(x * 100);
-    return [h("span", { class: "share" }, t("sp.ofLine", { p })), h("span", { class: "share-bar", style: `--p:${Math.min(100, Math.max(0, p))}%`, "aria-hidden": "true" })];
+    return [h("span", { class: "share", "data-ddn": "speed-share" }, shareText(v, x, line)), h("span", { class: "share-bar", style: `--p:${Math.min(100, Math.max(0, p))}%`, "aria-hidden": "true" })];
   };
+  const lineRow = r.line ? row("sp.line", lineValue(r), "line") : null;
   $("speed-result").replaceChildren(
-    ...(r.line ? [row("sp.line", t("sp.lineV", { d: spf(r.line.down), u: spf(r.line.up) }), "line")] : []),
-    ...(d.up != null ? [row("sp.discordUp", mbps(d.up), "up", ...share(d.upShare))] : []),
-    ...(d.down != null ? [row("sp.discordDown", mbps(d.down), "down", ...share(d.downShare))] : []),
-    // Only the line measured (e2ee / plain, or the Discord part could not run): no Discord rows of zeros.
+    ...(lineRow ? [lineRow] : []),
+    ...(d.up != null ? [row("sp.discordUp", mbps(d.up), "up", ...share(d.up, d.upShare, r.line?.up))] : []),
+    ...(d.down != null ? [row("sp.discordDown", mbps(d.down), "down", ...share(d.down, d.downShare, r.line?.down))] : []),
+    // Only the line measured (the line test, e2ee / plain, or the Discord part could not run): no Discord rows of zeros.
     ...(d.fragments > 0
       ? [row("sp.channels", `${d.channels} · ${d.fragments} × ${fmtSize(d.fragmentBytes)}`, "channels"), row("sp.conc", concText(r), "conc"), row("sp.problems", `${d.rateLimited} / ${d.errors}`, "problems")]
       : []),
     row("sp.build", `${r.build ?? "?"} · ${t(`sp.where.${r.platform === "desktop" ? "desktop" : "web"}`)} · ${fmtDateTime(r.at)}`, "build"),
   );
-  $("speed-hints").replaceChildren(...r.hints.map((x) => h("li", { "data-ddn": "speed-hint", "data-k": x.k }, hintText(x))), ...(d.leftOver ? [h("li", {}, t("sp.leftover", { n: d.leftOver }))] : []));
+  // What to run next for a comparison: the other test.
+  const next = d.fragments > 0 && !r.line ? t("sp.next.line") : DISCORD_SPEED && d.fragments === 0 && r.line ? t("sp.next.discord") : "";
+  $("speed-hints").replaceChildren(
+    ...r.hints.map((x) => h("li", { "data-ddn": "speed-hint", "data-k": x.k }, hintText(x))),
+    ...(d.leftOver ? [h("li", {}, t("sp.leftover", { n: d.leftOver }))] : []),
+    ...(next ? [h("li", { "data-ddn": "speed-next" }, next)] : []),
+  );
   $("speed-card").hidden = false;
   // The result where the user looks: the card scrolled into view (it opens below the fold in a usual window).
   $("speed-card").scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -2882,30 +2919,42 @@ function paintSpeedHistory() {
   const hs = speedHistory();
   $("speed-history-box").hidden = hs.length === 0;
   $("speed-history").replaceChildren(
-    ...hs.map((r) => h("li", { "data-ddn": "speed-history-row" }, h("span", { class: "dname mono" }, `${fmtDateTime(r.at)} · ↑ ${spf(r.discord.up)} ↓ ${spf(r.discord.down)} MB/s${r.line ? ` · ${t("sp.line")} ↓ ${spf(r.line.down)} ↑ ${spf(r.line.up)}` : ""}`), h("span", { class: "when" }, `${r.discord.channels} ch · ${r.build ?? ""}`))),
+    ...hs.map((r) => {
+      const parts = [
+        r.discord.up != null || r.discord.down != null ? `Discord ↑ ${spf(r.discord.up)} ↓ ${spf(r.discord.down)} MB/s` : "",
+        r.line && !r.lineAt ? `${t("sp.line")} ↓ ${spf(r.line.down)} ↑ ${spf(r.line.up)} MB/s` : "",
+      ].filter(Boolean);
+      const where = r.discord.fragments > 0 ? `${r.discord.channels} ch · ${r.build ?? ""}` : (r.build ?? "");
+      return h("li", { "data-ddn": "speed-history-row" }, h("span", { class: "dname mono" }, `${fmtDateTime(r.at)} · ${parts.join(" · ")}`), h("span", { class: "when" }, where));
+    }),
   );
 }
 function wireSpeedTest() {
-  for (const k of ["speed-count", "speed-size", "speed-noline", "speed-uponly"]) $(k).addEventListener("change", paintSpeedIntro);
+  for (const k of ["speed-count", "speed-size", "speed-uponly"]) $(k).addEventListener("change", paintSpeedIntro);
   $("speed-cancel").onclick = () => void core.speedTestCancel();
-  $("speed-run").onclick = (e) =>
+  const run = (which: "line" | "discord") => (e: MouseEvent) =>
     void act(e.currentTarget as HTMLElement, async () => {
       const o = speedOpts();
+      const label = t(which === "line" ? "sp.runLine" : "sp.runDiscord");
       const st = await core.netStatus().catch(() => null);
       if (st?.leanWhy) {
-        const total = fmtSize(o.count * o.sizeMb * 1024 * 1024 * (o.only ? 1 : 2) + (o.noLine ? 0 : 400e6));
-        if (!(await confirmDanger(t("sp.h"), t("sp.meteredAsk", { total }), t("sp.run")))) return;
+        const total = fmtSize(which === "line" ? LINE_BYTES : discordBytes(o));
+        if (!(await confirmDanger(t("sp.h"), t("sp.meteredAsk", { total }), label))) return;
       }
+      speedSteps = which === "line" ? ["line-down", "line-up"] : o.only ? ["up", "cleanup"] : ["up", "down", "cleanup"];
       $("speed-run").hidden = true;
+      $("speed-run-line").hidden = true;
       $("speed-cancel").hidden = false;
-      $("speed-state").textContent = t("sp.running");
+      $("speed-state").textContent = t(which === "line" ? "sp.running.line" : "sp.running.discord");
+      $("speed-live").textContent = "";
       // The progress line in view (the button may sit low in a short window).
       $("speed-live").scrollIntoView({ block: "nearest", behavior: "smooth" });
       $("speed-state").className = "chip chip--accent";
       $("speed-card").hidden = true;
       try {
-        const r = await core.speedTest(o);
+        const r = await core.speedTest(which === "line" ? { noDiscord: true } : { ...o, noLine: true, lineRef: lastLine() });
         $("speed-live").textContent = "";
+        delete $("speed-live").dataset.stage;
         $("speed-state").textContent = t("sp.done");
         $("speed-state").className = "chip chip--success";
         paintSpeedResult(r);
@@ -2918,13 +2967,17 @@ function wireSpeedTest() {
       } catch (err) {
         const aborted = /abort/i.test(String((err as Error)?.message ?? err));
         $("speed-state").textContent = "";
-        $("speed-live").textContent = aborted ? t("sp.cancelled") : errText(err);
+        delete $("speed-live").dataset.stage;
+        $("speed-live").textContent = aborted ? t(which === "line" ? "sp.cancelled.line" : "sp.cancelled") : errText(err);
         if (!aborted) throw err;
       } finally {
-        $("speed-run").hidden = false;
+        $("speed-run-line").hidden = false;
+        $("speed-run").hidden = !DISCORD_SPEED;
         $("speed-cancel").hidden = true;
       }
     });
+  $("speed-run").onclick = run("discord");
+  $("speed-run-line").onclick = run("line");
 }
 /** The agent's reasons for a disk that did not mount, in the UI's language where known. */
 function vdiskWhy(why: string): string {

@@ -1737,16 +1737,20 @@ export class AppCore {
    * and back, then deleted; nothing in the account changes (no operation, no node). Metadata only (e2ee/plain:
    * the pieces would go through the instance; only the line test runs there). One test at a time.
    */
-  async speedTest(o: { count?: number; sizeMb?: number; noLine?: boolean; only?: "up" | "down" } = {}): Promise<SpeedTestResult> {
+  async speedTest(o: { count?: number; sizeMb?: number; noLine?: boolean; noDiscord?: boolean; only?: "up" | "down"; lineRef?: { down: number; up: number; at: number } | null } = {}): Promise<SpeedTestResult> {
     if (this.speedAbort) throw new Error("a speed test is running");
     const ac = (this.speedAbort = new AbortController());
     const onProgress = (p: SpeedTestProgress) => this.onEvent({ type: "speed-progress", p });
     try {
       const f = globalThis.fetch.bind(globalThis);
-      const line = o.noLine ? null : await lineSpeed(f, 8, ac.signal, onProgress).catch(() => null);
+      // `lineRef`: the line from an earlier test on this device (the Discord test alone is compared with it).
+      const measured = o.noLine ? null : await lineSpeed(f, 8, ac.signal, onProgress).catch(() => null);
+      const line = measured ?? (o.lineRef ? { down: o.lineRef.down, up: o.lineRef.up } : null);
+      const lineAt = !measured && o.lineRef ? o.lineRef.at : undefined;
       if (ac.signal.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
       const c = this.client;
-      const discordOk = !!c && mode.clientSnapshots;
+      // The line test and the Discord test run apart (two buttons); without options both run, one after the other.
+      const discordOk = !!c && mode.clientSnapshots && !o.noDiscord;
       const size = o.sizeMb ? Math.round(o.sizeMb * 1024 * 1024) - 28 : undefined;
       const d = discordOk ? await discordSpeed(c!, this.resume, { count: o.count, size, only: o.only, signal: ac.signal, onProgress }) : null;
       const channels = c?.blobs.lanes?.() ?? 0;
@@ -1755,6 +1759,7 @@ export class AppCore {
         build: BUILD,
         platform: this.platform.kind,
         line,
+        ...(lineAt ? { lineAt } : {}),
         discord: {
           up: d?.up ?? null,
           down: d?.down ?? null,

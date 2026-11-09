@@ -3,7 +3,7 @@
 // or a test cut short (cleaned at the next start); the per-channel pacing applies as to an upload.
 import { describe, expect, it } from "vitest";
 import { Sequencer } from "@ddv4/sync-core";
-import { ChannelPacer, LocalArbiter, MemoryTransport, MetadataClient, RateLimitedError, cleanupLeftovers, discordSpeed, removeTestMessage, speedHints, type ResumeStore } from "../src/index.js";
+import { ChannelPacer, LocalArbiter, MemoryTransport, MetadataClient, RateLimitedError, cleanupLeftovers, discordSpeed, lineSpeed, removeTestMessage, SPEED_BEAT_MS, speedHints, type ResumeStore, type SpeedTestProgress } from "../src/index.js";
 
 function memStore(): ResumeStore & { m: Map<string, unknown> } {
   const m = new Map<string, unknown>();
@@ -99,6 +99,62 @@ describe("speed test", () => {
     expect(await cleanupLeftovers(working, store)).toBe(1);
     expect((await store.entries("st:")).length).toBe(0);
   }, 30_000);
+  it("progress keeps coming while a slow piece is on its way: a clock and the pieces done, every stage", async () => {
+    const { t, c } = setup();
+    const post = t.postFile.bind(t);
+    // One post takes 2.5 s: before, nothing was reported until it ended (a test looked stuck).
+    t.postFile = async (...a) => {
+      await new Promise((r) => setTimeout(r, 2500));
+      return post(...a);
+    };
+    const ev: SpeedTestProgress[] = [];
+    const t0 = Date.now();
+    await discordSpeed(c, null, { count: 1, size: 10_000, onProgress: (p) => ev.push({ ...p }) });
+    const up = ev.filter((e) => e.stage === "up");
+    // Reported at the start and then about every second while the piece is posted.
+    expect(up[0]).toMatchObject({ pieces: 0, of: 1 });
+    expect(up.filter((e) => e.pieces === 0).length).toBeGreaterThanOrEqual(3);
+    expect(up.filter((e) => e.pieces === 0).at(-1)!.ms).toBeGreaterThanOrEqual(1900);
+    expect(up.at(-1)).toMatchObject({ pieces: 1, of: 1 });
+    // The stages in order; the download is shown before its links are fetched; the clean-up counts pieces.
+    expect([...new Set(ev.map((e) => e.stage))]).toEqual(["up", "down", "cleanup"]);
+    expect(ev.find((e) => e.stage === "down")).toMatchObject({ pieces: 0, of: 1 });
+    expect(ev.at(-1)).toMatchObject({ stage: "cleanup", pieces: 1, of: 1 });
+    // No beat after the end.
+    const n = ev.length;
+    await new Promise((r) => setTimeout(r, SPEED_BEAT_MS + 300));
+    expect(ev.length).toBe(n);
+    expect(Date.now() - t0).toBeLessThan(10_000);
+  }, 20_000);
+
+  it("the line test reports during the transfer (not only after each request) and stops on time", async () => {
+    // A slow download stream: 25 chunks of 100 kB, one every 200 ms (5 s for one request; the test runs 1.5 s).
+    const f = (async (url: string, init?: RequestInit) => {
+      if (/__up/.test(url)) {
+        await new Promise((r) => setTimeout(r, 400));
+        return new Response("ok");
+      }
+      let i = 0;
+      const body = new ReadableStream<Uint8Array>({
+        async pull(ctl) {
+          await new Promise((r) => setTimeout(r, 200));
+          if (init?.signal?.aborted || i++ >= 25) return ctl.close();
+          ctl.enqueue(new Uint8Array(100_000));
+        },
+      });
+      return new Response(body);
+    }) as typeof fetch;
+    const ev: SpeedTestProgress[] = [];
+    const r = await lineSpeed(f, 1.5, undefined, (p) => ev.push({ ...p }));
+    const down = ev.filter((e) => e.stage === "line-down");
+    expect(down[0]!.ms).toBeLessThan(100);
+    expect(down[0]!.planMs).toBe(1500);
+    // Several reports with bytes before the first request could end.
+    expect(down.filter((e) => e.bytes > 0).length).toBeGreaterThanOrEqual(3);
+    expect(r.down).toBeGreaterThan(0);
+    expect(ev.some((e) => e.stage === "line-up")).toBe(true);
+  }, 20_000);
+
   it("the per-channel pacing applies (as to an upload)", async () => {
     const pacer = new ChannelPacer({ perMin: 30, maxPerMin: 30, burst: 2 });
     const { c } = setup(pacer);

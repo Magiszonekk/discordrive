@@ -27,6 +27,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const MODE = (process.env.DDN_E2E_MODE ?? "metadata-only") as "metadata-only" | "e2ee" | "plain";
 // plain: the server's names are readable on purpose (that is the mode); the "server blind" check applies to the others.
 const SERVER_SIDE = MODE !== "metadata-only";
+/** The speed test's live line keeps moving while a slow piece is on its way (the step, the pieces, the clock). */
+const speedLiveMoves = (l: unknown) => {
+  const x = l as { live1?: string; live2?: string } | undefined;
+  return !!x?.live1 && !!x.live2 && x.live1 !== x.live2 && /(Krok|Step) 1 (z|of) 3/.test(x.live2) && / (z|of) 6 /.test(x.live2);
+};
 // Own output dir: the previews of all three modes run from this checkout and serve dist/<mode>.
 const buildRoot = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-check-dist-"));
 execFileSync(process.execPath, [join(here, "..", "..", "node_modules", "tsx", "dist", "cli.mjs"), join(here, "build.ts"), MODE, buildRoot], { stdio: "ignore" });
@@ -425,17 +430,30 @@ try {
     const msgs0 = fake ? fake.messages.size : 0;
     const st: Record<string, unknown> = {};
     if (!SERVER_SIDE) {
+      // Two tests: the line and Discord, each with its own button (the line is not measured in CI: Cloudflare).
+      st.buttons = { discord: await p.isVisible("[data-ddn=speed-run]"), line: await p.isVisible("[data-ddn=speed-run-line]"), noLineGone: (await p.locator("[data-ddn=speed-noline]").count()) === 0 };
+      // A line result from an earlier test on this device: the Discord result is compared with it.
+      await p.evaluate(() => localStorage.setItem("ddn.speed.history", JSON.stringify([{ at: Date.now() - 60_000, build: "x", platform: "web", line: { down: 50, up: 20 }, discord: { up: null, down: null, upShare: null, downShare: null, channels: 0, fragments: 0, fragmentBytes: 0, concUp: { auto: true, start: 0, max: 0 }, concDown: { auto: true, start: 0, max: 0 }, rateLimited: 0, errors: 0, deleted: 0, leftOver: 0 }, hints: [] }])));
       await p.click("[data-ddn=speed-adv] summary");
       await p.fill("[data-ddn=speed-count]", "6");
       await p.fill("[data-ddn=speed-size]", "1");
-      await p.check("[data-ddn=speed-noline]");
       // The deletes meet the channel's limit (429 for the first 4): they are tried again, none is left.
       fake!.deleteRejects = 4;
+      // A slow post (3 s, longer than a usual gap between progress events): the live line still moves on.
+      fake!.postDelayMs = 3000;
       await p.click("[data-ddn=speed-run]");
+      await p.waitForFunction(() => /Discord/.test(document.querySelector("[data-ddn=speed-live]")?.textContent ?? ""), null, { timeout: 30_000 });
+      const live1 = await p.textContent("[data-ddn=speed-live]");
+      await p.waitForTimeout(2200);
+      const live2 = await p.textContent("[data-ddn=speed-live]");
+      fake!.postDelayMs = 0;
+      st.live = { live1, live2 };
       await p.waitForSelector("[data-ddn=speed-card]:not([hidden])", { timeout: 120_000 });
       st.up = await p.textContent("[data-ddn=speed-up]");
       st.down = await p.textContent("[data-ddn=speed-down]");
       st.channels = await p.textContent("[data-ddn=speed-channels]");
+      st.share = await p.locator("[data-ddn=speed-share]").allTextContents();
+      st.lineLabel = await p.textContent("[data-ddn=speed-line] dd");
       // The card is scrolled into view (a usual window: it opens below the fold).
       st.cardInView = await p.evaluate(() => {
         const b = document.querySelector("[data-ddn=speed-card]")!.getBoundingClientRect();
@@ -467,6 +485,7 @@ try {
       st.lineOnlyRows = await p.evaluate(() => (window as unknown as { ddnSpeedCardRows?(r: unknown): string[] }).ddnSpeedCardRows?.({ at: Date.now(), build: "x", platform: "web", line: { down: 50, up: 20 }, discord: { up: null, down: null, upShare: null, downShare: null, channels: 1, fragments: 0, fragmentBytes: 10485760, concUp: { auto: true, start: 0, max: 0 }, concDown: { auto: true, start: 0, max: 0 }, rateLimited: 0, errors: 0, deleted: 0, leftOver: 0 }, hints: [] }) ?? null);
     }
     st.files = (await p.evaluate(() => (window as unknown as { ddnCore: { list(): Promise<{ rows: unknown[] }> } }).ddnCore.list())).rows.length - files0;
+    if (SERVER_SIDE) st.buttons = { discord: await p.isVisible("[data-ddn=speed-run]"), line: await p.isVisible("[data-ddn=speed-run-line]") };
     r.speedTest = st;
     await nav(p, "settings", "appearance");
   }
@@ -2315,7 +2334,7 @@ try {
       const f = r.folderNav as Record<string, unknown> | undefined;
       return !!f && f.upHiddenAtRoot === true && f.rowCursor === "pointer" && f.rowClick === true && /^(Parent folder|Folder nadrzędny)$/.test(String(f.upLabel)) && f.upButton === true && f.enter === true && f.backspaceInField === true && f.backspace === true && f.backspaceAtRootStays === true;
     })(),
-    speedTest: ((x) => !!x && x.files === 0 && (SERVER_SIDE ? x.advHidden === true && JSON.stringify(x.lineOnlyRows) === JSON.stringify(["line", "build"]) : /MB\/s/.test(String(x.up)) && /MB\/s/.test(String(x.down)) && /6 ×/.test(String(x.channels)) && x.cardInView === true && x.deleteRejectsLeft === 0 && /discordrive speed test/.test(String(x.copied)) && Number(x.history) >= 1 && x.msgsAfter === 0 && x.msgsAfterCancel === 0 && /Cancel|Anulow/.test(String(x.cancelText))))(r.speedTest as Record<string, unknown> | undefined),
+    speedTest: ((x) => !!x && x.files === 0 && (SERVER_SIDE ? x.advHidden === true && JSON.stringify(x.lineOnlyRows) === JSON.stringify(["line", "build"]) && JSON.stringify(x.buttons) === JSON.stringify({ discord: false, line: true }) : JSON.stringify(x.buttons) === JSON.stringify({ discord: true, line: true, noLineGone: true }) && speedLiveMoves(x.live) && (x.share as string[]).length === 2 && (x.share as string[]).every((s) => /\d+% (prędkości Twojego łącza|of your line's speed) \((łącze|line) (50|20) MB\/s/.test(s)) && /test z|test of/.test(String(x.lineLabel)) && !/: .*: /.test(String(x.copied).split("\n")[2]) && /MB\/s/.test(String(x.up)) && /MB\/s/.test(String(x.down)) && /6 ×/.test(String(x.channels)) && x.cardInView === true && x.deleteRejectsLeft === 0 && /discordrive speed test/.test(String(x.copied)) && Number(x.history) >= 1 && x.msgsAfter === 0 && x.msgsAfterCancel === 0 && /Cancel|Anulow/.test(String(x.cancelText))))(r.speedTest as Record<string, unknown> | undefined),
     settingsLayoutStable: ((x) => !!x && x.moved.length === 0)(r.settingsLayout as { moved: string[] } | undefined),
     localSearch: ((x) => !!x && x.byTakenDate && x.byNameNoDiacritics && x.allWords)(r.localSearch as { byTakenDate: boolean; byNameNoDiacritics: boolean; allWords: boolean } | undefined),
     settingsTabs: ((x) => !!x && x.everySectionOnce && x.untabbed.length === 0 && x.oneChannelList && x.reloadApp && x.back && x.anchor && x.remembered === "/settings/network" &&

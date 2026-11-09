@@ -35,13 +35,28 @@ export interface SpeedTestProgress {
   mbps: number;
   /** Pieces in flight now (Discord stages). */
   inFlight?: number;
+  /** Test pieces finished in this stage and how many there are (Discord stages and the clean-up). */
+  pieces?: number;
+  of?: number;
+  /** Time in this stage so far, and how long it is planned to take (the line stages run for a set time). */
+  ms: number;
+  planMs?: number;
 }
+
+/** Progress is sent at least this often while a stage runs: a slow piece must not look like a stuck test. */
+export const SPEED_BEAT_MS = 1000;
+const beat = (fn: () => void) => {
+  const id = setInterval(fn, SPEED_BEAT_MS);
+  return () => clearInterval(id);
+};
 
 export interface SpeedTestResult {
   at: number;
   build: string | null;
   platform: string;
   line: { down: number; up: number } | null;
+  /** The line is from an earlier line test on this device (then: when it was measured), not from this run. */
+  lineAt?: number;
   discord: {
     up: number | null;
     down: number | null;
@@ -117,8 +132,15 @@ export async function lineSpeed(f: typeof fetch, seconds = 8, signal?: AbortSign
     const t0 = Date.now();
     const end = t0 + seconds * 1000;
     let bytes = 0;
-    const tick = () => onProgress?.({ stage: up ? "line-up" : "line-down", bytes, total: 0, mbps: MBPS(bytes, Date.now() - t0) });
+    let told = 0;
+    const tick = () => {
+      told = Date.now();
+      onProgress?.({ stage: up ? "line-up" : "line-down", bytes, total: 0, mbps: MBPS(bytes, told - t0), ms: told - t0, planMs: seconds * 1000 });
+    };
+    tick();
+    const stop = beat(tick);
     const body = up ? new Uint8Array(8_000_000) : null;
+    try {
     await Promise.all(
       Array.from({ length: 6 }, async () => {
         while (Date.now() < end && !signal?.aborted) {
@@ -135,6 +157,7 @@ export async function lineSpeed(f: typeof fetch, seconds = 8, signal?: AbortSign
                 const x = await rd.read();
                 if (x.done) break;
                 bytes += x.value.byteLength;
+                if (Date.now() - told > 250) tick();
                 if (Date.now() > end) {
                   await rd.cancel().catch(() => {});
                   break;
@@ -149,6 +172,9 @@ export async function lineSpeed(f: typeof fetch, seconds = 8, signal?: AbortSign
         }
       }),
     );
+    } finally {
+      stop();
+    }
     return MBPS(bytes, Date.now() - t0);
   };
   const down = await run(false);
@@ -193,12 +219,16 @@ export async function discordSpeed(
   const remove = (blobs as { remove?(p: Placement): Promise<unknown> }).remove?.bind(blobs);
   const forget = async (i: number) => store?.del(`${KEY_PREFIX}${i}`).catch(() => {});
   let deleted = 0;
+  let stopBeat = () => {};
   try {
     // ── upload ──
     let next = 0;
     let sent = 0;
+    let piecesUp = 0;
     const t0 = Date.now();
-    const report = () => o.onProgress?.({ stage: "up", bytes: sent, total: count * size, mbps: MBPS(sent, Date.now() - t0), inFlight: net.win.up.inUse });
+    const report = () => o.onProgress?.({ stage: "up", bytes: sent, total: count * size, mbps: MBPS(sent, Date.now() - t0), inFlight: net.win.up.inUse, pieces: piecesUp, of: count, ms: Date.now() - t0 });
+    report();
+    stopBeat = beat(report);
     const worker = async () => {
       for (;;) {
         const free = await net.win.up.acquire(signal);
@@ -219,6 +249,7 @@ export async function discordSpeed(
             throw e;
           }
           sent += size;
+          piecesUp++;
           report();
         } finally {
           free();
@@ -227,6 +258,7 @@ export async function discordSpeed(
     };
     const workers = Math.min(count, Math.max(net.win.up.max, client.autoCap("up")));
     const results = await Promise.allSettled(Array.from({ length: workers }, worker));
+    stopBeat();
     if (signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
     const failed = results.filter((r) => r.status === "rejected");
     errors += failed.length;
@@ -237,11 +269,16 @@ export async function discordSpeed(
     // ── download ──
     if (o.only !== "up") {
       const have = posted.filter((p): p is Placement => !!p);
-      await blobs.prefetch?.(have, { x: "speedtest", first: 0 }).catch(() => {});
       let k = 0;
       let got = 0;
+      let piecesDown = 0;
+      // The clock of the download starts before the links are fetched (a few seconds on a slow line): the
+      // stage shown is the download from the first moment, not a stalled upload.
       const t1 = Date.now();
-      const rep = () => o.onProgress?.({ stage: "down", bytes: got, total: have.length * size, mbps: MBPS(got, Date.now() - t1), inFlight: net.win.down.inUse });
+      const rep = () => o.onProgress?.({ stage: "down", bytes: got, total: have.length * size, mbps: MBPS(got, Date.now() - t1), inFlight: net.win.down.inUse, pieces: piecesDown, of: have.length, ms: Date.now() - t1 });
+      rep();
+      stopBeat = beat(rep);
+      await blobs.prefetch?.(have, { x: "speedtest", first: 0 }).catch(() => {});
       const reader = async () => {
         for (;;) {
           const free = await net.win.down.acquire(signal);
@@ -254,6 +291,7 @@ export async function discordSpeed(
               const b = await blobs.get(have[i]!, signal, { x: "speedtest", i });
               if (tk) net.tune.down.end(tk, b.byteLength, k < have.length);
               got += b.byteLength - 28;
+              piecesDown++;
             } catch (e) {
               if (tk) net.tune.down.drop(tk);
               if (e instanceof RateLimitedError) rateLimited++;
@@ -267,15 +305,23 @@ export async function discordSpeed(
       };
       const n = Math.min(have.length, Math.max(net.win.down.max, client.autoCap("down")));
       const rr = await Promise.allSettled(Array.from({ length: n }, reader));
+      stopBeat();
       if (signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
       errors += rr.filter((r) => r.status === "rejected").length;
       down = MBPS(got, Date.now() - t1);
     }
   } finally {
+    stopBeat();
     // ── delete every test message (also after a cancel or a failure) ──
     if (remove) {
       const all = posted.map((p, i) => [p, i] as const).filter((x): x is readonly [Placement, number] => !!x[0]);
       let done = 0;
+      const t2 = Date.now();
+      const n0 = all.length;
+      // A delete that meets the channel's limit waits up to a minute: the clock keeps moving meanwhile.
+      const rc = () => o.onProgress?.({ stage: "cleanup", bytes: done, total: n0, mbps: 0, pieces: done, of: n0, ms: Date.now() - t2 });
+      if (n0) rc();
+      const stopRc = n0 ? beat(rc) : () => {};
       // Two at a time, each tried again after a 429 (a cancel does not stop the clean-up).
       await Promise.all(
         Array.from({ length: 2 }, async () => {
@@ -288,10 +334,10 @@ export async function discordSpeed(
               await forget(x[1]);
             }
             done++;
-            o.onProgress?.({ stage: "cleanup", bytes: done, total: posted.filter(Boolean).length, mbps: 0 });
+            rc();
           }
         }),
-      );
+      ).finally(stopRc);
     }
   }
   const leftOver = posted.filter(Boolean).length - deleted;

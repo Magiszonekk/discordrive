@@ -273,7 +273,6 @@ try {
     await p.click("[data-ddn=speed-adv] summary");
     await p.fill("[data-ddn=speed-count]", "6");
     await p.fill("[data-ddn=speed-size]", "1");
-    await p.check("[data-ddn=speed-noline]");
     await p.click("[data-ddn=speed-run]");
     const card = await p.waitForSelector("[data-ddn=speed-card]:not([hidden])", { timeout: 120_000 }).then(() => true).catch(() => false);
     const up = (await p.textContent("[data-ddn=speed-up]").catch(() => "")) ?? "";
