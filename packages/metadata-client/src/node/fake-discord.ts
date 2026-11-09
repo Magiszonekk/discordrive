@@ -59,6 +59,14 @@ export class FakeDiscord {
   getPerSecPerHook = 0;
   /** Tests: the Cloudflare block as plain text ("error code: 1015") instead of an HTML page. */
   cloudflarePlain = false;
+  /**
+   * The line test's server (speed.cloudflare.com's /__down and /__up) for the speed test: each request moves at
+   * this many bytes/s, so a test sees a usual line. `lineRefuse`: answer 429 (the test server's limit).
+   */
+  lineBps = 1_500_000;
+  lineRefuse = false;
+  /** Line test requests seen: [up body size]. */
+  lineUps: number[] = [];
   /** GETs of messages per webhook: [start, end] times (tests: rate and concurrency). */
   readonly getLog = new Map<string, { t0: number; t1: number; st: number }[]>();
   /**
@@ -139,6 +147,37 @@ export class FakeDiscord {
     res.end(data);
   }
 
+  /** The line test's endpoints, paced at `lineBps` per request (reads the upload slowly, writes the download slowly). */
+  private async lineTest(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    const cors = { "access-control-allow-origin": "*" };
+    if (this.lineRefuse) {
+      for await (const _ of req) void _;
+      res.writeHead(429, cors);
+      return void res.end("error code: 1015");
+    }
+    const wait = (n: number) => new Promise((r) => setTimeout(r, (n / this.lineBps) * 1000));
+    if (url.pathname === "/__up") {
+      let n = 0;
+      for await (const c of req) {
+        n += (c as Buffer).length;
+        req.pause();
+        await wait((c as Buffer).length);
+        req.resume();
+      }
+      this.lineUps.push(n);
+      res.writeHead(200, cors);
+      return void res.end("ok");
+    }
+    const total = Math.min(100_000_000, Number(url.searchParams.get("bytes") ?? 1e6));
+    res.writeHead(200, { ...cors, "content-type": "application/octet-stream" });
+    const chunk = Buffer.alloc(64 * 1024);
+    for (let sent = 0; sent < total && !res.destroyed; sent += chunk.length) {
+      await wait(chunk.length);
+      if (!res.write(chunk)) await new Promise((r) => res.once("drain", r));
+    }
+    res.end();
+  }
+
   /** Discord-shaped CDN path: /attachments/<channel>/<attachment>/<filename>. */
   private link(aid: string): string {
     const ex = Math.floor(Date.now() / 1000 + 86400).toString(16);
@@ -182,6 +221,7 @@ export class FakeDiscord {
       return void res.end();
     }
     const url = new URL(req.url ?? "/", this.origin);
+    if (url.pathname === "/__up" || url.pathname === "/__down") return this.lineTest(req, res, url);
     if (url.pathname === "/api/v10/attachments/refresh-urls" && req.method === "POST") {
       if (!this.botToken || req.headers.authorization !== `Bot ${this.botToken}`) return this.send(res, 401, { message: "401: Unauthorized", code: 0 });
       const chunks: Buffer[] = [];

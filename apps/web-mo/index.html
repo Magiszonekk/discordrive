@@ -635,7 +635,7 @@
           <h2 class="sec-h"><span id="speed-h" data-i18n="sp.h">Speed test</span><span class="chip" data-ddn="speed-state"></span></h2>
           <p class="sec-lead" data-ddn="speed-lead"></p>
           <div class="sec-body">
-            <div class="row-btns"><button class="btn primary" type="button" data-ddn="speed-run" data-i18n="sp.run">Run the test</button><button class="btn" type="button" data-ddn="speed-cancel" data-i18n="sp.cancel" hidden>Cancel</button></div>
+            <div class="row-btns"><button class="btn primary" type="button" data-ddn="speed-run" data-i18n="sp.runDiscord">Test Discord</button><button class="btn" type="button" data-ddn="speed-run-line" data-i18n="sp.runLine">Test the line</button><button class="btn" type="button" data-ddn="speed-cancel" data-i18n="sp.cancel" hidden>Cancel</button></div>
             <div class="note warn" data-ddn="speed-metered" hidden><svg class="i"><use href="#i-info"/></svg><p data-i18n="sp.metered"></p></div>
             <p class="result" data-ddn="speed-live" role="status" aria-live="polite"></p>
             <details class="howto" data-ddn="speed-adv">
@@ -645,7 +645,6 @@
                   <label class="field"><span class="lab" data-i18n="sp.count">Test pieces</span><input class="input" type="number" min="4" max="200" step="1" value="32" data-ddn="speed-count"></label>
                   <label class="field"><span class="lab" data-i18n="sp.size">Piece size (MiB)</span><input class="input" type="number" min="1" max="24" step="1" value="10" data-ddn="speed-size"></label>
                 </div>
-                <label class="ack"><input type="checkbox" data-ddn="speed-noline"><span data-i18n="sp.noLine">Skip the line test</span></label>
                 <label class="ack"><input type="checkbox" data-ddn="speed-uponly"><span data-i18n="sp.upOnly">Upload only</span></label>
               </div>
             </details>

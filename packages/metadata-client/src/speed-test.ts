@@ -35,13 +35,28 @@ export interface SpeedTestProgress {
   mbps: number;
   /** Pieces in flight now (Discord stages). */
   inFlight?: number;
+  /** Test pieces finished in this stage and how many there are (Discord stages and the clean-up). */
+  pieces?: number;
+  of?: number;
+  /** Time in this stage so far, and how long it is planned to take (the line stages run for a set time). */
+  ms: number;
+  planMs?: number;
 }
+
+/** Progress is sent at least this often while a stage runs: a slow piece must not look like a stuck test. */
+export const SPEED_BEAT_MS = 1000;
+const beat = (fn: () => void) => {
+  const id = setInterval(fn, SPEED_BEAT_MS);
+  return () => clearInterval(id);
+};
 
 export interface SpeedTestResult {
   at: number;
   build: string | null;
   platform: string;
   line: { down: number; up: number } | null;
+  /** The line is from an earlier line test on this device (then: when it was measured), not from this run. */
+  lineAt?: number;
   discord: {
     up: number | null;
     down: number | null;
@@ -111,45 +126,86 @@ export async function cleanupLeftovers(client: Pick<DriveClient, "blobs">, store
   return n;
 }
 
-/** The line: download / upload streams to speed.cloudflare.com for `seconds` each way. */
-export async function lineSpeed(f: typeof fetch, seconds = 8, signal?: AbortSignal, onProgress?: SpeedTestOptions["onProgress"]): Promise<{ down: number; up: number }> {
+/** The line: download / upload streams to speed.cloudflare.com for `seconds` each way. Throws when a direction
+ * moved no data at all (the test server refused, e.g. 429): a 0 is not a speed to compare with. */
+export async function lineSpeed(f: typeof fetch, seconds = 8, signal?: AbortSignal, onProgress?: SpeedTestOptions["onProgress"], origin = "https://speed.cloudflare.com"): Promise<{ down: number; up: number }> {
   const run = async (up: boolean) => {
     const t0 = Date.now();
     const end = t0 + seconds * 1000;
     let bytes = 0;
-    const tick = () => onProgress?.({ stage: up ? "line-up" : "line-down", bytes, total: 0, mbps: MBPS(bytes, Date.now() - t0) });
-    const body = up ? new Uint8Array(8_000_000) : null;
-    await Promise.all(
-      Array.from({ length: 6 }, async () => {
-        while (Date.now() < end && !signal?.aborted) {
-          try {
-            if (up) {
-              const r = await f("https://speed.cloudflare.com/__up", { method: "POST", body: body as BodyInit, signal });
-              if (r.ok) bytes += body!.byteLength;
-              await r.arrayBuffer().catch(() => null);
-            } else {
-              const r = await f("https://speed.cloudflare.com/__down?bytes=25000000", { signal });
-              const rd = r.body?.getReader();
-              if (!rd) break;
-              for (;;) {
-                const x = await rd.read();
-                if (x.done) break;
-                bytes += x.value.byteLength;
-                if (Date.now() > end) {
-                  await rd.cancel().catch(() => {});
-                  break;
+    let told = 0;
+    let lastAt = t0;
+    let refused = 0;
+    const tick = () => {
+      told = Date.now();
+      onProgress?.({ stage: up ? "line-up" : "line-down", bytes, total: 0, mbps: MBPS(bytes, told - t0), ms: told - t0, planMs: seconds * 1000 });
+    };
+    tick();
+    const stop = beat(tick);
+    // Requests still in flight at the end are cut (a slow line must not stretch "8 s" to minutes); the speed is
+    // what finished up to the last finished request.
+    const cut = new AbortController();
+    const onAbort = () => cut.abort();
+    signal?.addEventListener("abort", onAbort);
+    const timer = setTimeout(() => cut.abort(), seconds * 1000 + 1500);
+    // Uploads go in small bodies that grow while they finish fast (256 kB .. 2 MB): one big body keeps a
+    // browser worker busy for seconds (no progress, no timers) and on a slow line never finishes in time.
+    const MIN_UP = 256 * 1024;
+    const MAX_UP = 2 * 1024 * 1024;
+    const pool = up ? new Uint8Array(MAX_UP) : null;
+    try {
+      await Promise.all(
+        Array.from({ length: 6 }, async () => {
+          let size = MIN_UP;
+          while (Date.now() < end && !cut.signal.aborted) {
+            try {
+              if (up) {
+                const s0 = Date.now();
+                const r = await f(`${origin}/__up`, { method: "POST", body: pool!.subarray(0, size) as BodyInit, signal: cut.signal });
+                await r.arrayBuffer().catch(() => null);
+                if (r.ok) {
+                  bytes += size;
+                  lastAt = Date.now();
+                } else if (r.status === 429 || r.status >= 500) refused++;
+                const took = Date.now() - s0;
+                size = took < 400 ? Math.min(MAX_UP, size * 2) : took > 1500 ? Math.max(MIN_UP, size / 2) : size;
+              } else {
+                const r = await f(`${origin}/__down?bytes=25000000`, { signal: cut.signal });
+                if (!r.ok) {
+                  refused++;
+                  await r.arrayBuffer().catch(() => null);
+                  throw new Error(`HTTP ${r.status}`);
+                }
+                const rd = r.body?.getReader();
+                if (!rd) break;
+                for (;;) {
+                  const x = await rd.read();
+                  if (x.done) break;
+                  bytes += x.value.byteLength;
+                  lastAt = Date.now();
+                  if (lastAt - told > 250) tick();
+                  if (lastAt > end) {
+                    await rd.cancel().catch(() => {});
+                    break;
+                  }
                 }
               }
+            } catch {
+              if (cut.signal.aborted) break;
+              await new Promise((r) => setTimeout(r, 300));
             }
-          } catch {
-            if (signal?.aborted) break;
-            await new Promise((r) => setTimeout(r, 300));
+            tick();
           }
-          tick();
-        }
-      }),
-    );
-    return MBPS(bytes, Date.now() - t0);
+        }),
+      );
+    } finally {
+      stop();
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    }
+    if (signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    if (bytes === 0) throw Object.assign(new Error(refused ? "the line test server refused (try later)" : "the line test moved no data"), { code: refused ? "line_refused" : "line_no_data" });
+    return MBPS(bytes, Math.min(lastAt, end) - t0);
   };
   const down = await run(false);
   const up = await run(true);
@@ -193,12 +249,16 @@ export async function discordSpeed(
   const remove = (blobs as { remove?(p: Placement): Promise<unknown> }).remove?.bind(blobs);
   const forget = async (i: number) => store?.del(`${KEY_PREFIX}${i}`).catch(() => {});
   let deleted = 0;
+  let stopBeat = () => {};
   try {
     // ── upload ──
     let next = 0;
     let sent = 0;
+    let piecesUp = 0;
     const t0 = Date.now();
-    const report = () => o.onProgress?.({ stage: "up", bytes: sent, total: count * size, mbps: MBPS(sent, Date.now() - t0), inFlight: net.win.up.inUse });
+    const report = () => o.onProgress?.({ stage: "up", bytes: sent, total: count * size, mbps: MBPS(sent, Date.now() - t0), inFlight: net.win.up.inUse, pieces: piecesUp, of: count, ms: Date.now() - t0 });
+    report();
+    stopBeat = beat(report);
     const worker = async () => {
       for (;;) {
         const free = await net.win.up.acquire(signal);
@@ -219,6 +279,7 @@ export async function discordSpeed(
             throw e;
           }
           sent += size;
+          piecesUp++;
           report();
         } finally {
           free();
@@ -227,6 +288,7 @@ export async function discordSpeed(
     };
     const workers = Math.min(count, Math.max(net.win.up.max, client.autoCap("up")));
     const results = await Promise.allSettled(Array.from({ length: workers }, worker));
+    stopBeat();
     if (signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
     const failed = results.filter((r) => r.status === "rejected");
     errors += failed.length;
@@ -237,11 +299,16 @@ export async function discordSpeed(
     // ── download ──
     if (o.only !== "up") {
       const have = posted.filter((p): p is Placement => !!p);
-      await blobs.prefetch?.(have, { x: "speedtest", first: 0 }).catch(() => {});
       let k = 0;
       let got = 0;
+      let piecesDown = 0;
+      // The clock of the download starts before the links are fetched (a few seconds on a slow line): the
+      // stage shown is the download from the first moment, not a stalled upload.
       const t1 = Date.now();
-      const rep = () => o.onProgress?.({ stage: "down", bytes: got, total: have.length * size, mbps: MBPS(got, Date.now() - t1), inFlight: net.win.down.inUse });
+      const rep = () => o.onProgress?.({ stage: "down", bytes: got, total: have.length * size, mbps: MBPS(got, Date.now() - t1), inFlight: net.win.down.inUse, pieces: piecesDown, of: have.length, ms: Date.now() - t1 });
+      rep();
+      stopBeat = beat(rep);
+      await blobs.prefetch?.(have, { x: "speedtest", first: 0 }).catch(() => {});
       const reader = async () => {
         for (;;) {
           const free = await net.win.down.acquire(signal);
@@ -254,6 +321,7 @@ export async function discordSpeed(
               const b = await blobs.get(have[i]!, signal, { x: "speedtest", i });
               if (tk) net.tune.down.end(tk, b.byteLength, k < have.length);
               got += b.byteLength - 28;
+              piecesDown++;
             } catch (e) {
               if (tk) net.tune.down.drop(tk);
               if (e instanceof RateLimitedError) rateLimited++;
@@ -267,15 +335,23 @@ export async function discordSpeed(
       };
       const n = Math.min(have.length, Math.max(net.win.down.max, client.autoCap("down")));
       const rr = await Promise.allSettled(Array.from({ length: n }, reader));
+      stopBeat();
       if (signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
       errors += rr.filter((r) => r.status === "rejected").length;
       down = MBPS(got, Date.now() - t1);
     }
   } finally {
+    stopBeat();
     // ── delete every test message (also after a cancel or a failure) ──
     if (remove) {
       const all = posted.map((p, i) => [p, i] as const).filter((x): x is readonly [Placement, number] => !!x[0]);
       let done = 0;
+      const t2 = Date.now();
+      const n0 = all.length;
+      // A delete that meets the channel's limit waits up to a minute: the clock keeps moving meanwhile.
+      const rc = () => o.onProgress?.({ stage: "cleanup", bytes: done, total: n0, mbps: 0, pieces: done, of: n0, ms: Date.now() - t2 });
+      if (n0) rc();
+      const stopRc = n0 ? beat(rc) : () => {};
       // Two at a time, each tried again after a 429 (a cancel does not stop the clean-up).
       await Promise.all(
         Array.from({ length: 2 }, async () => {
@@ -288,10 +364,10 @@ export async function discordSpeed(
               await forget(x[1]);
             }
             done++;
-            o.onProgress?.({ stage: "cleanup", bytes: done, total: posted.filter(Boolean).length, mbps: 0 });
+            rc();
           }
         }),
-      );
+      ).finally(stopRc);
     }
   }
   const leftOver = posted.filter(Boolean).length - deleted;
@@ -305,10 +381,10 @@ export function speedHints(r: { line: { down: number; up: number } | null; up: n
   if (r.rateLimited > 0) h.push({ k: "rate-limited", n: r.rateLimited });
   if (r.errors > 0) h.push({ k: "errors", n: r.errors });
   const line = r.line;
-  if (r.up !== null && line && line.up > 0 && r.up / line.up >= 0.85) h.push({ k: "line-full", dir: "up", share: r.up / line.up });
+  if (r.up !== null && line && line.up > 0 && r.up / line.up >= 0.85 && r.up / line.up <= 1.15) h.push({ k: "line-full", dir: "up", share: r.up / line.up });
   // ~5 MB/s per channel is what Discord gives one channel (30 posts a minute of 10 MiB): below the line, more channels help.
   else if (r.up !== null && r.channels > 0 && r.up / r.channels >= 3.5 && (!line || r.up < line.up * 0.85)) h.push({ k: "channels", perChannel: r.up / r.channels, channels: r.channels });
-  if (r.down !== null && line && line.down > 0 && r.down / line.down >= 0.85) h.push({ k: "line-full", dir: "down", share: r.down / line.down });
+  if (r.down !== null && line && line.down > 0 && r.down / line.down >= 0.85 && r.down / line.down <= 1.15) h.push({ k: "line-full", dir: "down", share: r.down / line.down });
   else if (r.down !== null && r.browser && r.down < 25 && line && line.down > 50) h.push({ k: "browser-h3", down: r.down });
   return h;
 }
