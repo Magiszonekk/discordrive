@@ -109,6 +109,8 @@ function canonicalNode(n: NodeRecord): NodeRecord {
         }
       : null,
     conflictOf: n.conflictOf ? { nodeId: n.conflictOf.nodeId, seq: n.conflictOf.seq } : null,
+    // Rules 5, optional: absent when none is set, so older states stay byte-identical.
+    ...(n.attrs?.thumbHidden ? { attrs: { thumbHidden: true as const } } : {}),
   };
 }
 

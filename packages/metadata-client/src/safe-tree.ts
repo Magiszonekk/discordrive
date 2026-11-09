@@ -28,7 +28,7 @@ import {
   loadSnapshot,
   MemoryIndexStore,
   nameKey,
-  RULES_VERSION,
+  rulesVersionFor,
   takeSnapshot,
   uploadsTouched,
   applyEntry,
@@ -62,6 +62,8 @@ export interface SafeTreeState {
 }
 
 /** An upload committed outside the log that the Safe does not refer to this long after: a write that never happened. */
+/** Rules version of the Safe's own ops (rulesVersionFor raises it for an op that needs newer rules). */
+export const SAFE_RULES_VERSION = 4;
 export const SAFE_ORPHAN_GRACE_MS = 60 * 60_000;
 
 /** Where the Safe's files' pieces are, and how they are let go. */
@@ -178,7 +180,9 @@ export class SafeTree {
       const lg = uploadsTouched(op);
       const e: LogEntry = {
         opId,
-        rulesVersion: RULES_VERSION,
+        // Rules 4 (what every reader of a Safe knows), 5 only for an op that needs it: a phone not yet
+        // updated still opens a Safe nobody hid a thumbnail in.
+        rulesVersion: rulesVersionFor(t, op, SAFE_RULES_VERSION),
         baseSeq: Math.min(baseSeq, seq - 1),
         device: { ...this.device },
         createdAt,

@@ -113,12 +113,13 @@ const KINDS: [string, number][] = [
   ["restore", 4],
   ["purge", 4],
   ["group", 4],
-  ["push", 14],
+  ["push", 13],
   ["pull", 12],
   ["time", 3],
   ["cleaner", 3],
   ["invalid", 1],
   ["relocate", 1],
+  ["attr", 1],
   ["gc", 2],
   ["join", 2],
 ];
@@ -162,10 +163,12 @@ export interface Stats {
   fragmentsDeleted: number;
   joins: number;
   maxLog: number;
+  /** Rules 5: files with an attribute at the end of a run (coverage of set_attr). */
+  attrs: number;
 }
 
 export function newStats(): Stats {
-  return { runs: 0, entries: 0, outcomes: {}, notices: {}, leaseRejected: 0, fragmentsDeleted: 0, joins: 0, maxLog: 0 };
+  return { runs: 0, entries: 0, outcomes: {}, notices: {}, leaseRejected: 0, fragmentsDeleted: 0, joins: 0, maxLog: 0, attrs: 0 };
 }
 
 let lastLogValue: LogEntry[] | null = null;
@@ -417,6 +420,7 @@ export function runCase(actions: Action[], stats: Stats): void {
           { type: "create", kind: "folder", nodeId: "short", parentId: ROOT_ID, name: "x" },
           { type: "create", kind: "folder", nodeId: newNodeId(d), parentId: pick(files(d), a.x)?.id ?? ROOT_ID, name: "in-file" },
           { type: "upload_commit", uploadId: `up-9-${pad(a.y % 100)}` },
+          { type: "set_attr", nodeId: pick(files(d), a.x)?.id ?? "zzzzzzzz", attr: "nope", value: true } as unknown as SingleOp,
         ];
         d.r.enqueue(pick(bad, a.y)!);
         break;
@@ -429,6 +433,12 @@ export function runCase(actions: Action[], stats: Stats): void {
         const cur = u?.boundTo ? d.r.store.getNode(u.boundTo.nodeId)?.content : undefined;
         // `from` as this device sees it: may be stale by the time the op is sequenced (CAS -> skipped).
         if (u?.boundTo) d.r.enqueue({ type: "relocate", uploadId: u.id, versionId: u.boundTo.versionId, from: cur?.versionId === u.boundTo.versionId ? cur.manifestRef : `mf-${u.id}`, manifestRef: `mf-${u.id}-r${a.y % 97}`, ...(a.z % 2 ? { pieces: [{ loc: `w${a.y % 3}`, n: 1 + (a.z % 4), bytes: a.y % 9000 }] } : {}) });
+        break;
+      }
+      case "attr": {
+        // Rules 5: hide/show a file's thumbnail (sometimes a folder or an unknown node: rejected/skipped).
+        const id = a.z % 7 === 0 ? pickNode(d, userNodes(d), a.x) : pickNode(d, files(d), a.x);
+        if (id) d.r.enqueue({ type: "set_attr", nodeId: id, attr: "thumbHidden", value: a.y % 3 !== 0 });
         break;
       }
       case "gc":
@@ -489,6 +499,7 @@ export function runCase(actions: Action[], stats: Stats): void {
     for (const n of r.notices) stats.notices[n.code] = (stats.notices[n.code] ?? 0) + 1;
   }
   const want = canonicalState(full);
+  for (const n of full.allNodes()) if (n.attrs) stats.attrs++;
 
   for (const d of devs) expect(canonicalState(d.r.store)).toBe(want);
 

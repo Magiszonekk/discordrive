@@ -29,6 +29,7 @@ import {
   ROOT_ID,
   RULES_VERSION,
   SYSTEM_IDS,
+  NODE_ATTRS,
   type ChangeMark,
   type ContentRef,
   type CreateOp,
@@ -45,6 +46,7 @@ import {
   type RelocateOp,
   type RenameOp,
   type RestoreOp,
+  type SetAttrOp,
   type SingleOp,
   type TrashOp,
   type UploadAbortOp,
@@ -228,9 +230,11 @@ export function spaceOf(s: IndexStore, id: NodeId): Space {
  * same as rules-4 ones, so a device that never touches the Gallery may go on writing 3.)
  */
 export function rulesVersionFor(s: IndexStore, op: Operation, base: number): number {
+  const ops = op.type === "group" ? op.ops : [op];
+  // Rules 5: an attribute op exists only from rules 5 on (written only when someone uses it).
+  if (base < 5 && ops.some((o) => o.type === "set_attr")) return 5;
   if (base >= 4) return base;
   const inGallery = (id: NodeId | undefined) => id !== undefined && (id === GALLERY_ID || (!!s.getNode(id) && spaceOf(s, id) === "gallery"));
-  const ops = op.type === "group" ? op.ops : [op];
   for (const o of ops) {
     if ("space" in o && o.space !== undefined) return 4;
     if ("nodeId" in o && inGallery(o.nodeId)) return 4;
@@ -371,6 +375,11 @@ function applySingle(ctx: Ctx, op: SingleOp, sub: number): Outcome {
     case "relocate":
       // Rules v3 only: in an entry of rules 2 it stays what it was then, an unknown type.
       if (ctx.e.rulesVersion >= 3) return opRelocate(ctx, op);
+      ctx.notice({ code: "invalid_op", reason: "unknown_type" });
+      return "rejected";
+    case "set_attr":
+      // Rules 5 only: in an older entry it stays what it was then, an unknown type.
+      if (ctx.e.rulesVersion >= 5) return opSetAttr(ctx, op);
       ctx.notice({ code: "invalid_op", reason: "unknown_type" });
       return "rejected";
     default:
@@ -978,6 +987,8 @@ function opNewContent(ctx: Ctx, op: NewContentVersionOp): Outcome {
       content: cur,
       recoveredFrom: null,
       conflictOf: { nodeId: rec.id, seq: ctx.e.seq },
+      // Rules 5: the copy shows the same way the file did (the attribute is about the picture).
+      ...(rec.attrs ? { attrs: { ...rec.attrs } } : {}),
     };
     ctx.s.putNode({ ...rec, content: version });
     placeLive(ctx, copy, rec.parentId!, copy.name);
@@ -1055,6 +1066,31 @@ function opRelocate(ctx: Ctx, op: RelocateOp): Outcome {
   ctx.s.putNode({ ...node, content: { ...rest, manifestRef: op.manifestRef, ...(pieces ? { pieces } : {}) } });
   // from == manifestRef: only the piece locations were filled in (read from the manifest); nothing moved.
   if (op.from !== op.manifestRef) ctx.s.putUpload({ ...u, relocated: { seq: ctx.e.seq, at: ctx.e.serverTime } });
+  return "applied";
+}
+
+/**
+ * Rules 5: set or clear a display attribute of a file. The later op wins (like a rename, without a
+ * notice: nothing is lost, the other device's choice is visible right away). Works in the trash too.
+ */
+function opSetAttr(ctx: Ctx, op: SetAttrOp): Outcome {
+  if (!isRef(op.nodeId)) return ctx.reject("bad_node_id");
+  if (isSystem(ctx.s, op.nodeId)) return ctx.reject("system_node", op.nodeId);
+  if (!(NODE_ATTRS as readonly unknown[]).includes(op.attr)) return ctx.reject("bad_attr", op.nodeId);
+  if (typeof op.value !== "boolean") return ctx.reject("bad_attr_value", op.nodeId);
+  const node = ctx.s.getNode(op.nodeId);
+  if (!node) {
+    ctx.notice({ code: "node_purged", nodeId: op.nodeId, reason: "set_attr" });
+    return "skipped";
+  }
+  if (node.kind !== "file") return ctx.reject("not_a_file", node.id);
+  const has = node.attrs?.[op.attr] === true;
+  if (has === op.value) return "noop";
+  const attrs = { ...node.attrs };
+  if (op.value) attrs[op.attr] = true;
+  else delete attrs[op.attr];
+  const { attrs: _old, ...rest } = node;
+  ctx.s.putNode(Object.keys(attrs).length ? { ...rest, attrs } : rest);
   return "applied";
 }
 
