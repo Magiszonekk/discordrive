@@ -974,7 +974,36 @@ else {
     if (process.env.DDN_DESKTOP_QUIT_ON_CLOSE) app.quit();
   });
   let stopped = false;
+  let stopping = false;
+  /** Chromium switch, read at every GPU helper exit: failed restarts do not end the app. */
+  const GPU_NO_CRASH_LIMIT = "disable-gpu-process-crash-limit";
   const qdbg = (m: string) => (process.env.DDN_DESKTOP_DEBUG || process.env.DDN_DESKTOP_DATA) && console.error(`[ddn] ${m}`);
+  // The session ends (log out, shut down, the service manager stops the app): quit at once, without the
+  // "transfers are still running" question — nobody is there to answer it. On Linux the system stops
+  // every process of the app together (SIGTERM to the whole group): the agent and the instance close
+  // their databases themselves (agent.ts, local-instance.ts), this process waits for them and ends.
+  const sessionEnd = (why: string) => {
+    qdbg(`session end: ${why}`);
+    quitting = true;
+    app.quit();
+  };
+  // Chromium installs its own handlers for these when its message loop starts (they quit without
+  // `quitting`, so running transfers would show the question): installed once the app is ready, these
+  // replace them.
+  void app.whenReady().then(() => {
+    for (const s of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(s, () => sessionEnd(s));
+  });
+  // Which of the app's processes gets the system's SIGTERM first is up to the scheduler: Chromium may see
+  // its GPU helper killed before this process handles its own signal, and counts the failed restarts
+  // towards the limit that ends the app (see before-quit). A GPU helper killed by SIGTERM is the system
+  // stopping the app (a crash is SIGSEGV/SIGABRT, the kernel's out-of-memory killer SIGKILL): lift the limit
+  // now. If no quit follows within 10 s (someone killed just that helper), the limit is back.
+  app.on("child-process-gone", (_e, d) => {
+    qdbg(`child gone: ${d.type} ${d.reason} ${d.exitCode} quitting=${quitting}`);
+    if (d.type !== "GPU" || d.reason !== "killed" || d.exitCode !== 15) return;
+    app.commandLine.appendSwitch(GPU_NO_CRASH_LIMIT);
+    if (!quitting) setTimeout(() => !quitting && app.commandLine.removeSwitch(GPU_NO_CRASH_LIMIT), 10_000);
+  });
   app.on("before-quit", (e) => {
     qdbg(`before-quit: quitting=${quitting} busy=${busy.busy} stopped=${stopped}`);
     if (!quitting && busy.busy) {
@@ -984,10 +1013,30 @@ else {
     }
     quitting = true;
     if (stopped) return;
+    e.preventDefault();
+    if (stopping) return;
+    stopping = true;
+    // While the app stops, the system may end its GPU helper too (shut down: all processes of the app get
+    // SIGTERM at once). Chromium starts the helper again and, after a few failed starts, ends the whole app
+    // with a fatal error that the system records as a crash ("closed unexpectedly" at the next login).
+    // Nothing needs drawing any more: failed GPU starts from here on no longer count towards that limit.
+    // (Read by Chromium at every GPU exit, so setting it now works; normal use keeps the limit.)
+    app.commandLine.appendSwitch(GPU_NO_CRASH_LIMIT);
     // The agent and the built-in instance stop first (database closed, journals flushed); the app ends
     // after them, so a new start never meets a half-closed one (at most 5 s).
-    e.preventDefault();
-    const ends = [agent, instance].filter((p): p is UtilityProcess => !!p && p.pid !== undefined).map((p) => new Promise<void>((r) => (p.once("exit", () => r()), p.postMessage({ type: "quit" }))));
+    const ends = [agent, instance]
+      .filter((p): p is UtilityProcess => !!p && p.pid !== undefined)
+      .map(
+        (p) =>
+          new Promise<void>((r) => {
+            p.once("exit", () => r());
+            try {
+              p.postMessage({ type: "quit" });
+            } catch {
+              /* already gone (the same signal ended it) */
+            }
+          }),
+      );
     void Promise.race([Promise.all(ends).then(() => "children exited"), new Promise((r) => setTimeout(() => r("5 s timeout"), 5000))]).then((why) => {
       qdbg(`children stopped: ${why}`);
       stopped = true;
@@ -996,7 +1045,10 @@ else {
       const run = runOnQuit;
       runOnQuit = null;
       run?.();
-      app.quit();
+      // On a later turn: with no child left to wait for (the agent already ended on the same SIGTERM) this
+      // runs before Electron has finished the prevented before-quit, which then cancels the nested quit:
+      // the windows closed and the app kept running without them.
+      setTimeout(() => app.quit(), 0);
     });
   });
 }

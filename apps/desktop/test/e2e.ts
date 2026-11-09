@@ -9,7 +9,7 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -87,6 +87,42 @@ const check = (name: string, v: boolean) => {
   r[name] = v;
   if (!v) ok = false;
 };
+/** Linux: a process and all its descendants (pid, command line), from /proc. */
+function processTree(root: number): { pid: number; args: string }[] {
+  const kids = new Map<number, number[]>();
+  for (const d of readdirSync("/proc")) {
+    if (!/^\d+$/.test(d)) continue;
+    try {
+      const st = readFileSync(`/proc/${d}/stat`, "utf8");
+      const ppid = Number(st.slice(st.lastIndexOf(")") + 2).split(" ")[1]);
+      kids.set(ppid, [...(kids.get(ppid) ?? []), Number(d)]);
+    } catch {
+      /* ended meanwhile */
+    }
+  }
+  const out: { pid: number; args: string }[] = [];
+  const walk = (pid: number) => {
+    try {
+      out.push({ pid, args: readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ") });
+    } catch {
+      return;
+    }
+    for (const k of kids.get(pid) ?? []) walk(k);
+  };
+  walk(root);
+  return out;
+}
+/** Crash reports the system would show at the next login (apport), and Chromium's own crash dumps. */
+function crashFiles(): string[] {
+  const ls = (dir: string) => {
+    try {
+      return readdirSync(dir, { recursive: true }).map((f) => join(dir, String(f)));
+    } catch {
+      return [];
+    }
+  };
+  return [...ls("/var/crash").filter((f) => /electron|discordrive/i.test(f)), ...ls(join(data, "Crashpad")).filter((f) => f.endsWith(".dmp"))];
+}
 
 let app: ElectronApplication | null = null;
 try {
@@ -589,6 +625,58 @@ try {
   check("noPartialFiles", readdirSync(downloads).every((f) => !f.endsWith(".ddnpart")));
   r.downloads = readdirSync(downloads);
 
+  if (process.platform === "linux") {
+    step("the session ends while an upload runs: SIGTERM to every process of the app, the GPU helper first");
+    // As systemd stopping the app's scope at shut down / log out: every process gets SIGTERM, the GPU helper
+    // went first in the recorded crashes. The app must end on its own (exit 0, no fatal "GPU process isn't
+    // usable", which the system records as a crash), without the "transfers are still running" question,
+    // with the agent's and the instance's databases closed (no -wal file left), and start again as before.
+    const errLog: string[] = [];
+    app.process().stderr?.on("data", (d: Buffer) => errLog.push(d.toString()));
+    const exited = new Promise<{ code: number | null; signal: string | null }>((res) => app!.process().once("exit", (code, signal) => res({ code, signal })));
+    writeFileSync(join(src, "during-shutdown.bin"), randomBytes(24 * 1024 * 1024));
+    fake.postDelayMs = 1500;
+    await p.evaluate((paths) => void (window as unknown as { ddnCore: { uploadPaths(p: string[]): Promise<unknown> } }).ddnCore.uploadPaths(paths).catch(() => {}), [join(src, "during-shutdown.bin")]);
+    const busyNow = await app.evaluate(async () => {
+      const g = globalThis as unknown as { __ddnBusy?: () => boolean };
+      for (let i = 0; i < 100 && !g.__ddnBusy?.(); i++) await new Promise((r) => setTimeout(r, 100));
+      return g.__ddnBusy?.() === true;
+    });
+    check("sessionEndBusyBefore", busyNow);
+    const mainPid = app.process().pid!;
+    const tree = processTree(mainPid);
+    const gpu = tree.filter((x) => x.args.includes("--type=gpu-process")).map((x) => x.pid);
+    r.sessionEndTree = tree.map((x) => /--type=([\w-]+)/.exec(x.args)?.[1] ?? (x.args.includes("--utility-sub-type") ? "utility" : "main"));
+    const crashesBefore = crashFiles();
+    const t0 = Date.now();
+    for (const x of gpu) process.kill(x, "SIGTERM");
+    await new Promise((res) => setTimeout(res, 30));
+    for (const x of tree) if (!gpu.includes(x.pid)) try { process.kill(x.pid, "SIGTERM"); } catch { /* gone already */ }
+    const end = await Promise.race([exited, new Promise<null>((res) => setTimeout(() => res(null), 30_000))]);
+    const err = errLog.join("");
+    r.sessionEnd = { ...end, ms: Date.now() - t0, gpuHelpers: gpu.length, log: err.split("\n").filter((l) => /\[ddn\]|FATAL|GPU process/.test(l)).slice(-20) };
+    // Within the 30 s: a "transfers are still running" question would keep it open.
+    check("sessionEndCleanExit", !!end && end.code === 0 && end.signal === null);
+    check("sessionEndNoFatal", !/FATAL|isn't usable/.test(err));
+    check("sessionEndAgentClosed", /agent quits: (SIGTERM|asked by the app)/.test(err));
+    check("sessionEndInstanceClosed", /instance quits: (SIGTERM|asked by the app)/.test(err));
+    await gone(mainPid);
+    const wal = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? wal(join(dir, e.name)) : e.name.endsWith(".db-wal") && statSync(join(dir, e.name)).size > 0 ? [join(dir, e.name)] : []));
+    // The app's own databases (agent index, built-in instance); Chromium's caches are not ours.
+    const walLeft = [...wal(join(data, "agent")), ...wal(join(data, "instance"))];
+    r.sessionEndWalLeft = walLeft;
+    check("sessionEndDatabasesClosed", walLeft.length === 0 && existsSync(join(data, "instance", "instance.db")));
+    const newCrashes = crashFiles().filter((f) => !crashesBefore.includes(f));
+    r.sessionEndNewCrashFiles = newCrashes;
+    check("sessionEndNoCrashReport", newCrashes.length === 0);
+    fake.postDelayMs = 0;
+    w = await launch();
+    app = w.app;
+    p = w.page;
+    const back = await p.waitForSelector("[data-page=files]:not([hidden])", { timeout: 60_000 }).then(() => true).catch(() => false);
+    const rows4 = back ? (await p.evaluate(() => (window as unknown as { ddnCore: { list(): Promise<{ rows: { name: string }[] }> } }).ddnCore.list())).rows : [];
+    check("sessionEndStartsAgain", back && rows4.some((x) => x.name === "movie.bin"));
+  }
   const pid1 = app.process().pid;
   await app.evaluate(({ app: a }) => a.exit(0)).catch(() => {});
   await app.close().catch(() => {});
