@@ -97,6 +97,8 @@ export const CORE_METHODS: Record<string, string[]> = {
   aiSettings: [],
   setAiSettings: ["o?"],
   galleryAvailable: [],
+  attrsAvailable: [],
+  setThumbHidden: ["s[]", "b"],
   safeState: [],
   safeCreate: ["s"],
   safeUnlock: ["s"],

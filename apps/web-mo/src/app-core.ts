@@ -2173,13 +2173,14 @@ export class AppCore {
    * Hide (or show again) the thumbnail of files on every device of the account (rules 5, set_attr): the
    * type icon instead of the picture. Folders are left out. One operation (a group for several).
    */
-  async setThumbHidden(nodeIds: string[], hidden: boolean): Promise<OpOutcome & { changed: number }> {
+  async setThumbHidden(nodeIds: string[], hidden: boolean): Promise<OpOutcome & { changed: string[] }> {
     const tree = this.c().store;
     const ids = nodeIds.filter((id) => tree.getNode(id)?.kind === "file" && (tree.getNode(id)!.attrs?.thumbHidden === true) !== hidden);
-    if (!ids.length) return { outcome: "noop", notices: [], changed: 0 };
+    if (!ids.length) return { outcome: "noop", notices: [], changed: [] };
     const ops = ids.map((nodeId) => ({ type: "set_attr" as const, nodeId, attr: "thumbHidden" as const, value: hidden }));
     const r = await this.commit(ops.length === 1 ? ops[0]! : { type: "group", ops }, hidden ? "hide thumbnail" : "show thumbnail");
-    return { ...r, changed: ids.length };
+    // Only these changed (Undo puts back just them; the others were that way already).
+    return { ...r, changed: ids };
   }
 
   /** The instance replays rules 5 (file attributes): only then the thumbnail can be hidden per file. */

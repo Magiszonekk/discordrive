@@ -1681,6 +1681,15 @@ try {
       await p.click("[data-ddn=menu-thumb-hide]");
       await p.waitForFunction(() => document.querySelectorAll("[data-ddn=row][data-thumb-hidden='1']").length === 2, null, { timeout: 15_000 }).catch(() => {});
       th.bulkHidden = await p.evaluate(() => document.querySelectorAll("[data-ddn=row][data-thumb-hidden='1']").length);
+      // Undo of that bulk hide: only the video comes back; the photo was hidden before and stays hidden.
+      await p.locator("[data-ddn=toast-undo]").last().click().catch(() => {});
+      await p.waitForFunction(() => document.querySelectorAll("[data-ddn=row][data-thumb-hidden='1']").length === 1, null, { timeout: 15_000 }).catch(() => {});
+      th.bulkUndo = await one();
+      await tile("film.webm").locator("[data-ddn=select]").check({ force: true }).catch(() => {});
+      await tile("foto.jpg").locator("[data-ddn=select]").check({ force: true }).catch(() => {});
+      await menuOf("foto.jpg");
+      await p.click("[data-ddn=menu-thumb-hide]");
+      await p.waitForFunction(() => document.querySelectorAll("[data-ddn=row][data-thumb-hidden='1']").length === 2, null, { timeout: 15_000 }).catch(() => {});
       th.bulkShowOffered = (await menuOf("foto.jpg")).includes("menu-thumb-show");
       await p.click("[data-ddn=menu-thumb-show]");
       await tile("foto.jpg").locator("img[data-ddn=thumb]").waitFor({ timeout: 30_000 }).catch(() => {});
@@ -2595,7 +2604,7 @@ try {
         o.off?.imgs === 0 && o.off?.queued === 0 && o.off?.badges === 3 && o.onAgain?.imgs === 2 &&
         o.hideOffered === true && o.hidden?.photoHidden && !o.hidden.photoImg && o.hidden.photoBadge && o.hidden.videoImg &&
         o.hiddenKept?.photoHidden && !o.hiddenKept.photoImg && o.hiddenKept.videoImg && o.showOffered === true &&
-        o.bulkHideOffered === true && o.bulkHidden === 2 && o.bulkShowOffered === true && o.shownAgain?.photoImg === true && !o.shownAgain.photoHidden && o.shownAgain.videoImg
+        o.bulkHideOffered === true && o.bulkHidden === 2 && o.bulkUndo?.photoHidden === true && o.bulkUndo.videoImg === true && o.bulkShowOffered === true && o.shownAgain?.photoImg === true && !o.shownAgain.photoHidden && o.shownAgain.videoImg
       );
     })(),
     queueCloses: (() => {

@@ -2291,9 +2291,14 @@ async function setThumbs(items: { id: string; name: string }[], hide: boolean) {
   albumCovers.clear();
   shownList = "";
   await render();
-  const msg = items.length === 1 ? t(hide ? "thumb.hidden" : "thumb.shown", { name: items[0]!.name }) : tn(hide ? "thumb.hiddenN" : "thumb.shownN", r.changed || items.length);
+  const msg = items.length === 1 ? t(hide ? "thumb.hidden" : "thumb.shown", { name: items[0]!.name }) : tn(hide ? "thumb.hiddenN" : "thumb.shownN", r.changed.length || items.length);
+  // Undo: only the files this changed (a photo hidden before stays hidden).
   report(r, msg, async () => {
-    await core.setThumbHidden(items.map((x) => x.id), !hide);
+    await core.setThumbHidden(r.changed, !hide);
+    for (const id of r.changed) {
+      const s = selected.get(id);
+      if (s) s.thumbHidden = !hide;
+    }
     albumCovers.clear();
     shownList = "";
     await render();
