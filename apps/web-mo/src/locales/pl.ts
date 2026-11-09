@@ -3,6 +3,8 @@ export const pl: Record<string, string> = {
   "app.title": "DiscorDrive",
   "brand.name": "DiscorDrive",
   "lang.label": "Język",
+  "thumbs.on": "Miniatury zdjęć i filmów",
+  "thumbs.on.t": "Wyłączone: listy i kafelki pokazują ikonę typu pliku i miniatury nie są pobierane. Zapamiętane na tym urządzeniu.",
   "theme.label": "Tryb kolorów",
   "theme.system": "System",
   "theme.light": "Jasny",

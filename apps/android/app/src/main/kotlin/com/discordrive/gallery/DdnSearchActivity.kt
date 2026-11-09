@@ -155,7 +155,8 @@ class DdnSearchActivity : AppCompatActivity() {
                 img.setPadding(0, 0, 0, 0)
                 // Media: the thumbnail (the type icon until it comes); other files: their type icon above the name.
                 fun typeIcon() { img.setImageResource(CobaltUi.typeIconOf(c.name, false)); img.setColorFilter(getColor(R.color.cobalt_muted)); img.scaleType = ImageView.ScaleType.CENTER_INSIDE; img.setPadding(0, 0, 0, if (media) 0 else cell / 4) }
-                if (media) DdnThumbs.into(s, c.manifestRef, img, cell) { typeIcon() } else typeIcon()
+                img.tag = null
+                if (media && com.discordrive.gallery.Settings.thumbsOn(this@DdnSearchActivity)) DdnThumbs.into(s, c.manifestRef, img, cell) { typeIcon() } else typeIcon()
                 f.setOnClickListener { open(c) }
             }
         }

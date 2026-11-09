@@ -71,6 +71,16 @@ object Settings {
         prefs(context).edit().putString("accent", key).apply()
     }
 
+    /**
+     * Thumbnails in the lists, grids and album covers (this phone only, like the accent). Off: type icons and
+     * no thumbnail is fetched; the viewer still shows the picture of an opened file.
+     */
+    fun thumbsOn(context: Context): Boolean = prefs(context).getBoolean("thumbs", true)
+
+    fun setThumbsOn(context: Context, on: Boolean) {
+        prefs(context).edit().putBoolean("thumbs", on).apply()
+    }
+
     /** Theme overlay res id for the chosen accent, or null for the default blue. */
     fun accentOverlay(context: Context): Int? =
         ACCENTS.firstOrNull { it.key == accentKey(context) }?.overlayStyle

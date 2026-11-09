@@ -564,6 +564,8 @@ Tekst: %3$s</string>
     <string name="cobalt_back">Wstecz</string>
     <string name="ddn_set_look">Wygląd</string>
     <string name="ddn_set_look_note">Kolor akcentu w przyciskach, przełącznikach i nagłówkach.</string>
+    <string name="ddn_set_thumbs">Miniatury zdjęć i filmów</string>
+    <string name="ddn_set_thumbs_note">Wyłączone: listy i siatki pokazują ikonę typu pliku i miniatury nie są pobierane. Tylko na tym telefonie.</string>
     <string name="ddn_set_diag">Diagnostyka</string>
     <string name="ddn_set_danger">Strefa niebezpieczna</string>
     <string name="cobalt_cancel">Anuluj</string>

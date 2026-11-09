@@ -3,6 +3,8 @@ export const en: Record<string, string> = {
   "app.title": "DiscorDrive",
   "brand.name": "DiscorDrive",
   "lang.label": "Language",
+  "thumbs.on": "Thumbnails of photos and videos",
+  "thumbs.on.t": "Off: lists and tiles show the file type icon and no thumbnails are downloaded. Kept on this device.",
   "theme.label": "Colour mode",
   "theme.system": "System",
   "theme.light": "Light",

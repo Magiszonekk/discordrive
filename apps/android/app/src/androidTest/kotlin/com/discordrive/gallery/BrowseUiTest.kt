@@ -780,6 +780,17 @@ class BrowseUiTest {
             r["thumbnailDecoded"] = DdnThumbs.load(sess, photoRow.manifestRef!!, 't', 320)?.let { it.width == 320 && it.height == 240 } == true
             val drawn = waitUntil(5_000) { var ok = false; s.onActivity { a -> ok = a.isDrawn() }; ok }
             if (drawn) r["thumbnailShown"] = waitUntil { var ok = false; s.onActivity { a -> ok = a.firstCellHasPicture() }; ok }
+            // Settings -> Thumbnails off (this phone): the same grid shows type icons only; on again: the picture.
+            com.discordrive.gallery.Settings.setThumbsOn(ctx, false)
+            s.onActivity { a -> a.showForTest() }
+            if (drawn) r["thumbsOffNoPicture"] = waitUntil { items(s) == 2 } && run {
+                Thread.sleep(1500)
+                var pic = true; s.onActivity { a -> pic = a.firstCellHasPicture() }; !pic
+            }
+            shot("3b-gallery-thumbs-off")
+            com.discordrive.gallery.Settings.setThumbsOn(ctx, true)
+            s.onActivity { a -> a.showForTest() }
+            if (drawn) r["thumbsOnAgain"] = waitUntil { var ok = false; s.onActivity { a -> ok = a.firstCellHasPicture() }; ok }
             Log.i("ddn-ui", "window drawn: $drawn")
             shot("3-gallery")
         }
