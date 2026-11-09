@@ -283,6 +283,10 @@ export const pl: Record<string, string> = {
   "rescueD.code": "Kod zestawu (<span class=\"mono\">ddn-kit1:…</span>)",
   "rescueD.go": "Odtwórz konto",
   "rescueD.done": "Konto odtworzone na tym urządzeniu.",
+  // joining this device: the step in progress (password, rescue kit, pairing)
+  "authStage.password": "Sprawdzam hasło…",
+  "authStage.device": "Dodaję to urządzenie do konta…",
+  "authStage.files": "Pobieram listę plików…",
 
   // okno udostępniania
   "shareD.h": "Udostępnij link",

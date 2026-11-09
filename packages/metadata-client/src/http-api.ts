@@ -84,15 +84,17 @@ export async function rescueRegisterDevice(
   accountId: string,
   device: DeviceKey,
   f: typeof fetch = defaultFetch,
-): Promise<{ deviceId: string }> {
+): Promise<{ deviceId: string; instanceId: string }> {
   const c = await getChallenge(baseUrl, f);
   const rk = await rescueKey(account);
-  return post<{ deviceId: string }>(f, `${baseUrl}/v1/auth/rescue-device`, {
+  const r = await post<{ deviceId: string }>(f, `${baseUrl}/v1/auth/rescue-device`, {
     challengeId: c.challengeId,
     accountId,
     devicePublicKey: device.publicKey,
     signature: await rk.sign(authMessage.rescueAddDevice(c, accountId, device.publicKey)),
   });
+  // The challenge already named the instance: the caller needs no second round trip for it.
+  return { deviceId: r.deviceId, instanceId: c.instanceId };
 }
 
 export interface ServerDevice {

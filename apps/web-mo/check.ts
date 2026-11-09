@@ -229,6 +229,41 @@ async function nav(p: Page, name: "files" | "trash" | "devices" | "settings" | "
 async function openChannels(p: Page) {
   await p.waitForSelector("[data-ddn=channels-sec] [data-ddn=webhook-url]", { state: "visible" });
 }
+/**
+ * Joining a device: record every step the card shows under its button (data-stage, text, whether the button
+ * and the fields are locked at that moment). readStages: the order, how long each step lasted, hidden at the end.
+ */
+async function watchStages(p: Page, stageSel: string, buttonSel: string) {
+  await p.evaluate(
+    ([sel, btn]) => {
+      const el = document.querySelector<HTMLElement>(`[data-ddn=${sel}]`)!;
+      const card = el.closest(".auth-card")!;
+      const seen: { stage: string; text: string; at: number; locked: boolean }[] = [];
+      const t0 = performance.now();
+      const note = () => {
+        const st = el.hidden ? "" : (el.dataset.stage ?? "");
+        if (st && seen.at(-1)?.stage !== st)
+          seen.push({ stage: st, text: el.textContent ?? "", at: Math.round(performance.now() - t0), locked: !!document.querySelector<HTMLButtonElement>(`[data-ddn=${btn}]`)?.disabled && [...card.querySelectorAll<HTMLInputElement>("input, textarea")].every((x) => x.disabled) });
+      };
+      new MutationObserver(note).observe(el, { attributes: true, childList: true, characterData: true, subtree: true });
+      (window as unknown as Record<string, unknown>)[`__stages_${sel}`] = { seen, t0 };
+    },
+    [stageSel, buttonSel],
+  );
+}
+async function readStages(p: Page, stageSel: string) {
+  const x = await p.evaluate((sel) => {
+    const w = (window as unknown as Record<string, { seen: { stage: string; text: string; at: number; locked: boolean }[]; t0: number }>)[`__stages_${sel}`]!;
+    return { seen: w.seen, done: Math.round(performance.now() - w.t0) };
+  }, stageSel);
+  return {
+    order: x.seen.map((s) => s.stage).join(">"),
+    locked: x.seen.length > 0 && x.seen.every((s) => s.locked),
+    text: x.seen.map((s) => s.text),
+    ms: Object.fromEntries(x.seen.map((s, i) => [s.stage, (x.seen[i + 1]?.at ?? x.done) - s.at])),
+    hidden: await p.isHidden(`[data-ddn=${stageSel}]`),
+  };
+}
 const count = (p: Page, re: RegExp) => p.waitForFunction((src) => new RegExp(src).test(document.querySelector("[data-ddn=count]")?.textContent ?? ""), re.source, { timeout: 30_000 });
 
 let ok = false;
@@ -950,9 +985,11 @@ try {
   const sasB = await m.textContent("[data-ddn=join-sas]");
   r.sas = { a: sasA, b: sasB, match: !!sasA && sasA === sasB && /^\d{6}$/.test(sasA) };
   await shot(m, "10-phone-sas");
+  await watchStages(m, "join-stage", "join-confirm");
   await m.click("[data-ddn=join-confirm]");
   await m.waitForSelector("[data-ddn=signed-in]:not([hidden]) [data-page=files]:not([hidden])", { timeout: 30_000 });
   await count(m, L.of(65));
+  r.pairStages = await readStages(m, "join-stage");
   r.phoneCount = await m.textContent("[data-ddn=count]");
   r.phoneNoKitPrompt = !(await m.isVisible("[data-ddn=kit-dialog][open]"));
   await shot(m, "11-phone-files");
@@ -992,9 +1029,11 @@ try {
   await t.evaluate((k) => navigator.clipboard.writeText(k), kit).catch(() => {});
   await typeInto(t, "[data-ddn=rescue-text]", kit);
   await typeInto(t, "[data-ddn=rescue-name]", "Odtworzony");
+  await watchStages(t, "rescue-stage", "rescue-go");
   await t.click("[data-ddn=rescue-go]");
   await count(t, L.of(65));
   r.rescueCount = await t.textContent("[data-ddn=count]");
+  r.rescueStages = await readStages(t, "rescue-stage");
   await third.close();
 
   // 10b. rename (rule 2 suffix + Undo), row menu, selection + Move to… picker, drag onto a breadcrumb,
@@ -1179,8 +1218,17 @@ try {
   await typeInto(np, "[data-ddn=signin-password]", pwPass);
   await typeInto(np, "[data-ddn=signin-name]", "Haslem");
   await shot(np, "20-signin-password");
+  // While it runs: the step is shown under the button (checking the password, adding the device, the file
+  // list) and the form is locked; every step seen is recorded with how long it lasted.
+  await watchStages(np, "signin-stage", "signin-go");
   await np.click("[data-ddn=signin-go]");
   await count(np, L.of(65));
+  const stages = await readStages(np, "signin-stage");
+  ops.pwStages = stages.order;
+  ops.pwStageLocked = stages.locked;
+  ops.pwStageText = stages.text;
+  ops.pwStageMs = stages.ms;
+  ops.pwStageHidden = stages.hidden;
   ops.pwSignedIn = true;
   await fresh.close();
   // Turn it off again: the sealed key is deleted from the server.
@@ -2339,6 +2387,17 @@ try {
     passwordSignIn: (() => {
       const o = r.ops as Record<string, unknown> | undefined;
       return !!o && o.pwDefaultOff === true && /good|strong|dobre|mocne/.test(String(o.pwStrength)) && o.pwNeedsAck === true && /Wrong login or password|Zły login albo hasło/.test(String(o.pwWrong)) && o.pwSignedIn === true && o.pwOff === true;
+    })(),
+    // Joining with a password / a rescue kit / pairing shows each step on the card with the form locked, then hides it.
+    authStages: (() => {
+      const o = r.ops as Record<string, unknown> | undefined;
+      const k = r.rescueStages as { order: string; locked: boolean; hidden: boolean } | undefined;
+      const q = r.pairStages as { order: string; locked: boolean; hidden: boolean } | undefined;
+      return (
+        !!o && o.pwStages === "password>device>files" && o.pwStageLocked === true && o.pwStageHidden === true &&
+        !!k && k.order === "device>files" && k.locked && k.hidden &&
+        !!q && q.order === "files" && q.locked && q.hidden
+      );
     })(),
     // The note under the queue is true in this mode; plain says nothing about encryption.
     modeTexts:

@@ -154,7 +154,15 @@ export type CoreEvent =
   /** The server no longer accepts this device: the account was blocked or deleted, or the device revoked. */
   | { type: "auth-lost"; code: AuthLost }
   /** Settings → Network → Speed test: the stage and its speed while it runs. */
-  | { type: "speed-progress"; p: SpeedTestProgress };
+  | { type: "speed-progress"; p: SpeedTestProgress }
+  /** Joining this device (password, rescue kit, pairing) and opening the account: the step in progress. */
+  | { type: "auth-stage"; stage: AuthStage };
+
+/**
+ * Steps of joining a device that take noticeable time: "password" = checking the password (key derivation,
+ * about a second), "device" = registering this device, "files" = fetching the file list (first sync).
+ */
+export type AuthStage = "password" | "device" | "files";
 
 /** Thumbnails for files uploaded without them: progress (kept across restarts by `after`). */
 export interface BackfillState {
@@ -585,6 +593,7 @@ export class AppCore {
       resume: (this.resume = this.platform.resume(a.accountId)),
     };
     this.authLost = null;
+    this.onEvent({ type: "auth-stage", stage: "files" });
     try {
       await this.rebuildClient();
     } catch (e) {
@@ -2604,7 +2613,7 @@ export class AppCore {
   /** New device: login + password -> account key opened here -> device registered with the rescue key. */
   async joinWithPassword(serverUrl: string, login: string, password: string, deviceName: string): Promise<void> {
     const dk = await generateDeviceKey(this.platform.extractableDeviceKey);
-    const r = await signInWithPassword(serverUrl, login, password, dk);
+    const r = await signInWithPassword(serverUrl, login, password, dk, undefined, (stage) => this.onEvent({ type: "auth-stage", stage }));
     await this.platform.keys.save({
       serverUrl,
       instanceId: r.instanceId,
@@ -2625,11 +2634,11 @@ export class AppCore {
     const kit = mode.decodeKit(kitText);
     const key = accountKeyFromB64(kit.key);
     const dk = await generateDeviceKey(this.platform.extractableDeviceKey);
-    const c = await getChallenge(serverUrl);
-    const { deviceId } = await rescueRegisterDevice(serverUrl, key, kit.accountId, dk);
+    this.onEvent({ type: "auth-stage", stage: "device" });
+    const { deviceId, instanceId } = await rescueRegisterDevice(serverUrl, key, kit.accountId, dk);
     await this.platform.keys.save({
       serverUrl,
-      instanceId: c.instanceId,
+      instanceId,
       accountId: kit.accountId,
       deviceId,
       deviceName,
