@@ -100,6 +100,8 @@ import type { CorePlatform, DiskFiles, PlatformResumeStore, TransferLogStore } f
 export interface CoreConfig {
   /** Test hook: send discord.com API calls to a local fake. Never set in production. */
   discordApiOrigin?: string;
+  /** Test hook: the line test's server instead of speed.cloudflare.com. Never set in production. */
+  lineTestOrigin?: string;
   wasmUrl?: string;
 }
 
@@ -1744,7 +1746,12 @@ export class AppCore {
     try {
       const f = globalThis.fetch.bind(globalThis);
       // `lineRef`: the line from an earlier test on this device (the Discord test alone is compared with it).
-      const measured = o.noLine ? null : await lineSpeed(f, 8, ac.signal, onProgress).catch(() => null);
+      // The line test alone (its button) reports why it failed (the test server refused, no data); within the
+      // combined test the Discord part still runs without it.
+      const measured = o.noLine ? null : await lineSpeed(f, 8, ac.signal, onProgress, this.cfg.lineTestOrigin).catch((e) => {
+        if (o.noDiscord || ac.signal.aborted) throw e;
+        return null;
+      });
       const line = measured ?? (o.lineRef ? { down: o.lineRef.down, up: o.lineRef.up } : null);
       const lineAt = !measured && o.lineRef ? o.lineRef.at : undefined;
       if (ac.signal.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });

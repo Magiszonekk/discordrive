@@ -155,6 +155,32 @@ describe("speed test", () => {
     expect(ev.some((e) => e.stage === "line-up")).toBe(true);
   }, 20_000);
 
+  it("the line test: small upload bodies, requests cut at the planned time, a refusal is an error (not 0 MB/s)", async () => {
+    const sizes: number[] = [];
+    // A very slow line: one request never ends by itself (only the cut stops it).
+    const slow = (async (url: string, init?: RequestInit) => {
+      if (/__up/.test(url)) sizes.push((init!.body as Uint8Array).byteLength);
+      await new Promise((_, rej) => init!.signal!.addEventListener("abort", () => rej(new DOMException("aborted", "AbortError"))));
+      return new Response("x");
+    }) as typeof fetch;
+    const t0 = Date.now();
+    await expect(lineSpeed(slow, 1)).rejects.toThrow(/moved no data/);
+    expect(Date.now() - t0).toBeLessThan(4000); // down: 1 s + the cut margin, no minutes
+    // The test server refuses (429): an error the UI words.
+    const refuse = (async () => new Response("error code: 1015", { status: 429 })) as typeof fetch;
+    await expect(lineSpeed(refuse, 0.5)).rejects.toThrow(/refused/);
+    // Upload bodies stay small (a big one kept a browser worker silent for seconds).
+    const ok = (async (url: string, init?: RequestInit) => {
+      if (/__up/.test(url)) sizes.push((init!.body as Uint8Array).byteLength);
+      await new Promise((r) => setTimeout(r, 20));
+      return /__up/.test(url) ? new Response("ok") : new Response(new Uint8Array(100_000));
+    }) as typeof fetch;
+    const r = await lineSpeed(ok, 0.8);
+    expect(r.up).toBeGreaterThan(0);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(Math.min(...sizes)).toBe(256 * 1024);
+  }, 20_000);
+
   it("the per-channel pacing applies (as to an upload)", async () => {
     const pacer = new ChannelPacer({ perMin: 30, maxPerMin: 30, burst: 2 });
     const { c } = setup(pacer);
@@ -167,5 +193,7 @@ describe("speed test", () => {
     expect(speedHints({ line: { down: 100, up: 100 }, up: 20, down: 90, channels: 4, rateLimited: 0, errors: 0, browser: false, metered: false }).map((h) => h.k)).toEqual(["channels", "line-full"]);
     expect(speedHints({ line: { down: 200, up: 40 }, up: 38, down: 18, channels: 10, rateLimited: 0, errors: 0, browser: true, metered: false }).map((h) => h.k)).toEqual(["line-full", "browser-h3"]);
     expect(speedHints({ line: null, up: 10, down: 10, channels: 2, rateLimited: 3, errors: 1, browser: false, metered: true }).map((h) => h.k)).toEqual(["metered", "rate-limited", "errors", "channels"]);
+    // Far above an older, slower line test: not "the line is full" (it was 1099% before).
+    expect(speedHints({ line: { down: 1, up: 1 }, up: 11, down: 11, channels: 1, rateLimited: 0, errors: 0, browser: false, metered: false }).filter((h) => h.k === "line-full")).toEqual([]);
   });
 });

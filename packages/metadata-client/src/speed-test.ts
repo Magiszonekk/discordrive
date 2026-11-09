@@ -126,56 +126,86 @@ export async function cleanupLeftovers(client: Pick<DriveClient, "blobs">, store
   return n;
 }
 
-/** The line: download / upload streams to speed.cloudflare.com for `seconds` each way. */
-export async function lineSpeed(f: typeof fetch, seconds = 8, signal?: AbortSignal, onProgress?: SpeedTestOptions["onProgress"]): Promise<{ down: number; up: number }> {
+/** The line: download / upload streams to speed.cloudflare.com for `seconds` each way. Throws when a direction
+ * moved no data at all (the test server refused, e.g. 429): a 0 is not a speed to compare with. */
+export async function lineSpeed(f: typeof fetch, seconds = 8, signal?: AbortSignal, onProgress?: SpeedTestOptions["onProgress"], origin = "https://speed.cloudflare.com"): Promise<{ down: number; up: number }> {
   const run = async (up: boolean) => {
     const t0 = Date.now();
     const end = t0 + seconds * 1000;
     let bytes = 0;
     let told = 0;
+    let lastAt = t0;
+    let refused = 0;
     const tick = () => {
       told = Date.now();
       onProgress?.({ stage: up ? "line-up" : "line-down", bytes, total: 0, mbps: MBPS(bytes, told - t0), ms: told - t0, planMs: seconds * 1000 });
     };
     tick();
     const stop = beat(tick);
-    const body = up ? new Uint8Array(8_000_000) : null;
+    // Requests still in flight at the end are cut (a slow line must not stretch "8 s" to minutes); the speed is
+    // what finished up to the last finished request.
+    const cut = new AbortController();
+    const onAbort = () => cut.abort();
+    signal?.addEventListener("abort", onAbort);
+    const timer = setTimeout(() => cut.abort(), seconds * 1000 + 1500);
+    // Uploads go in small bodies that grow while they finish fast (256 kB .. 2 MB): one big body keeps a
+    // browser worker busy for seconds (no progress, no timers) and on a slow line never finishes in time.
+    const MIN_UP = 256 * 1024;
+    const MAX_UP = 2 * 1024 * 1024;
+    const pool = up ? new Uint8Array(MAX_UP) : null;
     try {
-    await Promise.all(
-      Array.from({ length: 6 }, async () => {
-        while (Date.now() < end && !signal?.aborted) {
-          try {
-            if (up) {
-              const r = await f("https://speed.cloudflare.com/__up", { method: "POST", body: body as BodyInit, signal });
-              if (r.ok) bytes += body!.byteLength;
-              await r.arrayBuffer().catch(() => null);
-            } else {
-              const r = await f("https://speed.cloudflare.com/__down?bytes=25000000", { signal });
-              const rd = r.body?.getReader();
-              if (!rd) break;
-              for (;;) {
-                const x = await rd.read();
-                if (x.done) break;
-                bytes += x.value.byteLength;
-                if (Date.now() - told > 250) tick();
-                if (Date.now() > end) {
-                  await rd.cancel().catch(() => {});
-                  break;
+      await Promise.all(
+        Array.from({ length: 6 }, async () => {
+          let size = MIN_UP;
+          while (Date.now() < end && !cut.signal.aborted) {
+            try {
+              if (up) {
+                const s0 = Date.now();
+                const r = await f(`${origin}/__up`, { method: "POST", body: pool!.subarray(0, size) as BodyInit, signal: cut.signal });
+                await r.arrayBuffer().catch(() => null);
+                if (r.ok) {
+                  bytes += size;
+                  lastAt = Date.now();
+                } else if (r.status === 429 || r.status >= 500) refused++;
+                const took = Date.now() - s0;
+                size = took < 400 ? Math.min(MAX_UP, size * 2) : took > 1500 ? Math.max(MIN_UP, size / 2) : size;
+              } else {
+                const r = await f(`${origin}/__down?bytes=25000000`, { signal: cut.signal });
+                if (!r.ok) {
+                  refused++;
+                  await r.arrayBuffer().catch(() => null);
+                  throw new Error(`HTTP ${r.status}`);
+                }
+                const rd = r.body?.getReader();
+                if (!rd) break;
+                for (;;) {
+                  const x = await rd.read();
+                  if (x.done) break;
+                  bytes += x.value.byteLength;
+                  lastAt = Date.now();
+                  if (lastAt - told > 250) tick();
+                  if (lastAt > end) {
+                    await rd.cancel().catch(() => {});
+                    break;
+                  }
                 }
               }
+            } catch {
+              if (cut.signal.aborted) break;
+              await new Promise((r) => setTimeout(r, 300));
             }
-          } catch {
-            if (signal?.aborted) break;
-            await new Promise((r) => setTimeout(r, 300));
+            tick();
           }
-          tick();
-        }
-      }),
-    );
+        }),
+      );
     } finally {
       stop();
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
     }
-    return MBPS(bytes, Date.now() - t0);
+    if (signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    if (bytes === 0) throw Object.assign(new Error(refused ? "the line test server refused (try later)" : "the line test moved no data"), { code: refused ? "line_refused" : "line_no_data" });
+    return MBPS(bytes, Math.min(lastAt, end) - t0);
   };
   const down = await run(false);
   const up = await run(true);
@@ -351,10 +381,10 @@ export function speedHints(r: { line: { down: number; up: number } | null; up: n
   if (r.rateLimited > 0) h.push({ k: "rate-limited", n: r.rateLimited });
   if (r.errors > 0) h.push({ k: "errors", n: r.errors });
   const line = r.line;
-  if (r.up !== null && line && line.up > 0 && r.up / line.up >= 0.85) h.push({ k: "line-full", dir: "up", share: r.up / line.up });
+  if (r.up !== null && line && line.up > 0 && r.up / line.up >= 0.85 && r.up / line.up <= 1.15) h.push({ k: "line-full", dir: "up", share: r.up / line.up });
   // ~5 MB/s per channel is what Discord gives one channel (30 posts a minute of 10 MiB): below the line, more channels help.
   else if (r.up !== null && r.channels > 0 && r.up / r.channels >= 3.5 && (!line || r.up < line.up * 0.85)) h.push({ k: "channels", perChannel: r.up / r.channels, channels: r.channels });
-  if (r.down !== null && line && line.down > 0 && r.down / line.down >= 0.85) h.push({ k: "line-full", dir: "down", share: r.down / line.down });
+  if (r.down !== null && line && line.down > 0 && r.down / line.down >= 0.85 && r.down / line.down <= 1.15) h.push({ k: "line-full", dir: "down", share: r.down / line.down });
   else if (r.down !== null && r.browser && r.down < 25 && line && line.down > 50) h.push({ k: "browser-h3", down: r.down });
   return h;
 }

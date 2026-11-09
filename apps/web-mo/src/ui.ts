@@ -30,7 +30,7 @@ let features = { thumbnails: false, search: false, streaming: false };
 let searchQ = "";
 
 const cfg =
-  (window as unknown as { DDN_CONFIG?: { discordApiOrigin?: string; serverUrl?: string; language?: string; streamMinBytes?: number; desktop?: { local: boolean; invite: string | null } } }).DDN_CONFIG ?? {};
+  (window as unknown as { DDN_CONFIG?: { discordApiOrigin?: string; lineTestOrigin?: string; serverUrl?: string; language?: string; streamMinBytes?: number; desktop?: { local: boolean; invite: string | null } } }).DDN_CONFIG ?? {};
 // Language before the first paint: this browser's choice, else the instance default, else English.
 setLang(storedLang() ?? (isLang(cfg.language) ? cfg.language : "en"));
 applyStatic();
@@ -2788,7 +2788,8 @@ const speedHistory = (): SpeedTestResult[] => {
 };
 /** The last line measured on this device (a result of the line test, or a Discord test that ran it too). */
 const lastLine = (): { down: number; up: number; at: number } | null => {
-  const r = speedHistory().find((x) => x.line && !x.lineAt);
+  // A line of 0 (an older result when the test server refused) is no speed to compare with.
+  const r = speedHistory().find((x) => x.line && !x.lineAt && x.line.down > 0 && x.line.up > 0);
   return r?.line ? { ...r.line, at: r.at } : null;
 };
 const DISCORD_SPEED = __DDN_MODE__ === "metadata-only";
@@ -2829,6 +2830,8 @@ function paintSpeedProgress(p: SpeedTestProgress) {
 /** "Discord: 84% of your line's speed (line 7.4 MB/s, 1.2 MB/s less)": the comparison of one direction. */
 function shareText(v: number | null, share: number | null, line: number | undefined): string {
   if (v == null || share == null || !line) return "";
+  // Far above the line: the line test was slower then (another network, a busy moment), not Discord faster than it.
+  if (share > 1.15) return t("sp.lineSlower", { line: spf(line) });
   const d = v - line;
   const diff = Math.abs(d) < 0.05 ? t("sp.diffSame") : t(d < 0 ? "sp.diffLess" : "sp.diffMore", { d: spf(Math.abs(d)) });
   return t("sp.ofLine", { p: Math.round(share * 100), line: spf(line), diff });
@@ -2968,7 +2971,9 @@ function wireSpeedTest() {
         const aborted = /abort/i.test(String((err as Error)?.message ?? err));
         $("speed-state").textContent = "";
         delete $("speed-live").dataset.stage;
-        $("speed-live").textContent = aborted ? t(which === "line" ? "sp.cancelled.line" : "sp.cancelled") : errText(err);
+        const m = String((err as Error)?.message ?? err);
+        $("speed-live").textContent = aborted ? t(which === "line" ? "sp.cancelled.line" : "sp.cancelled") : /line test server refused/.test(m) ? t("sp.lineRefused") : /line test moved no data/.test(m) ? t("sp.lineNoData") : errText(err);
+        if (/line test (server refused|moved no data)/.test(m)) return;
         if (!aborted) throw err;
       } finally {
         $("speed-run-line").hidden = false;
@@ -4218,7 +4223,7 @@ async function main() {
     // above before this registration exists on a first visit; it is only slower then, never wrong.
     await navigator.serviceWorker.register("./w/sw.js", { scope: "./w/" }).catch(() => {});
   }
-  await core.init({ discordApiOrigin: cfg.discordApiOrigin, wasmUrl: new URL("./sqlite3.wasm", document.baseURI).href /* <base href="/">: right on /folder/<id> too */ });
+  await core.init({ discordApiOrigin: cfg.discordApiOrigin, lineTestOrigin: cfg.lineTestOrigin, wasmUrl: new URL("./sqlite3.wasm", document.baseURI).href /* <base href="/">: right on /folder/<id> too */ });
   if (await openShareView()) return;
   $<HTMLInputElement>("server").value = serverUrl;
   // Same-origin instance: the server field is noise; keep it only for a dev setup with a separate API.
