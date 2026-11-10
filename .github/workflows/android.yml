@@ -274,8 +274,9 @@ jobs:
             # failure too, its report says OK or FAILURES.
             adb shell am instrument -w -e class com.discordrive.gallery.JoinNoteTest io.github.magiszonekk.discordrive.test/androidx.test.runner.AndroidJUnitRunner | tee build/join-note.txt; grep -q "^OK (3 tests)" build/join-note.txt
             adb shell am instrument -w -e class com.discordrive.gallery.CobaltScreensTest io.github.magiszonekk.discordrive.test/androidx.test.runner.AndroidJUnitRunner | tee build/cobalt-screens.txt; grep -q "^OK (" build/cobalt-screens.txt
-            # The editor's copy keeps the original's EXIF (date taken, camera, GPS), upright with orientation normal.
-            adb shell am instrument -w -e class com.discordrive.gallery.EditExifTest io.github.magiszonekk.discordrive.test/androidx.test.runner.AndroidJUnitRunner | tee build/edit-exif.txt; grep -q "^OK (2 tests)" build/edit-exif.txt
+            # The editor's copy keeps the original's EXIF (date taken, camera, GPS), upright with orientation normal; the
+            # photo viewer shows a sideways-stored photo (EXIF orientation 6) upright.
+            adb shell am instrument -w -e class com.discordrive.gallery.EditExifTest io.github.magiszonekk.discordrive.test/androidx.test.runner.AndroidJUnitRunner | tee build/edit-exif.txt; grep -q "^OK (3 tests)" build/edit-exif.txt
             # The upload notification: one count for a series of runs, its own ID next to the AI descriptions' job,
             # swiped away it stays away; the automatic copy screen's state and location note.
             adb shell am instrument -w -e class com.discordrive.gallery.BackupProgressTest io.github.magiszonekk.discordrive.test/androidx.test.runner.AndroidJUnitRunner | tee build/backup-progress.txt; grep -q "^OK (9 tests)" build/backup-progress.txt
