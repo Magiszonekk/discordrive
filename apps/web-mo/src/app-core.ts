@@ -1900,14 +1900,15 @@ export class AppCore {
   }
   // ── the disk in the system (desktop, Linux FUSE: apps/desktop/src/vdisk.ts) ──
 
-  private vdiskEntry(n: { id: string; name: string; kind: string; content: { sizeBytes: number; createdAt: number; manifestRef: string } | null }) {
+  private vdiskEntry(n: { id: string; name: string; kind: string; content: { sizeBytes: number; createdAt: number; manifestRef: string } | null; attrs?: { thumbHidden?: true } }) {
     const s = this.store;
     // Files: when the content was made (manifest takenAt, known in the index) else when it was written.
     // Folders: when something in them last changed (a file manager without inotify on FUSE compares it to
     // notice new files).
     const taken = s instanceof SqlIndexStore && n.content ? s.descInfo(n.content.manifestRef)?.taken : null;
     const mtime = n.kind === "folder" ? this.vdiskFolderTime(n.id) : taken || n.content?.createdAt || 0;
-    return { id: n.id, name: n.name, kind: n.kind === "folder" ? ("folder" as const) : ("file" as const), size: n.content?.sizeBytes ?? 0, mtime };
+    // thumbHidden (rules 5): the file manager gets no thumbnail for it (vdisk-thumbs drops a cached one).
+    return { id: n.id, name: n.name, kind: n.kind === "folder" ? ("folder" as const) : ("file" as const), size: n.content?.sizeBytes ?? 0, mtime, ...(n.attrs?.thumbHidden ? { thumbHidden: true as const } : {}) };
   }
   /** The newest change among a folder's children (added, renamed, a new version), ms; at least the folder's own. */
   private vdiskFolderTime(id: string): number {
@@ -2179,6 +2180,8 @@ export class AppCore {
     if (!ids.length) return { outcome: "noop", notices: [], changed: [] };
     const ops = ids.map((nodeId) => ({ type: "set_attr" as const, nodeId, attr: "thumbHidden" as const, value: hidden }));
     const r = await this.commit(ops.length === 1 ? ops[0]! : { type: "group", ops }, hidden ? "hide thumbnail" : "show thumbnail");
+    // The disk in the system follows at once (its file manager thumbnails), not only after the next sync.
+    this.onEvent({ type: "changed" });
     // Only these changed (Undo puts back just them; the others were that way already).
     return { ...r, changed: ids };
   }

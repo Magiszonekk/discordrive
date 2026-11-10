@@ -24,7 +24,7 @@ export interface VdiskCore {
   vdiskPreview?(id: string, kind: "t" | "p"): Promise<{ data: Uint8Array; mime: string } | null>;
   /** The path of a folder in the mount ("" for the root), for the thumbnails' URIs. */
   vdiskPath?(id: string): string | null;
-  vdiskList(id: string): { id: string; name: string; kind: "file" | "folder"; size: number; mtime: number }[] | null;
+  vdiskList(id: string): { id: string; name: string; kind: "file" | "folder"; size: number; mtime: number; thumbHidden?: boolean }[] | null;
   vdiskStat(id: string): { id: string; name: string; kind: "file" | "folder"; size: number; mtime: number } | null;
   vdiskRead(id: string, off: number, len: number, cache: Map<string, Uint8Array>): Promise<Uint8Array>;
   /** Writing (when the disk is writable): a closed file's local copy uploaded, folders, renames, the trash. */
@@ -762,6 +762,9 @@ export class Vdisk {
       const was = new Map(before.map((e) => [e.name, e.id]));
       const is = new Map(now.map((e) => [e.name, e.id]));
       const added = [...is.keys()].filter((n) => was.get(n) !== is.get(n));
+      // Thumbnails of a listed folder follow the account (a thumbnail hidden or shown on any device).
+      const path = this.thumbs ? this.opts.core.vdiskPath?.(dir) : null;
+      if (path !== null && path !== undefined) void this.thumbs!.folder(acc.map((e) => ({ ...e, path: join(path, e.name) })));
       // Gone names only (a name whose node changed, a queued copy now uploaded, is just looked up again).
       const removed = [...was].filter(([n]) => !is.has(n)).map(([name, id]) => ({ id, name }));
       if (added.length || removed.length) names.push({ dir, added, removed });
@@ -913,7 +916,7 @@ export class Vdisk {
       listed: (id, entries) => {
         this.listedNow.set(id, entries.map((e) => ({ id: e.id, name: e.name })));
         const dir = core.vdiskPath?.(id);
-        if (this.thumbs && dir !== null && dir !== undefined) return this.thumbs.folder(entries.map((e) => ({ id: e.id, kind: e.kind, mtime: e.mtime, path: join(dir, e.name) })));
+        if (this.thumbs && dir !== null && dir !== undefined) return this.thumbs.folder(entries.map((e) => ({ id: e.id, kind: e.kind, mtime: e.mtime, thumbHidden: e.thumbHidden, path: join(dir, e.name) })));
       },
     });
     await new Promise<void>((r) => this.srv!.once("listening", () => r()));
