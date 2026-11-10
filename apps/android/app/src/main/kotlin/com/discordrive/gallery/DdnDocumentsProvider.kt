@@ -105,7 +105,9 @@ class DdnDocumentsProvider : DocumentsProvider() {
 
     override fun openDocumentThumbnail(documentId: String, sizeHint: Point, signal: CancellationSignal?): AssetFileDescriptor {
         val s = session() ?: throw FileNotFoundException("no account")
-        val ref = s.node(documentId)?.manifestRef ?: throw FileNotFoundException(documentId)
+        val n = s.node(documentId) ?: throw FileNotFoundException(documentId)
+        if (n.thumbHidden) throw FileNotFoundException("thumbnail hidden")
+        val ref = n.manifestRef ?: throw FileNotFoundException(documentId)
         val p = runCatching { s.files.preview(ref, 't') }.getOrNull() ?: throw FileNotFoundException("no thumbnail")
         val f = File(File(context!!.cacheDir, "saf-ddn-thumbs").apply { mkdirs() }, key(ref))
         if (!f.isFile) f.writeBytes(p.data)
@@ -126,7 +128,7 @@ class DdnDocumentsProvider : DocumentsProvider() {
 
     private fun MatrixCursor.row(n: IndexReplica.Child) {
         if (n.isFolder) return dir(n.id, n.name)
-        val media = DdnSession.isImage(n.name) || DdnSession.isVideo(n.name)
+        val media = (DdnSession.isImage(n.name) || DdnSession.isVideo(n.name)) && !n.thumbHidden
         newRow().add(Document.COLUMN_DOCUMENT_ID, n.id).add(Document.COLUMN_DISPLAY_NAME, n.name).add(Document.COLUMN_MIME_TYPE, mimeOf(n.name))
             .add(Document.COLUMN_SIZE, n.size).add(Document.COLUMN_LAST_MODIFIED, n.createdAt.takeIf { it > 0 })
             .add(Document.COLUMN_FLAGS, if (media) Document.FLAG_SUPPORTS_THUMBNAIL else 0)

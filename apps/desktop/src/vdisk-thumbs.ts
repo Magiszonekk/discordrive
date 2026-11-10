@@ -8,7 +8,7 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 
@@ -59,6 +59,10 @@ export function withText(png: Buffer, text: Record<string, string>): Buffer {
   return Buffer.concat([png.subarray(0, ihdrEnd), ...extra, png.subarray(ihdrEnd)]);
 }
 
+/** tEXt of a "fail" marker written because the account hides the thumbnail (it goes when shown again). */
+const HIDDEN_COMMENT = "discordrive: thumbnail hidden";
+const HIDDEN_TAG = Buffer.from(`Comment\0${HIDDEN_COMMENT}`, "latin1");
+
 /** A 1×1 transparent PNG (the "fail" marker's body). */
 export function onePixel(): Buffer {
   const ihdr = Buffer.alloc(13);
@@ -84,6 +88,9 @@ function toPng(helper: string, data: Uint8Array, max: number): Promise<Buffer> {
 export class Thumbnails {
   /** URIs written (or marked) in this session, with the mtime they were written for. */
   private readonly done = new Map<string, number>();
+  /** URIs whose thumbnail the account hides (rules 5), as last written. */
+  private readonly hidden = new Set<string>();
+  private readonly seen = new Set<string>();
   private queue: Promise<void> = Promise.resolve();
   written = 0;
   failed = 0;
@@ -105,12 +112,25 @@ export class Thumbnails {
    * The thumbnails of a folder's files (after the file manager listed it): written in the background, one
    * at a time, each file once per mtime. `entries` are the folder's children with their path in the mount.
    */
-  folder(entries: { id: string; path: string; kind: string; mtime: number }[]): Promise<void> {
+  folder(entries: { id: string; path: string; kind: string; mtime: number; thumbHidden?: boolean }[]): Promise<void> {
     const todo: { id: string; uri: string; mt: number }[] = [];
     for (const e of entries) {
       if (e.kind !== "file") continue;
       const uri = fileUri(join(this.opts.mountpoint, e.path));
       const mt = Math.floor(e.mtime / 1000);
+      // Hidden or shown again (the file's mtime stays, so the file manager would keep what it has): the
+      // cached pictures go, a "hidden" marker is written; shown again, the marker goes and they come back.
+      // Also after a restart: a cached picture of a hidden file, a hidden marker of a shown one.
+      const hide = e.thumbHidden === true;
+      // What is on disk is looked at once per file and session; later only a change of the attribute counts.
+      const first = !this.seen.has(uri);
+      this.seen.add(uri);
+      if (hide !== this.hidden.has(uri) || (first && (hide ? existsSync(this.pathOf(uri, "normal")) : this.hiddenMarker(uri)))) {
+        for (const s of ["normal", "large", "fail"] as const) rmSync(this.pathOf(uri, s), { force: true });
+        if (hide) this.hidden.add(uri);
+        else this.hidden.delete(uri);
+        this.done.delete(uri);
+      }
       // Done in this session and still on disk (the cache may have been cleaned meanwhile: written again).
       if (this.done.get(uri) === mt && (existsSync(this.pathOf(uri, "normal")) || existsSync(this.pathOf(uri, "fail")))) continue;
       this.done.set(uri, mt);
@@ -156,10 +176,24 @@ export class Thumbnails {
     await this.one(id, uri, mt).catch(() => {});
   }
 
+  /** The "no thumbnail" marker of `uri` says the account hides it (not that the file has none). */
+  private hiddenMarker(uri: string): boolean {
+    try {
+      return readFileSync(this.pathOf(uri, "fail")).includes(HIDDEN_TAG);
+    } catch {
+      return false;
+    }
+  }
+
   private async one(id: string, uri: string, mtime: number) {
     const normal = this.pathOf(uri, "normal");
     if (existsSync(normal) || existsSync(this.pathOf(uri, "fail"))) return;
     const text = { "Thumb::URI": uri, "Thumb::MTime": String(mtime), Software: "discordrive" };
+    if (this.hidden.has(uri)) {
+      // Hidden on the account: the file manager is told not to make its own either.
+      write(this.pathOf(uri, "fail"), withText(onePixel(), { ...text, Comment: HIDDEN_COMMENT }));
+      return;
+    }
     const pv = (await this.opts.core.vdiskPreview(id, "t").catch(() => null)) ?? null;
     if (!pv) {
       // Nothing stored with the file (an old upload, not a picture): the file manager is told not to try.

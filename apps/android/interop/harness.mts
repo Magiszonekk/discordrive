@@ -130,7 +130,7 @@ for (const [name, data, pv] of [
 await ts.commitOp({ type: "rename", nodeId: "fold-0000000003", name: "Dokumenty" }, "rename");
 await ts.commitOp({ type: "trash", nodeId: "fold-0000000004" }, "trash");
 
-const row = (n: NodeRecord) => ({ id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: n.content?.sizeBytes ?? null, ref: n.content?.manifestRef ?? null, sha: n.content?.plaintextSha256 ?? null, at: n.content?.createdAt ?? 0, up: n.content?.uploadId ?? null });
+const row = (n: NodeRecord) => ({ id: n.id, name: n.name, kind: n.kind, parent: n.parentId, size: n.content?.sizeBytes ?? null, ref: n.content?.manifestRef ?? null, sha: n.content?.plaintextSha256 ?? null, at: n.content?.createdAt ?? 0, up: n.content?.uploadId ?? null, th: n.attrs?.thumbHidden ? 1 : 0 });
 // The phone's sync core over the RPC (InteropTest.RpcReplica implements IndexReplica with it).
 type Req = { id: number; m: string; a?: unknown };
 let store = initIndex(new MemoryIndexStore());
@@ -184,6 +184,8 @@ function core(q: Req): unknown {
         const f = store.getNode(n.parentId!);
         if (!f) continue;
         const a = by.get(f.id) ?? { id: f.id, name: f.name, count: 0, cover: row(n) };
+        // As the phone's core: the newest photo whose thumbnail is not hidden is the cover.
+        if (a.count > 0 && a.cover.th && !n.attrs?.thumbHidden) a.cover = row(n);
         a.count++;
         by.set(f.id, a);
       }
@@ -249,6 +251,22 @@ async function handle(q: Req): Promise<unknown> {
       notUnderFiles: !!hit && ![...s.childIds(ROOT_ID)].some((id) => id === hit.id),
       rules4: raw.filter((e) => e.rulesVersion === 4).length,
     };
+  }
+  // Rules 5: a thumbnail hidden on one side is hidden on the other (attribute in the index; op of rules 5).
+  if (q.m === "thumbAttr") {
+    const a = q.a as { name: string; hide?: boolean };
+    const t2 = await mk();
+    await t2.pull();
+    const hit = [...t2.store.allNodes()].find((n) => n.name === a.name && n.content && !inTrash(t2.store, n.id));
+    if (hit && a.hide !== undefined) await t2.commitOp({ type: "set_attr", nodeId: hit.id, attr: "thumbHidden", value: a.hide }, "thumb");
+    const raw: { rulesVersion: number }[] = [];
+    for (let after = 0; ; ) {
+      const b = await api.read(after, 1000);
+      if (!b.length) break;
+      raw.push(...b);
+      after = b.at(-1)!.seq;
+    }
+    return { found: !!hit, hidden: hit ? t2.store.getNode(hit.id)?.attrs?.thumbHidden === true : null, rules5: raw.filter((e) => e.rulesVersion === 5).length };
   }
   if (q.m === "speed") {
     const x = q.a as { mb: number; ms: number; chunks: number; r429: number };

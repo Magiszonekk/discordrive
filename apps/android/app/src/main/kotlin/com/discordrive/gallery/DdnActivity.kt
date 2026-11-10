@@ -249,7 +249,7 @@ open class DdnActivity : AppCompatActivity() {
                 ui.thumb(r, null, type)
                 ui.folderTile(r, c.isFolder)
                 r.icon.tag = null
-                if (thumbsOn && !c.isFolder && (DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) && c.manifestRef != null) {
+                if (thumbsOn && !c.thumbHidden && !c.isFolder && (DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) && c.manifestRef != null) {
                     r.icon.tag = c.manifestRef
                     val ref = c.manifestRef
                     DdnThumbs.pool.execute {
@@ -288,8 +288,9 @@ open class DdnActivity : AppCompatActivity() {
                 img.clearColorFilter()
                 img.scaleType = ImageView.ScaleType.CENTER_CROP
                 fun typeIcon() { img.setImageResource(R.drawable.ic_cobalt_image); img.setColorFilter(getColor(R.color.cobalt_muted)); img.scaleType = ImageView.ScaleType.CENTER_INSIDE }
-                // Thumbnails off (Settings): the type icon, nothing fetched (tag cleared: a late load of a recycled cell is dropped).
-                if (thumbsOn) DdnThumbs.into(s, c.manifestRef, img, cell) { typeIcon() } else { img.tag = null; typeIcon() }
+                // Thumbnails off (Settings) or hidden for this file (account): the type icon, nothing fetched (tag
+                // cleared: a late load of a recycled cell is dropped).
+                if (thumbsOn && !c.thumbHidden) DdnThumbs.into(s, c.manifestRef, img, cell) { typeIcon() } else { img.tag = null; typeIcon() }
                 f.setOnClickListener { open(c, items) }
                 f.setOnLongClickListener { rowMenu(c); true }
             }
@@ -335,7 +336,7 @@ open class DdnActivity : AppCompatActivity() {
                 img.scaleType = ImageView.ScaleType.CENTER_CROP
                 fun typeIcon() { img.setImageResource(R.drawable.ic_cobalt_image); img.setColorFilter(getColor(R.color.cobalt_muted)); img.scaleType = ImageView.ScaleType.CENTER_INSIDE }
                 img.tag = null
-                if (!priv) { if (thumbsOn) DdnThumbs.into(s, a.cover.manifestRef, img, cell) { typeIcon() } else typeIcon() }
+                if (!priv) { if (thumbsOn && !a.cover.thumbHidden) DdnThumbs.into(s, a.cover.manifestRef, img, cell) { typeIcon() } else typeIcon() }
                 (v.getChildAt(1) as TextView).text = a.name
                 (v.getChildAt(2) as TextView).text = if (priv) getString(R.string.ddn_album_private) else plq(R.plurals.ddn_album_count, a.count, a.count)
                 v.setOnClickListener { if (priv) PrivateUnlock.unlock(this@DdnActivity) { openAlbum(a) } else openAlbum(a) }
@@ -373,6 +374,8 @@ open class DdnActivity : AppCompatActivity() {
             if (inGallery) items += getString(R.string.ddn_to_drive) to { DdnPick.driveFolder(this, s) { to -> move(c, to, getString(R.string.ddn_moved_to_drive)) } }
             else if (c.isFolder || DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) items += getString(R.string.ddn_to_gallery) to { move(c, s.galleryRoot, getString(R.string.ddn_moved_to_gallery)) }
         }
+        if (s.attrsKnown && !c.isFolder && (DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)))
+            items += getString(if (c.thumbHidden) R.string.ddn_thumb_show else R.string.ddn_thumb_hide) to { setThumbHidden(c, !c.thumbHidden) }
         items += getString(R.string.safe_to_safe) to { DdnSafeActivity.moveIn(this, listOf(c)) { show() } }
         items += getString(R.string.ddn_to_trash) to { askTrash(c) }
         return items
@@ -411,6 +414,18 @@ open class DdnActivity : AppCompatActivity() {
             val r = runCatching { s.move(listOf(c.id), to) }
             main.post {
                 r.onSuccess { toast(DdnViewerActivity.moveOutcome(this, it, done)) }.onFailure { note(DdnErrors.text(this, it)) }
+                show()
+            }
+        }
+    }
+
+    /** Hide / show the thumbnail of one photo or video on every device of the account. */
+    private fun setThumbHidden(c: IndexReplica.Child, hidden: Boolean) {
+        val s = session ?: return
+        thread {
+            val r = runCatching { s.setThumbHidden(listOf(c.id), hidden) }
+            main.post {
+                r.onSuccess { toast(getString(if (hidden) R.string.ddn_thumb_hidden else R.string.ddn_thumb_shown)) }.onFailure { note(DdnErrors.text(this, it)) }
                 show()
             }
         }

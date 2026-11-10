@@ -109,6 +109,7 @@ class DdnSession private constructor(private val app: Context, val acct: Account
             lastError = null
             // Whether the account has the Gallery space: asked here (off the main thread), read by the menus.
             sync.galleryAvailable()
+            sync.attrsAvailable()
         } catch (e: Exception) {
             lastError = e.message
             Log.w(TAG, "refresh: ${e.message}")
@@ -241,6 +242,10 @@ class DdnSession private constructor(private val app: Context, val acct: Account
         (r["outcome"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: "?"
     }
     fun moveToTrash(ids: List<String>): String = op { sync.trash(ids) }
+    /** Hide / show again the thumbnail of files (every device of the account). */
+    fun setThumbHidden(ids: List<String>, hidden: Boolean): String = op { sync.setThumbHidden(ids, hidden) }
+    /** The instance knows file attributes (rules 5): only then the menu offers Hide thumbnail. UI thread: known only. */
+    val attrsKnown: Boolean get() = sync.attrsKnown == true
     /** Move into a folder; into [galleryRoot] / an album = "Move to the Gallery", into a Drive folder = "Move to the Drive". */
     fun move(ids: List<String>, parentId: String): String = op { sync.move(ids, parentId) }
     fun restore(ids: List<String>): String = op { sync.restore(ids) }

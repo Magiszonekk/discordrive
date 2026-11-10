@@ -64,6 +64,8 @@ export interface ChildRow {
   cursor: string;
   /** Unavailable file: the locations (webhook IDs) its missing pieces are on. */
   unavailable?: string[];
+  /** Rules 5: show the type icon, not the thumbnail (set on any device of the account). */
+  thumbHidden?: true;
 }
 
 export interface FolderStats {
@@ -368,6 +370,7 @@ export class SqlIndexStore implements IndexStore {
         trashed: false,
         cursor: JSON.stringify([1, Number(r.t), "", r.id]),
         ...(r.unav ? { unavailable: JSON.parse(r.unav) as string[] } : {}),
+        ...(n.attrs?.thumbHidden ? { thumbHidden: true as const } : {}),
       };
     });
   }
@@ -551,6 +554,7 @@ export class SqlIndexStore implements IndexStore {
           trashed: n.trashed !== null,
           cursor: JSON.stringify([fo, by === "size" ? Number(r.sz) : by === "date" ? Number(r.mt) : null, r.name_key, r.id]),
           ...(r.unav ? { unavailable: JSON.parse(r.unav) as string[] } : {}),
+          ...(n.attrs?.thumbHidden ? { thumbHidden: true as const } : {}),
         });
       }
     }
