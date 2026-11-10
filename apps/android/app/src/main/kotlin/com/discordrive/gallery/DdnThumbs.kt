@@ -2,6 +2,7 @@ package com.discordrive.gallery
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.os.Handler
 import android.os.Looper
 import android.util.LruCache
@@ -51,6 +52,34 @@ object DdnThumbs {
         var sample = 1
         while (maxOf(o.outWidth, o.outHeight) / (sample * 2) >= maxPx) sample *= 2
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+    }
+
+    /** The decoded pixels turned (and mirrored) as the EXIF orientation says, as viewers show the photo. */
+    fun upright(b: Bitmap, exif: android.media.ExifInterface?): Bitmap {
+        val m = Matrix()
+        when (exif?.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1) ?: 1) {
+            2 -> m.postScale(-1f, 1f)
+            3 -> m.postRotate(180f)
+            4 -> m.postScale(1f, -1f)
+            5 -> { m.postRotate(90f); m.postScale(-1f, 1f) }
+            6 -> m.postRotate(90f)
+            7 -> { m.postRotate(270f); m.postScale(-1f, 1f) }
+            8 -> m.postRotate(270f)
+            else -> return b
+        }
+        return Bitmap.createBitmap(b, 0, 0, b.width, b.height, m, true)
+    }
+
+    /**
+     * A whole photo file as it is meant to be seen: decoded to at most `maxPx` and turned by its EXIF
+     * orientation (cameras often store the pixels sideways and only tag the turn).
+     */
+    fun decodeUpright(bytes: ByteArray, maxPx: Int): Bitmap? {
+        val b = decode(bytes, maxPx) ?: return null
+        val exif = runCatching { android.media.ExifInterface(bytes.inputStream()) }.getOrNull()
+        val up = upright(b, exif)
+        if (up !== b) b.recycle()
+        return up
     }
 
     /** Put the thumbnail into `target` when it arrives (the view's tag guards against recycled rows). */

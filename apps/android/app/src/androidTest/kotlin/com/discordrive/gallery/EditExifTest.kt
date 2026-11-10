@@ -59,7 +59,7 @@ class EditExifTest {
         // 2019-07-14 18:05:09 at +02:00.
         assertEquals(1563120309000L, DdnPictures.takenAt(exif))
         // As the editor loads it: decoded, then turned by the orientation tag (shown 200 × 300, red on top).
-        val shown = DdnEditActivity.upright(BitmapFactory.decodeByteArray(src, 0, src.size), exif)
+        val shown = DdnThumbs.upright(BitmapFactory.decodeByteArray(src, 0, src.size), exif)
         assertEquals(200, shown.width)
         assertEquals(300, shown.height)
         assertTrue(Color.red(shown.getPixel(100, 40)) > 200 && Color.blue(shown.getPixel(100, 40)) < 60)
@@ -87,6 +87,24 @@ class EditExifTest {
         val back = BitmapFactory.decodeByteArray(copy, 0, copy.size)
         assertEquals(200, back.width)
         assertEquals(300, back.height)
+    }
+
+    /** The photo viewer decodes the whole file the same way: a sideways-stored photo is shown upright. */
+    @Test
+    fun viewerShowsSidewaysPhotoUpright() {
+        val src = original()
+        val shown = DdnThumbs.decodeUpright(src, 4096)!!
+        assertEquals(200, shown.width)
+        assertEquals(300, shown.height)
+        assertTrue(Color.red(shown.getPixel(100, 40)) > 200 && Color.blue(shown.getPixel(100, 40)) < 60)
+        assertTrue(Color.blue(shown.getPixel(100, 260)) > 200 && Color.red(shown.getPixel(100, 260)) < 60)
+        // Downscaled (a big photo) it is still turned; without an orientation tag it stays as stored.
+        val small = DdnThumbs.decodeUpright(src, 100)!!
+        assertTrue(small.height > small.width)
+        val plain = ByteArrayOutputStream().also { Bitmap.createBitmap(40, 30, Bitmap.Config.ARGB_8888).compress(Bitmap.CompressFormat.JPEG, 90, it) }.toByteArray()
+        val flat = DdnThumbs.decodeUpright(plain, 4096)!!
+        assertEquals(40, flat.width)
+        assertEquals(30, flat.height)
     }
 
     @Test

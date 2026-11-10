@@ -116,7 +116,7 @@ class DdnEditActivity : AppCompatActivity() {
                 sourceExif = head?.let { h -> runCatching { android.media.ExifInterface(h.inputStream()) }.getOrNull() }
                 sourceTaken = sourceExif?.let(DdnPictures::takenAt) ?: runCatching { s.files.manifest(ref).second.takenAt }.getOrNull()
                 // The stored preview is already upright; the file is turned here by its orientation tag.
-                if (full != null) DdnThumbs.decode(full, MAX_PX)?.let { upright(it, sourceExif) } else DdnThumbs.load(s, ref, 'p', MAX_PX)
+                if (full != null) DdnThumbs.decode(full, MAX_PX)?.let { DdnThumbs.upright(it, sourceExif) } else DdnThumbs.load(s, ref, 'p', MAX_PX)
             }.getOrNull()
             runOnUiThread {
                 loading.visibility = View.GONE
@@ -227,22 +227,6 @@ class DdnEditActivity : AppCompatActivity() {
             android.media.ExifInterface.TAG_GPS_IMG_DIRECTION, android.media.ExifInterface.TAG_GPS_IMG_DIRECTION_REF,
             android.media.ExifInterface.TAG_GPS_PROCESSING_METHOD,
         )
-
-        /** The decoded pixels turned (and mirrored) as the EXIF orientation says, as viewers show the photo. */
-        internal fun upright(b: Bitmap, exif: android.media.ExifInterface?): Bitmap {
-            val m = Matrix()
-            when (exif?.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1) ?: 1) {
-                2 -> m.postScale(-1f, 1f)
-                3 -> m.postRotate(180f)
-                4 -> m.postScale(1f, -1f)
-                5 -> { m.postRotate(90f); m.postScale(-1f, 1f) }
-                6 -> m.postRotate(90f)
-                7 -> { m.postRotate(270f); m.postScale(-1f, 1f) }
-                8 -> m.postRotate(270f)
-                else -> return b
-            }
-            return Bitmap.createBitmap(b, 0, 0, b.width, b.height, m, true)
-        }
 
         /** `jpeg` with the original's kept EXIF and orientation 1 (normal): through a file, as ExifInterface saves. */
         internal fun withExif(jpeg: ByteArray, from: android.media.ExifInterface, tmpDir: java.io.File): ByteArray {

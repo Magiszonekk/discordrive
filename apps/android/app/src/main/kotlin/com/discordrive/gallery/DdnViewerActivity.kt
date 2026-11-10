@@ -237,7 +237,7 @@ class DdnViewerActivity : AppCompatActivity() {
                 if (size > 0) thread {
                     // A large photo stays on its preview; its first byte still says whether the file is there.
                     val r = runCatching { if (size <= FULL_IMAGE_MAX) s.files.range(ref, size, 0, size - 1) else s.files.range(ref, size, 0, 0) }
-                    val b = r.getOrNull()?.takeIf { size <= FULL_IMAGE_MAX }?.let { DdnThumbs.decode(it, 4096) }
+                    val b = r.getOrNull()?.takeIf { size <= FULL_IMAGE_MAX }?.let { DdnThumbs.decodeUpright(it, 4096) }
                     main.post {
                         if (active !== h || activeId != c.id) return@post
                         if (b != null) { img.setImageBitmap(b); fullAt = position }
