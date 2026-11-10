@@ -675,4 +675,47 @@ Tekst: %3$s</string>
     <string name="ddn_info_exposure">Ekspozycja: %1$s</string>
     <string name="ddn_info_place">Lokalizacja: %1$s</string>
     <string name="ddn_info_map">Mapa</string>
+    <!-- Selection (Files, Gallery, albums) -->
+    <string name="ddn_no_date">Bez daty</string>
+    <string name="ddn_select_all">Zaznacz wszystko</string>
+    <string name="ddn_move_to">Przenieś do…</string>
+    <string name="ddn_moved">Przeniesiono.</string>
+    <string name="ddn_thumbs_hide">Ukryj miniatury</string>
+    <string name="ddn_thumbs_show">Pokaż miniatury</string>
+    <plurals name="ddn_thumbs_hidden">
+        <item quantity="one">Ukryto %d miniaturę na wszystkich Twoich urządzeniach</item>
+        <item quantity="few">Ukryto %d miniatury na wszystkich Twoich urządzeniach</item>
+        <item quantity="many">Ukryto %d miniatur na wszystkich Twoich urządzeniach</item>
+        <item quantity="other">Ukryto %d miniatury na wszystkich Twoich urządzeniach</item>
+    </plurals>
+    <plurals name="ddn_thumbs_shown">
+        <item quantity="one">%d miniatura znowu widoczna</item>
+        <item quantity="few">%d miniatury znowu widoczne</item>
+        <item quantity="many">%d miniatur znowu widocznych</item>
+        <item quantity="other">%d miniatury znowu widoczne</item>
+    </plurals>
+    <plurals name="ddn_to_trash_ask_n">
+        <item quantity="one">Przenieść %d element do kosza? Przez 30 dni można go przywrócić.</item>
+        <item quantity="few">Przenieść %d elementy do kosza? Przez 30 dni można je przywrócić.</item>
+        <item quantity="many">Przenieść %d elementów do kosza? Przez 30 dni można je przywrócić.</item>
+        <item quantity="other">Przenieść %d elementy do kosza? Przez 30 dni można je przywrócić.</item>
+    </plurals>
+    <plurals name="ddn_downloading_n">
+        <item quantity="one">Pobieram %d plik do Pobranych…</item>
+        <item quantity="few">Pobieram %d pliki do Pobranych…</item>
+        <item quantity="many">Pobieram %d plików do Pobranych…</item>
+        <item quantity="other">Pobieram %d pliki do Pobranych…</item>
+    </plurals>
+    <plurals name="ddn_saved_n">
+        <item quantity="one">Zapisano %d plik w Pobranych</item>
+        <item quantity="few">Zapisano %d pliki w Pobranych</item>
+        <item quantity="many">Zapisano %d plików w Pobranych</item>
+        <item quantity="other">Zapisano %d pliki w Pobranych</item>
+    </plurals>
+    <plurals name="ddn_preparing_n">
+        <item quantity="one">Przygotowuję %d plik…</item>
+        <item quantity="few">Przygotowuję %d pliki…</item>
+        <item quantity="many">Przygotowuję %d plików…</item>
+        <item quantity="other">Przygotowuję %d pliki…</item>
+    </plurals>
 </resources>

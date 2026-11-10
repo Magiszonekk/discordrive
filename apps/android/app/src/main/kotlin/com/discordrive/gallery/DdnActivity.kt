@@ -49,6 +49,27 @@ open class DdnActivity : AppCompatActivity() {
     private lateinit var ui: CobaltUi
     /** Files: the path above the list (breadcrumbs, tap = go there). */
     private lateinit var crumbs: TextView
+    /** The normal bar (wordmark / screen name + icons) and the selection bar that replaces it. */
+    private lateinit var bar: LinearLayout
+    private lateinit var selBar: LinearLayout
+    private lateinit var selCount: TextView
+    private lateinit var selShare: View
+    private lateinit var selDownload: View
+
+    /** What the open list shows: day headers (Gallery, albums) and items, in order. */
+    private sealed interface Row {
+        data class Head(val key: Long, val label: String) : Row
+        data class Item(val c: IndexReplica.Child) : Row
+    }
+    private var rows: List<Row> = emptyList()
+
+    /**
+     * Selection, as in Google Photos / Files by Google: a long press selects and starts it, taps add/remove,
+     * a finger moved on after the long press selects the range, the bar shows the count and the actions for all.
+     */
+    private var selecting = false
+    private val selected = LinkedHashSet<String>()
+    private lateinit var back: OnBackPressedCallback
 
     override fun onCreate(savedInstanceState: Bundle?) {
         CobaltUi.theme(this)
@@ -82,23 +103,33 @@ open class DdnActivity : AppCompatActivity() {
             menu.add(0, 3, 2, R.string.ddn_albums).setIcon(R.drawable.ic_cobalt_album)
             setBackgroundColor(getColor(R.color.cobalt_paper))
             selectedItemId = if (albumsTab) 3 else if (gallery) 2 else 1
-            setOnItemSelectedListener { gallery = it.itemId == 2; albumsTab = it.itemId == 3; album = null; show(); true }
+            setOnItemSelectedListener { endSelection(); gallery = it.itemId == 2; albumsTab = it.itemId == 3; album = null; show(); true }
         }
-        val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         bar.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        fun barIcon(icon: Int, label: Int, onClick: () -> Unit) = bar.addView(ImageView(this).apply {
+        fun barIcon(into: LinearLayout, icon: Int, label: Int, onClick: (View) -> Unit): View = ImageView(this).apply {
             setImageResource(icon); setColorFilter(getColor(R.color.cobalt_ink)); contentDescription = getString(label)
             setPadding(dp(12), dp(12), dp(12), dp(12))
             val tv = android.util.TypedValue(); theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, tv, true); setBackgroundResource(tv.resourceId)
-            setOnClickListener { onClick() }
-        }, LinearLayout.LayoutParams(dp(48), dp(48)))
-        barIcon(R.drawable.ic_cobalt_search, R.string.ddn_search) { startActivity(Intent(this@DdnActivity, DdnSearchActivity::class.java)) }
+            setOnClickListener { onClick(it) }
+        }.also { into.addView(it, LinearLayout.LayoutParams(dp(48), dp(48))) }
+        barIcon(bar, R.drawable.ic_cobalt_search, R.string.ddn_search) { startActivity(Intent(this@DdnActivity, DdnSearchActivity::class.java)) }
         // Upload into the open place: the folder (Files), the album, the Gallery.
-        barIcon(R.drawable.ic_cobalt_upload, R.string.ddn_upload) { pick.launch(arrayOf("*/*")) }
-        barIcon(R.drawable.ic_lock, R.string.safe_title) { DdnSafeActivity.open(this@DdnActivity) }
-        barIcon(R.drawable.ic_cobalt_settings, R.string.ddn_settings) { startActivity(Intent(this@DdnActivity, DdnSettingsActivity::class.java)) }
+        barIcon(bar, R.drawable.ic_cobalt_upload, R.string.ddn_upload) { pick.launch(arrayOf("*/*")) }
+        barIcon(bar, R.drawable.ic_lock, R.string.safe_title) { DdnSafeActivity.open(this@DdnActivity) }
+        barIcon(bar, R.drawable.ic_cobalt_settings, R.string.ddn_settings) { startActivity(Intent(this@DdnActivity, DdnSettingsActivity::class.java)) }
         bar.setPaddingRelative(0, 0, dp(4), 0)
         root.addView(bar)
+        // The selection bar (in place of the bar while selecting): close, the count, Share, Download, Trash, ⋮.
+        selBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; visibility = View.GONE; setPaddingRelative(dp(4), 0, dp(4), 0) }
+        barIcon(selBar, R.drawable.ic_cobalt_close, R.string.selection_exit) { endSelection() }
+        selCount = TextView(this).apply { androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_BarTitle); setPadding(dp(8), dp(14), dp(8), dp(10)); maxLines = 1 }
+        selBar.addView(selCount, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        selShare = barIcon(selBar, R.drawable.ic_cobalt_share2, R.string.ddn_share) { session?.let { s -> DdnBatch.share(this, s, chosen()) } }
+        selDownload = barIcon(selBar, R.drawable.ic_cobalt_download, R.string.ddn_download) { session?.let { s -> DdnBatch.download(this, s, chosen()) { note(it) } } }
+        barIcon(selBar, R.drawable.ic_cobalt_trash, R.string.ddn_to_trash) { askTrash(chosen()) }
+        barIcon(selBar, R.drawable.ic_cobalt_more, R.string.ddn_more) { v -> selectionMenu(v) }
+        root.addView(selBar)
         root.addView(crumbs)
         root.addView(status)
         root.addView(swipe, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -106,13 +137,17 @@ open class DdnActivity : AppCompatActivity() {
         setContentView(root)
         Insets.apply(root)
 
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+        list.addOnItemTouchListener(dragSelect)
+        back = object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                // Back from a folder goes up; from the root of this icon's view it closes only this task.
-                if (albumsTab && album != null) { album = null; show() }
+                // Back while selecting ends the selection; from a folder goes up; from the root of this icon's view
+                // it closes only this task.
+                if (selecting) endSelection()
+                else if (albumsTab && album != null) { album = null; show() }
                 else if (!gallery && !albumsTab && path.size > 1) { path.removeAt(path.size - 1); show() } else finish()
             }
-        })
+        }
+        onBackPressedDispatcher.addCallback(this, back)
 
         status.text = getString(R.string.ddn_opening)
         thread {
@@ -203,7 +238,7 @@ open class DdnActivity : AppCompatActivity() {
         // Files below the root: the path, each part a step back (tap = up to it).
         crumbs.visibility = if (!gallery && !albumsTab && path.size > 1) View.VISIBLE else View.GONE
         crumbs.text = path.dropLast(1).joinToString(" › ") { it.second }
-        crumbs.setOnClickListener { if (path.size > 1) { path.removeAt(path.size - 1); show() } }
+        crumbs.setOnClickListener { if (path.size > 1) { endSelection(); path.removeAt(path.size - 1); show() } }
         status.text = s.lastError?.let { if (io.github.magiszonekk.discordrive.core.ErrorText.needsUpdate(it)) getString(R.string.ddn_err_update) else getString(R.string.ddn_offline, DdnErrors.bare(this, it)) } ?: ""
         status.visibility = if (status.text.isEmpty()) View.GONE else View.VISIBLE
         thread {
@@ -227,10 +262,23 @@ open class DdnActivity : AppCompatActivity() {
         }
     }
 
+    /** Items of the open list (headers left out). */
+    private fun itemsNow(): List<IndexReplica.Child> = rows.mapNotNull { (it as? Row.Item)?.c }
+
+    /** The list changed under a selection (refresh, an action): what is gone is no longer selected. */
+    private fun keepSelection() {
+        if (!selecting) return
+        val ids = itemsNow().mapTo(HashSet()) { it.id }
+        selected.retainAll(ids)
+        if (selected.isEmpty()) endSelection() else selectionUi()
+    }
+
     private fun showList(s: DdnSession, items: List<IndexReplica.Child>) {
+        rows = items.map { Row.Item(it) }
+        keepSelection()
         list.layoutManager = LinearLayoutManager(this)
         list.adapter = object : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
-            override fun getItemCount() = items.size
+            override fun getItemCount() = rows.size
             override fun onCreateViewHolder(p: ViewGroup, t: Int): RecyclerView.ViewHolder {
                 val r = ui.listRow()
                 r.view.setPaddingRelative(dp(12), dp(8), dp(8), dp(8))
@@ -239,50 +287,141 @@ open class DdnActivity : AppCompatActivity() {
                 r.view.tag = r
                 return object : RecyclerView.ViewHolder(r.view) {}
             }
-            override fun onBindViewHolder(h: RecyclerView.ViewHolder, i: Int) {
-                val c = items[i]
+            override fun onBindViewHolder(h: RecyclerView.ViewHolder, i: Int, payloads: MutableList<Any>) {
+                // Only the selection changed: a row whose state is the same keeps its thumbnail (no reload, no flicker).
+                val c = (rows[i] as Row.Item).c
                 val r = h.itemView.tag as CobaltUi.ListRow
+                if (payloads.isNotEmpty() && r.view.isSelected == (selecting && c.id in selected)) {
+                    r.view.getChildAt(r.view.childCount - 1).visibility = if (c.isFolder && !selecting) View.VISIBLE else View.GONE
+                    return
+                }
+                onBindViewHolder(h, i)
+            }
+            override fun onBindViewHolder(h: RecyclerView.ViewHolder, i: Int) {
+                val c = (rows[i] as Row.Item).c
+                val r = h.itemView.tag as CobaltUi.ListRow
+                val on = selecting && c.id in selected
                 r.title.text = c.name
                 r.sub.text = if (c.isFolder) getString(R.string.ddn_folder) else listOfNotNull(Formatter.formatShortFileSize(this@DdnActivity, c.size ?: 0), c.createdAt.takeIf { it > 0 }?.let { Ago.of(this@DdnActivity, it) }).joinToString(" · ")
-                r.view.getChildAt(r.view.childCount - 1).visibility = if (c.isFolder) View.VISIBLE else View.GONE
+                r.view.getChildAt(r.view.childCount - 1).visibility = if (c.isFolder && !selecting) View.VISIBLE else View.GONE
+                // Selected (Files by Google): the row in the accent's soft tone, a check in place of the icon.
+                if (on) r.view.setBackgroundColor(getColor(R.color.cobalt_accent_soft)) else {
+                    val tv = android.util.TypedValue(); theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true); r.view.setBackgroundResource(tv.resourceId)
+                }
+                r.view.isSelected = on
                 val type = ui.typeIcon(c.name, c.isFolder)
-                ui.thumb(r, null, type)
-                ui.folderTile(r, c.isFolder)
                 r.icon.tag = null
-                if (thumbsOn && !c.thumbHidden && !c.isFolder && (DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) && c.manifestRef != null) {
-                    r.icon.tag = c.manifestRef
-                    val ref = c.manifestRef
-                    DdnThumbs.pool.execute {
-                        val b = runCatching { DdnThumbs.load(s, ref!!, 't', dp(88)) }.getOrNull()
-                        main.post { if (r.icon.tag == ref && b != null) ui.thumb(r, b, type) }
+                r.icon.backgroundTintList = null
+                if (on) {
+                    ui.thumb(r, null, R.drawable.ic_cobalt_check)
+                    r.icon.backgroundTintList = android.content.res.ColorStateList.valueOf(getColor(R.color.cobalt_accent))
+                    r.icon.setColorFilter(Color.WHITE)
+                } else {
+                    ui.thumb(r, null, type)
+                    ui.folderTile(r, c.isFolder)
+                    if (thumbsOn && !c.thumbHidden && !c.isFolder && (DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) && c.manifestRef != null) {
+                        r.icon.tag = c.manifestRef
+                        val ref = c.manifestRef
+                        DdnThumbs.pool.execute {
+                            val b = runCatching { DdnThumbs.load(s, ref!!, 't', dp(88)) }.getOrNull()
+                            main.post { if (r.icon.tag == ref && b != null) ui.thumb(r, b, type) }
+                        }
                     }
                 }
                 r.view.setOnClickListener {
-                    if (c.isFolder) { path += c.id to c.name; show() } else open(c, items.filter { !it.isFolder })
+                    val at = h.bindingAdapterPosition
+                    if (selecting) toggle(at)
+                    else if (c.isFolder) { path += c.id to c.name; show() } else open(c, itemsNow().filter { !it.isFolder })
                 }
-                r.view.setOnLongClickListener { rowMenu(c); true }
+                r.view.setOnLongClickListener { startSelection(h.bindingAdapterPosition); true }
             }
         }
         if (items.isEmpty()) note(getString(R.string.ddn_empty))
     }
 
+    /** Day headers over a newest-first list of media (Gallery, an album), as in the phone's gallery. */
+    private fun withDays(items: List<IndexReplica.Child>): List<Row> {
+        val zone = java.time.ZoneId.systemDefault()
+        val today = java.time.LocalDate.now(zone)
+        val out = ArrayList<Row>(items.size + 16)
+        var last: Long? = null
+        for (c in items) {
+            val day = if (c.createdAt > 0) java.time.Instant.ofEpochMilli(c.createdAt).atZone(zone).toLocalDate() else null
+            val key = day?.toEpochDay() ?: Long.MIN_VALUE
+            if (key != last) {
+                val label = when (day) {
+                    null -> getString(R.string.ddn_no_date)
+                    today -> getString(R.string.date_today)
+                    today.minusDays(1) -> getString(R.string.date_yesterday)
+                    else -> java.time.format.DateTimeFormatter.ofPattern(if (day.year == today.year) "EEEE, d MMMM" else "d MMMM yyyy", java.util.Locale.getDefault()).format(day).replaceFirstChar { it.uppercase() }
+                }
+                out += Row.Head(key, label)
+                last = key
+            }
+            out += Row.Item(c)
+        }
+        return out
+    }
+
+    /** The items under a day header (up to the next one). */
+    private fun dayItems(headAt: Int): List<Int> {
+        val out = ArrayList<Int>()
+        var i = headAt + 1
+        while (i < rows.size && rows[i] is Row.Item) out += i++
+        return out
+    }
+
     private fun showGrid(s: DdnSession, items: List<IndexReplica.Child>) {
+        rows = withDays(items)
+        keepSelection()
         val cols = maxOf(3, resources.displayMetrics.widthPixels / dp(120))
         val cell = resources.displayMetrics.widthPixels / cols
-        list.layoutManager = GridLayoutManager(this, cols)
+        list.layoutManager = GridLayoutManager(this, cols).apply {
+            spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() { override fun getSpanSize(position: Int) = if (rows.getOrNull(position) is Row.Head) cols else 1 }
+        }
         list.adapter = object : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
-            override fun getItemCount() = items.size
+            override fun getItemCount() = rows.size
+            override fun getItemViewType(position: Int) = if (rows[position] is Row.Head) 1 else 0
             override fun onCreateViewHolder(p: ViewGroup, t: Int): RecyclerView.ViewHolder {
+                if (t == 1) {
+                    // A day: its date and, while selecting, a circle that selects the whole day.
+                    val v = LinearLayout(this@DdnActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPaddingRelative(dp(12), dp(18), dp(8), dp(8)); layoutParams = ViewGroup.LayoutParams(-1, -2) }
+                    v.addView(ImageView(this@DdnActivity).apply { setImageResource(R.drawable.ic_circle_outline); setColorFilter(getColor(R.color.cobalt_muted)) }, LinearLayout.LayoutParams(dp(22), dp(22)).apply { marginEnd = dp(10) })
+                    v.addView(TextView(this@DdnActivity).apply { androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowTitle); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, -2, 1f))
+                    return object : RecyclerView.ViewHolder(v) {}
+                }
                 val f = FrameLayout(this@DdnActivity).apply { layoutParams = ViewGroup.LayoutParams(cell, cell); setPadding(1, 1, 1, 1) }
                 f.addView(ImageView(this@DdnActivity).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(getColor(R.color.cobalt_tile)) }, FrameLayout.LayoutParams(-1, -1))
                 f.addView(ImageView(this@DdnActivity).apply { setImageResource(R.drawable.ic_cobalt_film); setColorFilter(Color.WHITE); elevation = dp(2).toFloat() }, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.TOP or Gravity.END).apply { setMargins(0, dp(6), dp(6), 0) })
+                f.addView(ImageView(this@DdnActivity).apply { elevation = dp(2).toFloat() }, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.TOP or Gravity.START).apply { setMargins(dp(6), dp(6), 0, 0) })
                 return object : RecyclerView.ViewHolder(f) {}
             }
+            override fun onBindViewHolder(h: RecyclerView.ViewHolder, i: Int, payloads: MutableList<Any>) {
+                // Only the selection changed: the cell keeps its picture.
+                val row = rows[i]
+                if (payloads.isNotEmpty() && row is Row.Item) cellSelection(h.itemView as FrameLayout, row.c) else onBindViewHolder(h, i)
+            }
             override fun onBindViewHolder(h: RecyclerView.ViewHolder, i: Int) {
-                val c = items[i]
+                val row = rows[i]
+                if (row is Row.Head) {
+                    val v = h.itemView as LinearLayout
+                    val all = selecting && dayItems(i).all { (rows[it] as Row.Item).c.id in selected }
+                    (v.getChildAt(0) as ImageView).apply {
+                        visibility = if (selecting) View.VISIBLE else View.GONE
+                        setImageResource(if (all) R.drawable.ic_check_circle else R.drawable.ic_circle_outline)
+                        if (all) clearColorFilter() else setColorFilter(getColor(R.color.cobalt_muted))
+                    }
+                    (v.getChildAt(1) as TextView).text = row.label
+                    v.contentDescription = row.label
+                    v.setOnClickListener { if (selecting) toggleDay(h.bindingAdapterPosition) }
+                    v.setOnLongClickListener { selectDay(h.bindingAdapterPosition); true }
+                    return
+                }
+                val c = (row as Row.Item).c
                 val f = h.itemView as FrameLayout
                 val img = f.getChildAt(0) as ImageView
                 f.getChildAt(1).visibility = if (DdnSession.isVideo(c.name)) View.VISIBLE else View.GONE
+                cellSelection(f, c)
                 img.setImageDrawable(null)
                 img.contentDescription = c.name
                 img.clearColorFilter()
@@ -291,11 +430,182 @@ open class DdnActivity : AppCompatActivity() {
                 // Thumbnails off (Settings) or hidden for this file (account): the type icon, nothing fetched (tag
                 // cleared: a late load of a recycled cell is dropped).
                 if (thumbsOn && !c.thumbHidden) DdnThumbs.into(s, c.manifestRef, img, cell) { typeIcon() } else { img.tag = null; typeIcon() }
-                f.setOnClickListener { open(c, items) }
-                f.setOnLongClickListener { rowMenu(c); true }
+                f.setOnClickListener { if (selecting) toggle(h.bindingAdapterPosition) else open(c, itemsNow()) }
+                f.setOnLongClickListener { startSelection(h.bindingAdapterPosition); true }
             }
         }
         if (items.isEmpty()) note(getString(if (gallery && DdnPrivate.all(this).isNotEmpty()) R.string.ddn_gallery_empty_private else R.string.ddn_gallery_empty))
+    }
+
+    // ── selection ──
+
+    /** Selected (Google Photos): the picture shrinks over the accent's soft tone, a check at the top left. */
+    private fun cellSelection(f: FrameLayout, c: IndexReplica.Child) {
+        val on = selecting && c.id in selected
+        val img = f.getChildAt(0) as ImageView
+        (f.getChildAt(2) as ImageView).apply {
+            visibility = if (selecting) View.VISIBLE else View.GONE
+            setImageResource(if (on) R.drawable.ic_check_circle else R.drawable.ic_circle_outline)
+        }
+        f.setBackgroundColor(if (on) getColor(R.color.cobalt_accent_soft) else 0)
+        img.scaleX = if (on) 0.84f else 1f
+        img.scaleY = if (on) 0.84f else 1f
+        f.isSelected = on
+    }
+
+    private fun idAt(position: Int): String? = (rows.getOrNull(position) as? Row.Item)?.c?.id
+
+    /** Long press on an item: selection starts with it (or it is added), and a drag from here selects the range. */
+    private fun startSelection(position: Int) {
+        val id = idAt(position) ?: return
+        if (!selecting) { selecting = true; selected.clear() }
+        selected += id
+        dragFrom = position
+        dragBase = selected.toSet()
+        dragging = true
+        list.parent?.requestDisallowInterceptTouchEvent(true)
+        list.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+        selectionUi()
+    }
+
+    private fun toggle(position: Int) {
+        val id = idAt(position) ?: return
+        if (!selected.add(id)) selected.remove(id)
+        if (selected.isEmpty()) endSelection() else selectionUi()
+    }
+
+    /** Tap on a day while selecting: the whole day in (or out, when it was all in). */
+    private fun toggleDay(headAt: Int) {
+        val ids = dayItems(headAt).mapNotNull { idAt(it) }
+        if (ids.isEmpty()) return
+        if (ids.all { it in selected }) selected.removeAll(ids.toSet()) else selected.addAll(ids)
+        if (selected.isEmpty()) endSelection() else selectionUi()
+    }
+
+    /** Long press on a day: selection starts with that whole day. */
+    private fun selectDay(headAt: Int) {
+        val ids = dayItems(headAt).mapNotNull { idAt(it) }
+        if (ids.isEmpty()) return
+        if (!selecting) { selecting = true; selected.clear() }
+        selected.addAll(ids)
+        selectionUi()
+    }
+
+    private fun selectAll() {
+        selecting = true
+        itemsNow().forEach { selected += it.id }
+        selectionUi()
+    }
+
+    private fun endSelection() {
+        if (!selecting && selected.isEmpty()) return
+        selecting = false
+        dragging = false
+        selected.clear()
+        selectionUi()
+    }
+
+    /** The selected items, in list order. */
+    private fun chosen(): List<IndexReplica.Child> = itemsNow().filter { it.id in selected }
+
+    /** Bars and cells follow the selection (no new adapter: the list keeps its scroll position). */
+    private fun selectionUi() {
+        bar.visibility = if (selecting) View.GONE else View.VISIBLE
+        selBar.visibility = if (selecting) View.VISIBLE else View.GONE
+        crumbs.visibility = if (!selecting && !gallery && !albumsTab && path.size > 1) View.VISIBLE else View.GONE
+        nav.visibility = if (selecting) View.GONE else View.VISIBLE
+        swipe.isEnabled = !selecting
+        selCount.text = getString(R.string.selection_count, selected.size)
+        // Download / Share are for files (a folder is not sent as one file).
+        val files = chosen().none { it.isFolder }
+        selShare.visibility = if (files) View.VISIBLE else View.GONE
+        selDownload.visibility = if (files) View.VISIBLE else View.GONE
+        list.adapter?.notifyItemRangeChanged(0, rows.size, SELECTION)
+    }
+
+    // A finger moved on after the long press selects the range from the first item to the one under it (back
+    // over the first: the range shrinks again); near the top or bottom edge the list scrolls along.
+    private var dragging = false
+    private var dragFrom = -1
+    private var dragBase: Set<String> = emptySet()
+    private var dragY = 0f
+    private val autoScroll = object : Runnable {
+        override fun run() {
+            if (!dragging) return
+            val edge = dp(72)
+            val dy = when { dragY < edge -> -dp(14); dragY > list.height - edge -> dp(14); else -> 0 }
+            if (dy != 0) { list.scrollBy(0, dy); dragAt(list.width / 2f, dragY) }
+            main.postDelayed(this, 16)
+        }
+    }
+
+    private fun dragAt(x: Float, y: Float) {
+        val v = list.findChildViewUnder(x, y.coerceIn(0f, list.height - 1f)) ?: return
+        val to = list.getChildAdapterPosition(v)
+        if (to != RecyclerView.NO_POSITION) dragTo(to)
+    }
+
+    /** The drag reached `to`: the selection is what it was at the long press plus the items from there to here. */
+    private fun dragTo(to: Int) {
+        if (dragFrom < 0) return
+        val range = (minOf(dragFrom, to)..maxOf(dragFrom, to)).mapNotNull { idAt(it) }
+        val next = LinkedHashSet(dragBase).apply { addAll(range) }
+        if (next == selected) return
+        selected.clear(); selected.addAll(next)
+        selectionUi()
+    }
+
+    private val dragSelect = object : RecyclerView.OnItemTouchListener {
+        override fun onInterceptTouchEvent(rv: RecyclerView, e: android.view.MotionEvent): Boolean {
+            if (!dragging) return false
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_MOVE -> { dragY = e.y; main.removeCallbacks(autoScroll); main.post(autoScroll); return true }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> { dragging = false; main.removeCallbacks(autoScroll) }
+            }
+            return false
+        }
+        override fun onTouchEvent(rv: RecyclerView, e: android.view.MotionEvent) {
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_MOVE -> { dragY = e.y; dragAt(e.x, e.y) }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> { dragging = false; main.removeCallbacks(autoScroll) }
+            }
+        }
+        override fun onRequestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {}
+    }
+
+    /** ⋮ of the selection bar: the actions for every selected item. */
+    private fun selectionMenu(anchor: View) {
+        val s = session ?: return
+        val entries = selectionItems(s, chosen(), gallery || albumsTab)
+        val pm = androidx.appcompat.widget.PopupMenu(this, anchor, Gravity.END)
+        entries.forEachIndexed { i, (label, _) -> pm.menu.add(0, i, i, label) }
+        pm.setOnMenuItemClickListener { entries[it.itemId].second(); true }
+        pm.show()
+    }
+
+    /** The actions for the selected items. The main thread: what refresh() learned about the instance (no network here). */
+    private fun selectionItems(s: DdnSession, cs: List<IndexReplica.Child>, inGallery: Boolean): List<Pair<String, () -> Unit>> {
+        val items = ArrayList<Pair<String, () -> Unit>>()
+        if (cs.isEmpty()) return items
+        val media = cs.filter { !it.isFolder && (DdnSession.isImage(it.name) || DdnSession.isVideo(it.name)) }
+        val allMedia = media.size == cs.size
+        if (itemsNow().any { it.id !in selected }) items += getString(R.string.ddn_select_all) to { selectAll() }
+        if (allMedia) items += getString(R.string.action_move_to_album) to { DdnBatch.pickAlbum(this, s, cs.mapNotNullTo(HashSet()) { it.parentId }) { id, name -> move(cs, id, getString(R.string.ddn_moved_to_album, name)) } }
+        if (!inGallery) items += getString(R.string.ddn_move_to) to { DdnPick.driveFolder(this, s) { to -> move(cs, to, getString(R.string.ddn_moved)) } }
+        if (s.gallerySpaceKnown) {
+            if (inGallery) items += getString(R.string.ddn_to_drive) to { DdnPick.driveFolder(this, s) { to -> move(cs, to, getString(R.string.ddn_moved_to_drive)) } }
+            else if (cs.all { it.isFolder || DdnSession.isImage(it.name) || DdnSession.isVideo(it.name) }) items += getString(R.string.ddn_to_gallery) to { move(cs, s.galleryRoot, getString(R.string.ddn_moved_to_gallery)) }
+        }
+        if (s.attrsKnown && media.isNotEmpty()) {
+            // Mixed: hide the visible ones (as on the web); all hidden already: show them.
+            val hide = media.any { !it.thumbHidden }
+            val which = media.filter { it.thumbHidden != hide }
+            val label = if (media.size == 1) getString(if (hide) R.string.ddn_thumb_hide else R.string.ddn_thumb_show) else getString(if (hide) R.string.ddn_thumbs_hide else R.string.ddn_thumbs_show)
+            items += label to { setThumbHidden(which, hide) }
+        }
+        items += getString(R.string.safe_to_safe) to { DdnSafeActivity.moveIn(this, cs) { endSelection(); show() } }
+        items += getString(R.string.ddn_to_trash) to { askTrash(cs) }
+        return items
     }
 
     /**
@@ -303,6 +613,9 @@ open class DdnActivity : AppCompatActivity() {
      * cover and asks for the PIN to open. Long press: make private / not private.
      */
     private fun showAlbums(s: DdnSession, albums: List<IndexReplica.Album>) {
+        // The album list has no selection (long press = the album's menu).
+        endSelection()
+        rows = emptyList()
         val locked = DdnPrivate.all(this)
         // Private ones last (as in the phone gallery), the rest newest first.
         val list: List<IndexReplica.Album> = albums.filter { it.id !in locked } + albums.filter { it.id in locked }
@@ -367,80 +680,63 @@ open class DdnActivity : AppCompatActivity() {
 
     private fun toast(m: String) = android.widget.Toast.makeText(this, m, android.widget.Toast.LENGTH_SHORT).show()
 
-    /** The long-press entries of a row. The main thread: what refresh() learned about the instance (no network here). */
-    private fun rowMenuItems(s: DdnSession, c: IndexReplica.Child, inGallery: Boolean): List<Pair<String, () -> Unit>> {
-        val items = ArrayList<Pair<String, () -> Unit>>()
-        if (s.gallerySpaceKnown) {
-            if (inGallery) items += getString(R.string.ddn_to_drive) to { DdnPick.driveFolder(this, s) { to -> move(c, to, getString(R.string.ddn_moved_to_drive)) } }
-            else if (c.isFolder || DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)) items += getString(R.string.ddn_to_gallery) to { move(c, s.galleryRoot, getString(R.string.ddn_moved_to_gallery)) }
-        }
-        if (s.attrsKnown && !c.isFolder && (DdnSession.isImage(c.name) || DdnSession.isVideo(c.name)))
-            items += getString(if (c.thumbHidden) R.string.ddn_thumb_show else R.string.ddn_thumb_hide) to { setThumbHidden(c, !c.thumbHidden) }
-        items += getString(R.string.safe_to_safe) to { DdnSafeActivity.moveIn(this, listOf(c)) { show() } }
-        items += getString(R.string.ddn_to_trash) to { askTrash(c) }
-        return items
-    }
-
     /** A line under the bar (empty folder / Gallery): shown with the status line. */
     private fun note(t: String) {
         status.text = if (status.text.isNullOrEmpty()) t else "${status.text} · $t"
         status.visibility = View.VISIBLE
     }
 
-    /**
-     * Long press on a file or folder: Move to the Gallery (from the Drive) / Move to the Drive (from the Gallery)
-     * when the account has the Gallery, and Move to trash.
-     */
-    private fun rowMenu(c: IndexReplica.Child) {
-        val s = session ?: return
-        val inGallery = gallery || albumsTab
-        val items = rowMenuItems(s, c, inGallery)
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle(c.name)
-            .setItems(items.map { it.first }.toTypedArray()) { _, i -> items[i].second() }.show()
-    }
-
     private fun albumMenu(a: IndexReplica.Album, priv: Boolean) {
         val s = session ?: return
         val items = ArrayList<Pair<String, () -> Unit>>()
         items += getString(if (priv) R.string.album_private_unmark_action else R.string.album_private_mark_action) to { togglePrivate(a, priv) }
-        if (s.gallerySpaceKnown) items += getString(R.string.ddn_to_drive) to { DdnPick.driveFolder(this, s) { to -> move(IndexReplica.Child(a.id, a.name, "folder", null), to, getString(R.string.ddn_moved_to_drive)) } }
+        if (s.gallerySpaceKnown) items += getString(R.string.ddn_to_drive) to { DdnPick.driveFolder(this, s) { to -> move(listOf(IndexReplica.Child(a.id, a.name, "folder", null, parentId = s.galleryRoot)), to, getString(R.string.ddn_moved_to_drive)) } }
         com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle(a.name)
             .setItems(items.map { it.first }.toTypedArray()) { _, i -> items[i].second() }.show()
     }
 
-    private fun move(c: IndexReplica.Child, to: String, done: String) {
+    private fun move(cs: List<IndexReplica.Child>, to: String, done: String) {
         val s = session ?: return
+        // Items already there are left out (moving a folder into itself is refused by the rules anyway).
+        val ids = cs.filter { it.parentId != to && it.id != to }.map { it.id }
+        if (ids.isEmpty()) { endSelection(); return }
         thread {
-            val r = runCatching { s.move(listOf(c.id), to) }
+            val r = runCatching { s.move(ids, to) }
             main.post {
-                r.onSuccess { toast(DdnViewerActivity.moveOutcome(this, it, done)) }.onFailure { note(DdnErrors.text(this, it)) }
+                r.onSuccess { toast(DdnViewerActivity.moveOutcome(this, it, done)); endSelection() }.onFailure { note(DdnErrors.text(this, it)) }
                 show()
             }
         }
     }
 
-    /** Hide / show the thumbnail of one photo or video on every device of the account. */
-    private fun setThumbHidden(c: IndexReplica.Child, hidden: Boolean) {
+    /** Hide / show the thumbnails of photos and videos on every device of the account. */
+    private fun setThumbHidden(cs: List<IndexReplica.Child>, hidden: Boolean) {
         val s = session ?: return
+        if (cs.isEmpty()) return
         thread {
-            val r = runCatching { s.setThumbHidden(listOf(c.id), hidden) }
+            val r = runCatching { s.setThumbHidden(cs.map { it.id }, hidden) }
             main.post {
-                r.onSuccess { toast(getString(if (hidden) R.string.ddn_thumb_hidden else R.string.ddn_thumb_shown)) }.onFailure { note(DdnErrors.text(this, it)) }
+                r.onSuccess {
+                    toast(if (cs.size == 1) getString(if (hidden) R.string.ddn_thumb_hidden else R.string.ddn_thumb_shown) else plq(if (hidden) R.plurals.ddn_thumbs_hidden else R.plurals.ddn_thumbs_shown, cs.size, cs.size))
+                    endSelection()
+                }.onFailure { note(DdnErrors.text(this, it)) }
                 show()
             }
         }
     }
 
     /** Move to trash, asked first (30 days to restore, the trash is in Settings). */
-    private fun askTrash(c: IndexReplica.Child) {
+    private fun askTrash(cs: List<IndexReplica.Child>) {
         val s = session ?: return
+        if (cs.isEmpty()) return
         com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
             .setTitle(R.string.ddn_to_trash)
-            .setMessage(getString(R.string.ddn_to_trash_ask, c.name))
+            .setMessage(if (cs.size == 1) getString(R.string.ddn_to_trash_ask, cs[0].name) else plq(R.plurals.ddn_to_trash_ask_n, cs.size, cs.size))
             .setPositiveButton(R.string.ddn_to_trash) { _, _ ->
                 thread {
-                    val r = runCatching { s.moveToTrash(listOf(c.id)) }
+                    val r = runCatching { s.moveToTrash(cs.map { it.id }) }
                     main.post {
+                        if (r.isSuccess) endSelection()
                         r.onSuccess { android.widget.Toast.makeText(this, if (it == "applied") getString(R.string.ddn_moved_to_trash) else getString(R.string.ddn_trash_not_done, it), android.widget.Toast.LENGTH_SHORT).show() }
                             .onFailure { status.text = DdnErrors.text(this, it) }
                         show()
@@ -468,8 +764,30 @@ open class DdnActivity : AppCompatActivity() {
     internal fun showAlbumsForTest() { nav.selectedItemId = 3 }
     internal fun openAlbumForTest(id: String, name: String) { album = id to name; show() }
     internal fun isDrawn(): Boolean = list.isLaidOut && list.childCount > 0
-    /** The long-press menu of a row, as it would be shown (labels), built on the main thread like the real one. */
-    internal fun rowMenuForTest(c: IndexReplica.Child): List<String> = session?.let { s -> rowMenuItems(s, c, gallery || albumsTab).map { it.first } } ?: emptyList()
+    /** The selection's ⋮ menu for these items, as it would be shown (labels), built on the main thread like the real one. */
+    internal fun rowMenuForTest(c: IndexReplica.Child): List<String> = selectionMenuForTest(listOf(c))
+    internal fun selectionMenuForTest(cs: List<IndexReplica.Child>): List<String> = session?.let { s -> selectionItems(s, cs, gallery || albumsTab).map { it.first } } ?: emptyList()
+    /** Items shown (day headers left out). */
+    internal fun itemCountForTest(): Int = (list.adapter?.itemCount ?: -1).let { n -> if (n < 0) n else n - rows.count { it is Row.Head } }
+    /** Adapter position of the n-th item (headers skipped). */
+    internal fun positionOfItemForTest(n: Int): Int = rows.withIndex().filter { it.value is Row.Item }.getOrNull(n)?.index ?: -1
+    internal fun headPositionsForTest(): List<Int> = rows.withIndex().filter { it.value is Row.Head }.map { it.index }
+    internal fun longPressForTest(position: Int) { startSelection(position); dragging = false }
+    /** A tap on the item at `position` (selecting: adds / removes it). */
+    internal fun tapForTest(position: Int) { if (selecting) toggle(position) }
+    /** Long press at `from` and the finger moved to `to` (still down: dragMoreForTest moves it on). */
+    internal fun dragForTest(from: Int, to: Int) { startSelection(from); dragTo(to); dragging = false }
+    internal fun dragMoreForTest(to: Int) = dragTo(to)
+    internal fun selectDayForTest(headAt: Int) = selectDay(headAt)
+    internal fun tapDayForTest(headAt: Int) = toggleDay(headAt)
+    internal fun selectAllForTest() = selectAll()
+    internal fun selectedForTest(): Set<String> = if (selecting) selected.toSet() else emptySet()
+    internal fun selectingForTest(): Boolean = selecting
+    internal fun selectionBarForTest(): Boolean = selBar.visibility == View.VISIBLE && bar.visibility == View.GONE && nav.visibility == View.GONE
+    internal fun selectionTitleForTest(): String = selCount.text.toString()
+    internal fun backForTest() = onBackPressedDispatcher.onBackPressed()
+    /** Runs the selection's menu entry with this label (as a tap on it). */
+    internal fun runSelectionActionForTest(label: String): Boolean = session?.let { s -> selectionItems(s, chosen(), gallery || albumsTab).firstOrNull { it.first == label }?.second?.invoke()?.let { true } } ?: false
 
     internal fun showForTest() = show()
 
@@ -480,6 +798,8 @@ open class DdnActivity : AppCompatActivity() {
     }
 
     companion object {
+        /** Payload of a selection-only change of the list's rows. */
+        private const val SELECTION = "selection"
         const val START = "start"
         /** With START "files": the folders from the root down to the one to open (IDs and names, same order). */
         const val PATH_IDS = "pathIds"

@@ -51,7 +51,8 @@ class BrowseUiTest {
 
     private fun items(s: ActivityScenario<out DdnActivity>): Int {
         var n = -1
-        s.onActivity { a -> n = a.findRecycler()?.adapter?.itemCount ?: -1 }
+        // Items only (the Gallery's day headers are rows of the list too).
+        s.onActivity { a -> n = if (a.findRecycler()?.adapter == null) -1 else a.itemCountForTest() }
         return n
     }
 
@@ -330,6 +331,78 @@ class BrowseUiTest {
         ActivityScenario.launch<DdnWallpaperActivity>(Intent(ctx, DdnWallpaperActivity::class.java).putExtra(DdnWallpaperActivity.EXTRA_ID, photo.id)).use { w ->
             r["viewerWallpaperLoads"] = waitUntil { var ok = false; w.onActivity { a -> ok = a.loadedForTest() }; ok }
             shot("4c-wallpaper")
+        }
+    }
+
+    /**
+     * Selection in the Gallery (as in Google Photos): a long press selects and replaces the bar with the count and
+     * the actions (the bottom bar goes), a tap on the day selects the whole day, "Hide thumbnails" for all of them
+     * at once and back ("Show thumbnails"), Back ends the selection.
+     */
+    private fun gallerySelection(s: ActivityScenario<DdnActivity>, sess: DdnSession, r: LinkedHashMap<String, Boolean>) {
+        val media = sess.media(10, null).map { it.id }.toSet()
+        var heads = emptyList<Int>()
+        var first = -1
+        s.onActivity { a -> heads = a.headPositionsForTest(); first = a.positionOfItemForTest(0) }
+        r["selDayHeaders"] = heads.isNotEmpty() && heads[0] == 0 && first == 1
+        s.onActivity { a -> a.longPressForTest(first) }
+        var ok = false
+        s.onActivity { a -> ok = a.selectingForTest() && a.selectedForTest().size == 1 && a.selectionBarForTest() && a.selectionTitleForTest() == a.getString(R.string.selection_count, 1) }
+        r["selLongPressSelects"] = ok
+        shot("3d-gallery-selection")
+        // A tap on the first day while selecting: the whole day in; every day held: everything in.
+        // (A long press on a day starts the selection with that day; a tap on it then takes it out again.)
+        var day = emptySet<String>()
+        var out = false
+        s.onActivity { a -> a.backForTest(); a.selectDayForTest(a.headPositionsForTest()[0]); day = a.selectedForTest() }
+        s.onActivity { a -> a.tapDayForTest(a.headPositionsForTest()[0]); out = a.selectedForTest().none { it in day } }
+        val firstDay = sess.media(10, null).let { m -> val zone = java.time.ZoneId.systemDefault(); val d = { c: IndexReplica.Child -> java.time.Instant.ofEpochMilli(c.createdAt).atZone(zone).toLocalDate() }; m.filter { d(it) == d(m[0]) }.map { it.id }.toSet() }
+        r["selDayTap"] = day == firstDay && out
+        s.onActivity { a -> a.headPositionsForTest().forEach { h -> a.selectDayForTest(h) } }
+        var sel = emptySet<String>()
+        s.onActivity { a -> sel = a.selectedForTest() }
+        r["selDaySelectsAll"] = sel == media
+        shot("3e-gallery-day-selected")
+        var hideLabel = ""
+        s.onActivity { a -> hideLabel = a.getString(R.string.ddn_thumbs_hide); ok = a.selectionMenuForTest(sess.media(10, null)).contains(hideLabel) }
+        r["selMenuHideThumbs"] = ok
+        s.onActivity { a -> ok = a.runSelectionActionForTest(hideLabel) }
+        r["selHideThumbsAll"] = ok && waitUntil { media.all { sess.node(it)?.thumbHidden == true } } && waitUntil { var e = true; s.onActivity { a -> e = !a.selectingForTest() }; e }
+        // All hidden: the same menu offers "Show thumbnails"; it shows them on every one.
+        // (The list is read again after the action: until then its rows still say "visible".)
+        val shown = waitUntil { var done = false; s.onActivity { a -> a.selectAllForTest(); done = a.runSelectionActionForTest(a.getString(R.string.ddn_thumbs_show)) }; done }
+        r["selShowThumbsAll"] = shown && waitUntil { media.all { sess.node(it)?.thumbHidden == false } }
+        // Back ends the selection (and the bars come back), it does not leave the screen.
+        s.onActivity { a -> a.longPressForTest(first) }
+        s.onActivity { a -> a.backForTest() }
+        s.onActivity { a -> ok = !a.selectingForTest() && !a.selectionBarForTest() && !a.isFinishing }
+        r["selBackEnds"] = ok
+    }
+
+    /**
+     * Selection in Files (as in Files by Google): long press + taps add and remove, a drag after the long press
+     * selects the range (and shrinks it when going back), "Select all", Back ends the selection.
+     */
+    private fun filesSelection(r: LinkedHashMap<String, Boolean>) {
+        ActivityScenario.launch<DdnActivity>(Intent(ctx, DdnActivity::class.java)).use { s ->
+            waitUntil { items(s) >= 10 }
+            var ok = false
+            s.onActivity { a -> a.longPressForTest(0); a.tapForTest(1); a.tapForTest(2); a.tapForTest(1) }
+            s.onActivity { a -> ok = a.selectedForTest().size == 2 && a.selectionTitleForTest() == a.getString(R.string.selection_count, 2) }
+            r["selFilesTaps"] = ok
+            s.onActivity { a -> a.backForTest() }
+            // Long press on the 4th row, finger down to the 8th: 5 rows; back up to the 5th: 2 rows.
+            s.onActivity { a -> a.dragForTest(3, 7); ok = a.selectedForTest().size == 5 }
+            var back = false
+            s.onActivity { a -> a.dragMoreForTest(4); back = a.selectedForTest().size == 2 }
+            r["selFilesDragRange"] = ok && back
+            shot("1b-files-selection")
+            var all = 0
+            var n = 0
+            s.onActivity { a -> a.selectAllForTest(); all = a.selectedForTest().size; n = a.itemCountForTest() }
+            r["selFilesAll"] = all == n && n >= 10
+            s.onActivity { a -> a.backForTest(); ok = !a.selectingForTest() && !a.isFinishing }
+            r["selFilesBackEnds"] = ok
         }
     }
 
@@ -818,7 +891,9 @@ class BrowseUiTest {
             if (drawn) r["thumbShownAgain"] = waitUntil { var ok = false; s.onActivity { a -> ok = a.firstCellHasPicture() }; ok }
             Log.i("ddn-ui", "window drawn: $drawn")
             shot("3-gallery")
+            gallerySelection(s, sess, r)
         }
+        filesSelection(r)
         viewer(r)
         albums(r)
         // Upload from the phone (PR 4): a file shared into the queue and a photo of the camera folder copied
