@@ -249,10 +249,10 @@ class DdnBackupActivity : AppCompatActivity() {
         for (q in items) {
             ui.add(c, ui.text("${q.name}\n${DdnBackup.reason(this@DdnBackupActivity, q.error!!)}"))
             val retry = ui.button(R.string.ddn_fail_retry, CobaltUi.Kind.TONAL) {
-                thread { DdnBackup.Db(this@DdnBackupActivity).retry(q.id); runOnUiThread { DdnBackup.runNow(this@DdnBackupActivity, autoCopy = false); paintFailed() } }
+                thread { DdnBackup.db(this@DdnBackupActivity).retry(q.id); runOnUiThread { DdnBackup.runNow(this@DdnBackupActivity, autoCopy = false); paintFailed() } }
             }
             val drop = ui.button(R.string.ddn_fail_remove, CobaltUi.Kind.DANGER) {
-                thread { DdnBackup.Db(this@DdnBackupActivity).drop(q.id); runOnUiThread { DdnBackup.notifyFailed(this@DdnBackupActivity, DdnBackup.failed(this@DdnBackupActivity).size); paintFailed() } }
+                thread { DdnBackup.db(this@DdnBackupActivity).drop(q.id); runOnUiThread { DdnBackup.notifyFailed(this@DdnBackupActivity, DdnBackup.failed(this@DdnBackupActivity).size); paintFailed() } }
             }
             ui.actionBar(c, retry, drop)
         }

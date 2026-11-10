@@ -146,9 +146,9 @@ class BrowseUiTest {
                 shot("13-failed-upload")
             }
             // Remove one, retry the other with the webhooks back.
-            DdnBackup.Db(ctx).drop(failed.first { it.name == "do usunięcia.txt" }.id)
+            DdnBackup.db(ctx).drop(failed.first { it.name == "do usunięcia.txt" }.id)
             sc.rpc("hooksOn")
-            DdnBackup.Db(ctx).retry(failed.first { it.name == "nie dojdzie.txt" }.id)
+            DdnBackup.db(ctx).retry(failed.first { it.name == "nie dojdzie.txt" }.id)
             DdnBackup.runNow(ctx, autoCopy = false)
             Thread.sleep(1500)
             waitUntil(120_000) { wm.getWorkInfosForUniqueWork(DdnBackup.WORK_NOW).get().all { it.state.isFinished } }
@@ -218,6 +218,9 @@ class BrowseUiTest {
         s.refresh()
         val copy = s.children("fold-0000000001").firstOrNull { it.name == name }
         r["editCopyNextToOriginal"] = copy != null && s.children("fold-0000000001").any { it.id == photo.id && it.size == photo.size }
+        // The web upload has no EXIF date: the copy takes the original's stored date taken (2024-05-17 10:00 UTC),
+        // so it sits next to it in the Gallery instead of under today.
+        r["editCopyKeepsTaken"] = copy?.manifestRef?.let { ref -> runCatching { s.files.manifest(ref).second.takenAt }.getOrNull() } == 1715940000000L
         if (copy != null) {
             val v = sc.rpc("phoneUpload", buildJsonObject { put("folder", "fold-0000000001"); put("name", name); put("sha", copy.sha256 ?: ""); put("thumbSha", "") }).jsonObject
             r["webReadsEditedCopy"] = v.getValue("sha").jsonPrimitive.content == "true" && (v["thumbW"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0) > 0

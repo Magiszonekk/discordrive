@@ -24,6 +24,8 @@ import kotlin.concurrent.thread
  * Edit a photo of the account: crop (drag the frame), rotate, mirror; "Save a copy" uploads the result into
  * the same folder as "<name> (edycja).jpg", with its thumbnail and preview, so the original stays as it was
  * (every device sees both). The picture is the full file when it is not too big, else the stored preview.
+ * The copy keeps the original's EXIF (date taken, camera, exposure, GPS position; orientation reset, the
+ * pixels are already turned as shown) and its date taken, so it sits next to the original in the Gallery.
  */
 class DdnEditActivity : AppCompatActivity() {
     private lateinit var image: ImageView
@@ -33,6 +35,9 @@ class DdnEditActivity : AppCompatActivity() {
     private var original: Bitmap? = null
     private var working: Bitmap? = null
     @Volatile private var saving = false
+    /** The original's EXIF and date taken (read with the picture). */
+    @Volatile private var sourceExif: android.media.ExifInterface? = null
+    @Volatile private var sourceTaken: Long? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         CobaltUi.theme(this)
@@ -105,7 +110,13 @@ class DdnEditActivity : AppCompatActivity() {
                 val c = s.node(id)!!
                 val ref = c.manifestRef!!
                 val size = c.size ?: 0
-                if (size in 1..FULL_MAX) DdnThumbs.decode(s.files.range(ref, size, 0, size - 1), MAX_PX) else DdnThumbs.load(s, ref, 'p', MAX_PX)
+                val full = if (size in 1..FULL_MAX) s.files.range(ref, size, 0, size - 1) else null
+                // EXIF sits at the start of the file: a big one is read only that far.
+                val head = full ?: runCatching { if (size > 0) s.files.range(ref, size, 0, minOf(size, EXIF_HEAD) - 1) else null }.getOrNull()
+                sourceExif = head?.let { h -> runCatching { android.media.ExifInterface(h.inputStream()) }.getOrNull() }
+                sourceTaken = sourceExif?.let(DdnPictures::takenAt) ?: runCatching { s.files.manifest(ref).second.takenAt }.getOrNull()
+                // The stored preview is already upright; the file is turned here by its orientation tag.
+                if (full != null) DdnThumbs.decode(full, MAX_PX)?.let { upright(it, sourceExif) } else DdnThumbs.load(s, ref, 'p', MAX_PX)
             }.getOrNull()
             runOnUiThread {
                 loading.visibility = View.GONE
@@ -166,9 +177,10 @@ class DdnEditActivity : AppCompatActivity() {
             val r = runCatching {
                 val s = DdnSession.get(this)!!
                 val c = s.node(id)!!
-                val jpeg = ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.JPEG, 92, it) }.toByteArray()
+                val plain = ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.JPEG, 92, it) }.toByteArray()
+                val jpeg = sourceExif?.let { e -> runCatching { withExif(plain, e, cacheDir) }.getOrNull() } ?: plain
                 val name = editedName(c.name)
-                s.uploader(parallel = 2).upload({ jpeg.inputStream() }, jpeg.size.toLong(), name, c.parentId ?: "root", pictures(b))
+                s.uploader(parallel = 2).upload({ jpeg.inputStream() }, jpeg.size.toLong(), name, c.parentId ?: "root", pictures(b), takenAt = sourceTaken)
                 name
             }
             runOnUiThread {
@@ -194,6 +206,60 @@ class DdnEditActivity : AppCompatActivity() {
         internal const val KEEP_OPEN_FOR_TEST = "keepOpenForTest"
         private const val FULL_MAX = 40L * 1024 * 1024
         private const val MAX_PX = 4096
+        private const val EXIF_HEAD = 256L * 1024
+
+        /**
+         * What the copy takes over from the original's EXIF: when and with what it was made, and where. Not the
+         * size, the orientation or the embedded thumbnail (the copy's own pixels decide those).
+         */
+        private val KEPT_TAGS = listOf(
+            android.media.ExifInterface.TAG_DATETIME_ORIGINAL, android.media.ExifInterface.TAG_DATETIME_DIGITIZED, android.media.ExifInterface.TAG_DATETIME,
+            "OffsetTimeOriginal", "OffsetTimeDigitized", "OffsetTime", "SubSecTimeOriginal", "SubSecTimeDigitized", "SubSecTime",
+            android.media.ExifInterface.TAG_MAKE, android.media.ExifInterface.TAG_MODEL, "LensMake", "LensModel", "Software", "Artist", "Copyright",
+            android.media.ExifInterface.TAG_F_NUMBER, android.media.ExifInterface.TAG_APERTURE_VALUE, android.media.ExifInterface.TAG_EXPOSURE_TIME,
+            android.media.ExifInterface.TAG_SHUTTER_SPEED_VALUE, android.media.ExifInterface.TAG_EXPOSURE_BIAS_VALUE, android.media.ExifInterface.TAG_EXPOSURE_PROGRAM,
+            android.media.ExifInterface.TAG_ISO_SPEED_RATINGS, android.media.ExifInterface.TAG_FOCAL_LENGTH, android.media.ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM,
+            android.media.ExifInterface.TAG_FLASH, android.media.ExifInterface.TAG_WHITE_BALANCE, android.media.ExifInterface.TAG_METERING_MODE,
+            android.media.ExifInterface.TAG_GPS_LATITUDE, android.media.ExifInterface.TAG_GPS_LATITUDE_REF,
+            android.media.ExifInterface.TAG_GPS_LONGITUDE, android.media.ExifInterface.TAG_GPS_LONGITUDE_REF,
+            android.media.ExifInterface.TAG_GPS_ALTITUDE, android.media.ExifInterface.TAG_GPS_ALTITUDE_REF,
+            android.media.ExifInterface.TAG_GPS_TIMESTAMP, android.media.ExifInterface.TAG_GPS_DATESTAMP,
+            android.media.ExifInterface.TAG_GPS_IMG_DIRECTION, android.media.ExifInterface.TAG_GPS_IMG_DIRECTION_REF,
+            android.media.ExifInterface.TAG_GPS_PROCESSING_METHOD,
+        )
+
+        /** The decoded pixels turned (and mirrored) as the EXIF orientation says, as viewers show the photo. */
+        internal fun upright(b: Bitmap, exif: android.media.ExifInterface?): Bitmap {
+            val m = Matrix()
+            when (exif?.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1) ?: 1) {
+                2 -> m.postScale(-1f, 1f)
+                3 -> m.postRotate(180f)
+                4 -> m.postScale(1f, -1f)
+                5 -> { m.postRotate(90f); m.postScale(-1f, 1f) }
+                6 -> m.postRotate(90f)
+                7 -> { m.postRotate(270f); m.postScale(-1f, 1f) }
+                8 -> m.postRotate(270f)
+                else -> return b
+            }
+            return Bitmap.createBitmap(b, 0, 0, b.width, b.height, m, true)
+        }
+
+        /** `jpeg` with the original's kept EXIF and orientation 1 (normal): through a file, as ExifInterface saves. */
+        internal fun withExif(jpeg: ByteArray, from: android.media.ExifInterface, tmpDir: java.io.File): ByteArray {
+            val f = java.io.File.createTempFile("edit-", ".jpg", tmpDir)
+            try {
+                f.writeBytes(jpeg)
+                val to = android.media.ExifInterface(f.path)
+                var any = false
+                for (t in KEPT_TAGS) from.getAttribute(t)?.let { to.setAttribute(t, it); any = true }
+                if (!any) return jpeg
+                to.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL.toString())
+                to.saveAttributes()
+                return f.readBytes()
+            } finally {
+                f.delete()
+            }
+        }
 
         /** "IMG_1.jpg" → "IMG_1 (edycja).jpg" (always .jpg: the copy is a JPEG). */
         fun editedName(name: String): String {
