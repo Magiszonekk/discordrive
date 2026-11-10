@@ -123,7 +123,12 @@ open class DdnActivity : AppCompatActivity() {
         // The selection bar (in place of the bar while selecting): close, the count, Share, Download, Trash, ⋮.
         selBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; visibility = View.GONE; setPaddingRelative(dp(4), 0, dp(4), 0) }
         barIcon(selBar, R.drawable.ic_cobalt_close, R.string.selection_exit) { endSelection() }
-        selCount = TextView(this).apply { androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_BarTitle); setPadding(dp(8), dp(14), dp(8), dp(10)); maxLines = 1 }
+        selCount = TextView(this).apply {
+            androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_BarTitle); setPadding(dp(8), dp(14), dp(8), dp(10)); maxLines = 1
+            // A narrow phone with a large font: the number gets smaller instead of being cut off.
+            val max = (textSize / resources.displayMetrics.scaledDensity).toInt().coerceAtLeast(13)
+            androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(this, 12, max, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
+        }
         selBar.addView(selCount, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         selShare = barIcon(selBar, R.drawable.ic_cobalt_share2, R.string.ddn_share) { session?.let { s -> DdnBatch.share(this, s, chosen()) } }
         selDownload = barIcon(selBar, R.drawable.ic_cobalt_download, R.string.ddn_download) { session?.let { s -> DdnBatch.download(this, s, chosen()) { note(it) } } }
@@ -789,13 +794,16 @@ open class DdnActivity : AppCompatActivity() {
     internal fun selectionBarForTest(): Boolean = selBar.visibility == View.VISIBLE && bar.visibility == View.GONE && nav.visibility == View.GONE
     internal fun selectionTitleForTest(): String = selCount.contentDescription?.toString() ?: ""
     /**
-     * The count is shown whole: no ellipsis now, and a 4-digit count would fit the same view even with the font
-     * 30 % larger (Settings → font size), next to every icon of the bar.
+     * The count is shown whole: no ellipsis, and its text fits the view at the bar's size and 30 % larger
+     * (Settings → font size); the numbers go to the log.
      */
     internal fun selectionCountFitsForTest(): Boolean {
         val room = selCount.width - selCount.paddingLeft - selCount.paddingRight
-        val big = android.graphics.Paint(selCount.paint).apply { textSize = selCount.textSize * 1.3f }
-        return selCount.text.isNotEmpty() && room > 0 && (selCount.layout?.getEllipsisCount(0) ?: 0) == 0 && big.measureText("9999") <= room
+        val t = selCount.text.toString()
+        val w = selCount.paint.measureText(t)
+        val big = android.graphics.Paint(selCount.paint).apply { textSize = selCount.textSize * 1.3f }.measureText(t)
+        android.util.Log.i("ddn-ui", "selection count '$t': room $room px, text $w px, at 1.3 $big px, screen ${resources.displayMetrics.widthPixels} px")
+        return t.isNotEmpty() && room > 0 && (selCount.layout?.getEllipsisCount(0) ?: 0) == 0 && w <= room && big <= room
     }
     internal fun selectionCountTextForTest(): String = selCount.text.toString()
     /** Adapter positions of the files (not folders) of the open list. */
