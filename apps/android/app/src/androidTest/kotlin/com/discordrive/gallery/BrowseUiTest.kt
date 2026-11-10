@@ -401,6 +401,15 @@ class BrowseUiTest {
             var n = 0
             s.onActivity { a -> a.selectAllForTest(); all = a.selectedForTest().size; n = a.itemCountForTest() }
             r["selFilesAll"] = all == n && n >= 10
+            // The count on the bar (files only: Share and Download shown too, the narrowest title): whole, and room
+            // for a 4-digit count at a 1.3 font scale. The photo folder has files only.
+            s.onActivity { a -> a.backForTest(); a.openFolderForTest("fold-0000000001", "Zdjęcia 1") }
+            var fits = false
+            var shown = ""
+            waitUntil { var f = emptyList<Int>(); s.onActivity { a -> f = a.filePositionsForTest() }; f.size >= 2 }
+            s.onActivity { a -> val f = a.filePositionsForTest(); a.longPressForTest(f[0]); a.tapForTest(f[1]) }
+            r["selCountFits"] = waitUntil(5_000) { s.onActivity { a -> fits = a.selectionCountFitsForTest(); shown = a.selectionCountTextForTest() }; fits } && shown == "2"
+            shot("1c-files-selection-count")
             s.onActivity { a -> a.backForTest(); ok = !a.selectingForTest() && !a.isFinishing }
             r["selFilesBackEnds"] = ok
         }

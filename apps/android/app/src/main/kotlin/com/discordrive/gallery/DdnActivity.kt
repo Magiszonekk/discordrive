@@ -515,7 +515,10 @@ open class DdnActivity : AppCompatActivity() {
         crumbs.visibility = if (!selecting && !gallery && !albumsTab && path.size > 1) View.VISIBLE else View.GONE
         nav.visibility = if (selecting) View.GONE else View.VISIBLE
         swipe.isEnabled = !selecting
-        selCount.text = getString(R.string.selection_count, selected.size)
+        // The number alone, as in Google Photos ("Zaznaczono: 22" did not fit next to four icons); the full
+        // phrase for TalkBack.
+        selCount.text = selected.size.toString()
+        selCount.contentDescription = getString(R.string.selection_count, selected.size)
         // Download / Share are for files (a folder is not sent as one file).
         val files = chosen().none { it.isFolder }
         selShare.visibility = if (files) View.VISIBLE else View.GONE
@@ -784,7 +787,19 @@ open class DdnActivity : AppCompatActivity() {
     internal fun selectedForTest(): Set<String> = if (selecting) selected.toSet() else emptySet()
     internal fun selectingForTest(): Boolean = selecting
     internal fun selectionBarForTest(): Boolean = selBar.visibility == View.VISIBLE && bar.visibility == View.GONE && nav.visibility == View.GONE
-    internal fun selectionTitleForTest(): String = selCount.text.toString()
+    internal fun selectionTitleForTest(): String = selCount.contentDescription?.toString() ?: ""
+    /**
+     * The count is shown whole: no ellipsis now, and a 4-digit count would fit the same view even with the font
+     * 30 % larger (Settings → font size), next to every icon of the bar.
+     */
+    internal fun selectionCountFitsForTest(): Boolean {
+        val room = selCount.width - selCount.paddingLeft - selCount.paddingRight
+        val big = android.graphics.Paint(selCount.paint).apply { textSize = selCount.textSize * 1.3f }
+        return selCount.text.isNotEmpty() && room > 0 && (selCount.layout?.getEllipsisCount(0) ?: 0) == 0 && big.measureText("9999") <= room
+    }
+    internal fun selectionCountTextForTest(): String = selCount.text.toString()
+    /** Adapter positions of the files (not folders) of the open list. */
+    internal fun filePositionsForTest(): List<Int> = rows.withIndex().filter { (it.value as? Row.Item)?.c?.isFolder == false }.map { it.index }
     internal fun backForTest() = onBackPressedDispatcher.onBackPressed()
     /** Runs the selection's menu entry with this label (as a tap on it). */
     internal fun runSelectionActionForTest(label: String): Boolean = session?.let { s -> selectionItems(s, chosen(), gallery || albumsTab).firstOrNull { it.first == label }?.second?.invoke()?.let { true } } ?: false
