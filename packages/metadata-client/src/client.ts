@@ -41,6 +41,11 @@ export interface MetadataClientOptions {
   webhooks: WebhookRef[];
   /** Other storage backends from the vault (spread over together with the webhooks). */
   backends?: BlobBackend[];
+  /**
+   * Re-read the webhooks of the vault (another device of the account may add, retire or remove a channel
+   * while this client runs). Without it the list stays as given.
+   */
+  loadWebhooks?: () => Promise<WebhookRef[]>;
   store?: IndexStore;
   pacer?: ChannelPacer;
   chunkSize?: number;
@@ -77,12 +82,49 @@ export class WebhookBlobStore extends BackendBlobStore {
   constructor(
     transport: WebhookTransport,
     webhooks: WebhookRef[],
-    o: { pacer?: ChannelPacer; maxRetries?: number; now?: () => number; sleep?: (ms: number) => Promise<void>; links?: LinkAheadOptions; backends?: BlobBackend[] } = {},
+    o: { pacer?: ChannelPacer; maxRetries?: number; now?: () => number; sleep?: (ms: number) => Promise<void>; links?: LinkAheadOptions; backends?: BlobBackend[]; loadWebhooks?: () => Promise<WebhookRef[]> } = {},
   ) {
     const rt = { log: null, net: null };
     const dw = new DiscordWebhooks(transport, rt, { maxRetries: o.maxRetries, sleep: o.sleep, links: o.links });
     super(new BackendRegistry([...webhooks.map((h) => dw.backend(h)), ...(o.backends ?? [])]), { ...o, rt });
     this.discord = dw;
+    this.loadWebhooks = o.loadWebhooks ?? null;
+  }
+
+  private readonly loadWebhooks: (() => Promise<WebhookRef[]>) | null;
+
+  protected override async reloadBackends(): Promise<boolean> {
+    return this.loadWebhooks ? this.syncWebhooks(await this.loadWebhooks()) : false;
+  }
+
+  /**
+   * Bring the Discord webhooks in line with the vault: new ones join (reads and posts), the retired flag
+   * follows, ones gone from the vault leave (their files are unavailable, as on the device that removed
+   * them). Refs already known are updated in place (their learned channel IDs stay). True = something changed.
+   */
+  syncWebhooks(refs: WebhookRef[]): boolean {
+    let changed = false;
+    const want = new Map(refs.map((r) => [r.id, r]));
+    for (const [id, cur] of this.discord.hooks) {
+      if (want.has(id)) continue;
+      // The placeholder of an account with no channel yet goes only when a real one arrives.
+      if (id === "0" && cur.url === "unset://" && !refs.length) continue;
+      this.discord.hooks.delete(id);
+      this.registry.remove(id);
+      changed = true;
+    }
+    for (const r of refs) {
+      const cur = this.discord.hooks.get(r.id);
+      if (!cur || !this.registry.has(r.id)) {
+        this.registry.add(this.discord.backend({ ...r }));
+        changed = true;
+        continue;
+      }
+      if (cur.url !== r.url) ((cur.url = r.url), (changed = true), this.gone.delete(r.id));
+      if (!!cur.retired !== !!r.retired) ((cur.retired = r.retired || undefined), (changed = true));
+      cur.channelId ??= r.channelId;
+    }
+    return changed;
   }
 
   get transport(): WebhookTransport {
@@ -105,7 +147,7 @@ export class MetadataClient extends DriveClient {
   private readonly wh: WebhookBlobStore;
 
   constructor(o: MetadataClientOptions) {
-    const wh = new WebhookBlobStore(o.transport, o.webhooks, { pacer: o.pacer, maxRetries: o.maxRetries, now: o.now, sleep: o.sleep, links: o.links, backends: o.backends });
+    const wh = new WebhookBlobStore(o.transport, o.webhooks, { pacer: o.pacer, maxRetries: o.maxRetries, now: o.now, sleep: o.sleep, links: o.links, backends: o.backends, loadWebhooks: o.loadWebhooks });
     super({ ...o, blobs: wh });
     this.wh = wh;
     this.pacer = wh.pacer;
@@ -158,6 +200,14 @@ export class MetadataClient extends DriveClient {
   /** The webhooks this client posts through. */
   get webhooks(): WebhookRef[] {
     return [...this.wh.hooks.values()];
+  }
+
+  /**
+   * Re-read the channels of the vault now (another device may have changed them); true = something changed.
+   * Reads of a piece on an unknown channel do this by themselves.
+   */
+  async reloadChannels(): Promise<boolean> {
+    return this.wh.reload();
   }
 
   /** Stop/resume posting to one backend in this client (the vault flag is the durable part). */

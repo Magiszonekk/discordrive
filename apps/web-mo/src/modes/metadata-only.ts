@@ -138,6 +138,9 @@ export const mode: ModeImpl = {
       arbiter: this.arbiter(ctx),
       transport: transport(ctx),
       webhooks: hooks.length ? hooks : [{ id: "0", url: "unset://" }],
+      // Channels added, retired or removed on another device: re-read when a piece is on an unknown one
+      // and on the upkeep tick (refreshChannels), without a restart.
+      loadWebhooks: async () => toWebhookRefs(await vault(ctx).load()),
       store: ctx.store,
       net: ctx.net,
       resume: ctx.resume,
@@ -246,6 +249,10 @@ export const mode: ModeImpl = {
     await vault(ctx).removeWebhook(id, "removed");
     const s = sqlOf(ctx);
     if (s) refreshUnavailable(s, await vault(ctx).load());
+  },
+
+  async refreshChannels(_ctx, c) {
+    return mc(c).reloadChannels();
   },
 
   async upkeep(ctx, c) {

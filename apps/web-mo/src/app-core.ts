@@ -809,6 +809,11 @@ export class AppCore {
     if (this.unavailTimer) return;
     const tick = async () => {
       if (!this.client) return;
+      // A channel added on another device: uploads spread onto it and its files read here without a restart.
+      if (mode.refreshChannels && (await mode.refreshChannels(this.ctx!, this.client).catch(() => false))) {
+        this.version++;
+        this.onEvent({ type: "changed" });
+      }
       if (this.leader && mode.upkeep) {
         await mode.upkeep(this.ctx!, this.client).catch(() => null);
         const st = await mode.moveStatus(this.ctx!, this.client).catch(() => null);

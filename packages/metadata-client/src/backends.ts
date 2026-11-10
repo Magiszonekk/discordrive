@@ -151,6 +151,10 @@ export class BackendBlobStore implements BlobStore {
    */
   readonly gone = new Set<string>();
   private rr = 0;
+  /** A re-read of the backend list in flight (several reads that miss the same new channel share it). */
+  private reloading: Promise<boolean> | null = null;
+  /** When a read of an unknown backend last re-read the list. */
+  private missReloadAt = -Infinity;
   private readonly rrInKey = new Map<string, number>();
   protected readonly maxRetries: number;
   protected readonly sleep: (ms: number) => Promise<void>;
@@ -164,6 +168,41 @@ export class BackendBlobStore implements BlobStore {
     this.maxRetries = o.maxRetries ?? 4;
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.rt = o.rt ?? { log: null, net: null };
+  }
+
+  /**
+   * Re-read the account's backend list (another device may have added a channel since this store was
+   * built) and bring the registry in line. Overridden where the list can be re-read; false = no change.
+   */
+  protected reloadBackends(): Promise<boolean> {
+    return Promise.resolve(false);
+  }
+
+  /**
+   * How often reads of unknown backends may re-read the list: the pieces of a channel removed from the
+   * account stay unknown, and a list of such files must not turn into one vault request per thumbnail.
+   */
+  static readonly RELOAD_MIN_INTERVAL_MS = 5_000;
+
+  /** Re-read the backend list now (deduplicated: a re-read in flight is joined). */
+  reload(): Promise<boolean> {
+    this.reloading ??= this.reloadBackends().finally(() => (this.reloading = null));
+    return this.reloading;
+  }
+
+  /**
+   * The backend of a placement. One that is not known here may have been added on another device after this
+   * store was built: the list is re-read once (at most every RELOAD_MIN_INTERVAL_MS) before giving up.
+   */
+  protected async backendOf(p: Placement): Promise<BlobBackend> {
+    try {
+      return this.registry.for(p);
+    } catch (e) {
+      if (!this.reloading && Date.now() - this.missReloadAt < BackendBlobStore.RELOAD_MIN_INTERVAL_MS) throw e;
+      if (!this.reloading) this.missReloadAt = Date.now();
+      await this.reload().catch(() => false);
+      return this.registry.for(p);
+    }
   }
 
   get log(): TransferLog | null {
@@ -258,12 +297,12 @@ export class BackendBlobStore implements BlobStore {
   }
 
   async extrasOf(p: Placement, signal?: AbortSignal): Promise<ExtraPlacement[]> {
-    const b = this.registry.for(p);
+    const b = await this.backendOf(p);
     return b.extrasOf ? b.extrasOf(p, signal) : [];
   }
 
   async addExtras(p: Placement, extras: ExtraFile[]): Promise<ExtraPlacement[]> {
-    const b = this.registry.for(p);
+    const b = await this.backendOf(p);
     if (!b.addExtras) throw new Error("this storage cannot keep previews");
     for (let attempt = 0; ; attempt++) {
       await this.pacer.acquire(b.paceKey);
@@ -354,12 +393,12 @@ export class BackendBlobStore implements BlobStore {
   }
 
   async get(p: Placement, signal?: AbortSignal, ctx?: BlobGetContext): Promise<Uint8Array> {
-    return this.registry.for(p).get(p, signal, ctx);
+    return (await this.backendOf(p)).get(p, signal, ctx);
   }
 
   /** Delete one stored blob. */
   async remove(p: Placement): Promise<"deleted" | "gone"> {
-    return this.registry.for(p).remove(p);
+    return (await this.backendOf(p)).remove(p);
   }
 }
 
