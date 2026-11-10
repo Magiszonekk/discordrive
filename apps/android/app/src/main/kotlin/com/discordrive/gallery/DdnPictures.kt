@@ -29,14 +29,7 @@ object DdnPictures {
         val local = file ?: uri.takeIf { it.scheme == "file" }?.path?.let(::File)
         runCatching {
             val exif = if (local != null) android.media.ExifInterface(local.path) else c.contentResolver.openInputStream(uri)!!.use { android.media.ExifInterface(it) }
-            val d = exif.getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL) ?: exif.getAttribute(android.media.ExifInterface.TAG_DATETIME)
-            if (d != null) {
-                val off = exif.getAttribute("OffsetTimeOriginal") ?: exif.getAttribute("OffsetTime")
-                val ldt = java.time.LocalDateTime.parse(d.trim(), java.time.format.DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss"))
-                val zone = off?.let { runCatching { java.time.ZoneOffset.of(it.trim()) }.getOrNull() } ?: java.time.ZoneId.systemDefault()
-                val ms = ldt.atZone(zone).toInstant().toEpochMilli()
-                if (ms > 0) return ms
-            }
+            takenAt(exif)?.let { return it }
         }
         if (local == null) runCatching {
             c.contentResolver.query(uri, arrayOf(android.provider.MediaStore.MediaColumns.DATE_TAKEN, android.provider.MediaStore.MediaColumns.DATE_MODIFIED), null, null, null)?.use { cur ->
@@ -50,6 +43,15 @@ object DdnPictures {
         }
         return local?.lastModified()?.takeIf { it > 0 }
     }
+
+    /** EXIF DateTimeOriginal (else DateTime), with its offset when there is one, else the phone's zone; ms. */
+    fun takenAt(exif: android.media.ExifInterface): Long? = runCatching {
+        val d = exif.getAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL) ?: exif.getAttribute(android.media.ExifInterface.TAG_DATETIME) ?: return null
+        val off = exif.getAttribute("OffsetTimeOriginal") ?: exif.getAttribute("OffsetTime")
+        val ldt = java.time.LocalDateTime.parse(d.trim(), java.time.format.DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss"))
+        val zone = off?.let { runCatching { java.time.ZoneOffset.of(it.trim()) }.getOrNull() } ?: java.time.ZoneId.systemDefault()
+        ldt.atZone(zone).toInstant().toEpochMilli().takeIf { it > 0 }
+    }.getOrNull()
 
     fun make(cr: ContentResolver, uri: Uri): List<FileWrite.Picture> {
         val viaSystem = listOfNotNull(

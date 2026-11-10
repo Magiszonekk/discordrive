@@ -29,7 +29,7 @@ object DdnFreeUp {
     fun scan(c: Context, limit: Int = 2000, progress: (Int, Int) -> Unit = { _, _ -> }): Scan {
         val s = DdnSession.get(c) ?: return Scan(emptyList(), 0, 0, 0)
         val acct = s.acct.accountId
-        val db = DdnBackup.Db(c)
+        val db = DdnBackup.db(c)
         val copied = db.copiedRows(acct)
         val media = DdnBackup.scan(c, DdnBackup.allBuckets(c).keys)
         val ready = ArrayList<Item>()

@@ -134,6 +134,13 @@ object DdnBackup {
     }
 
     // ── what was copied (MediaStore ID + size + date → node) ──
+    /**
+     * One helper for the whole process (thread-safe, meant to stay open): a new helper per call left its
+     * connection to the garbage collector, which logs every such connection as leaked.
+     */
+    @Volatile private var dbOne: Db? = null
+    internal fun db(c: Context): Db = dbOne ?: synchronized(this) { dbOne ?: Db(c.applicationContext).also { dbOne = it } }
+
     internal class Db(c: Context) : SQLiteOpenHelper(c, "ddn-upload.db", null, 2) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("CREATE TABLE copied (media INTEGER, size INTEGER, modified INTEGER, account TEXT, node TEXT, at INTEGER, PRIMARY KEY (media, size, modified, account))")
@@ -229,7 +236,7 @@ object DdnBackup {
     /** Items of the queue that failed for good (not a network failure): shown with their cause, Retry / Remove. */
     internal fun failed(c: Context): List<Db.Queued> {
         val acct = DdnAccount.load(c)?.accountId ?: return emptyList()
-        return Db(c).queued(acct).filter { it.error != null }
+        return db(c).queued(acct).filter { it.error != null }
     }
 
     /** A failure in words (the server's or Discord's code stays in the log). */
@@ -291,7 +298,7 @@ object DdnBackup {
         val taken = runCatching { DdnPictures.takenAt(c, source) }.getOrNull()
         // The original bytes: a photo keeps its GPS position (the caller asked for the permission first).
         MediaLocation.open(c, source).use { i -> f.outputStream().use { o -> i.copyTo(o, 1 shl 20) } }
-        return Db(c).enqueue(null, f.path, name, f.length(), folderId, acct.accountId, taken)
+        return db(c).enqueue(null, f.path, name, f.length(), folderId, acct.accountId, taken)
     }
 
     internal fun log(msg: String) = Log.i(TAG, msg)
@@ -358,7 +365,7 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         val t0 = System.currentTimeMillis()
         // "Copy now" copies the chosen folders also with the automatic copy off (the user asked for it).
         val auto = inputData.getBoolean("auto", true) && (DdnBackup.enabled(c) || inputData.getBoolean("manual", false))
-        val db = DdnBackup.Db(c)
+        val db = DdnBackup.db(c)
         var copied = 0
         var err: String? = null
         var waiting = 0
