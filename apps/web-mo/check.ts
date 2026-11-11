@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DdnServer, DISCORD_ORIGINS, FakeDiscord, type BotRefresher } from "@ddv4/metadata-client/node";
+import { RULES_VERSION } from "@ddv4/sync-core";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MODE = (process.env.DDN_E2E_MODE ?? "metadata-only") as "metadata-only" | "e2ee" | "plain";
@@ -2409,6 +2410,42 @@ try {
     r.admin = adm;
   }
 
+  // 10f. another device writes an entry with newer rules than this build: the list cannot catch up, so the
+  // status line says "update the app" at once (not "synced"), with one toast, also after a reload and on the
+  // About section. Last step on this account: it stays stuck at that entry.
+  step("newer rules");
+  if (srv) {
+    const nr: Record<string, unknown> = {};
+    const sel = "[data-ddn=status]";
+    nr.before = await p.getAttribute(sel, "data-state");
+    const who = await p.evaluate(async () => {
+      const st = await (window as unknown as { ddnCore: { status(): Promise<{ accountId: string; deviceId: string; headSeq: number }> } }).ddnCore.status();
+      return { accountId: st.accountId, deviceId: st.deviceId, headSeq: st.headSeq };
+    });
+    // The instance accepts it only when it knows those rules (as after its own update); the payload does not
+    // matter: the rules version is checked before the op is read.
+    const sq = (srv as unknown as { seq(a: string): { maxRulesVersion: number } }).seq(who.accountId);
+    const max = sq.maxRulesVersion;
+    sq.maxRulesVersion = RULES_VERSION + 1;
+    nr.submitted = srv.submit({ accountId: who.accountId, deviceId: who.deviceId }, { opId: "newerrules-0001", rulesVersion: RULES_VERSION + 1, baseSeq: who.headSeq, payload: "AAAA" }).status;
+    sq.maxRulesVersion = max;
+    const t0 = Date.now();
+    nr.shown = await p.waitForSelector(`${sel}[data-state=update]`, { timeout: 15_000 }).then(() => true, () => false);
+    nr.shownMs = Date.now() - t0;
+    nr.text = (await p.textContent(sel))?.trim();
+    nr.toasts = await p.$$eval(".toast.err", (e) => e.map((x) => x.textContent ?? "").filter((x) => /newer version|nowszej wersji/.test(x)).length);
+    await shot(p, "46-newer-rules");
+    await p.reload();
+    await p.waitForSelector("body[data-ready='1']");
+    nr.afterReload = await p.waitForSelector(`${sel}[data-state=update]`, { timeout: 15_000 }).then(() => true, () => false);
+    nr.reloadText = (await p.textContent(sel))?.trim();
+    await p.goto(base + "/settings/app");
+    await p.waitForSelector("body[data-ready='1']");
+    await p.waitForTimeout(800);
+    nr.about = { chip: (await p.textContent("[data-ddn-ui=about-sync]"))?.trim(), warn: await p.getAttribute("[data-ddn-ui=about-sync]", "class"), t: (await p.textContent("[data-ddn-ui=about-sync-t]"))?.trim() };
+    r.newerRules = nr;
+  }
+
   // 11. what the server stores: no names in clear
   if (srv) {
     const tables = ["devices", "log", "shares", "vault", "s_blobs", "s_uploads", "inst_hooks", "s_snapshots", "password_keys", "accounts", "admin_log", "invites"].filter((t) => srv!.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t));
@@ -2674,6 +2711,16 @@ try {
       const days = o.heads.filter((x) => x.startsWith("gallery-day:"));
       // March 2025: the busy day (20th, 4 photos) and one range over the 7 sparse days (1–7); no heading per sparse day.
       return days.filter((x) => /20/.test(x)).length >= 1 && days.some((x) => /1\s*[–-]\s*7/.test(x)) && days.length <= 4 && /2019/.test(String(o.exifUnder2019)) && /Galler|Galeri/.test(String(o.trashFrom)) && o.tilesFromOnce === true;
+    })(),
+    newerRules: (() => {
+      const o = r.newerRules as Record<string, any> | undefined;
+      if (!o) return !!remote;
+      const upd = /update the app|zaktualizuj aplikację/;
+      return (
+        o.before === "synced" && o.submitted === "accepted" && o.shown === true && o.shownMs < 10_000 && upd.test(String(o.text)) && !/synced|zsynchronizowano/.test(String(o.text)) &&
+        o.toasts === 1 && o.afterReload === true && upd.test(String(o.reloadText)) &&
+        upd.test(String(o.about?.chip)) && /chip--warning/.test(String(o.about?.warn)) && /newer version|nowszej wersji/.test(String(o.about?.t))
+      );
     })(),
     noPageErrors: errors.length === 0,
   };

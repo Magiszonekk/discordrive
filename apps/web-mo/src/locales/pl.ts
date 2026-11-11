@@ -136,6 +136,7 @@ export const pl: Record<string, string> = {
   // stan (stopka menu + Ustawienia → Ta przeglądarka)
   "status.connecting": "łączenie…",
   "status.synced": "zsynchronizowano",
+  "status.update": "zaktualizuj aplikację",
   "status.uploading": "wysyłanie {done}/{total}",
   "status.synced.t": "Pozycja w dzienniku zmian: {seq}. Zmiany z innych urządzeń przychodzą od razu.",
   "status.uploading.t": "Wysyłanie trwa, dopóki ta karta jest otwarta.",
