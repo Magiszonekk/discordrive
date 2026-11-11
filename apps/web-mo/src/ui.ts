@@ -198,7 +198,7 @@ const typeOf = (name: string) => EXT.find(([re]) => re.test(name)) ?? [null, "fi
 const VIDEO = EXT[0]![0];
 
 // ── messages and actions ────────────────────────────────────────────
-const KNOWN_ERRORS = ["channel_critical", "need_other_channel", "file_unavailable", "main_tab_only", "move_running", "bad_password", "login_taken", "bad_login", "password_too_short", "invalid_name", "invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone", "instance_busy", "discord_blocked", "webhook_in_use", "too_many_channels", "account_blocked", "not_admin", "last_admin", "self_target", "safe_damaged", "safe_missing", "safe_full", "safe_file_gone", "safe_closed"];
+const KNOWN_ERRORS = ["channel_critical", "need_other_channel", "file_unavailable", "main_tab_only", "move_running", "bad_password", "login_taken", "bad_login", "password_too_short", "invalid_name", "invite_required", "signup_closed", "rate_limited", "unauthorized", "body_too_large", "need_channel", "pointer_hook_gone", "instance_busy", "discord_blocked", "webhook_in_use", "too_many_channels", "account_blocked", "not_admin", "last_admin", "self_target", "safe_damaged", "safe_missing", "safe_full", "safe_file_gone", "safe_closed", "bad_kit", "kit_other_instance"];
 /** Readable text for an error: no technical codes in the message (the raw one goes to the console). */
 const errText = (e: unknown) => {
   const m = String((e as Error)?.message ?? e);

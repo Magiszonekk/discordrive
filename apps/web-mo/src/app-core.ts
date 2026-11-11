@@ -2710,8 +2710,7 @@ export class AppCore {
 
   /** New device from the rescue kit: registers this device with the rescue key. */
   async joinWithKit(serverUrl: string, kitText: string, deviceName: string): Promise<void> {
-    const kit = mode.decodeKit(kitText);
-    const key = accountKeyFromB64(kit.key);
+    const { kit, key } = readKit(kitText);
     const dk = await generateDeviceKey(this.platform.extractableDeviceKey);
     this.onEvent({ type: "auth-stage", stage: "device" });
     const { deviceId, instanceId } = await rescueRegisterDevice(serverUrl, key, kit.accountId, dk);
@@ -2904,5 +2903,20 @@ class LruMap<K, V> extends Map<K, V> {
     super.set(k, v);
     while (this.size > this.max) super.delete(this.keys().next().value as K);
     return this;
+  }
+}
+
+/**
+ * Reads a pasted rescue kit. A damaged or cut code fails deep in base64/JSON parsing; the UI gets a code
+ * it can explain instead ("bad_kit", or "kit_other_instance" for a kit of the other kind of instance).
+ */
+function readKit(kitText: string): { kit: ReturnType<typeof mode.decodeKit>; key: ReturnType<typeof accountKeyFromB64> } {
+  try {
+    const kit = mode.decodeKit(kitText);
+    return { kit, key: accountKeyFromB64(kit.key) };
+  } catch (e) {
+    const m = String((e as Error)?.message ?? e);
+    // Only the code goes up: the parser's text may quote pieces of the pasted (secret) kit.
+    throw new Error(/kit of an? (e2ee\/plain|metadata-only) instance/.test(m) ? "kit_other_instance" : "bad_kit");
   }
 }

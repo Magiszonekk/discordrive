@@ -340,6 +340,8 @@ export const pl: Record<string, string> = {
   "err.body_too_large": "Żądanie było za duże dla serwera.",
   "err.need_channel": "Najpierw dodaj kanał z webhookiem.",
   "err.pointer_hook_gone": "Kanał z wiadomością wskaźnikową został usunięty. Dodaj kanał i pokaż zestaw ratunkowy ponownie.",
+  "err.bad_kit": "To nie jest poprawny kod zestawu ratunkowego albo brakuje jego części. Skopiuj cały kod jeszcze raz (zaczyna się od ddn-kit).",
+  "err.kit_other_instance": "Ten zestaw ratunkowy pochodzi z instancji innego rodzaju. Otwórz serwer, na którym założono konto.",
   "err.update": "To konto używa funkcji z nowszej wersji aplikacji. Zaktualizuj aplikację (albo odśwież stronę), żeby je otworzyć.",
   "err.generic": "Coś poszło nie tak: {msg}",
   // stage 3: mode variants (key@mode) and new texts
