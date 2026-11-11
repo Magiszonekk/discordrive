@@ -622,7 +622,11 @@ class DdnViewerActivity : AppCompatActivity() {
     internal fun titleForTest(): String = info.text.toString()
     internal fun playingForTest(): String? = activeId?.takeIf { player != null }
     /** A finger drag across the pager (the swipe path of a real gesture). `dx` < 0: to the next file. */
-    internal fun dragForTest(dx: Float) { pager.beginFakeDrag(); var left = dx; val step = dx / 10; repeat(10) { pager.fakeDragBy(step); left -= step }; pager.endFakeDrag() }
+    // A swipe in steps (one call per frame, as a finger would): begin, move, end; then the pager settles by itself.
+    internal fun dragBeginForTest(): Boolean = pager.beginFakeDrag()
+    internal fun dragByForTest(dx: Float): Boolean = pager.isFakeDragging && pager.fakeDragBy(dx)
+    internal fun dragEndForTest(): Boolean = pager.isFakeDragging && pager.endFakeDrag()
+    internal fun scrollStateForTest(): Int = pager.scrollState
     @Volatile internal var trashedForTest: String? = null
 
     companion object {
