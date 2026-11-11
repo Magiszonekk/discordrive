@@ -1083,6 +1083,17 @@ try {
   await t.waitForSelector("body[data-ready='1']");
   await t.click("[data-ddn=join-kit-open]");
   await t.waitForURL((u) => u.pathname === "/restore");
+  // A damaged code and a kit of the other kind of instance: readable messages, no parser text.
+  const badKit = async (code: string) => {
+    await typeInto(t, "[data-ddn=rescue-text]", code);
+    const before = await t.locator(".toast.err").count();
+    await t.click("[data-ddn=rescue-go]");
+    await t.waitForFunction((n) => document.querySelectorAll(".toast.err").length > n, before, { timeout: 10_000 });
+    const text = (await t.locator(".toast.err").last().textContent()) ?? "";
+    return { text, unlocked: await t.isEnabled("[data-ddn=rescue-go]") };
+  };
+  const ownPrefix = MODE === "metadata-only" ? "ddn-kit3:" : "ddn-kit2:";
+  r.rescueBadKit = { damaged: await badKit(ownPrefix + "zepsuty"), cut: await badKit(kit.slice(0, Math.floor(kit.length / 2))), other: await badKit(MODE === "metadata-only" ? "ddn-kit2:e30" : "ddn-kit3:e30") };
   await t.evaluate((k) => navigator.clipboard.writeText(k), kit).catch(() => {});
   await typeInto(t, "[data-ddn=rescue-text]", kit);
   await typeInto(t, "[data-ddn=rescue-name]", "Odtworzony");
@@ -2529,6 +2540,12 @@ try {
     names: JSON.stringify(r.deviceNamesOnLaptop) === JSON.stringify(["Laptop testowy", "Telefon testowy"]),
     mobile: r.phoneFilesHiddenOnDevicesTab === true && r.phoneNoHorizontalScroll === true && r.phoneSidebarHiddenUntilMenu === true && r.phoneDrawerClosedAfterNav === true,
     rescue: L.of(65).test(String(r.rescueCount)),
+    rescueBadKit: (() => {
+      const b = r.rescueBadKit as Record<"damaged" | "cut" | "other", { text: string; unlocked: boolean }> | undefined;
+      if (!b) return false;
+      const plain = (x: { text: string; unlocked: boolean }) => x.unlocked && !/JSON|token|base64|Unexpected|bad rescue kit/i.test(x.text);
+      return [b.damaged, b.cut].every((x) => plain(x) && /rescue kit code|kodu zestawu ratunkowego/.test(x.text)) && plain(b.other) && /different kind of instance|instancji innego rodzaju/.test(b.other.text);
+    })(),
     renameMoveTrash: (() => {
       const o = r.ops as Record<string, unknown> | undefined;
       if (!o) return false;
