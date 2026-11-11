@@ -66,6 +66,16 @@ describe.skipIf(why !== null)(`disk in the system (Windows), writing${why ? ` â€
     });
     disks.push(disk);
     await disk.start();
+    // Every copy the helper queues, by name: one per write (a file becoming a placeholder after its upload
+    // is not a new write, nor queued again).
+    const queued: string[] = [];
+    const add0 = disk.outbox!.add.bind(disk.outbox!);
+    disk.outbox!.add = (path: string, dir: string, name: string) => (queued.push(name), add0(path, dir, name));
+    const settled = async () => {
+      await new Promise((r) => setTimeout(r, 3500));
+      await disk.outbox!.idle();
+      return queued.filter((n) => n === "kopia Å¼.bin").length;
+    };
     const rows = (parent?: string) => core.list(parent).rows;
     const names = (parent?: string) => rows(parent).map((r) => r.name).sort();
     const nodeOf = (n: string, parent?: string) => rows(parent).find((r) => r.name === n);
@@ -80,6 +90,7 @@ describe.skipIf(why !== null)(`disk in the system (Windows), writing${why ? ` â€
     const n1 = nodeOf("kopia Å¼.bin")!;
     expect(sha(new Uint8Array(await (await core.download(n1.id)).arrayBuffer()))).toBe(sha(data));
     expect(sha(await readFile(join(root, "kopia Å¼.bin")))).toBe(sha(data));
+    expect(await settled()).toBe(1);
 
     // 2. Overwritten: a new version of the same node.
     await new Promise((r) => setTimeout(r, 1500));
@@ -89,6 +100,7 @@ describe.skipIf(why !== null)(`disk in the system (Windows), writing${why ? ` â€
     await disk.outbox!.idle();
     expect(nodeOf("kopia Å¼.bin")!.id).toBe(n1.id);
     expect(sha(new Uint8Array(await (await core.download(n1.id)).arrayBuffer()))).toBe(sha(data2));
+    expect(await settled()).toBe(2);
 
     // 2b. Saved as Office and many editors do it: a temp file, then ReplaceFile over the original (the
     //     original placeholder deleted, the temp renamed into its place): still a new version of the same node.
@@ -103,6 +115,7 @@ describe.skipIf(why !== null)(`disk in the system (Windows), writing${why ? ` â€
     expect(rows().filter((r) => r.name.startsWith("kopia Å¼")).map((r) => [r.name, r.id])).toEqual([["kopia Å¼.bin", n1.id]]);
     expect(core.trashList().some((t) => t.id === n1.id)).toBe(false);
     expect(sha(new Uint8Array(await (await core.download(n1.id)).arrayBuffer()))).toBe(sha(data3));
+    expect(await settled()).toBe(3);
 
     // 3. A folder made here, a file in it.
     await mkdir(join(root, "Nowy folder"));

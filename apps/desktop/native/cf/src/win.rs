@@ -813,17 +813,21 @@ fn note_written(p: &Path) {
         }
         return;
     }
-    // A placeholder the helper made and nobody changed is not a write.
-    if m.file_attributes() & ATTR_REPARSE != 0 {
-        if let Some((_, size, _)) = st().made.lock().unwrap().get(p).cloned() {
-            let in_sync = attrs(p) & 0x0040_0000 == 0 || m.len() == size;
-            let ours = st().pending.lock().unwrap().values().any(|(q, _, _)| q == p);
-            if (in_sync && m.len() == size) || ours {
-                return;
-            }
-        }
+    if unchanged_placeholder(p, &m) {
+        return;
     }
     st().dirty_files.lock().unwrap().insert(p.to_path_buf(), now_ms());
+}
+
+/// A placeholder the helper made (or one of its uploads) that nobody changed since: not a write.
+fn unchanged_placeholder(p: &Path, m: &std::fs::Metadata) -> bool {
+    if m.file_attributes() & ATTR_REPARSE == 0 {
+        return false;
+    }
+    let Some((_, size, _)) = st().made.lock().unwrap().get(p).cloned() else { return false };
+    let in_sync = attrs(p) & 0x0040_0000 == 0 || m.len() == size;
+    let ours = st().pending.lock().unwrap().values().any(|(q, _, _)| q == p);
+    (in_sync && m.len() == size) || ours
 }
 
 /// Files nobody has written for 2 s: copied into the agent's queue (a share-none open fails while a program
@@ -833,6 +837,12 @@ fn flush_written() {
     let ready: Vec<PathBuf> = st().dirty_files.lock().unwrap().iter().filter(|(_, t)| now - **t > 2000).map(|(p, _)| p.clone()).collect();
     for p in ready {
         let Some(out) = st().outbox.clone() else { return };
+        // Turned into a placeholder of its node since it was noted (its upload ended): nothing new to send,
+        // and no exclusive open that would make a program writing it right now fail with "in use".
+        if std::fs::symlink_metadata(&p).map(|m| unchanged_placeholder(&p, &m)).unwrap_or(false) {
+            st().dirty_files.lock().unwrap().remove(&p);
+            continue;
+        }
         // Exclusive open = no writer left.
         let f = match { use std::os::windows::fs::OpenOptionsExt; std::fs::OpenOptions::new().read(true).share_mode(0).open(&p) } {
             Ok(f) => f,
@@ -888,7 +898,13 @@ fn uploaded(pending: &str, id: Option<&str>, err: Option<&str>) {
         return;
     }
     let idb = id.as_bytes().to_vec();
+    // Known as made (this node, this size) before it becomes a placeholder: the change notice the conversion
+    // itself raises is then not taken for a new write (which would copy and upload the same bytes again, and
+    // hold the file open exclusively meanwhile).
     let Ok(h) = open_for_cf(&p) else { return };
+    let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64).unwrap_or(0);
+    st().made.lock().unwrap().insert(p.clone(), (id.to_string(), size, t));
+    save_made();
     unsafe {
         let r = if m.file_attributes() & ATTR_REPARSE != 0 {
             CfUpdatePlaceholder(h, None, Some(idb.as_ptr() as *const c_void), idb.len() as u32, None, CF_UPDATE_FLAG_MARK_IN_SYNC, None, None)
@@ -900,9 +916,6 @@ fn uploaded(pending: &str, id: Option<&str>, err: Option<&str>) {
         }
         let _ = CloseHandle(h);
     }
-    let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64).unwrap_or(0);
-    st().made.lock().unwrap().insert(p, (id.to_string(), size, t));
-    save_made();
 }
 
 /// A file the user deleted before its upload ended: dropped from the queue.
