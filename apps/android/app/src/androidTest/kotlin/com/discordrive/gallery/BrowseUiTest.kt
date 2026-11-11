@@ -276,6 +276,23 @@ class BrowseUiTest {
         var folderIntent: Intent? = null
         ActivityScenario.launch<DdnViewerActivity>(Intent(ctx, DdnViewerActivity::class.java).putExtra("id", photo.id)).use { v ->
             fun <T> on(f: (DdnViewerActivity) -> T): T { var x: T? = null; v.onActivity { a -> x = f(a) }; @Suppress("UNCHECKED_CAST") return x as T }
+            // A swipe of 80 % of the width, one page at a time: ten moves a frame apart (not all in one go on the
+            // UI thread, which a busy frame, e.g. a video starting, could swallow), then wait until the pager has
+            // settled. A swipe the emulator dropped is tried again (at most twice more) and logged.
+            fun swipeTo(target: Int): Boolean {
+                repeat(3 * list.size) { attempt ->
+                    waitUntil(3_000) { on { it.scrollStateForTest() } == androidx.viewpager2.widget.ViewPager2.SCROLL_STATE_IDLE }
+                    val from = on { it.pageForTest() }
+                    if (from == target) return true
+                    val dx = (if (target > from) -1 else 1) * on { it.window.decorView.width } * 0.08f
+                    val began = on { it.dragBeginForTest() }
+                    if (began) { repeat(10) { on { a -> a.dragByForTest(dx) }; Thread.sleep(16) }; on { it.dragEndForTest() } }
+                    waitUntil(3_000) { on { it.scrollStateForTest() } == androidx.viewpager2.widget.ViewPager2.SCROLL_STATE_IDLE }
+                    val to = on { it.pageForTest() }
+                    if (to != (if (target > from) from + 1 else from - 1)) Log.w("ddn-ui", "viewer swipe $from -> $target, attempt ${attempt + 1}: began $began, now at $to")
+                }
+                return on { it.pageForTest() } == target
+            }
             r["viewerPicture"] = waitUntil { on { it.hasPictureForTest() } }
             r["viewerPages"] = on { it.pagesForTest() == list.size && it.pageForTest() == 0 && it.titleForTest() == photo.name }
             // The top bar: Download, Share, ⋮ (nothing at the bottom any more).
@@ -316,15 +333,13 @@ class BrowseUiTest {
             if (film != null) {
                 // Swipe to the video: the next page, its name in the bar, it plays; its controls clear of the bars.
                 val at = list.indexOf(film)
-                repeat(at) { on { a -> a.dragForTest(-a.window.decorView.width * 0.8f) }; Thread.sleep(800) }
-                r["viewerSwipeNext"] = waitUntil(5_000) { on { it.pageForTest() == at && it.titleForTest() == film.name } }
+                r["viewerSwipeNext"] = swipeTo(at) && waitUntil(5_000) { on { it.pageForTest() == at && it.titleForTest() == film.name } }
                 r["viewerVideoPlays"] = waitUntil(10_000) { on { it.playingForTest() } == film.id }
                 r["viewerVideoControlsClear"] = waitUntil(30_000) { on { a -> a.showControlsForTest(); a.controlsClearForTest() } == true }
                 r["viewerVideoMenu"] = on { it.menuItems(s, film).map { m -> m.first } }.let { !it.contains(ctx.getString(R.string.ddn_edit)) && !it.contains(ctx.getString(R.string.viewer_set_wallpaper)) && it.contains(ctx.getString(R.string.action_move_to_album)) }
                 shot("4b-viewer-video")
                 // Back to the photo: the video stops (no player), the photo's page again.
-                repeat(at) { on { a -> a.dragForTest(a.window.decorView.width * 0.8f) }; Thread.sleep(800) }
-                r["viewerSwipeBack"] = waitUntil(5_000) { on { it.pageForTest() == 0 && it.titleForTest() == photo.name } }
+                r["viewerSwipeBack"] = swipeTo(0) && waitUntil(5_000) { on { it.pageForTest() == 0 && it.titleForTest() == photo.name } }
                 r["viewerVideoStops"] = waitUntil(5_000) { on { it.playingForTest() } == null }
             }
         }

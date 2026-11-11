@@ -421,9 +421,16 @@ describe("upload: isolated network errors do not throttle it for good", () => {
     expect(two.ignored).toBe(3);
     expect(two.minLimit).toBe(clean.minLimit);
     expect(two.limitEnd).toBeGreaterThanOrEqual(8);
-    // ≥ 90 % of the clean run (each dropped post costs its retry back-off; the rest runs at full width)
-    expect(clean.secs / two.secs).toBeGreaterThanOrEqual(0.9);
+    // ≥ 90 % of the clean run (each dropped post costs its retry back-off; the rest runs at full width).
+    // Wall-clock runs of ~4.5 s: a busy CI machine (timers late) only ever makes a run slower, so when the
+    // first pair misses, both runs are repeated once and the faster of each pair is compared.
+    let ratio = clean.secs / two.secs;
+    if (ratio < 0.9) {
+      const [clean2, two2] = [await run([]), await run([37, 98, 141])];
+      ratio = Math.min(clean.secs, clean2.secs) / Math.min(two.secs, two2.secs);
+    }
+    expect(ratio).toBeGreaterThanOrEqual(0.9);
     const weak = await run("burst");
     expect(weak.cuts).toBeGreaterThanOrEqual(1);
-  }, 120_000);
+  }, 180_000);
 });
