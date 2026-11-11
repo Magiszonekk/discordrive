@@ -75,8 +75,11 @@ describe("the Gallery (a second space of the account)", () => {
     // In an album sorted by date: by the date taken too (both directions), sub-folders first.
     expect(core.list(album, undefined, 50, { by: "date", desc: true }).rows.map((r) => r.name)).toEqual(["IMG_B.jpg", "IMG_C.jpg"]);
     expect(core.list(album, undefined, 50, { by: "date", desc: false }).rows.map((r) => [r.name, r.modifiedAt])).toEqual([["IMG_C.jpg", Date.UTC(2023, 1, 2)], ["IMG_B.jpg", Date.UTC(2025, 6, 10)]]);
-    // Album cards in one call: count and the newest photo by date taken as the cover; Drive folders are not albums.
-    expect(core.albumCovers([album, docs])).toEqual({ [album]: { n: 2, cover: { id: p2.nodeId, at: Date.UTC(2025, 6, 10) } } });
+    // Album cards in one call: count and the photos newest first by date taken as cover candidates (the card
+    // shows the first with a thumbnail); Drive folders are not albums.
+    expect(core.albumCovers([album, docs])).toEqual({
+      [album]: { n: 2, covers: [{ id: p2.nodeId, at: Date.UTC(2025, 6, 10) }, { id: p3.nodeId, at: Date.UTC(2023, 1, 2) }] },
+    });
     expect(core.folderPath(album)).toEqual([{ id: GALLERY_ID, name: "" }, { id: album, name: "Wakacje" }]);
     // The Drive does not show the Gallery.
     expect(core.list(ROOT_ID).rows.map((r) => r.name).sort()).toEqual(["Dokumenty", "Telefon – Pixel"]);
