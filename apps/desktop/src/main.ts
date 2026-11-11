@@ -977,6 +977,20 @@ else {
   let stopping = false;
   /** Chromium switch, read at every GPU helper exit: failed restarts do not end the app. */
   const GPU_NO_CRASH_LIMIT = "disable-gpu-process-crash-limit";
+  /**
+   * The app is ending: a GPU helper that goes away from here on is not started again as a process.
+   * When the system ends the session it stops every process of the app at once, the helper that starts
+   * new processes too, so each restart fails at once and Chromium tries again in a tight loop: up to
+   * thousands of "GPU process launch failed: error_code=1002" lines in the system journal within a
+   * second. With "in-process-gpu" (read by Chromium each time it sets up a new GPU host) the replacement
+   * runs as a thread of this process instead, nothing is launched, the loop does not start. Linux only:
+   * there the helpers come from that launcher; Windows skips restarts itself while the session ends.
+   * Normal use is untouched (the switch is set only once quitting is decided).
+   */
+  const noGpuRestart = () => {
+    app.commandLine.appendSwitch(GPU_NO_CRASH_LIMIT);
+    if (process.platform === "linux") app.commandLine.appendSwitch("in-process-gpu");
+  };
   const qdbg = (m: string) => (process.env.DDN_DESKTOP_DEBUG || process.env.DDN_DESKTOP_DATA) && console.error(`[ddn] ${m}`);
   // The session ends (log out, shut down, the service manager stops the app): quit at once, without the
   // "transfers are still running" question — nobody is there to answer it. On Linux the system stops
@@ -985,6 +999,9 @@ else {
   const sessionEnd = (why: string) => {
     qdbg(`session end: ${why}`);
     quitting = true;
+    // Before app.quit(): the system's SIGTERM may have ended the GPU helper already, and with the
+    // "transfers are still running" question open no before-quit has run yet.
+    noGpuRestart();
     app.quit();
   };
   // Chromium installs its own handlers for these when its message loop starts (they quit without
@@ -1019,9 +1036,9 @@ else {
     // While the app stops, the system may end its GPU helper too (shut down: all processes of the app get
     // SIGTERM at once). Chromium starts the helper again and, after a few failed starts, ends the whole app
     // with a fatal error that the system records as a crash ("closed unexpectedly" at the next login).
-    // Nothing needs drawing any more: failed GPU starts from here on no longer count towards that limit.
-    // (Read by Chromium at every GPU exit, so setting it now works; normal use keeps the limit.)
-    app.commandLine.appendSwitch(GPU_NO_CRASH_LIMIT);
+    // Nothing needs drawing any more: failed GPU starts from here on no longer count towards that limit,
+    // and no new GPU process is started (see noGpuRestart). Normal use keeps the limit.
+    noGpuRestart();
     // The agent and the built-in instance stop first (database closed, journals flushed); the app ends
     // after them, so a new start never meets a half-closed one (at most 5 s).
     const ends = [agent, instance]
