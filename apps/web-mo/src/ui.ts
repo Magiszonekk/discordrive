@@ -2927,7 +2927,8 @@ function paintSpeedIntro() {
   void core.netStatus().then((st) => ($("speed-metered").hidden = !st?.leanWhy), () => null);
   paintSpeedHistory();
 }
-const spf = (v: number | null | undefined) => (v == null ? "—" : fmtNum(Math.round(v * 10) / 10));
+// One decimal below 10 MB/s: a slow line of 0.4 MB/s is not "0 MB/s".
+const spf = (v: number | null | undefined) => (v == null ? "—" : fmtNum(v, Math.abs(v) < 10 ? 1 : 0));
 /** Steps of the running test, in order: "Step 2 of 3" in the live line. */
 let speedSteps: SpeedTestProgress["stage"][] = [];
 function paintSpeedProgress(p: SpeedTestProgress) {

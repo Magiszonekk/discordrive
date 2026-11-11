@@ -35,6 +35,8 @@ const speedLineOk = (l: unknown, r: unknown) => {
   const y = r as { text: string; zeroKept: boolean } | undefined;
   return !!x && !!y && x.gapDown <= 1500 && x.gapUp <= 1500 && x.took < 24_000 && x.maxUp > 0 && x.maxUp <= 2 * 1024 * 1024 && /\d\u00a0MB\/s/.test(x.line) && !/\d MB\/s/.test(x.line) && /odmówił|refused/.test(y.text) && !y.zeroKept;
 };
+/** Speeds below 10 MB/s keep one decimal: the line 0.4 / 0.35 MB/s and Discord 0.3 MB/s, no "0 MB/s" anywhere. */
+const slowSpeedOk = (v: unknown) => typeof v === "string" && /0[,.]4\u00a0MB\/s/.test(v) && /0[,.]3\u00a0MB\/s/.test(v) && !/(^|[^\d,.])0\u00a0MB\/s/.test(v);
 /** The speed test's live line keeps moving while a slow piece is on its way (the step, the pieces, the clock). */
 const speedLiveMoves = (l: unknown) => {
   const x = l as { live1?: string; live2?: string } | undefined;
@@ -492,6 +494,12 @@ try {
       // Only the line here: the card of such a result has no Discord rows (no "0 × 10 MB", "up to 0").
       st.lineOnlyRows = await p.evaluate(() => (window as unknown as { ddnSpeedCardRows?(r: unknown): string[] }).ddnSpeedCardRows?.({ at: Date.now(), build: "x", platform: "web", line: { down: 50, up: 20 }, discord: { up: null, down: null, upShare: null, downShare: null, channels: 1, fragments: 0, fragmentBytes: 10485760, concUp: { auto: true, start: 0, max: 0 }, concDown: { auto: true, start: 0, max: 0 }, rateLimited: 0, errors: 0, deleted: 0, leftOver: 0 }, hints: [] }) ?? null);
     }
+    // A slow line (below 1 MB/s) keeps its decimal: "0,4 MB/s", never "0 MB/s" (also in the comparison with Discord).
+    st.slowSpeed = await p.evaluate(() => {
+      const w = window as unknown as { ddnSpeedCardRows?(r: unknown): string[] };
+      w.ddnSpeedCardRows?.({ at: Date.now(), build: "x", platform: "web", line: { down: 0.4, up: 0.35 }, discord: { up: 0.3, down: null, upShare: 0.857, downShare: null, channels: 1, fragments: 0, fragmentBytes: 10485760, concUp: { auto: true, start: 0, max: 0 }, concDown: { auto: true, start: 0, max: 0 }, rateLimited: 0, errors: 0, deleted: 0, leftOver: 0 }, hints: [] });
+      return document.querySelector("[data-ddn=speed-result]")?.textContent ?? "";
+    });
     // The line test in the browser (every mode) against the fake's line endpoints: the live line moves at least
     // every 1.5 s in both directions (big upload bodies kept the worker silent for 5-8 s), it ends near its 8 s,
     // and a refusal of the test server (429) is said in words and not kept as a line of 0 MB/s.
@@ -2564,7 +2572,7 @@ try {
       const f = r.folderNav as Record<string, unknown> | undefined;
       return !!f && f.upHiddenAtRoot === true && f.rowCursor === "pointer" && f.rowClick === true && /^(Parent folder|Folder nadrzędny)$/.test(String(f.upLabel)) && f.upButton === true && f.enter === true && f.backspaceInField === true && f.backspace === true && f.backspaceAtRootStays === true;
     })(),
-    speedTest: ((x) => !!x && x.files === 0 && speedLineOk(x.lineTest, x.lineRefused) && (SERVER_SIDE ? x.advHidden === true && JSON.stringify(x.lineOnlyRows) === JSON.stringify(["line", "build"]) && JSON.stringify(x.buttons) === JSON.stringify({ discord: false, line: true }) : JSON.stringify(x.buttons) === JSON.stringify({ discord: true, line: true, noLineGone: true }) && speedLiveMoves(x.live) && (x.share as string[]).length === 2 && (x.share as string[]).every((s) => /\d+% (prędkości Twojego łącza|of your line's speed) \((łącze|line) (50|20)\u00a0MB\/s/.test(s)) && /test z|test of/.test(String(x.lineLabel)) && !/: .*: /.test(String(x.copied).split("\n")[2]) && /MB\/s/.test(String(x.up)) && /MB\/s/.test(String(x.down)) && /6 ×/.test(String(x.channels)) && x.cardInView === true && x.deleteRejectsLeft === 0 && /discordrive speed test/.test(String(x.copied)) && Number(x.history) >= 1 && x.msgsAfter === 0 && x.msgsAfterCancel === 0 && /Cancel|Anulow/.test(String(x.cancelText))))(r.speedTest as Record<string, unknown> | undefined),
+    speedTest: ((x) => !!x && x.files === 0 && speedLineOk(x.lineTest, x.lineRefused) && slowSpeedOk(x.slowSpeed) && (SERVER_SIDE ? x.advHidden === true && JSON.stringify(x.lineOnlyRows) === JSON.stringify(["line", "build"]) && JSON.stringify(x.buttons) === JSON.stringify({ discord: false, line: true }) : JSON.stringify(x.buttons) === JSON.stringify({ discord: true, line: true, noLineGone: true }) && speedLiveMoves(x.live) && (x.share as string[]).length === 2 && (x.share as string[]).every((s) => /\d+% (prędkości Twojego łącza|of your line's speed) \((łącze|line) (50|20)\u00a0MB\/s/.test(s)) && /test z|test of/.test(String(x.lineLabel)) && !/: .*: /.test(String(x.copied).split("\n")[2]) && /MB\/s/.test(String(x.up)) && /MB\/s/.test(String(x.down)) && /6 ×/.test(String(x.channels)) && x.cardInView === true && x.deleteRejectsLeft === 0 && /discordrive speed test/.test(String(x.copied)) && Number(x.history) >= 1 && x.msgsAfter === 0 && x.msgsAfterCancel === 0 && /Cancel|Anulow/.test(String(x.cancelText))))(r.speedTest as Record<string, unknown> | undefined),
     settingsLayoutStable: ((x) => !!x && x.moved.length === 0)(r.settingsLayout as { moved: string[] } | undefined),
     localSearch: ((x) => !!x && x.byTakenDate && x.byNameNoDiacritics && x.allWords)(r.localSearch as { byTakenDate: boolean; byNameNoDiacritics: boolean; allWords: boolean } | undefined),
     settingsTabs: ((x) => !!x && x.everySectionOnce && x.untabbed.length === 0 && x.oneChannelList && x.reloadApp && x.back && x.anchor && x.remembered === "/settings/network" &&
