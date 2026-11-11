@@ -617,11 +617,22 @@ function renderCrumbs(fullPath: { id: string; name: string }[]) {
 
 type Status = Awaited<ReturnType<typeof core.status>>;
 
+/** The "newer app" message was shown as a toast once (the status line keeps saying it). */
+let updateToasted = false;
+
 function renderShellStatus(st: Status) {
   const s = $("status");
   s.dataset.tabRole = st.leader ? "main" : "secondary";
+  s.dataset.state = st.needsUpdate ? "update" : uploading ? "uploading" : "synced";
+  // A log entry from a newer app: the list cannot catch up here, so "synced" would be wrong.
+  if (st.needsUpdate && !updateToasted) {
+    updateToasted = true;
+    toast(t("err.update"), "err");
+  }
   s.replaceChildren(
-    uploading
+    st.needsUpdate
+      ? chip(t("status.update"), "warning", t("err.update"))
+      : uploading
       ? chip(t("status.uploading", { done: uploading.done, total: uploading.total }), "accent", t(desktop ? "status.uploadingDesktop.t" : "status.uploading.t"))
       : chip(t("status.synced"), "success", t("status.synced.t", { seq: fmtNum(st.headSeq) })),
   );
@@ -1248,9 +1259,9 @@ async function renderNow() {
     ui("acc-id").textContent = st.accountId ?? "-";
     ui("acc-device").textContent = st.deviceName || short(st.deviceId);
     ui("acc-server").textContent = serverUrl;
-    ui("about-sync").replaceChildren(document.createTextNode(uploading ? t("status.uploading", { done: uploading.done, total: uploading.total }) : t("status.synced")));
-    ui("about-sync").className = "chip chip--success";
-    ui("about-sync-t").textContent = t("status.synced.t", { seq: fmtNum(st.headSeq) });
+    ui("about-sync").replaceChildren(document.createTextNode(st.needsUpdate ? t("status.update") : uploading ? t("status.uploading", { done: uploading.done, total: uploading.total }) : t("status.synced")));
+    ui("about-sync").className = `chip ${st.needsUpdate ? "chip--warning" : "chip--success"}`;
+    ui("about-sync-t").textContent = st.needsUpdate ? t("err.update") : t("status.synced.t", { seq: fmtNum(st.headSeq) });
     ui("about-tab").textContent = st.leader ? t("status.main") : t("status.secondary");
     ui("about-tab").className = `chip${st.leader ? "" : " chip--warning"}`;
     ui("about-tab-t").textContent = st.leader ? t("status.main.t") : t("status.secondary.t");

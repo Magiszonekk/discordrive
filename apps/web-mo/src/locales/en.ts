@@ -126,6 +126,7 @@ export const en: Record<string, string> = {
   // status (sidebar footer + Settings → About this browser)
   "status.connecting": "connecting…",
   "status.synced": "synced",
+  "status.update": "update the app",
   "status.uploading": "uploading {done}/{total}",
   "status.synced.t": "Change log position: {seq}. Changes from other devices arrive right away.",
   "status.uploading.t": "The upload runs as long as this tab is open.",

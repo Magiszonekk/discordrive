@@ -24,6 +24,7 @@ import {
   GALLERY_ID,
   spaceOf,
   type Space,
+  UnsupportedRulesVersionError,
 } from "@ddv4/sync-core";
 import {
   HttpApi,
@@ -370,6 +371,11 @@ export class AppCore {
   persistent = false;
   /** Bumped on every applied batch; the UI polls it to refresh. */
   version = 0;
+  /**
+   * The account's log has an entry written by a newer app (newer rules version): this build cannot apply it,
+   * so the list stays at the entry before it until the app is updated. The status line says so.
+   */
+  needsUpdate = false;
   /** Settings: show files that cannot be read now (default off: hidden from lists, search, counters, preview, sharing). */
   showUnavailable = false;
   private unavailTimer: ReturnType<typeof setInterval> | null = null;
@@ -529,6 +535,7 @@ export class AppCore {
       leader: this.leader,
       persistent: this.persistent,
       headSeq: this.client?.replica.headSeq ?? 0,
+      needsUpdate: this.needsUpdate,
       version: this.version,
       /** Rescue kit confirmed on this device (forced once after the first channel). */
       kitSaved: !!a?.kitSavedAt,
@@ -609,7 +616,7 @@ export class AppCore {
     if (mode.clientSnapshots && this.resume) void cleanupLeftovers(this.client!, this.resume).catch(() => 0);
     this.sub = this.http.subscribe(
       () =>
-        void this.client!.pull().then((rs) => {
+        void this.pullLog().then((rs) => {
           this.version++;
           this.onEvent({ type: "changed" });
           const mine = this.uiNotices(rs, false);
@@ -797,7 +804,30 @@ export class AppCore {
     this.client.setConcurrency(this.conc);
     this.client.blobs.setCdnLanes?.(this.lanes);
     this.gc = mode.cleanup(this.ctx!, this.client, { primary: () => this.leader, metered: meteredLink });
-    await this.client.pull();
+    await this.pullLog();
+  }
+
+  /**
+   * Catch up with the log. An entry from a newer app stops it there: instead of an error nobody sees (the
+   * live pull runs in the background), needsUpdate turns on and the UI shows it in the status line at once.
+   */
+  private async pullLog(): Promise<ApplyResult[]> {
+    try {
+      const rs = await this.c().pull();
+      if (this.needsUpdate) this.setNeedsUpdate(false);
+      return rs;
+    } catch (e) {
+      if (!(e instanceof UnsupportedRulesVersionError) && (e as Error)?.name !== "UnsupportedRulesVersionError") throw e;
+      console.warn("ddn:", (e as Error).message);
+      if (!this.needsUpdate) this.setNeedsUpdate(true);
+      return [];
+    }
+  }
+
+  private setNeedsUpdate(on: boolean) {
+    this.needsUpdate = on;
+    this.version++;
+    this.onEvent({ type: "changed" });
   }
 
   /**
