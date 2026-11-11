@@ -150,7 +150,7 @@ const all = <T extends HTMLElement>(css: string) => [...document.querySelectorAl
 
 const fmt = fmtSize;
 /** Speed in MB/s (10^6 B/s, like the transfer report and the line speed of a provider); Mb/s for the tooltip. */
-const fmtRate = (bps: number) => `${fmtNum(bps / 1e6, bps < 10e6 ? 1 : 0)} MB/s`;
+const fmtRate = (bps: number) => `${fmtNum(bps / 1e6, bps < 10e6 ? 1 : 0)}\u00a0MB/s`;
 const fmtRateBits = (bps: number) => `${fmtNum((bps * 8) / 1e6, 0)} Mb/s`;
 /** "12.3 MB/s · 0:42 left" while running (… until the first 0.5 s), "avg 11.8 MB/s · 1:05" when done. */
 function speedText(m: SpeedMeter, now = Date.now()): { text: string; title: string } {
@@ -2955,8 +2955,8 @@ function speedResultText(r: SpeedTestResult): string {
   return [
     `discordrive speed test ${new Date(r.at).toISOString()} · ${t(`sp.where.${r.platform === "desktop" ? "desktop" : "web"}`)} · ${r.build ?? "?"}`,
     r.line ? `${t("sp.line")}: ${lineValue(r)}` : "",
-    d.up != null ? `${t("sp.discordUp")}: ${spf(d.up)} MB/s${d.upShare != null ? ` — ${shareText(d.up, d.upShare, r.line?.up)}` : ""}` : "",
-    d.down != null ? `${t("sp.discordDown")}: ${spf(d.down)} MB/s${d.downShare != null ? ` — ${shareText(d.down, d.downShare, r.line?.down)}` : ""}` : "",
+    d.up != null ? `${t("sp.discordUp")}: ${spf(d.up)}\u00a0MB/s${d.upShare != null ? ` — ${shareText(d.up, d.upShare, r.line?.up)}` : ""}` : "",
+    d.down != null ? `${t("sp.discordDown")}: ${spf(d.down)}\u00a0MB/s${d.downShare != null ? ` — ${shareText(d.down, d.downShare, r.line?.down)}` : ""}` : "",
     ...(d.fragments > 0 ? [`${t("sp.channels")}: ${d.channels} · ${d.fragments} × ${fmtSize(d.fragmentBytes)}`, `${t("sp.conc")}: ${concText(r)}`, `${t("sp.problems")}: ${d.rateLimited} / ${d.errors}`] : []),
     ...r.hints.map(hintText),
   ].filter(Boolean).join("\n");
@@ -3038,8 +3038,8 @@ function paintSpeedHistory() {
   $("speed-history").replaceChildren(
     ...hs.map((r) => {
       const parts = [
-        r.discord.up != null || r.discord.down != null ? `Discord ↑ ${spf(r.discord.up)} ↓ ${spf(r.discord.down)} MB/s` : "",
-        r.line && !r.lineAt ? `${t("sp.line")} ↓ ${spf(r.line.down)} ↑ ${spf(r.line.up)} MB/s` : "",
+        r.discord.up != null || r.discord.down != null ? `Discord ↑ ${spf(r.discord.up)} ↓ ${spf(r.discord.down)}\u00a0MB/s` : "",
+        r.line && !r.lineAt ? `${t("sp.line")} ↓ ${spf(r.line.down)} ↑ ${spf(r.line.up)}\u00a0MB/s` : "",
       ].filter(Boolean);
       const where = r.discord.fragments > 0 ? `${r.discord.channels} ch · ${r.build ?? ""}` : (r.build ?? "");
       return h("li", { "data-ddn": "speed-history-row" }, h("span", { class: "dname mono" }, `${fmtDateTime(r.at)} · ${parts.join(" · ")}`), h("span", { class: "when" }, where));
