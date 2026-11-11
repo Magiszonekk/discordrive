@@ -149,7 +149,12 @@ object DdnSafe {
 
     fun exists(c: Context): Boolean = parts(c).first.exists()
 
-    fun create(c: Context, password: String): SafeStore.Unlocked = keep(c, parts(c).second.create(password))
+    /** A new Safe starts the revision count again (the old one was deleted): what this phone saw of it no longer counts. */
+    fun create(c: Context, password: String): SafeStore.Unlocked {
+        val u = parts(c).second.create(password)
+        prefs(c).edit().putLong("seen", u.revision).apply()
+        return keep(c, u)
+    }
 
     fun unlock(c: Context, password: String): SafeStore.Unlocked = keep(c, parts(c).first.unlock(password)).also { cleanupLater(c) }
 
@@ -197,6 +202,37 @@ object DdnSafe {
         if (!isOpen) { out.delete(); throw IllegalStateException("safe_closed") }
         return out
     }
+
+    /** What moving `items` of the account into the Safe takes: bytes sent again, files moved, files in the trash left behind. */
+    data class MovePlan(val bytes: Long, val files: Int, val trashedInside: Int)
+
+    /**
+     * The plan of [moveIn] (the same as the web app's SafeTree.moveInPlan): every file below the moved folders,
+     * and the files in the account's trash inside them (not moved: deleted for good with the folder).
+     */
+    fun moveInPlan(c: Context, items: List<IndexReplica.Child>): MovePlan {
+        val s = DdnSession.get(c)!!
+        var bytes = 0L
+        var files = 0
+        fun walk(it: IndexReplica.Child) {
+            if (!it.isFolder) { bytes += it.size ?: 0; files++; return }
+            for (k in s.children(it.id)) walk(k)
+        }
+        items.forEach(::walk)
+        val folders = items.filter { it.isFolder }.map { it.id }.toSet()
+        var trashedInside = 0
+        if (folders.isNotEmpty()) for (t in s.trash()) {
+            // Trashed itself somewhere below a moved folder (the trash lists the top of what was trashed).
+            var up = t.parentId
+            var guard = 0
+            while (up != null && up !in folders && guard++ < 256) up = s.node(up)?.parentId
+            if (up == null || up !in folders) continue
+            trashedInside += if (t.isFolder) countFiles(s, t.id) else 1
+        }
+        return MovePlan(bytes, files, trashedInside)
+    }
+
+    private fun countFiles(s: DdnSession, id: String): Int = s.children(id).sumOf { if (it.isFolder) countFiles(s, it.id) else 1 }
 
     /**
      * Files and folders of the account into the Safe: each file read and sent again under a new key (the old key

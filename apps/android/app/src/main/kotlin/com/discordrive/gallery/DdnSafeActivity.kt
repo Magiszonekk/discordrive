@@ -89,7 +89,8 @@ class DdnSafeActivity : AppCompatActivity() {
 
     private fun busy(on: Boolean) { loading.visibility = if (on) View.VISIBLE else View.GONE }
 
-    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
+    /** Messages of the Safe can be long (a damaged Safe, a file gone): a snackbar with room for them, not a 2-line toast. */
+    private fun toast(s: String) = say(this, s)
 
     private fun show() {
         if (DdnSafe.isOpen) return showOpen()
@@ -298,6 +299,25 @@ class DdnSafeActivity : AppCompatActivity() {
     companion object {
         fun open(c: Context) = c.startActivity(Intent(c, DdnSafeActivity::class.java))
 
+        /**
+         * A message that stays readable whole: a snackbar of up to [SAY_LINES] lines, long enough to read it
+         * (a system toast cuts after 2 lines).
+         */
+        fun say(a: android.app.Activity, text: String): com.google.android.material.snackbar.Snackbar {
+            val sb = com.google.android.material.snackbar.Snackbar.make(a.findViewById(android.R.id.content), text, 8_000)
+            sb.view.findViewById<android.widget.TextView>(com.google.android.material.R.id.snackbar_text)?.apply { maxLines = SAY_LINES; tag = "safe-message" }
+            sb.show()
+            return sb
+        }
+        const val SAY_LINES = 8
+
+        /** The text of the move-in question: what is sent again (count and size), the copy deleted, the trash left behind. */
+        fun moveInText(c: Context, p: DdnSafe.MovePlan): String = listOfNotNull(
+            c.getString(R.string.safe_move_cost_n, p.files, android.text.format.Formatter.formatShortFileSize(c, p.bytes)),
+            c.getString(R.string.safe_to_safe_note),
+            if (p.trashedInside > 0) c.resources.getQuantityString(R.plurals.safe_in_trashed, p.trashedInside, p.trashedInside) else null,
+        ).joinToString("\n")
+
         /** "Move to the Safe" from Files / the Gallery: the Safe must be open; asks with the cost first. */
         fun moveIn(a: AppCompatActivity, items: List<IndexReplica.Child>, done: () -> Unit) {
             if (!DdnSafe.isOpen) {
@@ -305,20 +325,28 @@ class DdnSafeActivity : AppCompatActivity() {
                 open(a)
                 return
             }
-            val bytes = items.sumOf { it.size ?: 0 }
             val label = if (items.size == 1) items[0].name else a.resources.getQuantityString(R.plurals.safe_items, items.size, items.size)
-            MaterialAlertDialogBuilder(a).setTitle(a.getString(R.string.safe_to_safe_ask, label))
-                .setMessage(a.getString(R.string.safe_move_cost, android.text.format.Formatter.formatShortFileSize(a, bytes)) + "\n" + a.getString(R.string.safe_to_safe_note))
-                .setPositiveButton(R.string.safe_to_safe) { _, _ ->
-                    thread {
-                        val r = runCatching { DdnSafe.moveIn(a, items) }
-                        Handler(Looper.getMainLooper()).post {
-                            r.onSuccess { Toast.makeText(a, a.resources.getQuantityString(R.plurals.safe_moved_in, it, it), Toast.LENGTH_LONG).show() }
-                                .onFailure { Toast.makeText(a, DdnErrors.text(a, it), Toast.LENGTH_LONG).show() }
-                            done()
-                        }
-                    }
-                }.setNegativeButton(R.string.cobalt_cancel, null).show()
+            val ui = Handler(Looper.getMainLooper())
+            // Counting a folder's files reads the index: off the main thread, then the question.
+            thread {
+                val plan = runCatching { DdnSafe.moveInPlan(a, items) }
+                ui.post {
+                    if (a.isFinishing || a.isDestroyed) return@post
+                    plan.onFailure { say(a, DdnErrors.text(a, it)); return@post }
+                    MaterialAlertDialogBuilder(a).setTitle(a.getString(R.string.safe_to_safe_ask, label))
+                        .setMessage(moveInText(a, plan.getOrThrow()))
+                        .setPositiveButton(R.string.safe_to_safe) { _, _ ->
+                            thread {
+                                val r = runCatching { DdnSafe.moveIn(a, items) }
+                                ui.post {
+                                    r.onSuccess { Toast.makeText(a, a.resources.getQuantityString(R.plurals.safe_moved_in, it, it), Toast.LENGTH_LONG).show() }
+                                        .onFailure { say(a, DdnErrors.text(a, it)) }
+                                    done()
+                                }
+                            }
+                        }.setNegativeButton(R.string.cobalt_cancel, null).show()
+                }
+            }
         }
     }
 }

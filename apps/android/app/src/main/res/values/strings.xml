@@ -627,6 +627,13 @@ Tekst: %3$s</string>
     <string name="safe_to_safe">Przenieś do Sejfu</string>
     <string name="safe_to_safe_ask">Przenieść „%s” do Sejfu?</string>
     <string name="safe_to_safe_note">Kopia w Plikach zostanie usunięta na stałe.</string>
+    <string name="safe_move_cost_n">Pliki do ponownej wysyłki pod nowym kluczem: %1$d (%2$s).</string>
+    <plurals name="safe_in_trashed">
+        <item quantity="one">%d plik z kosza wewnątrz tego folderu nie zostanie przeniesiony: zniknie na stałe razem z folderem.</item>
+        <item quantity="few">%d pliki z kosza wewnątrz tego folderu nie zostaną przeniesione: znikną na stałe razem z folderem.</item>
+        <item quantity="many">%d plików z kosza wewnątrz tego folderu nie zostanie przeniesionych: znikną na stałe razem z folderem.</item>
+        <item quantity="other">%d pliku z kosza wewnątrz tego folderu nie zostanie przeniesione: zniknie na stałe razem z folderem.</item>
+    </plurals>
     <string name="safe_settings_note">Foldery i pliki pod osobnym hasłem, niewidoczne dla innych urządzeń konta.</string>
     <plurals name="safe_uploaded">
         <item quantity="one">Dodano %d plik do Sejfu.</item>

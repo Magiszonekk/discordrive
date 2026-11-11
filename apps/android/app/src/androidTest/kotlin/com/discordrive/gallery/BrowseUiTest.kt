@@ -688,6 +688,20 @@ class BrowseUiTest {
         val up = s.uploader().upload({ bytes.inputStream() }, bytes.size.toLong(), "do-sejfu.pdf", "root")
         s.refresh()
         val doc = s.children("root").first { it.id == up.nodeId }
+        // The question before moving a folder in: how many files and bytes are sent again, and the files of the
+        // account's trash inside it (they stay behind and go with the folder). Only asked here, nothing moves.
+        val planDir = s.folderPath(listOf("plan-sejfu"))
+        val kept = ByteArray(1_234) { 7 }
+        s.uploader().upload({ kept.inputStream() }, kept.size.toLong(), "zostaje.txt", planDir)
+        val gone = s.uploader().upload({ ByteArray(10).inputStream() }, 10, "w-koszu.txt", planDir)
+        s.refresh()
+        s.moveToTrash(listOf(gone.nodeId!!))
+        val plan = DdnSafe.moveInPlan(ctx, listOf(s.node(planDir)!!))
+        val planText = DdnSafeActivity.moveInText(ctx, plan)
+        r["safeMovePlanFolder"] = plan == DdnSafe.MovePlan(kept.size.toLong(), 1, 1) &&
+            planText.contains(": 1 (") && planText.contains("kosza") && !planText.contains("0 B")
+        s.moveToTrash(listOf(planDir)); s.purge(listOf(planDir))
+        s.refresh()
         val moved = DdnSafe.moveIn(ctx, listOf(doc))
         r["safeMovedIn"] = moved == 1 && DdnSafe.children(ctx, "root").map { it.name } == listOf("do-sejfu.pdf") && s.children("root").none { it.id == doc.id }
         ActivityScenario.launch<DdnSafeActivity>(Intent(ctx, DdnSafeActivity::class.java)).use { a ->
@@ -714,6 +728,13 @@ class BrowseUiTest {
             a.onActivity { x -> after = x.folderForTest(); finishing = x.isFinishing; usage = x.window.decorView.findViewWithTag<android.widget.TextView>("safe-usage")?.text?.toString().orEmpty() }
             r["safeBackGoesUp"] = inSub == sub && after == "root" && !finishing
             r["safeShowsUsage"] = Regex("\\d+%").containsMatchIn(usage)
+            // Long messages of the Safe (a damaged Safe, a file gone) are shown whole, not cut after 2 lines.
+            a.onActivity { x -> DdnSafeActivity.say(x, x.getString(R.string.safe_err_file_gone)) }
+            r["safeMessageWhole"] = waitUntil(5_000) {
+                var lines = 0
+                a.onActivity { x -> lines = x.window.decorView.findViewWithTag<android.widget.TextView>("safe-message")?.maxLines ?: 0 }
+                lines >= DdnSafeActivity.SAY_LINES
+            }
         }
         DdnSafe.delete(ctx, listOf(sub))
         val web = sc.rpc("safeWeb", buildJsonObject { put("password", pw); put("file", "do-sejfu.pdf"); put("sha", up.sha256) }).jsonObject

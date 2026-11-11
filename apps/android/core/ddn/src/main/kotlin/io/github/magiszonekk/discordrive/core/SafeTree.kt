@@ -42,7 +42,9 @@ class SafeStore(
 
     private fun read(): Pair<Long, String?> {
         val (rev, blob) = api.slot(Safe.SLOT)
-        if (rev < seenRevision) throw Safe.RollbackException(seenRevision, rev)
+        // An empty slot is "no Safe" (deleted on another device), whatever revision this phone saw before: the
+        // callers say [Missing]. Only a Safe that is there but older than the one seen is a rollback.
+        if (blob != null && rev < seenRevision) throw Safe.RollbackException(seenRevision, rev)
         return rev to blob
     }
 
