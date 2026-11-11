@@ -374,7 +374,14 @@ class BrowseUiTest {
         var out = false
         s.onActivity { a -> a.backForTest(); a.selectDayForTest(a.headPositionsForTest()[0]); day = a.selectedForTest() }
         s.onActivity { a -> a.tapDayForTest(a.headPositionsForTest()[0]); out = a.selectedForTest().none { it in day } }
-        val firstDay = sess.media(10, null).let { m -> val zone = java.time.ZoneId.systemDefault(); val d = { c: IndexReplica.Child -> java.time.Instant.ofEpochMilli(c.createdAt).atZone(zone).toLocalDate() }; m.filter { d(it) == d(m[0]) }.map { it.id }.toSet() }
+        // Use the activity's effective date (takenAt if known, else createdAt) to compute the first day,
+        // since the gallery now sorts and groups by that date.
+        val firstDay = s.onActivity { a ->
+            val m = sess.media(10, null)
+            val zone = java.time.ZoneId.systemDefault()
+            val d = { c: IndexReplica.Child -> java.time.Instant.ofEpochMilli(a.effectiveDateForTest(c)).atZone(zone).toLocalDate() }
+            m.filter { d(it) == d(m[0]) }.map { it.id }.toSet()
+        }
         r["selDayTap"] = day == firstDay && out
         s.onActivity { a -> a.headPositionsForTest().forEach { h -> a.selectDayForTest(h) } }
         var sel = emptySet<String>()

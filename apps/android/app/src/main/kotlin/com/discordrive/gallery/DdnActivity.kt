@@ -21,6 +21,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.discordrive.gallery.DdnTaken
 import io.github.magiszonekk.discordrive.core.IndexReplica
 import kotlin.concurrent.thread
 
@@ -76,16 +77,35 @@ open class DdnActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         ui = CobaltUi(this)
         DdnSessionDirs.cacheDir = cacheDir
-        gallery = intent.getStringExtra(START) == "gallery" || intent.component?.className?.endsWith(".DdnGallery") == true
-        path += "root" to getString(R.string.ddn_files)
-        // "Show in folder" from the viewer: Files at a folder (its path from the root) or an album.
-        when (intent.getStringExtra(START)) {
-            "files" -> {
-                val ids = intent.getStringArrayListExtra(PATH_IDS).orEmpty()
-                val names = intent.getStringArrayListExtra(PATH_NAMES).orEmpty()
-                if (ids.size == names.size) path += ids.zip(names)
+
+        // Restore state across recreation (e.g. font size change).
+        gallery = savedInstanceState?.getBoolean("gallery") == true
+        albumsTab = savedInstanceState?.getBoolean("albumsTab") == true
+        album = savedInstanceState?.getString("albumId")?.let { it to (savedInstanceState.getString("albumName") ?: "") }
+        if (savedInstanceState != null) {
+            val ids = savedInstanceState.getStringArrayList("selectedIds")
+            if (ids != null) selected.addAll(ids)
+            val pathIds = savedInstanceState.getStringArrayList("pathIds")
+            val pathNames = savedInstanceState.getStringArrayList("pathNames")
+            if (pathIds != null && pathNames != null && pathIds.size == pathNames.size) {
+                path += pathIds.zip(pathNames)
             }
-            "album" -> intent.getStringExtra(ALBUM_ID)?.let { albumsTab = true; album = it to (intent.getStringExtra(ALBUM_NAME) ?: "") }
+        }
+        selecting = savedInstanceState?.getBoolean("selecting") == true
+
+        // Intent takes priority for the initial view (show in folder, album, gallery icon).
+        if (savedInstanceState == null) {
+            gallery = intent.getStringExtra(START) == "gallery" || intent.component?.className?.endsWith(".DdnGallery") == true
+            path += "root" to getString(R.string.ddn_files)
+            // "Show in folder" from the viewer: Files at a folder (its path from the root) or an album.
+            when (intent.getStringExtra(START)) {
+                "files" -> {
+                    val ids = intent.getStringArrayListExtra(PATH_IDS).orEmpty()
+                    val names = intent.getStringArrayListExtra(PATH_NAMES).orEmpty()
+                    if (ids.size == names.size) path += ids.zip(names)
+                }
+                "album" -> intent.getStringExtra(ALBUM_ID)?.let { albumsTab = true; album = it to (intent.getStringExtra(ALBUM_NAME) ?: "") }
+            }
         }
 
         // Cobalt: paper page, a bar with the wordmark (Files) or the screen's name, breadcrumbs in Files, a quiet
@@ -177,6 +197,19 @@ open class DdnActivity : AppCompatActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean("gallery", gallery)
+        outState.putBoolean("albumsTab", albumsTab)
+        album?.let { outState.putString("albumId", it.first); outState.putString("albumName", it.second) }
+        outState.putBoolean("selecting", selecting)
+        if (selected.isNotEmpty()) outState.putStringArrayList("selectedIds", ArrayList(selected))
+        if (path.size > 1) {
+            outState.putStringArrayList("pathIds", ArrayList(path.map { it.first }))
+            outState.putStringArrayList("pathNames", ArrayList(path.map { it.second }))
+        }
+    }
+
     /** Back from another screen (the trash restored something, a file was sent): the list from the index again. */
     private var started = false
     override fun onStart() {
@@ -251,14 +284,16 @@ open class DdnActivity : AppCompatActivity() {
                 val open = album
                 if (open != null) {
                     val items = s.albumMedia(open.first)
-                    main.post { if (albumsTab && album == open) showGrid(s, items) }
+                    val sorted = sortByTaken(items)
+                    main.post { if (albumsTab && album == open) { showGrid(s, sorted); scheduleFillMissing(s, sorted) } }
                 } else {
                     val albums = listOfNotNull(s.cameraAlbum(DdnBackup.cameraName(this, getString(R.string.ddn_album_camera)))) + s.albums()
                     main.post { if (albumsTab && album == null) showAlbums(s, albums) }
                 }
             } else if (gallery) {
                 val items = s.media(5000, null, DdnPrivate.all(this))
-                main.post { if (gallery) showGrid(s, items) }
+                val sorted = sortByTaken(items)
+                main.post { if (gallery) { showGrid(s, sorted); scheduleFillMissing(s, sorted) } }
             } else {
                 val folder = path.last().first
                 val items = s.children(folder)
@@ -276,6 +311,39 @@ open class DdnActivity : AppCompatActivity() {
         val ids = itemsNow().mapTo(HashSet()) { it.id }
         selected.retainAll(ids)
         if (selected.isEmpty()) endSelection() else selectionUi()
+    }
+
+    /** Effective date for sorting/grouping: takenAt from the manifest if known, else createdAt. */
+    private fun effectiveDate(c: IndexReplica.Child): Long {
+        val ref = c.manifestRef ?: return c.createdAt
+        val sess = session ?: return c.createdAt
+        val taken = DdnTaken.dateOf(this, sess.acct.accountId, ref)
+        return if (taken > 0) taken else c.createdAt
+    }
+
+    /** Sort media items by effective date (newest first). */
+    private fun sortByTaken(items: List<IndexReplica.Child>): List<IndexReplica.Child> =
+        items.sortedByDescending { effectiveDate(it) }
+
+    /** Test helper: effective date for an item (takenAt if known, else createdAt). */
+    internal fun effectiveDateForTest(c: IndexReplica.Child): Long = effectiveDate(c)
+
+    /** Schedule a background fill of missing takenAt for items that don't have it yet. */
+    private fun scheduleFillMissing(s: DdnSession, items: List<IndexReplica.Child>) {
+        thread {
+            val reads = DdnTaken.fillMissing(this, s, items)
+            if (reads > 0) {
+                main.post {
+                    if (gallery) {
+                        val sorted = sortByTaken(s.media(5000, null, DdnPrivate.all(this)))
+                        showGrid(s, sorted)
+                    } else if (albumsTab && album != null) {
+                        val sorted = sortByTaken(s.albumMedia(album!!.first))
+                        showGrid(s, sorted)
+                    }
+                }
+            }
+        }
     }
 
     private fun showList(s: DdnSession, items: List<IndexReplica.Child>) {
@@ -818,6 +886,29 @@ open class DdnActivity : AppCompatActivity() {
     internal fun firstCellHasPicture(): Boolean = (0 until list.childCount).any { i ->
         val img = (list.getChildAt(i) as? FrameLayout)?.getChildAt(0) as? ImageView
         img?.drawable is android.graphics.drawable.BitmapDrawable
+    }
+
+    /** Whether the gallery tab is currently selected. */
+    internal fun isGalleryForTest(): Boolean = gallery
+
+    /** The day header labels currently shown. */
+    internal fun dayHeadLabelsForTest(): List<String> =
+        rows.filter { it is Row.Head }.map { (it as Row.Head).label }
+
+    /** Whether any day header label contains the given text (e.g. "2019"). */
+    internal fun hasDayHeadContainingForTest(text: String): Boolean =
+        dayHeadLabelsForTest().any { it.contains(text) }
+
+    /** Whether the photo with the given name is under the day header containing the given text. */
+    internal fun photoUnderDayHeadForTest(photoName: String, dayHeadText: String): Boolean {
+        val heads = rows.withIndex().filter { it.value is Row.Head }
+        val idx = heads.indexOfFirst { (it.value as Row.Head).label.contains(dayHeadText) }
+        if (idx < 0) return false
+        val start = heads[idx].index + 1
+        val end = if (idx + 1 < heads.size) heads[idx + 1].index else rows.size
+        return (start until end).any { i ->
+            (rows[i] as? Row.Item)?.c?.name == photoName
+        }
     }
 
     companion object {
