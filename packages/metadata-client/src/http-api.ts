@@ -10,6 +10,7 @@ import { fromBase64, toBase64 } from "@ddv4/processing";
 import type { SubmitResult } from "@ddv4/sync-core";
 import type { AccountKey } from "./account-key.js";
 import { authMessage, rescueKey, type Challenge, type DeviceKey } from "./device-key.js";
+import { NetworkError } from "./net.js";
 import type { EncryptedEntry, EncryptedEnvelope, EncryptedLogApi } from "./op-crypto.js";
 import type { SealedVault, VaultPutResult, VaultStore } from "./vault.js";
 
@@ -25,13 +26,53 @@ export class ServerError extends Error {
 
 const defaultFetch: typeof fetch = (...a) => fetch(...a);
 
-async function post<T>(f: typeof fetch, url: string, body: unknown, token?: string): Promise<T> {
+/**
+ * Limit for one sign-in / pairing request (headers and body). These requests are tiny, so a server
+ * that has not answered by then is not going to: without a limit a hung connection keeps the sign-in
+ * card locked forever. The error carries the code `server_timeout` for a readable message.
+ */
+let requestTimeoutMs = 20_000;
+/** Change the limit (tests); returns the previous value. */
+export function setRequestTimeout(ms: number): number {
+  const old = requestTimeoutMs;
+  requestTimeoutMs = ms;
+  return old;
+}
+
+/** Run a request with the limit; a request still running at the limit fails with a timeout NetworkError. */
+async function timed<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const ms = requestTimeoutMs;
+  const ctl = new AbortController();
+  const h = setTimeout(() => ctl.abort(), ms);
+  try {
+    return await fn(ctl.signal);
+  } catch (e) {
+    if (ctl.signal.aborted) throw new NetworkError(`server_timeout: no answer from the server within ${Math.round(ms / 1000)} s`, true);
+    throw e;
+  } finally {
+    clearTimeout(h);
+  }
+}
+
+async function readJson(r: Response): Promise<Record<string, unknown>> {
+  // Read the whole body first: a hang while reading must surface as a timeout, not as an empty answer.
+  const text = await r.text();
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function post<T>(f: typeof fetch, url: string, body: unknown, token?: string): Promise<T> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (token) headers.authorization = "Bearer " + token;
-  const r = await f(url, { method: "POST", headers, body: JSON.stringify(body) });
-  const j = (await r.json().catch(() => ({}))) as T & { error?: string };
-  if (!r.ok) throw new ServerError(r.status, j.error ?? "?");
-  return j;
+  return timed(async (signal) => {
+    const r = await f(url, { method: "POST", headers, body: JSON.stringify(body), signal });
+    const j = (await readJson(r)) as T & { error?: string };
+    if (!r.ok) throw new ServerError(r.status, j.error ?? "?");
+    return j;
+  });
 }
 
 /** Ask for a challenge and check it is for the expected server instance (if pinned). */
@@ -439,13 +480,19 @@ export class HttpPairingMailbox {
   }
   async put(pairingId: string, msg: { pub: string; sealed: string }): Promise<void> {
     if (!this.token) throw new Error("pairing put needs a signed-in device");
-    const r = await this.f(`${this.baseUrl}/v1/pairing/${pairingId}`, {
-      method: "PUT",
-      headers: { authorization: "Bearer " + (await this.token()), "content-type": "application/json" },
-      body: JSON.stringify(msg),
+    const token = await this.token();
+    await timed(async (signal) => {
+      const r = await this.f(`${this.baseUrl}/v1/pairing/${pairingId}`, {
+        method: "PUT",
+        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+        body: JSON.stringify(msg),
+        signal,
+      });
+      const j = await readJson(r);
+      if (!r.ok) throw new ServerError(r.status, (j.error as string | undefined) ?? "?");
     });
-    if (!r.ok) throw new ServerError(r.status, ((await r.json().catch(() => ({}))) as { error?: string }).error ?? "?");
   }
+  // No limit here: the new device polls every few seconds, and one slow poll must not end the pairing.
   async take(pairingId: string): Promise<{ pub: string; sealed: string } | null> {
     const r = await this.f(`${this.baseUrl}/v1/pairing/${pairingId}`);
     if (r.status === 404) return null;
