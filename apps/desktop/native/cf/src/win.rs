@@ -819,15 +819,40 @@ fn note_written(p: &Path) {
     st().dirty_files.lock().unwrap().insert(p.to_path_buf(), now_ms());
 }
 
-/// A placeholder the helper made (or one of its uploads) that nobody changed since: not a write.
+/// A placeholder the helper made (or one of its uploads) that nobody changed since: not a write. Windows
+/// clears a placeholder's in-sync state when its content changes, so new bytes of the same size count too.
 fn unchanged_placeholder(p: &Path, m: &std::fs::Metadata) -> bool {
     if m.file_attributes() & ATTR_REPARSE == 0 {
         return false;
     }
     let Some((_, size, _)) = st().made.lock().unwrap().get(p).cloned() else { return false };
-    let in_sync = attrs(p) & 0x0040_0000 == 0 || m.len() == size;
-    let ours = st().pending.lock().unwrap().values().any(|(q, _, _)| q == p);
-    (in_sync && m.len() == size) || ours
+    // The copy queued now is of exactly this file (same size and time): its upload will make it in sync.
+    let ours = st().pending.lock().unwrap().values().any(|(q, n, t)| q == p && *n == m.len() && m.modified().ok() == Some(*t));
+    // The state unreadable: the size alone decides (never every placeholder taken for a write).
+    (m.len() == size && in_sync(p).unwrap_or(true)) || ours
+}
+
+/// The placeholder's in-sync state (None: it could not be read).
+fn in_sync(p: &Path) -> Option<bool> {
+    let w = wide_path(p);
+    // FILE_READ_ATTRIBUTES only: reading the state never fetches the content.
+    let Ok(h) = (unsafe { CreateFileW(PCWSTR(w.as_ptr()), 0x80, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, None, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, None) }) else {
+        return None;
+    };
+    // The basic info and a file identity (ours are node ids, well under this).
+    let mut buf = [0u64; 64];
+    let r = unsafe { CfGetPlaceholderInfo(h, CF_PLACEHOLDER_INFO_BASIC, buf.as_mut_ptr() as *mut c_void, size_of::<[u64; 64]>() as u32, None) };
+    unsafe {
+        let _ = CloseHandle(h);
+    }
+    if let Err(e) = r {
+        if std::env::var_os("DDN_CF_TRACE").is_some() {
+            eprintln!("ddn-cf: in-sync state of {}: {e}", p.display());
+        }
+        return None;
+    }
+    let info = unsafe { &*(buf.as_ptr() as *const CF_PLACEHOLDER_BASIC_INFO) };
+    Some(info.InSyncState == CF_IN_SYNC_STATE_IN_SYNC)
 }
 
 /// Files nobody has written for 2 s: copied into the agent's queue (a share-none open fails while a program

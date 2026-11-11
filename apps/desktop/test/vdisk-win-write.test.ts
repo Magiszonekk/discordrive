@@ -102,6 +102,14 @@ describe.skipIf(why !== null)(`disk in the system (Windows), writing${why ? ` �
     expect(sha(new Uint8Array(await (await core.download(n1.id)).arrayBuffer()))).toBe(sha(data2));
     expect(await settled()).toBe(2);
 
+    // 2a. Overwritten again with other bytes of the same size, right after the upload: still a new version.
+    await new Promise((r) => setTimeout(r, 500));
+    const data2a = new Uint8Array(randomBytes(data2.byteLength));
+    await writeFile(join(root, "kopia ż.bin"), data2a);
+    expect(await until(async () => sha(new Uint8Array(await (await core.download(n1.id)).arrayBuffer())) === sha(data2a))).toBe(true);
+    expect(nodeOf("kopia ż.bin")!.id).toBe(n1.id);
+    expect(await settled()).toBe(3);
+
     // 2b. Saved as Office and many editors do it: a temp file, then ReplaceFile over the original (the
     //     original placeholder deleted, the temp renamed into its place): still a new version of the same node.
     await new Promise((r) => setTimeout(r, 1500));
@@ -115,7 +123,7 @@ describe.skipIf(why !== null)(`disk in the system (Windows), writing${why ? ` �
     expect(rows().filter((r) => r.name.startsWith("kopia ż")).map((r) => [r.name, r.id])).toEqual([["kopia ż.bin", n1.id]]);
     expect(core.trashList().some((t) => t.id === n1.id)).toBe(false);
     expect(sha(new Uint8Array(await (await core.download(n1.id)).arrayBuffer()))).toBe(sha(data3));
-    expect(await settled()).toBe(3);
+    expect(await settled()).toBe(4);
 
     // 3. A folder made here, a file in it.
     await mkdir(join(root, "Nowy folder"));
