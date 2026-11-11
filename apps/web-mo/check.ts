@@ -2321,6 +2321,50 @@ try {
     r.galleryTimeline = g;
   }
 
+  // 10c''. Album covers: the newest photo of an album has no thumbnail (uploaded by an app that made none):
+  // the card shows the next photo that has one, not an empty tile; an album with no thumbnail at all shows
+  // the album icon.
+  step("album covers");
+  {
+    const ac: Record<string, unknown> = {};
+    const aDir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-ac-"));
+    const older = join(aDir, "starsze.jpg");
+    execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc2=size=640x480", "-frames:v", "1", "-q:v", "4", older]);
+    utimesSync(older, new Date("2021-06-01T12:00:00Z"), new Date("2021-06-01T12:00:00Z"));
+    const ids = await p.evaluate(async () => {
+      const c = (window as unknown as { ddnCore: { mkdir(n: string, parent?: string): Promise<string> } }).ddnCore;
+      return { mixed: await c.mkdir("Album-okladka", "gallery"), bare: await c.mkdir("Album-bez-miniatur", "gallery") };
+    });
+    // The older photo through the page (thumbnails made), then a newer one and the bare album's photo without.
+    await p.goto(`${base}/folder/${ids.mixed}`);
+    await p.waitForSelector("body[data-ready='1']");
+    await p.setInputFiles("[data-ddn=file]", [older]);
+    await p.waitForFunction((done) => document.querySelector("[data-ddn-ui=queue-title]")?.textContent === done, L.uploaded, { timeout: 120_000 });
+    ac.olderId = await p.evaluate(async (ids) => {
+      const c = (window as unknown as { ddnCore: { upload(f: Blob, n: string, parent: string): Promise<{ nodeId: string }>; list(id: string): Promise<{ rows: { id: string; name: string }[] }> } }).ddnCore;
+      const png = (n: number) => new File([new Uint8Array(500 + n)], `nowe-${n}.png`, { lastModified: Date.now() });
+      await c.upload(png(1), "nowe-1.png", ids.mixed);
+      await c.upload(png(2), "nowe-2.png", ids.bare);
+      return (await c.list(ids.mixed)).rows.find((x) => x.name === "starsze.jpg")?.id ?? null;
+    }, ids);
+    await p.evaluate(() => {
+      history.pushState(null, "", "/gallery");
+      dispatchEvent(new PopStateEvent("popstate"));
+    });
+    const card = (name: string) => p.locator("[data-ddn=row]", { hasText: name }).locator("[data-ddn-ui=album-cover]");
+    await card("Album-okladka").locator("img[data-ddn=thumb]").waitFor({ timeout: 30_000 }).catch(() => {});
+    await card("Album-bez-miniatur").locator("svg").waitFor({ timeout: 30_000 }).catch(() => {});
+    const look = (name: string) =>
+      card(name).evaluate((el) => {
+        const img = el.querySelector<HTMLImageElement>("img[data-ddn=thumb]");
+        return { img: !!img && img.complete && img.naturalWidth > 0, cover: (el as HTMLElement).dataset.cover ?? null, icon: !!el.querySelector(":scope > svg"), badge: !!el.querySelector(".badge") };
+      });
+    ac.mixed = await look("Album-okladka");
+    ac.bare = await look("Album-bez-miniatur");
+    await shot(p, "35b-album-covers");
+    r.albumCovers = ac;
+  }
+
   // 10d. a browser without Ed25519 in WebCrypto (Chromium before 137): every sign-up card says "too old"
   // with the versions instead of the raw "Algorithm: Unrecognized name", its buttons are off.
   step("old browser");
@@ -2757,6 +2801,11 @@ try {
       const days = o.heads.filter((x) => x.startsWith("gallery-day:"));
       // March 2025: the busy day (20th, 4 photos) and one range over the 7 sparse days (1–7); no heading per sparse day.
       return days.filter((x) => /20/.test(x)).length >= 1 && days.some((x) => /1\s*[–-]\s*7/.test(x)) && days.length <= 4 && /2019/.test(String(o.exifUnder2019)) && /Galler|Galeri/.test(String(o.trashFrom)) && o.tilesFromOnce === true;
+    })(),
+    albumCovers: (() => {
+      const o = r.albumCovers as { olderId: string | null; mixed: { img: boolean; cover: string | null }; bare: { img: boolean; icon: boolean; badge: boolean } } | undefined;
+      if (!o) return false;
+      return !!o.olderId && o.mixed.img === true && o.mixed.cover === o.olderId && o.bare.img === false && o.bare.icon === true && o.bare.badge === false;
     })(),
     newerRules: (() => {
       const o = r.newerRules as Record<string, any> | undefined;

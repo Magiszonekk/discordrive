@@ -88,6 +88,8 @@ import { mode } from "ddn:mode";
 
 /** How long an upload waits for the page's previews when the manifest goes out (none by then: without). */
 const PREVIEW_WAIT_MS = 20_000;
+/** Album cover candidates per album (newest photos first); the card shows the first with a thumbnail. */
+const ALBUM_COVER_TRIES = 6;
 /** Names the thumbnail backfill looks at (what the page can make previews from). */
 const PREVIEW_NAMES = /\.(jpe?g|jfif|png|gif|webp|avif|bmp|mp4|m4v|webm|mov|mkv|ogv)$/i;
 
@@ -1097,20 +1099,21 @@ export class AppCore {
   }
 
   /**
-   * Album cards of the Gallery's root in one call: per album its photo count and the newest picture (by the
-   * date taken) as the cover. One round trip for the whole page instead of two per album.
+   * Album cards of the Gallery's root in one call: per album its photo count and the newest pictures (by the
+   * date taken) as cover candidates, newest first: the card shows the first one that has a thumbnail (the
+   * newest photo may have none, e.g. uploaded by an app that made none). One round trip for the whole page.
    */
-  albumCovers(ids: string[]): Record<string, { n: number; cover: { id: string; at: number } | null }> {
+  albumCovers(ids: string[]): Record<string, { n: number; covers: { id: string; at: number }[] }> {
     const media = /\.(webm|mp4|m4v|mov|mkv|ogv|avi|jpe?g|png|gif|webp|avif|heic|bmp|svg)$/i;
-    const out: Record<string, { n: number; cover: { id: string; at: number } | null }> = {};
+    const out: Record<string, { n: number; covers: { id: string; at: number }[] }> = {};
     for (const id of ids.slice(0, 500)) {
       const n = this.c().store.getNode(id);
       if (!n || n.kind !== "folder" || spaceOf(this.c().store, id) !== "gallery") continue;
       const st = this.folderStats(id);
       const pg = this.list(id, undefined, 24, { by: "date", desc: true });
       // A photo whose thumbnail is hidden is not a cover: the next one is (none: the album icon).
-      const f = pg.rows.find((x) => x.kind === "file" && media.test(x.name) && !x.unavailable?.length && !x.thumbHidden);
-      out[id] = { n: st.files, cover: f ? { id: f.id, at: f.modifiedAt ?? 0 } : null };
+      const fs = pg.rows.filter((x) => x.kind === "file" && media.test(x.name) && !x.unavailable?.length && !x.thumbHidden).slice(0, ALBUM_COVER_TRIES);
+      out[id] = { n: st.files, covers: fs.map((f) => ({ id: f.id, at: f.modifiedAt ?? 0 })) };
     }
     return out;
   }
