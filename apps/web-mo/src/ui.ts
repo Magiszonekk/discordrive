@@ -856,12 +856,20 @@ function showThumb(badge: HTMLElement, id: string, at: number) {
   badge.dataset.thumbFor = `${id}@${at}`;
   thumbSeen.observe(badge);
 }
-async function loadThumb(badge: HTMLElement, key: string) {
-  const id = key.slice(0, key.lastIndexOf("@"));
+/** Blob URL of a file's thumbnail (`id@at`), null when it has none; one fetch per key for this page. */
+function thumbUrl(key: string): Promise<string | null> {
   let p = thumbs.get(key);
   if (!p) {
     p = cachedThumb(key).then((b) => (b ? URL.createObjectURL(b) : null)).catch(() => null);
     thumbs.set(key, p);
+  }
+  return p;
+}
+async function loadThumb(badge: HTMLElement, key: string) {
+  const id = key.slice(0, key.lastIndexOf("@"));
+  let p = thumbs.get(key);
+  if (!p) {
+    p = thumbUrl(key);
     // plain: the server makes its own in the background after the upload; ask again a few times.
     void p.then((u) => {
       if (u || !features.thumbnails) return;
@@ -1385,26 +1393,55 @@ function galleryRows(rows: Parameters<typeof fileRow>[0][], enter: boolean, date
   });
   return out;
 }
-/** An album card: the newest photo in it as the cover (its thumbnail), the number of photos under the name. */
-const albumCovers = new Map<string, { n: number; cover: { id: string; at: number } | null }>();
+/**
+ * An album card: the newest photo in it that has a thumbnail as the cover, the number of photos under the
+ * name. Candidates are tried newest first when the card comes near the screen; none with a thumbnail (or
+ * thumbnails off): the album icon, never an empty tile.
+ */
+type AlbumCover = { n: number; covers: { id: string; at: number }[] };
+const albumCovers = new Map<string, AlbumCover>();
+const coverKey = (x: AlbumCover) => x.covers.map((c) => `${c.id}@${c.at}`).join(",");
+const coverSeen = new IntersectionObserver(
+  (es) => {
+    for (const e of es) {
+      if (!e.isIntersecting) continue;
+      coverSeen.unobserve(e.target);
+      void loadCover(e.target as HTMLElement);
+    }
+  },
+  { rootMargin: "400px" },
+);
+async function loadCover(cover: HTMLElement) {
+  const key = cover.dataset.key ?? "";
+  for (const k of key ? key.split(",") : []) {
+    const url = await thumbUrl(k);
+    if (cover.dataset.key !== key || !cover.isConnected) return; // repainted meanwhile
+    if (url) {
+      cover.dataset.cover = k.slice(0, k.lastIndexOf("@"));
+      return cover.replaceChildren(Object.assign(h("img", { class: "thumb", alt: "", "data-ddn": "thumb" }), { src: url }));
+    }
+  }
+  if (cover.dataset.key === key) cover.replaceChildren(icon("images"));
+}
 function decorateAlbum(tr: HTMLElement, id: string) {
   tr.classList.add("album");
   const cover = h("span", { class: "cover", "data-ddn-ui": "album-cover" }, icon("images"));
   tr.querySelector(".nm > svg.i")?.replaceWith(cover);
   // Known from the last render: painted at once (sync re-renders do not flash the icon).
-  const paint = (x: { n: number; cover: { id: string; at: number } | null }) => {
+  const paint = (x: AlbumCover) => {
     const sub = tr.querySelector(".sub");
     if (sub) sub.textContent = tn("gal.photos", x.n);
-    if (!x.cover || !thumbsOn) {
+    if (!x.covers.length || !thumbsOn) {
       delete cover.dataset.key;
+      delete cover.dataset.cover;
       return cover.replaceChildren(icon("images"));
     }
-    const key = `${x.cover.id}@${x.cover.at}`;
+    const key = coverKey(x);
     if (cover.dataset.key === key) return;
     cover.dataset.key = key;
-    const b = h("span", { class: "badge media" });
-    cover.replaceChildren(b);
-    showThumb(b, x.cover.id, x.cover.at);
+    delete cover.dataset.cover;
+    cover.replaceChildren(h("span", { class: "badge media" }));
+    coverSeen.observe(cover);
   };
   const known = albumCovers.get(id);
   if (known) paint(known);
@@ -1412,12 +1449,11 @@ function decorateAlbum(tr: HTMLElement, id: string) {
     .then((x) => {
       if (!tr.isConnected || !x) return;
       albumCovers.set(id, x);
-      if (!known || known.n !== x.n || known.cover?.id !== x.cover?.id || known.cover?.at !== x.cover?.at) paint(x);
+      if (!known || known.n !== x.n || coverKey(known) !== coverKey(x)) paint(x);
     })
     .catch(() => {});
 }
 /** Album cards asked in one batch per render (core.albumCovers), not two calls per album. */
-type AlbumCover = { n: number; cover: { id: string; at: number } | null };
 let coverBatch: { ids: string[]; done: Promise<Record<string, AlbumCover>> } | null = null;
 function coverOf(id: string): Promise<AlbumCover | undefined> {
   if (!coverBatch) {
