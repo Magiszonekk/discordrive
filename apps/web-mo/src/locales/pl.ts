@@ -330,6 +330,7 @@ export const pl: Record<string, string> = {
   "device.on": "{browser} na {os}",
 
   // błędy (sam czytelny tekst, bez kodów technicznych)
+  "err.server_timeout": "Serwer nie odpowiedział na czas. Sprawdź połączenie i spróbuj ponownie.",
   "err.network": "Brak połączenia z serwerem. Sprawdź adres i sieć.",
   "err.pairCode": "To nie jest kod parowania. Powinien zaczynać się od ddn-pair1:.",
   "err.webhook": "Discord nie przyjął tego webhooka. Skopiuj adres jeszcze raz z ustawień kanału.",

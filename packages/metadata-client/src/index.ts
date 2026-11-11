@@ -21,7 +21,7 @@ export {
 } from "./file-crypto.js";
 export { type BlobStore, type BlobPutContext, type BlobGetContext, type ExtraPlacement, type LaneFetch, AbortedError, throwIfAborted } from "./blob-store.js";
 export { DriveClient, piecesOf, readVersionRange, mbps, type DriveClientOptions, type DownloadOptions, type UploadStages, type ResumeStore, type UploadJournal, type UploadJournalFrag, resumeKeys } from "./drive-client.js";
-export { AdaptiveWindow, AutoTuner, NetControl, NetGate, NetworkError, SpeedBaseline, StuckGuard, guardedRead, isNetworkError, netCall, realClock, retryFree, type BaselineData, type GateState, type NetClock, type NetUiState, type TunerOptions, type TuneWhy, type WindowOptions } from "./net.js";
+export { AdaptiveWindow, AutoTuner, NetControl, NetGate, NetworkError, SpeedBaseline, StuckGuard, guardedRead, isNetworkError, isTimeout, netCall, realClock, retryFree, type BaselineData, type GateState, type NetClock, type NetUiState, type TunerOptions, type TuneWhy, type WindowOptions } from "./net.js";
 export {
   BackendBlobStore,
   BackendRegistry,
@@ -248,7 +248,7 @@ export {
   type UnlockedSafe,
 } from "./safe.js";
 export { SafeTree, SafeFileGoneError, SAFE_ORPHAN_GRACE_MS, emptySafeTree, safeChildren, safeTreeOf, type SafeCleanupReport, type SafeGone, type SafePieces, type SafeTreeOptions, type SafeTreeState } from "./safe-tree.js";
-export { HttpApi, HttpPairingMailbox, ServerError, createAccountHttp, getChallenge, getHealth, passwordParams, passwordSealedKey, rescueRegisterDevice, type HttpSession, type ServerDevice } from "./http-api.js";
+export { HttpApi, HttpPairingMailbox, ServerError, createAccountHttp, getChallenge, getHealth, passwordParams, passwordSealedKey, rescueRegisterDevice, setRequestTimeout, type HttpSession, type ServerDevice } from "./http-api.js";
 export { sealDeviceName, openDeviceName, cleanDeviceName, MAX_DEVICE_NAME } from "./device-names.js";
 export { prepareShare, prepareShareWith, shareLink, parseShareLink, openShare, attachmentFilename, type ShareMeta, type ShareAttachment, type OpenedShare } from "./share.js";
 export {

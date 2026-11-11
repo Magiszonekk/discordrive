@@ -314,6 +314,7 @@ export const en: Record<string, string> = {
   "device.on": "{browser} on {os}",
 
   // errors (readable text only, no technical codes)
+  "err.server_timeout": "The server did not answer in time. Check the connection and try again.",
   "err.network": "No connection to the server. Check the address and the network.",
   "err.pairCode": "This is not a pairing code. It should start with ddn-pair1:.",
   "err.webhook": "Discord did not accept this webhook. Copy the address again from the channel settings.",

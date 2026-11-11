@@ -14,7 +14,7 @@
 // differences (no channel step with a pool, ddn-kit2, own channel add/remove, cancel).
 // Text fields are filled with the REAL keyboard (keyboard.type, Control+V from the clipboard), never
 // fill(): fill() sets the value directly and did not notice an onkeydown that cancelled every key.
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Page, type Route } from "playwright";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
@@ -1094,6 +1094,31 @@ try {
   };
   const ownPrefix = MODE === "metadata-only" ? "ddn-kit3:" : "ddn-kit2:";
   r.rescueBadKit = { damaged: await badKit(ownPrefix + "zepsuty"), cut: await badKit(kit.slice(0, Math.floor(kit.length / 2))), other: await badKit(MODE === "metadata-only" ? "ddn-kit2:e30" : "ddn-kit3:e30") };
+  // A server that takes the request and never answers: after the request limit (20 s) a readable
+  // message, the card unlocked and the stage line hidden (before, the card stayed locked for good).
+  {
+    const hung: Route[] = [];
+    await t.route("**/v1/auth/challenge", (rt) => void hung.push(rt));
+    await typeInto(t, "[data-ddn=rescue-text]", kit);
+    const t0 = Date.now();
+    await t.click("[data-ddn=rescue-go]");
+    const lockedWhileWaiting = await t.waitForFunction(() => document.querySelector<HTMLButtonElement>("[data-ddn=rescue-go]")?.disabled === true, null, { timeout: 5_000 }).then(() => true, () => false);
+    // Older toasts (the bad kits above) fade out meanwhile, so look for the message itself.
+    const toast = await t
+      .waitForFunction(() => [...document.querySelectorAll(".toast.err")].map((x) => x.textContent ?? "").find((x) => /did not answer in time|nie odpowiedział na czas/.test(x)) ?? false, null, { timeout: 40_000 })
+      .then((h) => h.jsonValue() as Promise<string>, () => "");
+    r.rescueHung = {
+      lockedWhileWaiting,
+      toasted: !!toast,
+      ms: Date.now() - t0,
+      text: toast,
+      unlocked: await t.isEnabled("[data-ddn=rescue-go]"),
+      stageHidden: await t.isHidden("[data-ddn=rescue-stage]"),
+      onRestore: new URL(t.url()).pathname === "/restore",
+    };
+    await t.unroute("**/v1/auth/challenge");
+    for (const rt of hung) await rt.abort().catch(() => {});
+  }
   await t.evaluate((k) => navigator.clipboard.writeText(k), kit).catch(() => {});
   await typeInto(t, "[data-ddn=rescue-text]", kit);
   await typeInto(t, "[data-ddn=rescue-name]", "Odtworzony");
@@ -2546,6 +2571,9 @@ try {
       const plain = (x: { text: string; unlocked: boolean }) => x.unlocked && !/JSON|token|base64|Unexpected|bad rescue kit/i.test(x.text);
       return [b.damaged, b.cut].every((x) => plain(x) && /rescue kit code|kodu zestawu ratunkowego/.test(x.text)) && plain(b.other) && /different kind of instance|instancji innego rodzaju/.test(b.other.text);
     })(),
+    rescueHung: ((h) => !!h && h.lockedWhileWaiting && h.toasted && h.ms >= 15_000 && h.ms < 40_000 && /did not answer in time|nie odpowiedział na czas/.test(h.text) && h.unlocked && h.stageHidden && h.onRestore)(
+      r.rescueHung as { lockedWhileWaiting: boolean; toasted: boolean; ms: number; text: string; unlocked: boolean; stageHidden: boolean; onRestore: boolean } | undefined,
+    ),
     renameMoveTrash: (() => {
       const o = r.ops as Record<string, unknown> | undefined;
       if (!o) return false;
