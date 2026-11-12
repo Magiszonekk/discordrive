@@ -20,7 +20,7 @@ export {
   type FileKey,
 } from "./file-crypto.js";
 export { type BlobStore, type BlobPutContext, type BlobGetContext, type ExtraPlacement, type LaneFetch, AbortedError, throwIfAborted } from "./blob-store.js";
-export { DriveClient, piecesOf, readVersionRange, mbps, type DriveClientOptions, type DownloadOptions, type UploadStages, type ResumeStore, type UploadJournal, type UploadJournalFrag, resumeKeys } from "./drive-client.js";
+export { DriveClient, PREVIEW_NONE_RECHECK_MS, piecesOf, readVersionRange, mbps, type DriveClientOptions, type DownloadOptions, type UploadStages, type ResumeStore, type UploadJournal, type UploadJournalFrag, resumeKeys } from "./drive-client.js";
 export { AdaptiveWindow, AutoTuner, NetControl, NetGate, NetworkError, SpeedBaseline, StuckGuard, guardedRead, isNetworkError, isTimeout, netCall, realClock, retryFree, type BaselineData, type GateState, type NetClock, type NetUiState, type TunerOptions, type TuneWhy, type WindowOptions } from "./net.js";
 export {
   BackendBlobStore,

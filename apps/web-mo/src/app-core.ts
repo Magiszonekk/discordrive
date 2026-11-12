@@ -79,7 +79,7 @@ import {
   type SafePieces,
   type SafeTreeState,
 } from "@ddv4/metadata-client";
-import { searchItems, takenFromExif, EXIF_HEAD_BYTES, type DescriptionRecord } from "@ddv4/metadata-client";
+import { searchItems, takenFromExif, EXIF_HEAD_BYTES, PREVIEW_NONE_RECHECK_MS, type DescriptionRecord } from "@ddv4/metadata-client";
 import { AccountSettingsStore } from "@ddv4/metadata-client";
 import { NetControl, cleanupLeftovers, discordSpeed, lineSpeed, speedHints, type BaselineData, type LaneFetch, type NetUiState, type SpeedTestProgress, type SpeedTestResult } from "@ddv4/metadata-client";
 import { fromBase64, toBase64 } from "@ddv4/processing";
@@ -88,7 +88,10 @@ import { mode } from "ddn:mode";
 
 /** How long an upload waits for the page's previews when the manifest goes out (none by then: without). */
 const PREVIEW_WAIT_MS = 20_000;
-/** Album cover candidates per album (newest photos first); the card shows the first with a thumbnail. */
+/**
+ * Album cover candidates per album (newest photos first, those this device knows have no thumbnail left
+ * out); the card shows the first with a thumbnail.
+ */
 const ALBUM_COVER_TRIES = 6;
 /** Names the thumbnail backfill looks at (what the page can make previews from). */
 const PREVIEW_NAMES = /\.(jpe?g|jfif|png|gif|webp|avif|bmp|mp4|m4v|webm|mov|mkv|ogv)$/i;
@@ -1111,8 +1114,10 @@ export class AppCore {
       if (!n || n.kind !== "folder" || spaceOf(this.c().store, id) !== "gallery") continue;
       const st = this.folderStats(id);
       const pg = this.list(id, undefined, 24, { by: "date", desc: true });
-      // A photo whose thumbnail is hidden is not a cover: the next one is (none: the album icon).
-      const fs = pg.rows.filter((x) => x.kind === "file" && media.test(x.name) && !x.unavailable?.length && !x.thumbHidden).slice(0, ALBUM_COVER_TRIES);
+      // A photo whose thumbnail is hidden is not a cover: the next one is (none: the album icon). Photos this
+      // device already knows have no previews are skipped (no network), so older ones with a thumbnail get
+      // a turn when the newest have none.
+      const fs = pg.rows.filter((x) => x.kind === "file" && media.test(x.name) && !x.unavailable?.length && !x.thumbHidden && !this.knownWithoutPreviews(x.id)).slice(0, ALBUM_COVER_TRIES);
       out[id] = { n: st.files, covers: fs.map((f) => ({ id: f.id, at: f.modifiedAt ?? 0 })) };
     }
     return out;
@@ -1266,6 +1271,17 @@ export class AppCore {
       if (img) return new Blob([img.data as BlobPart], { type: img.mime });
     }
     return kind === "t" && mode.thumbnail ? mode.thumbnail(this.ctx!, nodeId).catch(() => null) : null;
+  }
+
+  /** This device looked at the file's previews and found none (no network; "{}" or "-" in the local index). */
+  private knownWithoutPreviews(nodeId: string): boolean {
+    const s = this.store as unknown as { previewInfo?(r: string): { v: string; at: number } | undefined };
+    const ref = this.c().store.getNode(nodeId)?.content?.manifestRef;
+    const k = ref ? s.previewInfo?.(ref) : undefined;
+    // plain: the server makes its own thumbnails (not in this index). at 0: previews being added right now.
+    // A "none" older than PREVIEW_NONE_RECHECK_MS is looked at again (another device may have added them).
+    if (mode.serverFeatures?.thumbnails) return false;
+    return !!k && k.at > 0 && (k.v === "{}" || k.v === "-") && Date.now() - k.at < PREVIEW_NONE_RECHECK_MS;
   }
 
   /** Previews of these files as far as this device already knows them (no network): which have one. */

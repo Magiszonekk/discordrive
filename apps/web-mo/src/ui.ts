@@ -846,6 +846,7 @@ function wireThumbsSwitch() {
       /* private mode: this tab only */
     }
     albumCovers.clear();
+    coverShown.clear();
     shownList = ""; // no row animation on this refresh
     void render();
   };
@@ -1411,17 +1412,47 @@ const coverSeen = new IntersectionObserver(
   },
   { rootMargin: "400px" },
 );
+/**
+ * What each album card showed last: its cover key and the picture (or icon) node. A re-render (sync, an
+ * upload) builds new cards; the node is moved into the new card at once instead of an empty tile for a frame.
+ */
+const coverShown = new Map<string, { key: string; node: Element; cover?: string }>();
+const coverAlbum = new WeakMap<HTMLElement, { id: string; paint(x: AlbumCover): void; rounds: number }>();
 async function loadCover(cover: HTMLElement) {
   const key = cover.dataset.key ?? "";
+  const card = coverAlbum.get(cover);
+  const album = card?.id;
   for (const k of key ? key.split(",") : []) {
     const url = await thumbUrl(k);
     if (cover.dataset.key !== key || !cover.isConnected) return; // repainted meanwhile
     if (url) {
-      cover.dataset.cover = k.slice(0, k.lastIndexOf("@"));
-      return cover.replaceChildren(Object.assign(h("img", { class: "thumb", alt: "", "data-ddn": "thumb" }), { src: url }));
+      const id = k.slice(0, k.lastIndexOf("@"));
+      cover.dataset.cover = id;
+      // The same picture already there (kept from the last render): no new <img> to decode.
+      const was = cover.firstElementChild;
+      const img = was instanceof HTMLImageElement && was.src === url ? was : Object.assign(h("img", { class: "thumb", alt: "", "data-ddn": "thumb" }), { src: url });
+      if (img !== was) cover.replaceChildren(img);
+      if (album) coverShown.set(album, { key, node: img, cover: id });
+      return;
     }
   }
-  if (cover.dataset.key === key) cover.replaceChildren(icon("images"));
+  if (cover.dataset.key !== key) return;
+  // None of these has a thumbnail: the core now knows that and gives the next older ones (a few rounds
+  // per card, so a big album of photos without thumbnails does not read every manifest).
+  if (card && card.rounds < 3) {
+    card.rounds++;
+    const x = await coverOf(card.id).catch(() => undefined);
+    if (cover.dataset.key !== key || !cover.isConnected) return;
+    if (x && x.covers.length && coverKey(x) !== key) {
+      albumCovers.set(card.id, x);
+      return card.paint(x);
+    }
+  }
+  delete cover.dataset.cover;
+  const was = cover.firstElementChild;
+  const ic = was instanceof SVGElement ? was : icon("images");
+  if (ic !== was) cover.replaceChildren(ic);
+  if (album) coverShown.set(album, { key, node: ic });
 }
 function decorateAlbum(tr: HTMLElement, id: string) {
   tr.classList.add("album");
@@ -1434,15 +1465,33 @@ function decorateAlbum(tr: HTMLElement, id: string) {
     if (!x.covers.length || !thumbsOn) {
       delete cover.dataset.key;
       delete cover.dataset.cover;
-      return cover.replaceChildren(icon("images"));
+      // The icon is kept too: a new photo in this album later starts from it, not from an empty tile.
+      const was = coverShown.get(id)?.node;
+      const ic = was instanceof SVGElement ? was : icon("images");
+      coverShown.set(id, { key: "", node: ic });
+      return cover.replaceChildren(ic);
     }
     const key = coverKey(x);
     if (cover.dataset.key === key) return;
     cover.dataset.key = key;
-    delete cover.dataset.cover;
-    cover.replaceChildren(h("span", { class: "badge media" }));
+    const was = coverShown.get(id);
+    if (was?.key === key) {
+      // The same candidates as last time: the same picture, moved from the old card.
+      if (was.cover) cover.dataset.cover = was.cover;
+      else delete cover.dataset.cover;
+      return cover.replaceChildren(was.node);
+    }
+    // Other candidates (a new photo): the old picture stays until the new one is known, if it is still one
+    // of them; an empty tile only on the first paint or when the old cover is no candidate any more (moved
+    // out, deleted, its thumbnail hidden).
+    if (was && (!was.cover || x.covers.some((c) => c.id === was.cover))) cover.replaceChildren(was.node);
+    else {
+      delete cover.dataset.cover;
+      cover.replaceChildren(h("span", { class: "badge media" }));
+    }
     coverSeen.observe(cover);
   };
+  coverAlbum.set(cover, { id, paint, rounds: 0 });
   const known = albumCovers.get(id);
   if (known) paint(known);
   void coverOf(id)
@@ -4437,6 +4486,7 @@ async function main() {
       if (typeof caches !== "undefined") await caches.delete(THUMB_CACHE).catch(() => false);
       for (const u of thumbs.values()) void u.then((x) => x && URL.revokeObjectURL(x));
       thumbs.clear();
+      coverShown.clear();
       myAccount = null;
       isAdmin = false;
       navigate("/", true);
