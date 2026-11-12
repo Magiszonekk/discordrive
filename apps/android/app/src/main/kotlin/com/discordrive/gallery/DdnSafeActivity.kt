@@ -67,8 +67,9 @@ class DdnSafeActivity : AppCompatActivity() {
     internal fun openFolderForTest(id: String, name: String) { path += id to name; showOpen() }
 
     /** A readable message for what went wrong (never "wrong password" for a damaged Safe, never a raw 404). */
-    private fun why(e: Throwable): String = when {
+    internal fun why(e: Throwable): String = when {
         e is Safe.BadPasswordException -> getString(R.string.safe_err_password)
+        e is Safe.RollbackException -> getString(R.string.safe_err_rollback)
         e is SafeStore.Damaged -> getString(R.string.safe_err_damaged)
         e is SafeStore.Missing -> getString(R.string.safe_err_missing)
         e is SafeStore.TooLarge -> getString(R.string.safe_err_full)

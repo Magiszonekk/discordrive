@@ -600,6 +600,7 @@ Tekst: %3$s</string>
     <string name="safe_err_ack">Potwierdź, że rozumiesz: zapomnianego hasła nie da się odzyskać.</string>
     <string name="safe_err_password">Złe hasło Sejfu.</string>
     <string name="safe_err_damaged">Sejfu nie da się odczytać: jest uszkodzony albo został nadpisany (to nie jest złe hasło). Wcześniejszą wersję można przywrócić jej hasłem.</string>
+    <string name="safe_err_rollback">Serwer podał starszą wersję Sejfu niż ta, którą to urządzenie już widziało: nie otwieram jej. Spróbuj później; jeśli to się powtarza, serwer mógł zostać przywrócony z dawnej kopii zapasowej.</string>
     <string name="safe_err_missing">To konto nie ma już Sejfu: usunięto go na innym urządzeniu.</string>
     <string name="safe_err_full">Sejf jest pełny: nie zmieści więcej nazw (jego zaszyfrowany zapis ma limit 1 MiB). Usuń albo wyjmij część plików lub folderów.</string>
     <string name="safe_err_file_gone">Ten plik jest niedostępny: jego zawartość została już usunięta (przywrócono starszą wersję Sejfu albo serwer z dawnej kopii zapasowej).</string>

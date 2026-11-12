@@ -747,6 +747,10 @@ class BrowseUiTest {
             a.onActivity { x -> after = x.folderForTest(); finishing = x.isFinishing; usage = x.window.decorView.findViewWithTag<android.widget.TextView>("safe-usage")?.text?.toString().orEmpty() }
             r["safeBackGoesUp"] = inSub == sub && after == "root" && !finishing
             r["safeShowsUsage"] = Regex("\\d+%").containsMatchIn(usage)
+            // A Safe older than one this phone has seen (a server rollback) is refused in words, not the raw exception.
+            var rollback = ""
+            a.onActivity { x -> rollback = x.why(io.github.magiszonekk.discordrive.core.Safe.RollbackException(2, 1)) }
+            r["safeRollbackReadable"] = rollback == ctx.getString(R.string.safe_err_rollback) && !rollback.contains("revision")
             // Long messages of the Safe (a damaged Safe, a file gone) are shown whole, not cut after 2 lines.
             a.onActivity { x -> DdnSafeActivity.say(x, x.getString(R.string.safe_err_file_gone)) }
             r["safeMessageWhole"] = waitUntil(5_000) {
