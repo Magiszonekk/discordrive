@@ -65,6 +65,8 @@ dependencies {
     implementation("androidx.media3:media3-datasource:1.4.1")
     implementation(libs.okhttp)
     implementation("androidx.core:core-ktx:1.15.0")
+    // EXIF with every standard tag (the system reader skips some, e.g. the lens): the editor's copy keeps them.
+    implementation("androidx.exifinterface:exifinterface:1.3.6")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
