@@ -101,7 +101,34 @@ function desktopShot(name: string) {
 let app: ElectronApplication | null = null;
 let cdp: Browser | null = null;
 let child: ChildProcess | null = null;
-const env = { ...process.env, DDN_DESKTOP_DATA: data, DDN_DESKTOP_DOWNLOADS: downloads, DDN_DESKTOP_TEST_DISCORD: origin, DDN_DESKTOP_TEST_CA: join(work, "c") } as Record<string, string>;
+// DDN_CF_TRACE: the disk's helper logs every copy it queues for upload ("ddn-cf: queue <path>") into
+// vdisk.log, so the report can say how many uploads each write started (one per write).
+const env = { ...process.env, DDN_DESKTOP_DATA: data, DDN_DESKTOP_DOWNLOADS: downloads, DDN_DESKTOP_TEST_DISCORD: origin, DDN_DESKTOP_TEST_CA: join(work, "c"), DDN_CF_TRACE: "1" } as Record<string, string>;
+/** How many times the disk's helper queued a copy of each file name so far (vdisk.log and its rotated part). */
+function queuedByName(): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const f of ["vdisk.log.1", "vdisk.log"]) {
+    let t = "";
+    try {
+      t = readFileSync(join(data, f), "utf8");
+    } catch {
+      continue;
+    }
+    // "ddn-cf: queue C:\\...\\name" (a failed queueing adds ": <error>"; a path has no ": ").
+    for (const x of t.matchAll(/ddn-cf: queue (.+)$/gm)) {
+      if (x[1]!.includes(": ")) continue;
+      const name = x[1]!.trim().split(/[\\/]/).pop()!;
+      m.set(name, (m.get(name) ?? 0) + 1);
+    }
+  }
+  return m;
+}
+/** The copies queued since `before`, for the report: "a.txt ×1, b.bin ×1" ("none" without any). */
+function queuedSince(before: Map<string, number>): { by: Map<string, number>; note: string } {
+  const by = new Map<string, number>();
+  for (const [k, v] of queuedByName()) if (v - (before.get(k) ?? 0) > 0) by.set(k, v - (before.get(k) ?? 0));
+  return { by, note: by.size ? [...by].map(([k, v]) => `${k} ×${v}`).join(", ") : "none" };
+}
 try {
   desktopShot("desktop-before");
   let p: Page;
@@ -329,7 +356,8 @@ try {
       const ok = await waitFor(async () => /Mounted|Zamontowany/.test((await p.locator("[data-ddn=app-vdisk-hint]").textContent()) ?? "") && (await sw.isChecked()), 90_000);
       return { ok, note: (await p.locator("[data-ddn=app-vdisk-hint]").textContent()) ?? "" };
     });
-    await step(p, "W2-copy-folder", "Copy-Item of a folder with 3 files into the disk: in the account with the same bytes (read back by the app)", async () => {
+    await step(p, "W2-copy-folder", "Copy-Item of a folder with 3 files into the disk: in the account with the same bytes (read back by the app), each file queued for upload once", async () => {
+      const q0 = queuedByName();
       await ps(`Copy-Item -LiteralPath '${join(wsrc, "Folder W")}' -Destination '${root}' -Recurse -ErrorAction Stop`, 120_000);
       let folder: Row | undefined;
       const all = await waitFor(async () => {
@@ -349,11 +377,15 @@ try {
         }
       }
       await explorerShot("W2-explorer-folder", join(root, "Folder W"));
-      return { ok: all && same, note: all ? notes.join(", ") : "not all files in the account within 3 min" };
+      // After the screenshot: a file turning into a placeholder after its upload must not be queued again.
+      const q = queuedSince(q0);
+      const once = wfiles.every((f) => q.by.get(f.n) === 1);
+      return { ok: all && same && once, note: `${all ? notes.join(", ") : "not all files in the account within 3 min"}; queued: ${q.note}` };
     });
     await step(p, "W3-save-replace", "A save as Notepad / Office do it ([IO.File]::Replace of a temp file): a new version of the same node", async () => {
       const folder = (await rowsIn()).find((r) => r.name === "Folder W")!;
       const before = (await rowsIn(folder.id)).find((x) => x.name === "a.txt")!;
+      const q0 = queuedByName();
       const next = Buffer.from("druga wersja\n".repeat(50));
       const target = join(root, "Folder W", "a.txt");
       const tmp = join(root, "Folder W", "a.txt.tmp");
@@ -363,7 +395,8 @@ try {
       const after = (await rowsIn(folder.id)).filter((x) => x.name.startsWith("a.txt"));
       const sameNode = after.length === 1 && after[0]!.id === before.id;
       const h = ok ? await accountSha(before.id) : "";
-      return { ok: ok && sameNode && h === sha(next), note: `rows: ${after.map((x) => `${x.name} ${x.size}`).join(", ")}; same node: ${sameNode}; bytes ${h === sha(next) ? "ok" : "differ"}` };
+      // The save's queued copies (by the name the helper saw: the temp file or a.txt), shown, not judged.
+      return { ok: ok && sameNode && h === sha(next), note: `rows: ${after.map((x) => `${x.name} ${x.size}`).join(", ")}; same node: ${sameNode}; bytes ${h === sha(next) ? "ok" : "differ"}; queued: ${queuedSince(q0).note}` };
     });
     await step(p, "W4-delete-rename", "Remove-Item of a file: into the app's trash; Rename-Item of a file not on this computer: the new name in the account", async () => {
       const folder = (await rowsIn()).find((r) => r.name === "Folder W")!;
