@@ -296,6 +296,9 @@ class BrowseUiTest {
                 return on { it.pageForTest() } == target
             }
             r["viewerLoading"] = waitUntil(1_800) { on { it.loadingForTest() } }
+            // The bar at the start (it hides by itself after ~3 s, which the held-back photo would outlast).
+            r["viewerChromeAtStart"] = on { it.chromeShownForTest() }
+            val pagerTop = on { it.pagerTopForTest() }
             r["viewerPicture"] = waitUntil { on { it.fullShownForTest() } } && on { it.hasPictureForTest() }
             r["viewerLoadingGone"] = !on { it.loadingForTest() }
             DdnViewerActivity.fullDelayForTest = 0
@@ -304,8 +307,6 @@ class BrowseUiTest {
             r["viewerActions"] = on { it.actionsForTest() } == listOf(R.string.ddn_download, R.string.ddn_share, R.string.ddn_more).map { ctx.getString(it) }
             shot("4-viewer")
             // Hides by itself (~3 s without a touch), a tap brings it back.
-            r["viewerChromeAtStart"] = on { it.chromeShownForTest() }
-            val pagerTop = on { it.pagerTopForTest() }
             r["viewerChromeHides"] = waitUntil(6_000) { !on { it.chromeShownForTest() } }
             shot("4a-viewer-hidden")
             // Full screen without a jump: the page stays where it was when the bars hide.
