@@ -121,6 +121,7 @@ open class DdnActivity : AppCompatActivity() {
             menu.add(0, 2, 1, R.string.ddn_gallery).setIcon(R.drawable.ic_cobalt_gallery)
             menu.add(0, 3, 2, R.string.ddn_albums).setIcon(R.drawable.ic_cobalt_album)
             setBackgroundColor(getColor(R.color.cobalt_paper))
+            tag = DdnSafeActivity.NAV_TAG
             selectedItemId = if (albumsTab) 3 else if (gallery) 2 else 1
             setOnItemSelectedListener { endSelection(); gallery = it.itemId == 2; albumsTab = it.itemId == 3; album = null; show(); true }
         }

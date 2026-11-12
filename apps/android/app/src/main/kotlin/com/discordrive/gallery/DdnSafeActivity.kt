@@ -307,10 +307,21 @@ class DdnSafeActivity : AppCompatActivity() {
         fun say(a: android.app.Activity, text: String): com.google.android.material.snackbar.Snackbar {
             val sb = com.google.android.material.snackbar.Snackbar.make(a.findViewById(android.R.id.content), text, 8_000)
             sb.view.findViewById<android.widget.TextView>(com.google.android.material.R.id.snackbar_text)?.apply { maxLines = SAY_LINES; tag = "safe-message" }
+            // Above the bottom tabs (Files / Gallery / Albums), not over their labels.
+            a.window.decorView.findViewWithTag<android.view.View>(NAV_TAG)?.takeIf { it.isShown }?.let { sb.anchorView = it }
             sb.show()
             return sb
         }
         const val SAY_LINES = 8
+        /** The tag of a screen's bottom tabs: messages are shown above them. */
+        const val NAV_TAG = "ddn-bottom-nav"
+
+        /** Why a move into the Safe stopped, in words: a file on a removed channel by its name, never a raw 404. */
+        fun moveInFailText(c: Context, e: Throwable): String {
+            if (e !is DdnSafe.MoveGone) return DdnErrors.text(c, e)
+            val gone = c.getString(R.string.safe_move_gone, e.name)
+            return if (e.moved > 0) gone + "\n" + c.resources.getQuantityString(R.plurals.safe_moved_in, e.moved, e.moved) else gone
+        }
 
         /** The text of the move-in question: what is sent again (count and size), the copy deleted, the trash left behind. */
         fun moveInText(c: Context, p: DdnSafe.MovePlan): String = listOfNotNull(
@@ -341,7 +352,7 @@ class DdnSafeActivity : AppCompatActivity() {
                                 val r = runCatching { DdnSafe.moveIn(a, items) }
                                 ui.post {
                                     r.onSuccess { Toast.makeText(a, a.resources.getQuantityString(R.plurals.safe_moved_in, it, it), Toast.LENGTH_LONG).show() }
-                                        .onFailure { say(a, DdnErrors.text(a, it)) }
+                                        .onFailure { say(a, moveInFailText(a, it)) }
                                     done()
                                 }
                             }

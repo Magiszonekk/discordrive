@@ -723,6 +723,37 @@ class BrowseUiTest {
         s.refresh()
         val moved = DdnSafe.moveIn(ctx, listOf(doc))
         r["safeMovedIn"] = moved == 1 && DdnSafe.children(ctx, "root").map { it.name } == listOf("do-sejfu.pdf") && s.children("root").none { it.id == doc.id }
+        // A folder whose file is on a channel removed on Discord: the move stops with the file's name in words (no
+        // raw 404), the file stays in Files, no empty folder of the move is left in the Safe.
+        val deadTop = s.folderPath(listOf("martwy-kanal"))
+        val deadIn = s.folderPath(listOf("martwy-kanal", "w-srodku"))
+        s.uploader().upload({ ByteArray(5_000) { 3 }.inputStream() }, 5_000, "na-usunietym.bin", deadIn)
+        s.refresh()
+        val fake = sc.rpc("hooksOff").jsonPrimitive.int >= 0 // real Discord: not here
+        val fail = if (fake) try { DdnSafe.moveIn(ctx, listOf(s.node(deadTop)!!)); null } catch (e: Exception) { e } else null
+        sc.rpc("hooksOn")
+        io.github.magiszonekk.discordrive.core.FileWriter.dead.clear()
+        if (fake) {
+            val text = fail?.let { DdnSafeActivity.moveInFailText(ctx, it) }.orEmpty()
+            Log.i("ddn-ui", "safe move gone: $text")
+            s.refresh()
+            r["safeMoveGoneInWords"] = fail is DdnSafe.MoveGone && text.contains("na-usunietym.bin") && !text.contains("404") && !text.contains("HTTP")
+            r["safeMoveGoneNoEmptyFolder"] = DdnSafe.children(ctx, "root").map { it.name } == listOf("do-sejfu.pdf") &&
+                s.children(deadIn).any { it.name == "na-usunietym.bin" }
+        }
+        s.moveToTrash(listOf(deadTop)); s.purge(listOf(deadTop))
+        s.refresh()
+        // Messages over Files are shown above the bottom tabs, not over their labels.
+        ActivityScenario.launch<DdnActivity>(Intent(ctx, DdnActivity::class.java)).use { f ->
+            r["safeMessageAboveTabs"] = waitUntil(10_000) {
+                var ok = false
+                f.onActivity { a ->
+                    val nav = a.window.decorView.findViewWithTag<android.view.View>(DdnSafeActivity.NAV_TAG)
+                    ok = nav != null && nav.isShown && DdnSafeActivity.say(a, "x").anchorView === nav
+                }
+                ok
+            }
+        }
         ActivityScenario.launch<DdnSafeActivity>(Intent(ctx, DdnSafeActivity::class.java)).use { a ->
             r["safeScreenOpen"] = waitUntil { var st = ""; a.onActivity { x -> st = x.stateForTest }; st == "open" }
             shot("7-safe-open")
