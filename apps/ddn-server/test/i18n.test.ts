@@ -29,6 +29,12 @@ function compare(name: string, en: Record<string, string>, pl: Record<string, st
       expect(Object.entries(en).filter(([, v]) => !v.trim())).toEqual([]);
       expect(Object.entries(pl).filter(([, v]) => !v.trim())).toEqual([]);
     });
+    it("a number and its unit are joined by a no-break space (no \"5 / MB/s\" line break)", () => {
+      // A digit or a {placeholder}, a plain space, then a size or speed unit.
+      const loose = /(\d|\})[ \t](B|kB|KB|KiB|MB|MiB|GB|GiB|TB|TiB)\b/;
+      const bad = [...Object.entries(en), ...Object.entries(pl)].filter(([, v]) => loose.test(v)).map(([k]) => k);
+      expect(bad).toEqual([]);
+    });
     it("placeholders match", () => {
       const diff: string[] = [];
       for (const [k, v] of Object.entries(en)) {
