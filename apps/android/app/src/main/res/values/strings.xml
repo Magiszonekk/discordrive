@@ -727,4 +727,78 @@ Tekst: %3$s</string>
         <item quantity="many">Przygotowuję %d plików…</item>
         <item quantity="other">Przygotowuję %d pliki…</item>
     </plurals>
+    <!-- The Gallery: the state of each photo's copy (badges, the bar over the grid, the legend, the filter). -->
+    <string name="ddn_gb_all">Wszystko skopiowane</string>
+    <string name="ddn_gb_off_none">Auto-kopia wyłączona</string>
+    <string name="ddn_gb_progress">Skopiowano %1$s z %2$s</string>
+    <string name="ddn_gb_turn_on">Włącz</string>
+    <plurals name="ddn_gb_off">
+        <item quantity="one">Auto-kopia wyłączona — %s zdjęcie tylko na telefonie</item>
+        <item quantity="few">Auto-kopia wyłączona — %s zdjęcia tylko na telefonie</item>
+        <item quantity="many">Auto-kopia wyłączona — %s zdjęć tylko na telefonie</item>
+        <item quantity="other">Auto-kopia wyłączona — %s zdjęcia tylko na telefonie</item>
+    </plurals>
+    <plurals name="ddn_gb_wait_wifi">
+        <item quantity="one">%s czeka na Wi-Fi</item>
+        <item quantity="few">%s czekają na Wi-Fi</item>
+        <item quantity="many">%s czeka na Wi-Fi</item>
+        <item quantity="other">%s czeka na Wi-Fi</item>
+    </plurals>
+    <plurals name="ddn_gb_wait_charging">
+        <item quantity="one">%s czeka na ładowanie</item>
+        <item quantity="few">%s czekają na ładowanie</item>
+        <item quantity="many">%s czeka na ładowanie</item>
+        <item quantity="other">%s czeka na ładowanie</item>
+    </plurals>
+    <plurals name="ddn_gb_wait_queue">
+        <item quantity="one">%s w kolejce</item>
+        <item quantity="few">%s w kolejce</item>
+        <item quantity="many">%s w kolejce</item>
+        <item quantity="other">%s w kolejce</item>
+    </plurals>
+    <plurals name="ddn_gb_failed">
+        <item quantity="one">%d błąd kopii</item>
+        <item quantity="few">%d błędy kopii</item>
+        <item quantity="many">%d błędów kopii</item>
+        <item quantity="other">%d błędu kopii</item>
+    </plurals>
+    <string name="ddn_gb_badge_local">Tylko na telefonie</string>
+    <string name="ddn_gb_badge_queued">Czeka na wysłanie</string>
+    <string name="ddn_gb_badge_sending">Wysyłanie</string>
+    <string name="ddn_gb_badge_failed">Błąd kopii</string>
+    <string name="ddn_gb_badge_account">Tylko w koncie</string>
+    <string name="ddn_gb_badge_both">Na telefonie i w koncie</string>
+    <string name="ddn_gb_legend">Co znaczą znaczki</string>
+    <string name="ddn_gb_badge_x">%1$s — %2$s</string>
+    <string name="ddn_gb_legend_local">nie ma kopii w koncie (auto-kopia wyłączona albo pomija ten folder)</string>
+    <string name="ddn_gb_legend_queued">czeka w kolejce albo właśnie się wysyła</string>
+    <string name="ddn_gb_legend_failed">kopia się nie udała — dotknij, by zobaczyć powód i spróbować ponownie</string>
+    <string name="ddn_gb_legend_account">jest w koncie, nie na tym telefonie (inne urządzenie albo „Zwolnij miejsce”)</string>
+    <string name="ddn_gb_legend_both">Bez znaczka: zdjęcie jest na telefonie i ma kopię w koncie.</string>
+    <string name="ddn_gb_legend_ok">Rozumiem</string>
+    <string name="ddn_gb_filter">Pokaż</string>
+    <string name="ddn_gb_filter_all">Wszystkie</string>
+    <string name="ddn_gb_filter_phone">Tylko na telefonie</string>
+    <string name="ddn_gb_filter_account">Tylko w koncie</string>
+    <string name="ddn_gb_filter_empty">Nic w tym widoku</string>
+    <string name="ddn_gb_copy_now">Skopiuj teraz</string>
+    <plurals name="ddn_gb_copy_queued">
+        <item quantity="one">%d zdjęcie w kolejce do skopiowania</item>
+        <item quantity="few">%d zdjęcia w kolejce do skopiowania</item>
+        <item quantity="many">%d zdjęć w kolejce do skopiowania</item>
+        <item quantity="other">%d zdjęcia w kolejce do skopiowania</item>
+    </plurals>
+    <string name="ddn_gb_copy_none">Zaznaczone zdjęcia już są w koncie albo w kolejce.</string>
+    <string name="ddn_gb_failed_title">Kopia się nie udała</string>
+    <string name="ddn_gb_retry">Spróbuj ponownie</string>
+    <string name="ddn_gb_info_yes">Kopia w koncie: tak</string>
+    <string name="ddn_gb_info_yes_at">Kopia w koncie: tak, %1$s</string>
+    <string name="ddn_gb_info_no">Kopia w koncie: nie — tylko na telefonie</string>
+    <string name="ddn_gb_info_waiting">Kopia w koncie: nie — %1$s</string>
+    <string name="ddn_gb_info_failed">Kopia w koncie: nie — błąd: %1$s</string>
+    <string name="ddn_gb_info_account_only">Kopia w koncie: tylko w koncie (nie na tym telefonie)</string>
+    <string name="ddn_gb_why_wifi">czeka na Wi-Fi</string>
+    <string name="ddn_gb_why_charging">czeka na ładowanie</string>
+    <string name="ddn_gb_why_queue">czeka w kolejce</string>
+    <string name="ddn_gb_phone_photo">Zdjęcie z telefonu</string>
 </resources>

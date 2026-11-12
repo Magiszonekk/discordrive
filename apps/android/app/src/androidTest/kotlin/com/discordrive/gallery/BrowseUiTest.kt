@@ -976,6 +976,77 @@ class BrowseUiTest {
         }
     }
 
+    /**
+     * The Gallery shows the phone's own photos next to the account's, each with the state of its copy: a camera
+     * photo with the automatic copy off is "only on the phone" (badge, the bar says how many and offers Włącz,
+     * the filter "Only on the phone" lists it), "Copy now" on it sends it, then it is one tile with its copy and
+     * no badge; the web's photos are "only in the account". The legend shows once.
+     */
+    private fun galleryBackupState(r: LinkedHashMap<String, Boolean>) {
+        val cr = ctx.contentResolver
+        val sess = DdnSession.get(ctx)!!
+        DdnBackup.set(ctx, on = false)
+        ctx.getSharedPreferences("ddn-gallery", android.content.Context.MODE_PRIVATE).edit().clear().apply()
+        val name = "PXL_local_${System.currentTimeMillis()}.jpg"
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "DCIM/Camera")
+        }
+        val uri = cr.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)!!
+        cr.openOutputStream(uri)!!.use { Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.rgb(200, 90, 30)) }.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        val localOnly = sess.media(5000, null).none { it.name == name }
+        try {
+            ActivityScenario.launch<DdnActivity>(Intent(ctx, DdnActivity::class.java)).use { sc ->
+                sc.onActivity { a -> a.showGalleryForTest() }
+                fun badges(): Map<String, io.github.magiszonekk.discordrive.core.GalleryBackup.Badge> { var m = emptyMap<String, io.github.magiszonekk.discordrive.core.GalleryBackup.Badge>(); sc.onActivity { a -> m = a.badgesForTest() }; return m }
+                r["gbLocalOnlyBadge"] = localOnly && waitUntil { badges()[name] == io.github.magiszonekk.discordrive.core.GalleryBackup.Badge.LOCAL_ONLY }
+                // Other devices' photos (the web uploads) and the copy of uploads() (its photo removed from the phone since):
+                // only in the account.
+                r["gbAccountOnlyBadge"] = badges().filterKeys { it != name }.let { m -> m.isNotEmpty() && m.values.all { it == io.github.magiszonekk.discordrive.core.GalleryBackup.Badge.ACCOUNT_ONLY } }
+                var bar: String? = null
+                sc.onActivity { a -> bar = a.backupBarForTest() }
+                val n = badges().values.count { it == io.github.magiszonekk.discordrive.core.GalleryBackup.Badge.LOCAL_ONLY }
+                val want = ctx.plq(R.plurals.ddn_gb_off, n, "$n")
+                r["gbBarOff"] = bar == want
+                Log.i("ddn-ui", "gallery bar: '$bar' (want '$want'), badges ${badges()}")
+                var legend = false
+                sc.onActivity { a -> legend = a.legendShownForTest() }
+                r["gbLegendOnce"] = legend
+                // The badge is drawn on the cell (TalkBack text) when the window is drawn.
+                var drawn = emptyMap<String, String?>()
+                if (waitUntil(5_000) { var ok = false; sc.onActivity { a -> ok = a.isDrawn() }; ok }) {
+                    waitUntil(5_000) { sc.onActivity { a -> drawn = a.drawnBadgesForTest() }; drawn.containsKey(name) }
+                    r["gbBadgeDrawn"] = drawn[name] == ctx.getString(R.string.ddn_gb_badge_local)
+                }
+                shot("3g-gallery-backup-local")
+                sc.onActivity { a -> a.setFilterForTest(io.github.magiszonekk.discordrive.core.GalleryBackup.Filter.PHONE_ONLY) }
+                r["gbFilterPhoneOnly"] = waitUntil { val m = badges(); name in m && m.values.all { it in io.github.magiszonekk.discordrive.core.GalleryBackup.PHONE_ONLY } }
+                shot("3h-gallery-filter-phone")
+                // Copy now on the selected photo (it is the only one in the filter).
+                var label = ""
+                sc.onActivity { a -> label = a.getString(R.string.ddn_gb_copy_now); a.longPressForTest(a.positionOfNameForTest(name)) }
+                var ran = false
+                sc.onActivity { a -> ran = a.runSelectionActionForTest(label) }
+                r["gbCopyNowOffered"] = ran
+                val wm = androidx.work.WorkManager.getInstance(ctx)
+                Thread.sleep(1500)
+                waitUntil(120_000) { wm.getWorkInfosForUniqueWork(DdnBackup.WORK_NOW).get().all { it.state.isFinished } }
+                sess.refresh()
+                val copy = sess.media(5000, null).firstOrNull { it.name == name }
+                r["gbCopyNowUploaded"] = copy != null && copy.parentId == sess.galleryRoot
+                sc.onActivity { a -> a.setFilterForTest(io.github.magiszonekk.discordrive.core.GalleryBackup.Filter.ALL) }
+                r["gbBothAfterCopy"] = copy != null && waitUntil(30_000) { sc.onActivity { a -> a.showForTest() }; Thread.sleep(500); badges()[name] == io.github.magiszonekk.discordrive.core.GalleryBackup.Badge.BOTH } &&
+                    badges().keys.count { it == name } == 1
+                shot("3i-gallery-backup-copied")
+                if (copy != null) sess.moveToTrash(listOf(copy.id))
+            }
+        } finally {
+            cr.delete(uri, null, null)
+            ctx.getSharedPreferences("ddn-gallery", android.content.Context.MODE_PRIVATE).edit().clear().apply()
+        }
+    }
+
     @Test
     fun filesGalleryViewer() {
         val args = InstrumentationRegistry.getArguments()
@@ -1060,6 +1131,7 @@ class BrowseUiTest {
         // automatically, both through the background job (WorkManager, as in the app); the TS device downloads
         // them and checks the bytes and the thumbnail made on the phone.
         uploads(sc, r)
+        galleryBackupState(r)
         cameraAlbum(r)
         trashAndSettings(sc, r, args.getString("ddnUpdates"))
         // Last: the edited copy adds a file to the photo folder (the counts above stay as they were).

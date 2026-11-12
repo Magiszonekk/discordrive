@@ -548,6 +548,8 @@ class DdnViewerActivity : AppCompatActivity() {
         val place = placeOf(s, c)
         val base = getString(if (place.inGallery) R.string.ddn_gallery else R.string.ddn_files)
         out += getString(R.string.ddn_info_where, (listOf(base) + place.folders.map { it.second }).joinToString(" / "))
+        // Opened from the Gallery: whether this photo has its copy in the account and on this phone.
+        DdnGalleryState.infoLine(this, c.id)?.let { out += it }
         c.manifestRef?.let { db.record(acct, it) }?.let { rec ->
             out += ""
             out += getString(R.string.ddn_info_ai, rec.description)
