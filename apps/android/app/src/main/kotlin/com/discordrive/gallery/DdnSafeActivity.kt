@@ -330,6 +330,20 @@ class DdnSafeActivity : AppCompatActivity() {
             if (p.trashedInside > 0) c.resources.getQuantityString(R.plurals.safe_in_trashed, p.trashedInside, p.trashedInside) else null,
         ).joinToString("\n")
 
+        /**
+         * The move's end on screen: the screen first (it leaves selection mode, so the bottom tabs are back), then the
+         * message on the next frame, laid out above those tabs instead of over them.
+         */
+        internal fun moveInDone(a: android.app.Activity, r: Result<Int>, done: () -> Unit) {
+            done()
+            if (a.isFinishing || a.isDestroyed) return
+            a.window.decorView.post {
+                if (a.isFinishing || a.isDestroyed) return@post
+                r.onSuccess { Toast.makeText(a, a.resources.getQuantityString(R.plurals.safe_moved_in, it, it), Toast.LENGTH_LONG).show() }
+                    .onFailure { say(a, moveInFailText(a, it)) }
+            }
+        }
+
         /** "Move to the Safe" from Files / the Gallery: the Safe must be open; asks with the cost first. */
         fun moveIn(a: AppCompatActivity, items: List<IndexReplica.Child>, done: () -> Unit) {
             if (!DdnSafe.isOpen) {
@@ -350,11 +364,7 @@ class DdnSafeActivity : AppCompatActivity() {
                         .setPositiveButton(R.string.safe_to_safe) { _, _ ->
                             thread {
                                 val r = runCatching { DdnSafe.moveIn(a, items) }
-                                ui.post {
-                                    r.onSuccess { Toast.makeText(a, a.resources.getQuantityString(R.plurals.safe_moved_in, it, it), Toast.LENGTH_LONG).show() }
-                                        .onFailure { say(a, moveInFailText(a, it)) }
-                                    done()
-                                }
+                                ui.post { moveInDone(a, r, done) }
                             }
                         }.setNegativeButton(R.string.cobalt_cancel, null).show()
                 }

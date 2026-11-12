@@ -743,16 +743,31 @@ class BrowseUiTest {
         }
         s.moveToTrash(listOf(deadTop)); s.purge(listOf(deadTop))
         s.refresh()
-        // Messages over Files are shown above the bottom tabs, not over their labels.
+        // Messages over Files are shown above the bottom tabs, not over their labels — also when the move started in
+        // selection mode (the tabs hidden until it ends): the message's bottom edge at or above the tabs' top edge.
         ActivityScenario.launch<DdnActivity>(Intent(ctx, DdnActivity::class.java)).use { f ->
-            r["safeMessageAboveTabs"] = waitUntil(10_000) {
+            waitUntil(10_000) { var n = 0; f.onActivity { a -> n = a.itemCountForTest() }; n > 0 }
+            var selecting = false
+            f.onActivity { a -> a.longPressForTest(a.positionOfItemForTest(0)); selecting = a.selectingForTest() }
+            val gone = DdnSafe.MoveGone("na-usunietym.bin", 0, io.github.magiszonekk.discordrive.core.ServerException(404, "discord"))
+            f.onActivity { a -> DdnSafeActivity.moveInDone(a, Result.failure(gone)) { a.endSelectionForTest() } }
+            var edges = ""
+            r["safeMessageAboveTabs"] = selecting && waitUntil(10_000) {
                 var ok = false
                 f.onActivity { a ->
                     val nav = a.window.decorView.findViewWithTag<android.view.View>(DdnSafeActivity.NAV_TAG)
-                    ok = nav != null && nav.isShown && DdnSafeActivity.say(a, "x").anchorView === nav
+                    val msg = a.window.decorView.findViewWithTag<android.widget.TextView>("safe-message")
+                    if (nav != null && msg != null && nav.isShown && msg.isShown) {
+                        val n = IntArray(2).also { nav.getLocationOnScreen(it) }
+                        val m = IntArray(2).also { msg.getLocationOnScreen(it) }
+                        edges = "msg bottom ${m[1] + msg.height}, tabs top ${n[1]}"
+                        ok = m[1] + msg.height <= n[1]
+                    }
                 }
                 ok
             }
+            Log.i("ddn-ui", "safe message vs tabs: selecting $selecting, $edges")
+            shot("7b-safe-message-tabs")
         }
         ActivityScenario.launch<DdnSafeActivity>(Intent(ctx, DdnSafeActivity::class.java)).use { a ->
             r["safeScreenOpen"] = waitUntil { var st = ""; a.onActivity { x -> st = x.stateForTest }; st == "open" }

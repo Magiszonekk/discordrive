@@ -848,6 +848,7 @@ open class DdnActivity : AppCompatActivity() {
     internal fun selectDayForTest(headAt: Int) = selectDay(headAt)
     internal fun tapDayForTest(headAt: Int) = toggleDay(headAt)
     internal fun selectAllForTest() = selectAll()
+    internal fun endSelectionForTest() = endSelection()
     internal fun selectedForTest(): Set<String> = if (selecting) selected.toSet() else emptySet()
     internal fun selectingForTest(): Boolean = selecting
     internal fun selectionBarForTest(): Boolean = selBar.visibility == View.VISIBLE && bar.visibility == View.GONE && nav.visibility == View.GONE
