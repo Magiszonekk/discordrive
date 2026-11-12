@@ -1044,9 +1044,24 @@ try {
   await nav(p, "devices");
   await pasteInto(p, "[data-ddn=pair-code]", offer);
   r.pastedPairCode = (await p.inputValue("[data-ddn=pair-code]")) === offer;
+  // First try: the device gets added, then the mailbox step never gets an answer (limit 20 s).
+  // Trying again with the same code must finish that pairing: SAS, and one new device, not two.
+  {
+    const hung: Route[] = [];
+    await p.route("**/v1/pairing/**", (rt) => void hung.push(rt));
+    await p.click("[data-ddn=pair]");
+    const toast = await p
+      .waitForFunction(() => [...document.querySelectorAll(".toast.err")].map((x) => x.textContent ?? "").find((x) => /did not answer in time|nie odpowiedział na czas/.test(x)) ?? false, null, { timeout: 40_000 })
+      .then((h) => h.jsonValue() as Promise<string>, () => "");
+    await p.unroute("**/v1/pairing/**");
+    for (const rt of hung) await rt.abort().catch(() => {});
+    r.pairRetry = { timedOut: !!toast, codeKept: (await p.inputValue("[data-ddn=pair-code]")) === offer, unlocked: await p.isEnabled("[data-ddn=pair]") };
+  }
+  const errsBeforeRetry = await p.$$eval(".toast.err", (e) => e.map((x) => x.textContent ?? ""));
   await p.click("[data-ddn=pair]");
   await p.waitForSelector("[data-ddn-ui=sas-box]:not([hidden])", { timeout: 30_000 });
   const sasA = await p.textContent("[data-ddn=pair-sas]");
+  (r.pairRetry as Record<string, unknown>).newErrors = (await p.$$eval(".toast.err", (e) => e.map((x) => x.textContent ?? ""))).filter((x) => !errsBeforeRetry.includes(x));
   await m.waitForSelector("[data-ddn-ui=join-sas-box]:not([hidden])", { timeout: 15_000 });
   const sasB = await m.textContent("[data-ddn=join-sas]");
   r.sas = { a: sasA, b: sasB, match: !!sasA && sasA === sasB && /^\d{6}$/.test(sasA) };
@@ -1081,6 +1096,7 @@ try {
   r.devicesSurvivesReload = new URL(p.url()).pathname === "/devices";
   await p.waitForFunction(() => document.querySelectorAll("[data-ddn=device] .dname").length === 2, null, { timeout: 15_000 });
   r.deviceNamesOnLaptop = await p.$$eval("[data-ddn=device] .dname", (e) => e.map((x) => x.textContent));
+  (r.pairRetry as Record<string, unknown>).devices = await p.locator("[data-ddn=device]").count();
   await shot(p, "13-laptop-devices");
 
   // 10. the rescue kit restores the account on a third device
@@ -2617,6 +2633,10 @@ try {
     secondTab: st2.secondary && st2.rows === 50 && st2.page2 === 14 && st2.liveUpdate,
     share: typeof share === "string" ? !!remote : share.sha256Ok === true && share.revokedStopsNew === true && share.linkHasKeyAfterHash === true,
     pairing: (r.sas as { match: boolean }).match && r.phoneNoKitPrompt === true && r.phoneDownloadOk === true,
+    pairRetry: (() => {
+      const q = r.pairRetry as { timedOut: boolean; codeKept: boolean; unlocked: boolean; devices: number; newErrors: string[] } | undefined;
+      return !!q && q.timedOut && q.codeKept && q.unlocked && q.devices === 2 && q.newErrors.length === 0;
+    })(),
     names: JSON.stringify(r.deviceNamesOnLaptop) === JSON.stringify(["Laptop testowy", "Telefon testowy"]),
     mobile: r.phoneFilesHiddenOnDevicesTab === true && r.phoneNoHorizontalScroll === true && r.phoneSidebarHiddenUntilMenu === true && r.phoneDrawerClosedAfterNav === true,
     rescue: L.of(65).test(String(r.rescueCount)),

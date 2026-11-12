@@ -332,6 +332,23 @@ export class HttpApi implements EncryptedLogApi, VaultStore {
     ).body;
   }
 
+  /**
+   * Pairing step on the existing device. Like addDevice, but a key this account already holds counts
+   * as added: when an earlier attempt registered the key and then lost the connection before the
+   * mailbox step, trying again with the same code must finish that pairing (not fail with 409 and
+   * leave an unused device on the account). A key of another account still fails.
+   */
+  async addPairedDevice(newDevicePublicKey: string): Promise<{ deviceId: string }> {
+    try {
+      return await this.addDevice(newDevicePublicKey);
+    } catch (e) {
+      if (!(e instanceof ServerError && e.status === 409 && e.code === "public_key_in_use")) throw e;
+      const mine = (await this.listDevices()).find((d) => d.publicKey === newDevicePublicKey);
+      if (!mine) throw e;
+      return { deviceId: mine.deviceId };
+    }
+  }
+
   async listDevices(): Promise<ServerDevice[]> {
     return (await this.call<{ devices: ServerDevice[] }>("GET", "/v1/devices")).body.devices;
   }

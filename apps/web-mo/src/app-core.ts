@@ -2595,7 +2595,7 @@ export class AppCore {
     const t = code.trim();
     // The QR holds a link (…/#pair=ddn-pair1:…); accept both forms.
     const offer = t.includes("#pair=") ? decodeURIComponent(t.slice(t.indexOf("#pair=") + 6)) : t;
-    return acceptPairing(offer, { accountId: a.accountId, accountKey: a.accountKey, fromDevice: a.deviceName }, (pub) => http.addDevice(pub), http.pairingMailbox());
+    return acceptPairing(offer, { accountId: a.accountId, accountKey: a.accountKey, fromDevice: a.deviceName }, (pub) => http.addPairedDevice(pub), http.pairingMailbox());
   }
 
   /** New device, step 1: offer to show as QR/text. The QR carries a link that opens the app on the other device. */
