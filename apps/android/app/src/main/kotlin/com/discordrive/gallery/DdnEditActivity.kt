@@ -18,7 +18,6 @@ import androidx.core.view.WindowCompat
 import androidx.core.widget.TextViewCompat
 import io.github.magiszonekk.discordrive.core.FileWrite
 import java.io.ByteArrayOutputStream
-import com.discordrive.gallery.DdnTaken
 import kotlin.concurrent.thread
 
 /**

@@ -358,6 +358,12 @@ class BrowseUiTest {
      * at once and back ("Show thumbnails"), Back ends the selection.
      */
     private fun gallerySelection(s: ActivityScenario<DdnActivity>, sess: DdnSession, r: LinkedHashMap<String, Boolean>) {
+        // A photo from another device (the web upload, taken 2024-05-17): under its day taken, once its manifest is read.
+        r["galleryDayTakenSynced"] = waitUntil(30_000) {
+            var days = emptyList<Pair<String, List<String>>>()
+            s.onActivity { a -> days = a.daysForTest() }
+            days.any { (label, names) -> label.contains("2024") && "Wakacje \u017B.jpg" in names }
+        }
         val media = sess.media(10, null).map { it.id }.toSet()
         var heads = emptyList<Int>()
         var first = -1
@@ -374,13 +380,13 @@ class BrowseUiTest {
         var out = false
         s.onActivity { a -> a.backForTest(); a.selectDayForTest(a.headPositionsForTest()[0]); day = a.selectedForTest() }
         s.onActivity { a -> a.tapDayForTest(a.headPositionsForTest()[0]); out = a.selectedForTest().none { it in day } }
-        // Use the activity's effective date (takenAt if known, else createdAt) to compute the first day,
-        // since the gallery now sorts and groups by that date.
-        val firstDay = s.onActivity { a ->
-            val m = sess.media(10, null)
+        // The first day as the grid groups it: by the date taken (else added), newest first.
+        var firstDay = emptySet<String>()
+        s.onActivity { a ->
             val zone = java.time.ZoneId.systemDefault()
-            val d = { c: IndexReplica.Child -> java.time.Instant.ofEpochMilli(a.effectiveDateForTest(c)).atZone(zone).toLocalDate() }
-            m.filter { d(it) == d(m[0]) }.map { it.id }.toSet()
+            val d = { c: IndexReplica.Child -> java.time.Instant.ofEpochMilli(a.dateOfForTest(c)).atZone(zone).toLocalDate() }
+            val m = sess.media(10, null).sortedByDescending { a.dateOfForTest(it) }
+            firstDay = m.filter { d(it) == d(m[0]) }.map { it.id }.toSet()
         }
         r["selDayTap"] = day == firstDay && out
         s.onActivity { a -> a.headPositionsForTest().forEach { h -> a.selectDayForTest(h) } }
@@ -853,6 +859,49 @@ class BrowseUiTest {
         }
     }
 
+    /**
+     * A photo taken in 2019 and sent today (EXIF DateTimeOriginal): the Gallery shows it under its 2019 day, not
+     * under today. Selecting in the Gallery and recreating the screen (the system font size changed) keeps the
+     * Gallery and the selection.
+     */
+    private fun galleryExifDay(r: LinkedHashMap<String, Boolean>) {
+        val s = DdnSession.get(ctx)!!
+        val f = File(ctx.cacheDir, "stare 2019.jpg")
+        f.outputStream().use { Bitmap.createBitmap(200, 150, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.RED) }.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        android.media.ExifInterface(f.path).apply { setAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL, "2019:08:15 10:00:00"); saveAttributes() }
+        f.setLastModified(System.currentTimeMillis())
+        DdnUploads.queue(ctx, listOf(Uri.fromFile(f)), null)
+        Thread.sleep(1500)
+        val wm = androidx.work.WorkManager.getInstance(ctx)
+        waitUntil(120_000) { wm.getWorkInfosForUniqueWork(DdnBackup.WORK_NOW).get().all { it.state.isFinished } }
+        s.refresh()
+        val node = s.media(500, null).firstOrNull { it.name == "stare 2019.jpg" }
+        r["exifUploadedToGallery"] = node != null
+        ActivityScenario.launch<DdnActivity>(Intent(ctx, DdnActivity::class.java)).use { sc ->
+            sc.onActivity { a -> a.showGalleryForTest() }
+            var days = emptyList<Pair<String, List<String>>>()
+            r["exifDayHeader2019"] = waitUntil(30_000) {
+                sc.onActivity { a -> days = a.daysForTest() }
+                days.any { (label, names) -> label.contains("2019") && "stare 2019.jpg" in names }
+            }
+            Log.i("ddn-ui", "gallery days: $days")
+            shot("3f-gallery-exif-2019")
+            // Selection survives the screen being recreated (as on a system font size change).
+            var first = -1
+            sc.onActivity { a -> first = a.positionOfItemForTest(0); a.longPressForTest(first) }
+            var before = emptySet<String>()
+            sc.onActivity { a -> before = a.selectedForTest() }
+            sc.recreate()
+            r["selectionKeptOnRecreate"] = before.size == 1 && waitUntil(10_000) {
+                var ok = false
+                sc.onActivity { a -> ok = a.isGalleryForTest() && a.selectingForTest() && a.selectedForTest() == before && a.selectionBarForTest() }
+                ok
+            }
+            sc.onActivity { a -> a.backForTest() }
+        }
+        f.delete()
+    }
+
     private fun newerRules(sc: InteropScenario, r: LinkedHashMap<String, Boolean>) {
         sc.rpc("rulesNewer")
         val s = DdnSession.get(ctx)!!
@@ -966,6 +1015,7 @@ class BrowseUiTest {
         safe(sc, r)
         // After everything: the account gets an entry from a newer app. A refresh must not end the app; the screen
         // asks for an update instead of a raw engine error (the local copy stays as it was).
+        galleryExifDay(r)
         newerRules(sc, r)
         Log.i("ddn-ui", "RESULT $r")
         sc.rpc("done", kotlinx.serialization.json.JsonObject(r.mapValues { JsonPrimitive(it.value) }))
