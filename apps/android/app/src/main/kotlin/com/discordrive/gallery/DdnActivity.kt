@@ -128,7 +128,12 @@ open class DdnActivity : AppCompatActivity() {
         // status line only for what the user must know (offline, empty); the sync state is in Settings → Diagnostics.
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(getColor(R.color.cobalt_paper)) }
         val pad = dp(16)
-        title = TextView(this).apply { androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_BarTitle); setPadding(pad, dp(14), pad, dp(10)); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        title = TextView(this).apply {
+            androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_BarTitle); setPadding(pad, dp(14), dp(4), dp(10)); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            // A narrow phone (the Gallery's bar has five icons): the name gets smaller before it is cut off.
+            val max = (textSize / resources.displayMetrics.scaledDensity).toInt().coerceAtLeast(13)
+            androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(this, 13, max, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
+        }
         crumbs = TextView(this).apply { androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowSub); setPadding(pad, 0, pad, dp(6)); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.START }
         status = TextView(this).apply { androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_Meta); setPadding(pad, 0, pad, dp(8)) }
         list = RecyclerView(this)
