@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A small tonal action in a line of text ("Włącz" over the Gallery): the accent at 12%, rounded-md, a ripple. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android" android:color="@color/cobalt_ripple_accent">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/cobalt_button_tonal_bg"/>
+            <corners android:radius="6dp"/>
+        </shape>
+    </item>
+</ripple>

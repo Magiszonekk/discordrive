@@ -181,16 +181,19 @@ open class DdnActivity : AppCompatActivity() {
         root.addView(crumbs)
         root.addView(status)
         // The Gallery: how far the copy is ("Skopiowano 1 100 z 1 109 · 9 czeka na Wi-Fi"); tap = the automatic copy.
-        backupText = TextView(this).apply { androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowSub); maxLines = 2 }
+        // The numbers in tabular figures: "Skopiowano 1 099 z 1 109" does not shift while it counts.
+        backupText = TextView(this).apply { androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowSub); setTextColor(getColor(R.color.cobalt_ink_2)); fontFeatureSettings = "tnum"; maxLines = 2 }
+        // "Włącz": a small tonal action in the account's accent; it lights up with the line (the line takes the tap).
         backupOn = TextView(this).apply {
-            androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowTitle); setTextColor(getColor(R.color.cobalt_accent))
-            text = getString(R.string.ddn_gb_turn_on); setPadding(dp(12), dp(6), dp(4), dp(6)); visibility = View.GONE
+            androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowTitle); textSize = 14f; setTextColor(themeAccent())
+            text = getString(R.string.ddn_gb_turn_on); setPadding(dp(12), dp(6), dp(12), dp(6)); minHeight = dp(32); gravity = Gravity.CENTER
+            setBackgroundResource(R.drawable.bg_cobalt_chip_accent); isDuplicateParentStateEnabled = true; visibility = View.GONE
         }
         backupBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPaddingRelative(pad, dp(2), dp(12), dp(8)); visibility = View.GONE
-            addView(ImageView(this@DdnActivity).apply { setImageResource(R.drawable.ic_cobalt_cloud); setColorFilter(getColor(R.color.cobalt_muted)) }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(8) })
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPaddingRelative(pad, dp(4), dp(12), dp(8)); minimumHeight = dp(44); visibility = View.GONE
+            addView(ImageView(this@DdnActivity).apply { setImageResource(R.drawable.ic_cobalt_cloud); setColorFilter(getColor(R.color.cobalt_muted)) }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(10) })
             addView(backupText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(backupOn)
+            addView(backupOn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
             val tv = android.util.TypedValue(); theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true); setBackgroundResource(tv.resourceId)
             setOnClickListener { startActivity(Intent(this@DdnActivity, DdnBackupActivity::class.java)) }
         }
@@ -526,7 +529,7 @@ open class DdnActivity : AppCompatActivity() {
                 f.addView(ImageView(this@DdnActivity).apply { setImageResource(R.drawable.ic_cobalt_film); setColorFilter(Color.WHITE); elevation = dp(2).toFloat() }, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.TOP or Gravity.END).apply { setMargins(0, dp(6), dp(6), 0) })
                 f.addView(ImageView(this@DdnActivity).apply { elevation = dp(2).toFloat() }, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.TOP or Gravity.START).apply { setMargins(dp(6), dp(6), 0, 0) })
                 // The copy's state (Gallery): a small circle at the bottom end, a ring while it is being sent.
-                f.addView(badgeView(), FrameLayout.LayoutParams(dp(24), dp(24), Gravity.BOTTOM or Gravity.END).apply { setMargins(0, 0, dp(5), dp(5)) })
+                f.addView(badgeView(), FrameLayout.LayoutParams(dp(24), dp(24), Gravity.BOTTOM or Gravity.END).apply { setMargins(0, 0, dp(6), dp(6)) })
                 return object : RecyclerView.ViewHolder(f) {}
             }
             override fun onBindViewHolder(h: RecyclerView.ViewHolder, i: Int, payloads: MutableList<Any>) {
@@ -920,14 +923,31 @@ open class DdnActivity : AppCompatActivity() {
 
     // ── the Gallery: the state of each photo's copy ──
 
+    // The badge sits on the photo, so it keeps one look in both modes: a blue-black circle with a light rim (light
+    // and dark photos), a full red one for a failed copy; while sending, the progress ring is the circle's edge.
     private fun badgeView(): FrameLayout = FrameLayout(this).apply {
         setBackgroundResource(R.drawable.bg_cobalt_badge)
         elevation = dp(2).toFloat()
         visibility = View.GONE
         addView(ImageView(this@DdnActivity).apply { setColorFilter(Color.WHITE) }, FrameLayout.LayoutParams(dp(14), dp(14), Gravity.CENTER))
+        // No inset (Material's default 4 dp shrank the ring to ~18 dp, onto the icon), no gap at the ends.
         addView(com.google.android.material.progressindicator.CircularProgressIndicator(this@DdnActivity).apply {
-            indicatorSize = dp(24); trackThickness = dp(2); setIndicatorColor(Color.WHITE); trackColor = 0x40FFFFFF; visibility = View.GONE
+            indicatorInset = 0; indicatorSize = dp(24); trackThickness = dp(2); trackCornerRadius = dp(1); indicatorTrackGapSize = 0
+            setIndicatorColor(Color.WHITE); trackColor = 0x4DFFFFFF; visibility = View.GONE
         }, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+    }
+
+    private fun badgeBackground(b: GalleryBackup.Badge): Int = when (b) {
+        GalleryBackup.Badge.FAILED -> R.drawable.bg_cobalt_badge_error
+        GalleryBackup.Badge.SENDING -> R.drawable.bg_cobalt_badge_sending
+        else -> R.drawable.bg_cobalt_badge
+    }
+
+    /** The account's accent (the accent preset overlays colorPrimary), as CobaltUi uses it. */
+    private fun themeAccent(): Int {
+        val tv = android.util.TypedValue()
+        theme.resolveAttribute(androidx.appcompat.R.attr.colorPrimary, tv, true)
+        return tv.data
     }
 
     /** The cell's badge for its copy's state (none: on the phone and in the account, or outside the Gallery). */
@@ -938,7 +958,7 @@ open class DdnActivity : AppCompatActivity() {
         if (e == null || icon == null || selecting) { badge.visibility = View.GONE; badge.contentDescription = null; return }
         badge.visibility = View.VISIBLE
         badge.contentDescription = DdnGalleryState.words(this, e.badge)
-        badge.backgroundTintList = if (e.badge == GalleryBackup.Badge.FAILED) android.content.res.ColorStateList.valueOf(getColor(R.color.cobalt_error)) else null
+        badge.setBackgroundResource(badgeBackground(e.badge))
         (badge.getChildAt(0) as ImageView).setImageResource(icon)
         val ring = badge.getChildAt(1) as com.google.android.material.progressindicator.CircularProgressIndicator
         if (e.badge == GalleryBackup.Badge.SENDING) { ring.visibility = View.VISIBLE; ring.setProgressCompat(sendingPct.coerceIn(0, 100), false) } else ring.visibility = View.GONE
@@ -965,6 +985,16 @@ open class DdnActivity : AppCompatActivity() {
         if (b == null || !gallery) { backupBar.visibility = View.GONE; return }
         backupText.text = DdnGalleryState.barText(this, b)
         backupOn.visibility = if (b is GalleryBackup.Bar.Off) View.VISIBLE else View.GONE
+        // The line's icon speaks the badges' language: off, being copied / waiting, failures, all copied.
+        val failed = when (b) { is GalleryBackup.Bar.AllCopied -> b.failed; is GalleryBackup.Bar.Progress -> b.failed; is GalleryBackup.Bar.Waiting -> b.failed; else -> 0 }
+        val (barIcon, barTint) = when {
+            b is GalleryBackup.Bar.Off -> R.drawable.ic_cobalt_cloud_off to getColor(R.color.cobalt_muted)
+            failed > 0 -> R.drawable.ic_cobalt_cloud_alert to getColor(R.color.cobalt_error)
+            b is GalleryBackup.Bar.AllCopied -> R.drawable.ic_cobalt_cloud_check to getColor(R.color.cobalt_success)
+            b is GalleryBackup.Bar.Progress -> R.drawable.ic_cobalt_cloud_upload to themeAccent()
+            else -> R.drawable.ic_cobalt_cloud_upload to getColor(R.color.cobalt_muted)
+        }
+        (backupBar.getChildAt(0) as ImageView).apply { setImageResource(barIcon); setColorFilter(barTint) }
         backupBar.visibility = if (selecting) View.GONE else View.VISIBLE
         backupBar.contentDescription = backupText.text
         // The legend once, at the first visit of the Gallery with the phone's photos in it.
@@ -973,28 +1003,47 @@ open class DdnActivity : AppCompatActivity() {
 
     /** "What the badges mean": a card under the bar (once) or a dialog (⋮). */
     private fun legend(once: Boolean): LinearLayout {
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(12), dp(14), dp(8)) }
-        if (once) box.setBackgroundResource(R.drawable.bg_cobalt_note)
-        if (once) box.addView(TextView(this).apply { androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowTitle); text = getString(R.string.ddn_gb_legend) }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
+        // The card: filled a step off the page (a hairline alone disappears on the dark Cobalt). The dialog: its own
+        // 24 dp insets, in line with its title.
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; if (once) setPadding(dp(16), dp(14), dp(16), dp(6)) else setPadding(dp(24), dp(8), dp(24), 0) }
+        if (once) box.setBackgroundResource(R.drawable.bg_cobalt_legend)
+        if (once) box.addView(TextView(this).apply { androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowTitle); text = getString(R.string.ddn_gb_legend) }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        // "Tylko na telefonie — nie ma kopii…": the state's name in ink, what it means in muted.
+        fun named(full: String, name: Int): CharSequence = android.text.SpannableString(full).apply {
+            if (name > 0) {
+                setSpan(android.text.style.ForegroundColorSpan(getColor(R.color.cobalt_ink)), 0, name, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                androidx.core.content.res.ResourcesCompat.getFont(this@DdnActivity, R.font.inter_medium)?.let { setSpan(android.text.style.TypefaceSpan(it), 0, name, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
+            }
+        }
         for ((badge, words) in listOf(
             GalleryBackup.Badge.LOCAL_ONLY to R.string.ddn_gb_legend_local,
             GalleryBackup.Badge.QUEUED to R.string.ddn_gb_legend_queued,
             GalleryBackup.Badge.FAILED to R.string.ddn_gb_legend_failed,
             GalleryBackup.Badge.ACCOUNT_ONLY to R.string.ddn_gb_legend_account,
         )) {
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(4), 0, dp(4)) }
-            val b = badgeView().apply { visibility = View.VISIBLE; (getChildAt(0) as ImageView).setImageResource(DdnGalleryState.icon(badge)!!) }
-            if (badge == GalleryBackup.Badge.FAILED) b.backgroundTintList = android.content.res.ColorStateList.valueOf(getColor(R.color.cobalt_error))
-            row.addView(b, LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(10) })
-            row.addView(TextView(this).apply { androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowSub); text = getString(R.string.ddn_gb_badge_x, DdnGalleryState.words(this@DdnActivity, badge), getString(words)) }, LinearLayout.LayoutParams(0, -2, 1f))
+            // The badge at the first line (a description of 2–3 lines does not pull it to the middle).
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.TOP; setPadding(0, dp(5), 0, dp(5)) }
+            val b = badgeView().apply { visibility = View.VISIBLE; (getChildAt(0) as ImageView).setImageResource(DdnGalleryState.icon(badge)!!); setBackgroundResource(badgeBackground(badge)) }
+            row.addView(b, LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(12) })
+            val name = DdnGalleryState.words(this@DdnActivity, badge)
+            row.addView(TextView(this).apply { androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowSub); setPadding(0, dp(3), 0, 0); text = named(getString(R.string.ddn_gb_badge_x, name, getString(words)), name.length) }, LinearLayout.LayoutParams(0, -2, 1f))
             box.addView(row)
         }
-        box.addView(TextView(this).apply { androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowSub); text = getString(R.string.ddn_gb_legend_both); setPadding(0, dp(4), 0, 0) })
+        // No badge: an empty dashed circle in the badge's place, the same column as the rows above.
+        box.addView(TextView(this).apply {
+            androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowSub)
+            val t = getString(R.string.ddn_gb_legend_both)
+            text = named(t, t.indexOf(':').coerceAtLeast(0))
+            val none = androidx.core.content.ContextCompat.getDrawable(this@DdnActivity, R.drawable.bg_cobalt_badge_none)!!.apply { setBounds(0, 0, dp(24), dp(24)) }
+            setCompoundDrawablesRelative(none, null, null, null); compoundDrawablePadding = dp(12); gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(5), 0, dp(4))
+        })
         if (once) box.addView(TextView(this).apply {
-            androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowTitle); setTextColor(getColor(R.color.cobalt_accent))
-            text = getString(R.string.ddn_gb_legend_ok); setPadding(0, dp(10), dp(8), dp(4)); gravity = Gravity.END
+            androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowTitle); textSize = 14f; setTextColor(themeAccent())
+            text = getString(R.string.ddn_gb_legend_ok); setPadding(dp(12), dp(8), dp(12), dp(8)); minHeight = dp(40); gravity = Gravity.CENTER
+            val tv = android.util.TypedValue(); theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true); setBackgroundResource(tv.resourceId)
             setOnClickListener { DdnGalleryState.setLegendSeen(this@DdnActivity); legendCard.visibility = View.GONE }
-        }, LinearLayout.LayoutParams(-1, -2))
+        }, LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.END; marginEnd = -dp(8) })
         return box
     }
 

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The badge of a failed copy: a full red that keeps white at 5.5:1 in both modes (the dark mode's error colour gives
+     3.1:1), with the light rim so it does not melt into warm photos. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="#C8282D"/>
+    <stroke android:width="1dp" android:color="#A6FFFFFF"/>
+</shape>
