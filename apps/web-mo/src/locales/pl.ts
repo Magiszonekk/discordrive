@@ -297,7 +297,7 @@ export const pl: Record<string, string> = {
   // odtwarzanie z zestawu
   "rescueD.h": "Odtwórz z zestawu ratunkowego",
   "rescueD.sub": "Wklej kod z zestawu ratunkowego (plik, wydruk albo menedżer haseł).",
-  "rescueD.code": "Kod zestawu (<span class=\"mono\">ddn-kit1:…</span>)",
+  "rescueD.code": "Kod zestawu (<span class=\"mono\">ddn-kit3:…</span>)",
   "rescueD.go": "Odtwórz konto",
   "rescueD.done": "Konto odtworzone na tym urządzeniu.",
   // joining this device: the step in progress (password, rescue kit, pairing)

@@ -281,7 +281,7 @@ export const en: Record<string, string> = {
   // restore
   "rescueD.h": "Restore from a rescue kit",
   "rescueD.sub": "Paste the code from your rescue kit (file, printout or password manager).",
-  "rescueD.code": "Kit code (<span class=\"mono\">ddn-kit1:…</span>)",
+  "rescueD.code": "Kit code (<span class=\"mono\">ddn-kit3:…</span>)",
   "rescueD.go": "Restore account",
   "rescueD.done": "Account restored on this device.",
   // joining this device: the step in progress (password, rescue kit, pairing)

@@ -1102,6 +1102,8 @@ try {
     return { text, unlocked: await t.isEnabled("[data-ddn=rescue-go]") };
   };
   const ownPrefix = MODE === "metadata-only" ? "ddn-kit3:" : "ddn-kit2:";
+  // The field label shows the prefix this kind of instance actually gives out.
+  r.rescueLabel = (await t.locator("[data-i18n-html='rescueD.code']").textContent()) ?? "";
   r.rescueBadKit = { damaged: await badKit(ownPrefix + "zepsuty"), cut: await badKit(kit.slice(0, Math.floor(kit.length / 2))), other: await badKit(MODE === "metadata-only" ? "ddn-kit2:e30" : "ddn-kit3:e30") };
   // A server that takes the request and never answers: after the request limit (20 s) a readable
   // message, the card unlocked and the stage line hidden (before, the card stayed locked for good).
@@ -2618,6 +2620,7 @@ try {
     names: JSON.stringify(r.deviceNamesOnLaptop) === JSON.stringify(["Laptop testowy", "Telefon testowy"]),
     mobile: r.phoneFilesHiddenOnDevicesTab === true && r.phoneNoHorizontalScroll === true && r.phoneSidebarHiddenUntilMenu === true && r.phoneDrawerClosedAfterNav === true,
     rescue: L.of(65).test(String(r.rescueCount)),
+    rescueLabel: String(r.rescueLabel).includes(MODE === "metadata-only" ? "ddn-kit3:" : "ddn-kit2:"),
     rescueBadKit: (() => {
       const b = r.rescueBadKit as Record<"damaged" | "cut" | "other", { text: string; unlocked: boolean }> | undefined;
       if (!b) return false;
