@@ -71,6 +71,8 @@ open class DdnActivity : AppCompatActivity() {
     /** The file the upload job is sending now and how far (the badge's ring). */
     private var sendingName: String? = null
     private var sendingPct = 0
+    /** Some upload job runs (its end refreshes the Gallery). */
+    private var jobRunning = false
 
     /** What the open list shows: day headers (Gallery, albums) and items, in order. */
     private sealed interface Row {
@@ -575,7 +577,8 @@ open class DdnActivity : AppCompatActivity() {
             }
         }
         keep?.let { list.layoutManager?.onRestoreInstanceState(it) }
-        if (items.isEmpty()) note(getString(if (gallery && DdnPrivate.all(this).isNotEmpty()) R.string.ddn_gallery_empty_private else R.string.ddn_gallery_empty))
+        // An empty filter says so itself (the Gallery's note about private albums would be wrong there).
+        if (items.isEmpty() && !(gallery && filter != GalleryBackup.Filter.ALL)) note(getString(if (gallery && DdnPrivate.all(this).isNotEmpty()) R.string.ddn_gallery_empty_private else R.string.ddn_gallery_empty))
     }
 
     // ── selection ──
@@ -840,6 +843,8 @@ open class DdnActivity : AppCompatActivity() {
 
     /** A line under the bar (empty folder / Gallery): shown with the status line. */
     private fun note(t: String) {
+        // Drawn again (the dates filled in): the same note is not added twice.
+        if (status.text?.split(" · ")?.contains(t) == true) { status.visibility = View.VISIBLE; return }
         status.text = if (status.text.isNullOrEmpty()) t else "${status.text} · $t"
         status.visibility = View.VISIBLE
     }
@@ -913,7 +918,9 @@ open class DdnActivity : AppCompatActivity() {
         if (GalleryBackup.isLocal(c.id)) {
             val l = e?.local ?: return
             val coll = if (l.video) android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI else android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-            startActivity(Intent(Intent.ACTION_VIEW).setClass(this, DdnOpenActivity::class.java).setDataAndType(android.content.ContentUris.withAppendedId(coll, l.mediaId), if (l.video) "video/*" else "image/*"))
+            // With the state of its copy ("Kopia w koncie: nie — czeka na Wi-Fi") under the name.
+            startActivity(Intent(Intent.ACTION_VIEW).setClass(this, DdnOpenActivity::class.java).setDataAndType(android.content.ContentUris.withAppendedId(coll, l.mediaId), if (l.video) "video/*" else "image/*")
+                .putExtra(DdnOpenActivity.STATE_LINE, DdnGalleryState.infoLine(this, c.id)))
             return
         }
         // The viewer pages through the account's files (the phone's own have no copy to show there).
@@ -1118,21 +1125,16 @@ open class DdnActivity : AppCompatActivity() {
             val run = infos.firstOrNull { it.state == androidx.work.WorkInfo.State.RUNNING }
             val name = run?.progress?.getString("name")
             val pct = run?.progress?.getInt("pct", 0) ?: 0
-            val wasRunning = sendingName != null
-            if (name != sendingName) {
+            val running = infos.any { it.state == androidx.work.WorkInfo.State.RUNNING }
+            val ended = jobRunning && !running
+            jobRunning = running
+            if (name != sendingName || ended) {
                 sendingName = name; sendingPct = pct
-                // The job went on to the next file: the ring moves there (no reload, the grid keeps its place);
-                // the job ended: the Gallery is read again (copies made, the bar's count).
+                // The job went on to the next file (the one before is copied now) or ended: the Gallery is read
+                // again from the upload's tables (badges and the bar's count; the grid keeps its scroll position).
+                // A job ends also when the next run replaces it at once, so the end is "no job running".
                 if (!gallery) return@observe
-                if (name == null) { if (wasRunning) refresh(); return@observe }
-                entries = entries.mapValues { (_, e) ->
-                    when {
-                        e.badge == GalleryBackup.Badge.SENDING -> e.copy(badge = GalleryBackup.Badge.QUEUED)
-                        e.badge == GalleryBackup.Badge.QUEUED && e.item.name == name -> e.copy(badge = GalleryBackup.Badge.SENDING)
-                        else -> e
-                    }
-                }
-                list.adapter?.notifyItemRangeChanged(0, rows.size, SELECTION)
+                if (ended) refresh() else show()
             } else if (pct != sendingPct) {
                 sendingPct = pct
                 if (gallery) rows.forEachIndexed { i, r -> if ((r as? Row.Item)?.c?.let { entries[it.id]?.badge } == GalleryBackup.Badge.SENDING) list.adapter?.notifyItemChanged(i, SELECTION) }
@@ -1170,6 +1172,7 @@ open class DdnActivity : AppCompatActivity() {
     internal fun itemCountForTest(): Int = (list.adapter?.itemCount ?: -1).let { n -> if (n < 0) n else n - rows.count { it is Row.Head } }
     /** Adapter position of the n-th item (headers skipped). */
     internal fun positionOfItemForTest(n: Int): Int = rows.withIndex().filter { it.value is Row.Item }.getOrNull(n)?.index ?: -1
+    internal fun idOfNameForTest(name: String): String? = itemsNow().firstOrNull { it.name == name }?.id
     internal fun positionOfNameForTest(name: String): Int = rows.indexOfFirst { (it as? Row.Item)?.c?.name == name }
     internal fun headPositionsForTest(): List<Int> = rows.withIndex().filter { it.value is Row.Head }.map { it.index }
     internal fun longPressForTest(position: Int) { startSelection(position); dragging = false }

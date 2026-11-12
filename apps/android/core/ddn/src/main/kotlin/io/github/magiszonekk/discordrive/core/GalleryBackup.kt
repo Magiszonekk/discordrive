@@ -62,6 +62,11 @@ object GalleryBackup {
         val autoBuckets: Set<String> = emptySet(),
         /** The file being sent now (the upload job's progress): its name, if any. */
         val sending: String? = null,
+        /**
+         * Phone folders whose album is private on this phone: their photos are not shown before they are copied
+         * either (once copied, the album's lock hides them as any other photo of it).
+         */
+        val hiddenBuckets: Set<String> = emptySet(),
     )
 
     fun merge(inp: Input): List<Entry> {
@@ -75,6 +80,7 @@ object GalleryBackup {
         val queueByKey = inp.queue.groupBy { it.name to it.size }
 
         for (l in inp.locals) {
+            if (l.bucket in inp.hiddenBuckets) continue
             val rec = inp.copied[l.mediaId]?.takeIf { it.size == l.size && it.modified == l.modified }
             if (rec != null) {
                 val node = byId[rec.node]
@@ -131,8 +137,10 @@ object GalleryBackup {
      * The bar's state. The numbers come from the same lasting count as the upload notification
      * ([BackupSeries]: `seriesOpen`, `done`, `total`) while a series is open; the grid's own count otherwise.
      */
-    fun bar(entries: List<Entry>, autoOn: Boolean, seriesOpen: Boolean, done: Int, total: Int, wait: Wait): Bar {
+    fun bar(entries: List<Entry>, autoOn: Boolean, seriesOpen: Boolean, done: Int, total: Int, wait: Wait, running: Boolean = false): Bar {
         val waiting = entries.count { it.badge == Badge.QUEUED || it.badge == Badge.SENDING }
+        // A run is sending: what is left waits for its turn, not for Wi-Fi or the charger (they are there now).
+        @Suppress("NAME_SHADOWING") val wait = if (running) Wait.QUEUE else wait
         val failed = entries.count { it.badge == Badge.FAILED }
         val localOnly = entries.count { it.badge == Badge.LOCAL_ONLY }
         return when {

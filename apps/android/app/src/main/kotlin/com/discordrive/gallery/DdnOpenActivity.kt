@@ -60,9 +60,17 @@ class DdnOpenActivity : AppCompatActivity() {
                 val tv = android.util.TypedValue(); theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, tv, true); setBackgroundResource(tv.resourceId)
                 setOnClickListener { finish() }
             }, LinearLayout.LayoutParams(dp(48), dp(48)))
-            addView(TextView(this@DdnOpenActivity).apply {
-                text = name; androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowTitle); setTextColor(onScrim)
-                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            // The name; opened from the Gallery, the state of the photo's copy under it.
+            addView(LinearLayout(this@DdnOpenActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(TextView(this@DdnOpenActivity).apply {
+                    text = name; androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowTitle); setTextColor(onScrim)
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                })
+                stateLine = intent.getStringExtra(STATE_LINE)
+                stateLine?.let { t -> addView(TextView(this@DdnOpenActivity).apply {
+                    text = t; androidx.core.widget.TextViewCompat.setTextAppearance(this, R.style.TextAppearance_Cobalt_RowSub); setTextColor(onScrim); alpha = 0.85f; maxLines = 2
+                }) }
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(4) })
         }
         sendButton = CobaltUi(this).button(R.string.ddn_open_send, CobaltUi.Kind.PRIMARY, R.drawable.ic_cobalt_upload) { send(uri) }
@@ -165,9 +173,17 @@ class DdnOpenActivity : AppCompatActivity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
+    /** The state of the photo's copy shown under the name (opened from the Gallery), if any. */
+    private var stateLine: String? = null
+    internal fun stateLineForTest(): String? = stateLine
     internal fun shownForTest(): Boolean = shown
     internal fun nameForTest(): String = name
     internal fun showControlsForTest(): Boolean = (box.getChildAt(0) as? PlayerView)?.let { it.showController(); true } ?: false
     internal fun controlsClearForTest(): Boolean? = VideoFit.clear(box.getChildAt(0) as? PlayerView, bottomBar)
     internal fun sendButtonForTest(): com.google.android.material.button.MaterialButton = sendButton
+
+    companion object {
+        /** Opened from the Gallery: the line about the photo's copy ("Kopia w koncie: nie — …"). */
+        const val STATE_LINE = "stateLine"
+    }
 }

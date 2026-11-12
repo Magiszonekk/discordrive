@@ -36,15 +36,18 @@ object DdnGalleryState {
             val all = s.allFiles().mapTo(HashSet()) { it.id }
             ({ id -> id in all })
         } else ({ id -> s.node(id)?.let { it.trashedAt == null } == true })
+        // Phone folders whose album is private here: the album's name (Gallery album or older "Telefon – …" folder).
+        val locked = DdnPrivate.all(c)
+        val hiddenBuckets = if (locked.isEmpty()) emptySet() else locked.mapNotNullTo(HashSet()) { id -> runCatching { s.node(id)?.name }.getOrNull() }
         val queue = db.queued(acct).map { GalleryBackup.Queued(it.id, it.name, it.size, it.error) }
         val entries = GalleryBackup.merge(GalleryBackup.Input(
             account = account,
             locals = locals.map { GalleryBackup.Local(it.id, it.name, it.bucket, it.size, it.modified, it.taken, it.video) },
             copied = copied, live = live, queue = queue, failed = db.mediaErrors(acct),
-            autoOn = autoOn, autoBuckets = DdnBackup.buckets(c), sending = sending,
+            autoOn = autoOn, autoBuckets = DdnBackup.buckets(c), sending = sending, hiddenBuckets = hiddenBuckets,
         ))
         val series = BackupSeries.of(c)
-        val bar = GalleryBackup.bar(entries, autoOn, series.open, series.done, series.total, waitNow(c))
+        val bar = GalleryBackup.bar(entries, autoOn, series.open, series.done, series.total, waitNow(c), running = sending != null)
         last = entries.associateBy { it.item.id }
         return View(entries, bar)
     }

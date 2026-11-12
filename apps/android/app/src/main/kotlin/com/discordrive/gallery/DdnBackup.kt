@@ -519,7 +519,9 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                     } catch (e: Exception) {
                         DdnBackup.log("copy ${m.name}: ${e.message}")
                         err = e.message
-                        if (e is java.io.IOException || e.message?.startsWith("need_channel") == true) break
+                        if (e is java.io.IOException) break
+                        // No channel to write to: this photo shows the cause (red badge); the rest wait for the fix.
+                        if (e.message?.startsWith("need_channel") == true) { db.mediaFailed(m.id, acct, e.message!!); break }
                         // Not a network failure: the Gallery shows this photo's cause (tried again next run).
                         db.mediaFailed(m.id, acct, e.message ?: e.javaClass.simpleName)
                     }

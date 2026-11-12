@@ -105,6 +105,23 @@ class GalleryBackupTest {
         assertEquals(GalleryBackup.Bar.Off(2), GalleryBackup.bar(off, false, false, 0, 0, GalleryBackup.Wait.QUEUE))
     }
 
+    @Test fun aPrivateAlbumsFolderIsNotShownBeforeItsCopy() {
+        // The album of the phone folder "Secret" is private here: its new photo (not copied yet) stays out,
+        // as the album's copies do; the camera's photo is shown.
+        val e = GalleryBackup.merge(GalleryBackup.Input(
+            account = emptyList(),
+            locals = listOf(local(1, "s.jpg", bucket = "Secret"), local(2, "c.jpg")),
+            autoOn = true, autoBuckets = setOf("Camera", "Secret"), hiddenBuckets = setOf("Secret"),
+        ))
+        assertEquals(mapOf("c.jpg" to Badge.QUEUED), badges(e))
+    }
+
+    @Test fun duringARunTheReasonIsTheQueue() {
+        // The bar was computed without Wi-Fi; a run started since (Wi-Fi is back): not "waits for Wi-Fi".
+        val e = GalleryBackup.merge(GalleryBackup.Input(account = emptyList(), locals = listOf(local(1, "a.jpg"), local(2, "b.jpg")), autoOn = true, autoBuckets = setOf("Camera"), sending = "a.jpg"))
+        assertEquals(GalleryBackup.Bar.Progress(3, 5, 2, GalleryBackup.Wait.QUEUE, 0), GalleryBackup.bar(e, true, true, 3, 5, GalleryBackup.Wait.WIFI, running = true))
+    }
+
     @Test fun whyItWaits() {
         assertEquals(GalleryBackup.Wait.WIFI, GalleryBackup.waitOf(wifiOnly = true, unmetered = false, chargingOnly = true, charging = false))
         assertEquals(GalleryBackup.Wait.CHARGING, GalleryBackup.waitOf(wifiOnly = true, unmetered = true, chargingOnly = true, charging = false))

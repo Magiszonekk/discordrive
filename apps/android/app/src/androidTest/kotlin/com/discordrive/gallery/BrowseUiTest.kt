@@ -1020,6 +1020,18 @@ class BrowseUiTest {
                     r["gbBadgeDrawn"] = drawn[name] == ctx.getString(R.string.ddn_gb_badge_local)
                 }
                 shot("3g-gallery-backup-local")
+                // Its copy's state is shown where the phone's photo opens (the preview with "Send to discordrive").
+                var localId = ""
+                sc.onActivity { a -> localId = a.idOfNameForTest(name) ?: "" }
+                val line = DdnGalleryState.infoLine(ctx, localId)
+                r["gbLocalStateLine"] = line == ctx.getString(R.string.ddn_gb_info_no) && run {
+                    val coll = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                    val id = io.github.magiszonekk.discordrive.core.GalleryBackup.mediaIdOf(localId) ?: -1
+                    ActivityScenario.launch<DdnOpenActivity>(Intent(Intent.ACTION_VIEW).setClass(ctx, DdnOpenActivity::class.java)
+                        .setDataAndType(android.content.ContentUris.withAppendedId(coll, id), "image/*").putExtra(DdnOpenActivity.STATE_LINE, line)).use { o ->
+                        var t: String? = null; o.onActivity { a -> t = a.stateLineForTest() }; t == line
+                    }
+                }
                 sc.onActivity { a -> a.setFilterForTest(io.github.magiszonekk.discordrive.core.GalleryBackup.Filter.PHONE_ONLY) }
                 r["gbFilterPhoneOnly"] = waitUntil { val m = badges(); name in m && m.values.all { it in io.github.magiszonekk.discordrive.core.GalleryBackup.PHONE_ONLY } }
                 shot("3h-gallery-filter-phone")
