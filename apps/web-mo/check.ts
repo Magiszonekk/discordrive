@@ -31,16 +31,18 @@ const SERVER_SIDE = MODE !== "metadata-only";
 /** The line test in the browser: progress at least every 1.5 s each way, done in ~8+8 s, small upload bodies; a refusal in words, no 0 kept. */
 // A number and its unit are joined by a no-break space, so a narrow screen never wraps "5 / MB/s".
 const speedLineOk = (l: unknown, r: unknown) => {
-  const x = l as { took: number; gapDown: number; gapUp: number; maxUp: number; line: string } | undefined;
+  const x = l as { took: number; gapDown: number; gapUp: number; maxUp: number; line: string; zeroLive: number; dash: number } | undefined;
   const y = r as { text: string; zeroKept: boolean } | undefined;
-  return !!x && !!y && x.gapDown <= 1500 && x.gapUp <= 1500 && x.took < 24_000 && x.maxUp > 0 && x.maxUp <= 2 * 1024 * 1024 && /\d\u00a0MB\/s/.test(x.line) && !/\d MB\/s/.test(x.line) && /odmówił|refused/.test(y.text) && !y.zeroKept;
+  return !!x && !!y && x.zeroLive === 0 && x.dash > 0 && x.gapDown <= 1500 && x.gapUp <= 1500 && x.took < 24_000 && x.maxUp > 0 && x.maxUp <= 2 * 1024 * 1024 && /\d\u00a0MB\/s/.test(x.line) && !/\d MB\/s/.test(x.line) && /odmówił|refused/.test(y.text) && !y.zeroKept;
 };
 /** Speeds below 10 MB/s keep one decimal: the line 0.4 / 0.35 MB/s and Discord 0.3 MB/s, no "0 MB/s" anywhere. */
 const slowSpeedOk = (v: unknown) => typeof v === "string" && /0[,.]4\u00a0MB\/s/.test(v) && /0[,.]3\u00a0MB\/s/.test(v) && !/(^|[^\d,.])0\u00a0MB\/s/.test(v);
 /** The speed test's live line keeps moving while a slow piece is on its way (the step, the pieces, the clock). */
+// Before the first piece is done there is no speed yet: "—", never a "0 MB/s".
+const noZeroSpeed = (s: string) => !/(^|[^\d,.])0\u00a0MB\/s/.test(s);
 const speedLiveMoves = (l: unknown) => {
   const x = l as { live1?: string; live2?: string } | undefined;
-  return !!x?.live1 && !!x.live2 && x.live1 !== x.live2 && /(Krok|Step) 1 (z|of) 3/.test(x.live2) && / (z|of) 6 /.test(x.live2);
+  return !!x?.live1 && !!x.live2 && x.live1 !== x.live2 && /(Krok|Step) 1 (z|of) 3/.test(x.live2) && / (z|of) 6 /.test(x.live2) && /—\u00a0MB\/s/.test(x.live1) && [x.live1, x.live2].every(noZeroSpeed);
 };
 // Own output dir: the previews of all three modes run from this checkout and serve dist/<mode>.
 const buildRoot = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-check-dist-"));
@@ -520,7 +522,9 @@ try {
         const xs = live.filter((x) => x.s.startsWith(`${stage}|`)).map((x) => x.t);
         return xs.length < 2 ? 99_999 : Math.max(...xs.slice(1).map((t, i) => t - xs[i]!));
       };
-      st.lineTest = { took, gapDown: Math.round(gap("line-down")), gapUp: Math.round(gap("line-up")), ups: fake.lineUps.length, maxUp: Math.max(0, ...fake.lineUps), line: await p.textContent("[data-ddn=speed-line]") };
+      // The first beats of a direction (nothing arrived yet) show "—", not "0 MB/s".
+      const zeroLive = live.filter((x) => /^line-(up|down)\|/.test(x.s) && !noZeroSpeed(x.s)).length;
+      st.lineTest = { took, gapDown: Math.round(gap("line-down")), gapUp: Math.round(gap("line-up")), ups: fake.lineUps.length, maxUp: Math.max(0, ...fake.lineUps), line: await p.textContent("[data-ddn=speed-line]"), zeroLive, dash: live.filter((x) => /—\u00a0MB\/s/.test(x.s)).length };
       fake.lineRefuse = true;
       await p.click("[data-ddn=speed-run-line]");
       // Ends with a message in the live line (not a step), the buttons back.

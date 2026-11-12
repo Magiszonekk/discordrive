@@ -2985,11 +2985,13 @@ function paintSpeedProgress(p: SpeedTestProgress) {
   const i = speedSteps.indexOf(p.stage);
   const step = i >= 0 && speedSteps.length > 1 ? `${t("sp.step", { i: i + 1, n: speedSteps.length })} · ` : "";
   const time = fmtDuration(p.ms ?? 0);
+  // Nothing has arrived yet in this stage: no speed to show ("—"), not a measured 0.
+  const mbps = p.bytes > 0 ? spf(p.mbps) : "—";
   let text: string;
-  if (p.stage === "line-down" || p.stage === "line-up") text = t("sp.liveLine", { stage, time, plan: fmtDuration(p.planMs ?? 8000), mbps: spf(p.mbps) });
+  if (p.stage === "line-down" || p.stage === "line-up") text = t("sp.liveLine", { stage, time, plan: fmtDuration(p.planMs ?? 8000), mbps });
   else if (p.stage === "cleanup") text = t("sp.liveClean", { stage, done: p.pieces ?? p.bytes, of: p.of ?? p.total, time });
   else {
-    text = t("sp.liveN", { stage, done: p.pieces ?? 0, of: p.of ?? 0, time, mbps: spf(p.mbps), inflight: p.inFlight ?? 0 });
+    text = t("sp.liveN", { stage, done: p.pieces ?? 0, of: p.of ?? 0, time, mbps, inflight: p.inFlight ?? 0 });
     // Nothing finished yet: the first pieces are on their way (a 10 MiB piece takes seconds on a usual line).
     if (!p.pieces && (p.ms ?? 0) >= 2000) text += ` · ${t("sp.firstPieces")}`;
   }
