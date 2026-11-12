@@ -174,13 +174,15 @@ class DdnEditActivity : AppCompatActivity() {
         loading.visibility = View.VISIBLE
         val id = intent.getStringExtra(EXTRA_ID)!!
         thread {
+            val takenLocal = sourceTaken
             val r = runCatching {
                 val s = DdnSession.get(this)!!
                 val c = s.node(id)!!
                 val plain = ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.JPEG, 92, it) }.toByteArray()
                 val jpeg = sourceExif?.let { e -> runCatching { withExif(plain, e, cacheDir) }.getOrNull() } ?: plain
                 val name = editedName(c.name)
-                s.uploader(parallel = 2).upload({ jpeg.inputStream() }, jpeg.size.toLong(), name, c.parentId ?: "root", pictures(b), takenAt = sourceTaken)
+                val res = s.uploader(parallel = 2).upload({ jpeg.inputStream() }, jpeg.size.toLong(), name, c.parentId ?: "root", pictures(b), takenAt = takenLocal)
+                if (takenLocal != null) DdnTaken.put(this, s.acct.accountId, res.manifestRef, takenLocal)
                 name
             }
             runOnUiThread {

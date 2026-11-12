@@ -397,7 +397,8 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                     val open = { local?.inputStream() ?: c.contentResolver.openInputStream(Uri.parse(q.uri))!! }
                     val pics = if (DdnSession.isImage(q.name) || DdnSession.isVideo(q.name)) runCatching { picturesOf(c, local, q.uri) }.getOrDefault(emptyList()) else emptyList()
                     val taken = q.taken ?: q.uri?.let { u -> runCatching { DdnPictures.takenAt(c, Uri.parse(u)) }.getOrNull() }
-                    up.upload(open, q.size, q.name, q.folder, pics, progress = { a, b -> progress(q.name, a, b) }, cancelled = { isStopped }, takenAt = taken)
+                    val r = up.upload(open, q.size, q.name, q.folder, pics, progress = { a, b -> progress(q.name, a, b) }, cancelled = { isStopped }, takenAt = taken)
+                    if (taken != null) DdnTaken.put(c, acct, r.manifestRef, taken)
                     db.done(q.id)
                     local?.delete()
                     copied++
@@ -437,6 +438,7 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                             val pics = runCatching { DdnPictures.make(c.contentResolver, m.uri) }.getOrDefault(emptyList())
                             val taken = runCatching { DdnPictures.takenAt(c, src) }.getOrNull() ?: (m.modified * 1000).takeIf { it > 0 }
                             val r = up.upload(open, m.size, m.name, folder, pics, progress = { a, b -> progress(m.name, a, b) }, cancelled = { isStopped }, takenAt = taken)
+                            if (taken != null) DdnTaken.put(c, acct, r.manifestRef, taken)
                             db.markCopied(m.id, m.size, m.modified, acct, r.nodeId)
                             copied++
                         }
