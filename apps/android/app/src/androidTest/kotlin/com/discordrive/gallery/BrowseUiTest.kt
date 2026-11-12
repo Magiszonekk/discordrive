@@ -1016,7 +1016,10 @@ class BrowseUiTest {
                 // The badge is drawn on the cell (TalkBack text) when the window is drawn.
                 var drawn = emptyMap<String, String?>()
                 if (waitUntil(5_000) { var ok = false; sc.onActivity { a -> ok = a.isDrawn() }; ok }) {
-                    waitUntil(5_000) { sc.onActivity { a -> drawn = a.drawnBadgesForTest() }; drawn.containsKey(name) }
+                    // The cell on screen first (the one-time legend card takes room on a small screen).
+                    sc.onActivity { a -> a.findRecycler()?.scrollToPosition(a.positionOfNameForTest(name).coerceAtLeast(0)) }
+                    waitUntil(10_000) { sc.onActivity { a -> drawn = a.drawnBadgesForTest() }; drawn[name] != null }
+                    Log.i("ddn-ui", "drawn badges: $drawn")
                     r["gbBadgeDrawn"] = drawn[name] == ctx.getString(R.string.ddn_gb_badge_local)
                 }
                 shot("3g-gallery-backup-local")
