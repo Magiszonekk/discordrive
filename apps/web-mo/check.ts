@@ -2369,8 +2369,9 @@ try {
     ac.olderId = await p.evaluate(async (ids) => {
       const c = (window as unknown as { ddnCore: { upload(f: Blob, n: string, parent: string): Promise<{ nodeId: string }>; list(id: string): Promise<{ rows: { id: string; name: string }[] }> } }).ddnCore;
       const png = (n: number) => new File([new Uint8Array(500 + n)], `nowe-${n}.png`, { lastModified: Date.now() });
-      await c.upload(png(1), "nowe-1.png", ids.mixed);
-      await c.upload(png(2), "nowe-2.png", ids.bare);
+      // Seven newer photos without thumbnails: more than the cover candidates of one round (6).
+      for (let n = 1; n <= 7; n++) await c.upload(png(n), `nowe-${n}.png`, ids.mixed);
+      await c.upload(png(20), "nowe-20.png", ids.bare);
       return (await c.list(ids.mixed)).rows.find((x) => x.name === "starsze.jpg")?.id ?? null;
     }, ids);
     await p.evaluate(() => {
@@ -2388,6 +2389,43 @@ try {
     ac.mixed = await look("Album-okladka");
     ac.bare = await look("Album-bez-miniatur");
     await shot(p, "35b-album-covers");
+    // Re-renders (a sync, new uploads) keep the cover on screen: no frame with an empty tile on any card.
+    await p.evaluate(() => {
+      const w = window as unknown as { __acWatch: { frames: number; badge: number; empty: number; cards: Set<Element>; seen: string[]; stop: boolean } };
+      const o = (w.__acWatch = { frames: 0, badge: 0, empty: 0, cards: new Set<Element>(), seen: [] as string[], stop: false });
+      const tick = () => {
+        if (o.stop) return;
+        o.frames++;
+        const cs = [...document.querySelectorAll("[data-ddn-ui=album-cover]")];
+        for (const c of cs) o.cards.add(c);
+        const b = cs.filter((c) => c.querySelector(".badge"));
+        if (b.length) o.badge++;
+        // Which card and with what candidates (a failure says where).
+        for (const c of b.slice(0, 2)) if (o.seen.length < 8) o.seen.push(`${c.closest("[data-ddn=row]")?.querySelector(".nm")?.textContent?.slice(0, 30)} key=${(c as HTMLElement).dataset.key?.slice(0, 60)} f=${o.frames}`);
+        if (cs.some((c) => !c.firstElementChild)) o.empty++;
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    await p.evaluate(async (ids) => {
+      const c = (window as unknown as { ddnCore: { upload(f: Blob, n: string, parent: string): Promise<{ nodeId: string }> } }).ddnCore;
+      const png = (n: number) => new File([new Uint8Array(500 + n)], `nowe-${n}.png`, { lastModified: Date.now() });
+      for (let n = 8; n <= 9; n++) {
+        await c.upload(png(n), `nowe-${n}.png`, ids.mixed);
+        await new Promise((ok) => setTimeout(ok, 800));
+      }
+      await c.upload(png(21), "nowe-21.png", ids.bare);
+      // And a plain re-render of the page (as after a sync).
+      history.pushState(null, "", "/gallery");
+      dispatchEvent(new PopStateEvent("popstate"));
+      await new Promise((ok) => setTimeout(ok, 1500));
+    }, ids);
+    ac.flash = await p.evaluate(() => {
+      const o = (window as unknown as { __acWatch: { frames: number; badge: number; empty: number; cards: Set<Element>; seen: string[]; stop: boolean } }).__acWatch;
+      o.stop = true;
+      return { frames: o.frames, badge: o.badge, empty: o.empty, cards: o.cards.size, seen: o.seen };
+    });
+    ac.mixedAfter = await look("Album-okladka");
     r.albumCovers = ac;
   }
 
@@ -2834,9 +2872,12 @@ try {
       return days.filter((x) => /20/.test(x)).length >= 1 && days.some((x) => /1\s*[–-]\s*7/.test(x)) && days.length <= 4 && /2019/.test(String(o.exifUnder2019)) && /Galler|Galeri/.test(String(o.trashFrom)) && o.tilesFromOnce === true;
     })(),
     albumCovers: (() => {
-      const o = r.albumCovers as { olderId: string | null; mixed: { img: boolean; cover: string | null }; bare: { img: boolean; icon: boolean; badge: boolean } } | undefined;
+      const o = r.albumCovers as
+        | { olderId: string | null; mixed: { img: boolean; cover: string | null }; mixedAfter: { img: boolean; cover: string | null }; bare: { img: boolean; icon: boolean; badge: boolean }; flash: { frames: number; badge: number; empty: number; cards: number } }
+        | undefined;
       if (!o) return false;
-      return !!o.olderId && o.mixed.img === true && o.mixed.cover === o.olderId && o.bare.img === false && o.bare.icon === true && o.bare.badge === false;
+      // cards > 2: the two cards were really built again while watched.
+      return !!o.olderId && o.mixed.img === true && o.mixed.cover === o.olderId && o.bare.img === false && o.bare.icon === true && o.bare.badge === false && o.flash.cards > 2 && o.flash.badge === 0 && o.flash.empty === 0 && o.mixedAfter.img === true && o.mixedAfter.cover === o.olderId;
     })(),
     newerRules: (() => {
       const o = r.newerRules as Record<string, any> | undefined;
