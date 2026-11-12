@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The badge while its photo is being sent: the same circle without the rim, the progress ring takes the edge
+     (white over a 30% white track). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="#B8080B10"/>
+</shape>

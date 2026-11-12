@@ -280,7 +280,8 @@ class DdnBackupActivity : AppCompatActivity() {
             if (run != null) append(if (run.total > 0) c.getString(R.string.ddn_backup_running, run.done, run.total, run.line ?: "") else c.getString(R.string.ddn_backup_running_start)).append("\n")
             if (st != null) {
                 append(c.getString(R.string.ddn_backup_last, Ago.of(c, st.at), st.copied, st.waiting))
-                if (run == null) st.error?.let { append("\n").append(DdnErrors.text(c, it)) }
+                // A known cause in words (no channel, channel removed…), else the general error text.
+                if (run == null) st.error?.let { append("\n").append(DdnBackup.reason(c, it).takeIf { r -> r != c.getString(R.string.ddn_fail_other) } ?: DdnErrors.text(c, it)) }
             } else if (run == null) append(c.getString(R.string.ddn_backup_never))
         }.trimEnd()
     }

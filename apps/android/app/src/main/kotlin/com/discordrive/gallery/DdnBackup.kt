@@ -141,15 +141,33 @@ object DdnBackup {
     @Volatile private var dbOne: Db? = null
     internal fun db(c: Context): Db = dbOne ?: synchronized(this) { dbOne ?: Db(c.applicationContext).also { dbOne = it } }
 
-    internal class Db(c: Context) : SQLiteOpenHelper(c, "ddn-upload.db", null, 2) {
+    internal class Db(c: Context) : SQLiteOpenHelper(c, "ddn-upload.db", null, 3) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("CREATE TABLE copied (media INTEGER, size INTEGER, modified INTEGER, account TEXT, node TEXT, at INTEGER, PRIMARY KEY (media, size, modified, account))")
             // The queue: files the user sent (a copy in the app's storage, or a URI the app may read for good).
-            db.execSQL("CREATE TABLE queue (id INTEGER PRIMARY KEY AUTOINCREMENT, uri TEXT, local TEXT, name TEXT, size INTEGER, folder TEXT, account TEXT, error TEXT, at INTEGER, taken INTEGER)")
+            db.execSQL("CREATE TABLE queue (id INTEGER PRIMARY KEY AUTOINCREMENT, uri TEXT, local TEXT, name TEXT, size INTEGER, folder TEXT, account TEXT, error TEXT, at INTEGER, taken INTEGER, media INTEGER, modified INTEGER)")
+            v3(db)
         }
         override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
             // 2: when the shared file was made (read before the copy into the outbox loses it).
             if (old < 2) db.execSQL("ALTER TABLE queue ADD COLUMN taken INTEGER")
+            // 3: a photo of the phone queued by "Copy now" in the Gallery (its MediaStore ID and date: recorded
+            // as copied once sent), and the last failure of the automatic copy per photo (the Gallery's badge).
+            if (old < 3) {
+                db.execSQL("ALTER TABLE queue ADD COLUMN media INTEGER")
+                db.execSQL("ALTER TABLE queue ADD COLUMN modified INTEGER")
+                v3(db)
+            }
+        }
+        private fun v3(db: SQLiteDatabase) = db.execSQL("CREATE TABLE IF NOT EXISTS media_err (media INTEGER, account TEXT, error TEXT, at INTEGER, PRIMARY KEY (media, account))")
+
+        /** The automatic copy of a photo failed (not a network failure): the Gallery shows the cause. */
+        fun mediaFailed(media: Long, account: String, error: String) {
+            writableDatabase.insertWithOnConflict("media_err", null, ContentValues().apply { put("media", media); put("account", account); put("error", error); put("at", System.currentTimeMillis()) }, SQLiteDatabase.CONFLICT_REPLACE)
+        }
+        fun mediaOk(media: Long, account: String) = writableDatabase.delete("media_err", "media=? AND account=?", arrayOf("$media", account))
+        fun mediaErrors(account: String): Map<Long, String> = readableDatabase.rawQuery("SELECT media, error FROM media_err WHERE account=?", arrayOf(account)).use { c ->
+            buildMap { while (c.moveToNext()) put(c.getLong(0), c.getString(1)) }
         }
 
         fun isCopied(media: Long, size: Long, modified: Long, account: String): Boolean =
@@ -166,14 +184,17 @@ object DdnBackup {
         }
         fun copiedCount(account: String): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM copied WHERE account=?", arrayOf(account)).use { it.moveToFirst(); it.getInt(0) }
 
-        data class Queued(val id: Long, val uri: String?, val local: String?, val name: String, val size: Long, val folder: String, val error: String?, val taken: Long? = null)
-        fun enqueue(uri: String?, local: String?, name: String, size: Long, folder: String, account: String, taken: Long? = null): Long =
+        /** `media` / `modified`: a photo of the phone (MediaStore ID and date), recorded as copied once sent. */
+        data class Queued(val id: Long, val uri: String?, val local: String?, val name: String, val size: Long, val folder: String, val error: String?, val taken: Long? = null, val media: Long? = null, val modified: Long? = null)
+        fun enqueue(uri: String?, local: String?, name: String, size: Long, folder: String, account: String, taken: Long? = null, media: Long? = null, modified: Long? = null): Long =
             writableDatabase.insert("queue", null, ContentValues().apply {
                 put("uri", uri); put("local", local); put("name", name); put("size", size); put("folder", folder); put("account", account); put("at", System.currentTimeMillis())
                 if (taken != null) put("taken", taken)
+                if (media != null) { put("media", media); put("modified", modified ?: 0L) }
             })
-        fun queued(account: String): List<Queued> = readableDatabase.rawQuery("SELECT id, uri, local, name, size, folder, error, taken FROM queue WHERE account=? ORDER BY id", arrayOf(account)).use { c ->
-            buildList { while (c.moveToNext()) add(Queued(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getLong(4), c.getString(5), c.getString(6), if (c.isNull(7)) null else c.getLong(7))) }
+        fun queued(account: String): List<Queued> = readableDatabase.rawQuery("SELECT id, uri, local, name, size, folder, error, taken, media, modified FROM queue WHERE account=? ORDER BY id", arrayOf(account)).use { c ->
+            fun long(i: Int) = if (c.isNull(i)) null else c.getLong(i)
+            buildList { while (c.moveToNext()) add(Queued(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getLong(4), c.getString(5), c.getString(6), long(7), long(8), long(9))) }
         }
         fun done(id: Long) = writableDatabase.delete("queue", "id=?", arrayOf("$id"))
         fun failed(id: Long, error: String) = writableDatabase.update("queue", ContentValues().apply { put("error", error) }, "id=?", arrayOf("$id"))
@@ -203,11 +224,12 @@ object DdnBackup {
     }
 
     /** Media of the chosen camera folders, oldest first (what an automatic copy takes). */
-    data class Media(val id: Long, val uri: Uri, val name: String, val bucket: String, val size: Long, val modified: Long, val video: Boolean)
+    /** `modified`: seconds (MediaStore's DATE_MODIFIED); `taken`: ms (DATE_TAKEN, else the modification time). */
+    data class Media(val id: Long, val uri: Uri, val name: String, val bucket: String, val size: Long, val modified: Long, val video: Boolean, val taken: Long = modified * 1000)
     fun scan(c: Context, buckets: Set<String>): List<Media> {
         val out = ArrayList<Media>()
         for ((coll, video) in listOf(MediaStore.Images.Media.EXTERNAL_CONTENT_URI to false, MediaStore.Video.Media.EXTERNAL_CONTENT_URI to true)) {
-            val proj = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.BUCKET_DISPLAY_NAME, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED)
+            val proj = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.BUCKET_DISPLAY_NAME, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.DATE_TAKEN)
             c.contentResolver.query(coll, proj, null, null, null)?.use { cur ->
                 while (cur.moveToNext()) {
                     val bucket = cur.getString(2) ?: continue
@@ -215,11 +237,47 @@ object DdnBackup {
                     val size = cur.getLong(3)
                     if (size <= 0) continue
                     val id = cur.getLong(0)
-                    out += Media(id, ContentUris.withAppendedId(coll, id), cur.getString(1) ?: "media-$id", bucket, size, cur.getLong(4), video)
+                    val modified = cur.getLong(4)
+                    val taken = if (cur.isNull(5)) 0L else cur.getLong(5)
+                    out += Media(id, ContentUris.withAppendedId(coll, id), cur.getString(1) ?: "media-$id", bucket, size, modified, video, taken.takeIf { it > 0 } ?: modified * 1000)
                 }
             }
         }
         return out.sortedBy { it.modified }
+    }
+
+    /**
+     * The phone's folders the Gallery shows next to the account's photos: those of the automatic copy, and
+     * with the copy off the camera's (what the copy would take when switched on).
+     */
+    fun galleryBuckets(c: Context): Set<String> = if (enabled(c)) buckets(c) else CAMERA_BUCKETS
+
+    /**
+     * "Copy now" on photos of the phone chosen in the Gallery: queued with their MediaStore ID (recorded as
+     * copied once sent, so the automatic copy skips them), into the place the automatic copy would use. Needs
+     * the session's index (makes an album when missing): not on the main thread.
+     */
+    fun copyNow(c: Context, s: DdnSession, media: List<Media>): Int {
+        val acct = s.acct.accountId
+        val db = db(c)
+        val inQueue = db.queued(acct).mapNotNullTo(HashSet()) { it.media }
+        val toGallery = s.gallerySpace
+        val folders = HashMap<String, String>()
+        var n = 0
+        for (m in media) {
+            if (m.id in inQueue || db.isCopied(m.id, m.size, m.modified, acct)) continue
+            val folder = folders.getOrPut(m.bucket) {
+                when {
+                    !toGallery -> s.folderPath(listOf(rootName(s.acct.deviceName), m.bucket))
+                    m.bucket in CAMERA_BUCKETS -> s.galleryRoot
+                    else -> s.galleryAlbum(m.bucket)
+                }
+            }
+            db.enqueue(m.uri.toString(), null, m.name, m.size, folder, acct, taken = m.taken.takeIf { it > 0 }, media = m.id, modified = m.modified)
+            n++
+        }
+        if (n > 0) runNow(c, autoCopy = false)
+        return n
     }
 
     /** Every folder with photos or videos on the phone (for the settings), with its count. */
@@ -354,7 +412,11 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         show(line)
     }
 
-    private fun publish() = setProgressAsync(Data.Builder().putInt("done", shown.done).putInt("total", shown.total).putString("line", line).build())
+    /** The file being sent and how far (the Gallery's badge on that photo). */
+    private var current: String? = null
+    private var pct = 0
+    private fun publish() = setProgressAsync(Data.Builder().putInt("done", shown.done).putInt("total", shown.total).putString("line", line)
+        .putString("name", current).putInt("pct", pct).build())
 
     override suspend fun doWork(): Result = DdnBackup.running.withLockFun { work() }
 
@@ -380,7 +442,9 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             // unless the user refused it (then the copies are without the position, as chosen).
             val noLocation = auto && MediaLocation.hasMediaAccess(c) && !DdnBackup.mayCopyMedia(c)
             if (noLocation) DdnBackup.notifyNeedLocation(c) else DdnBackup.cancelNeedLocation(c)
-            val media = if (auto && !noLocation) DdnBackup.scan(c, DdnBackup.buckets(c)).filter { !db.isCopied(it.id, it.size, it.modified, acct) } else emptyList()
+            // A photo also queued by "Copy now" goes with the queue (counted once).
+            val inQueue = db.queued(acct).mapNotNullTo(HashSet()) { it.media }
+            val media = if (auto && !noLocation) DdnBackup.scan(c, DdnBackup.buckets(c)).filter { it.id !in inQueue && !db.isCopied(it.id, it.size, it.modified, acct) } else emptyList()
             if (noLocation) err = c.getString(R.string.ddn_loc_wait)
             total = queue.size + media.size
             shown = series.start(acct, total)
@@ -391,14 +455,17 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             publish()
             for (q in queue) {
                 if (isStopped || System.currentTimeMillis() - t0 > budget) break
+                current = q.name; pct = 0
                 show(q.name)
                 try {
                     val local = q.local?.let(::File)
-                    val open = { local?.inputStream() ?: c.contentResolver.openInputStream(Uri.parse(q.uri))!! }
+                    // A photo of the phone queued by "Copy now": its original bytes, with the GPS position.
+                    val open = { local?.inputStream() ?: MediaLocation.open(c, Uri.parse(q.uri)) }
                     val pics = if (DdnSession.isImage(q.name) || DdnSession.isVideo(q.name)) runCatching { picturesOf(c, local, q.uri) }.getOrDefault(emptyList()) else emptyList()
                     val taken = q.taken ?: q.uri?.let { u -> runCatching { DdnPictures.takenAt(c, Uri.parse(u)) }.getOrNull() }
                     val r = up.upload(open, q.size, q.name, q.folder, pics, progress = { a, b -> progress(q.name, a, b) }, cancelled = { isStopped }, takenAt = taken)
                     if (taken != null) DdnTaken.put(c, acct, r.manifestRef, taken)
+                    if (q.media != null) { db.markCopied(q.media, q.size, q.modified ?: 0L, acct, r.nodeId); db.mediaOk(q.media, acct) }
                     db.done(q.id)
                     local?.delete()
                     copied++
@@ -418,6 +485,7 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                 val folders = HashMap<String, String>()
                 for (m in media) {
                     if (isStopped || System.currentTimeMillis() - t0 > budget) break
+                    current = m.name; pct = 0
                     show(m.name)
                     try {
                         val folder = folders.getOrPut(m.bucket) {
@@ -431,6 +499,8 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                         val have = s.children(folder).firstOrNull { !it.isFolder && it.name == m.name && it.size == m.size }
                         if (have != null) {
                             db.markCopied(m.id, m.size, m.modified, acct, have.id)
+                        } else if (db.isCopied(m.id, m.size, m.modified, acct)) {
+                            // Copied meanwhile (the Gallery's "Copy now" in another run).
                         } else {
                             // The original bytes, with the GPS position (the run waits for the permission, see below).
                             val src = MediaLocation.original(c, m.uri)
@@ -442,13 +512,18 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                             db.markCopied(m.id, m.size, m.modified, acct, r.nodeId)
                             copied++
                         }
+                        db.mediaOk(m.id, acct)
                         step()
                     } catch (e: FileWriter.Cancelled) {
                         break
                     } catch (e: Exception) {
                         DdnBackup.log("copy ${m.name}: ${e.message}")
                         err = e.message
-                        if (e is java.io.IOException || e.message?.startsWith("need_channel") == true) break
+                        if (e is java.io.IOException) break
+                        // No channel to write to: this photo shows the cause (red badge); the rest wait for the fix.
+                        if (e.message?.startsWith("need_channel") == true) { db.mediaFailed(m.id, acct, e.message!!); break }
+                        // Not a network failure: the Gallery shows this photo's cause (tried again next run).
+                        db.mediaFailed(m.id, acct, e.message ?: e.javaClass.simpleName)
                     }
                 }
             }
@@ -478,7 +553,8 @@ class DdnUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         val t = System.currentTimeMillis()
         if (t - lastShown < 1000) return
         lastShown = t
-        show("$name · ${sent * 100 / maxOf(size, 1)}%")
+        pct = (sent * 100 / maxOf(size, 1)).toInt()
+        show("$name · $pct%")
     }
 
     private fun picturesOf(c: Context, local: File?, uri: String?): List<io.github.magiszonekk.discordrive.core.FileWrite.Picture> {
