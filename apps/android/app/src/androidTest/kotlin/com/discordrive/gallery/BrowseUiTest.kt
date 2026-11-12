@@ -274,7 +274,9 @@ class BrowseUiTest {
         val film = list.firstOrNull { it.name == "film.webm" }
         DdnViewerActivity.pending = list
         var folderIntent: Intent? = null
-        ActivityScenario.launch<DdnViewerActivity>(Intent(ctx, DdnViewerActivity::class.java).putExtra("id", photo.id)).use { v ->
+        // The whole photo held back 2 s: a spinner shows while it comes and goes with the picture.
+        DdnViewerActivity.fullDelayForTest = 2_000
+        try { ActivityScenario.launch<DdnViewerActivity>(Intent(ctx, DdnViewerActivity::class.java).putExtra("id", photo.id)).use { v ->
             fun <T> on(f: (DdnViewerActivity) -> T): T { var x: T? = null; v.onActivity { a -> x = f(a) }; @Suppress("UNCHECKED_CAST") return x as T }
             // A swipe of 80 % of the width, one page at a time: ten moves a frame apart (not all in one go on the
             // UI thread, which a busy frame, e.g. a video starting, could swallow), then wait until the pager has
@@ -293,14 +295,18 @@ class BrowseUiTest {
                 }
                 return on { it.pageForTest() } == target
             }
-            r["viewerPicture"] = waitUntil { on { it.hasPictureForTest() } }
+            r["viewerLoading"] = waitUntil(1_800) { on { it.loadingForTest() } }
+            // The bar at the start (it hides by itself after ~3 s, which the held-back photo would outlast).
+            r["viewerChromeAtStart"] = on { it.chromeShownForTest() }
+            val pagerTop = on { it.pagerTopForTest() }
+            r["viewerPicture"] = waitUntil { on { it.fullShownForTest() } } && on { it.hasPictureForTest() }
+            r["viewerLoadingGone"] = !on { it.loadingForTest() }
+            DdnViewerActivity.fullDelayForTest = 0
             r["viewerPages"] = on { it.pagesForTest() == list.size && it.pageForTest() == 0 && it.titleForTest() == photo.name }
             // The top bar: Download, Share, ⋮ (nothing at the bottom any more).
             r["viewerActions"] = on { it.actionsForTest() } == listOf(R.string.ddn_download, R.string.ddn_share, R.string.ddn_more).map { ctx.getString(it) }
             shot("4-viewer")
             // Hides by itself (~3 s without a touch), a tap brings it back.
-            r["viewerChromeAtStart"] = on { it.chromeShownForTest() }
-            val pagerTop = on { it.pagerTopForTest() }
             r["viewerChromeHides"] = waitUntil(6_000) { !on { it.chromeShownForTest() } }
             shot("4a-viewer-hidden")
             // Full screen without a jump: the page stays where it was when the bars hide.
@@ -342,7 +348,7 @@ class BrowseUiTest {
                 r["viewerSwipeBack"] = swipeTo(0) && waitUntil(5_000) { on { it.pageForTest() == 0 && it.titleForTest() == photo.name } }
                 r["viewerVideoStops"] = waitUntil(5_000) { on { it.playingForTest() } == null }
             }
-        }
+        } } finally { DdnViewerActivity.fullDelayForTest = 0 }
         // (Each scenario starts a new task: these run after the viewer's.) Show in folder opens the album.
         ActivityScenario.launch<DdnActivity>(folderIntent!!).use { f -> r["viewerShowInFolderOpens"] = waitUntil { items(f) == list.size } }
         // Set as wallpaper: the photo of the account in the cropper (not applied: the device's wallpaper stays).
