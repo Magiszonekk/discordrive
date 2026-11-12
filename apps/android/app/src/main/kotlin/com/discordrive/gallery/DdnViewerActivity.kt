@@ -234,12 +234,19 @@ class DdnViewerActivity : AppCompatActivity() {
             DdnSession.isImage(c.name) -> {
                 val img = h.box.getChildAt(0) as? ZoomableImageView ?: return
                 val size = c.size ?: 0
+                // While the whole file comes (seconds for a photo without a stored preview, which is black till then):
+                // a spinner in the middle of the page, shown only if it takes a moment (no flash for a quick one).
+                var came = false
+                if (size in 1..FULL_IMAGE_MAX) main.postDelayed({ if (!came && active === h && activeId == c.id) showLoading(h) }, LOADING_AFTER_MS)
                 if (size > 0) thread {
+                    if (fullDelayForTest > 0) Thread.sleep(fullDelayForTest)
                     // A large photo stays on its preview; its first byte still says whether the file is there.
                     val r = runCatching { if (size <= FULL_IMAGE_MAX) s.files.range(ref, size, 0, size - 1) else s.files.range(ref, size, 0, 0) }
                     val b = r.getOrNull()?.takeIf { size <= FULL_IMAGE_MAX }?.let { DdnThumbs.decodeUpright(it, 4096) }
                     main.post {
+                        came = true
                         if (active !== h || activeId != c.id) return@post
+                        hideLoading(h)
                         if (b != null) { img.setImageBitmap(b); fullAt = position }
                         else if (r.exceptionOrNull()?.let(::gone) == true) unavailable(h)
                     }
@@ -256,12 +263,21 @@ class DdnViewerActivity : AppCompatActivity() {
         if (h != null) {
             (h.box.getChildAt(1) as? PlayerView)?.let { h.box.removeView(it) }
             h.box.findViewWithTag<View>("play")?.visibility = View.VISIBLE
+            hideLoading(h)
         }
         active = null
         activeId = null
         // The bar no longer follows a video's controls: it times itself again.
         if (chromeOn) { main.removeCallbacks(hide); main.postDelayed(hide, HIDE_MS) }
     }
+
+    private fun showLoading(h: Pages.H) {
+        if (h.box.findViewWithTag<View>(LOADING) != null) return
+        val spin = com.google.android.material.progressindicator.CircularProgressIndicator(this).apply { isIndeterminate = true; tag = LOADING }
+        h.box.addView(spin, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+    }
+
+    private fun hideLoading(h: Pages.H) { h.box.findViewWithTag<View>(LOADING)?.let { h.box.removeView(it) } }
 
     /** A file without a preview (or gone): its type icon and a line, centred on the dark page. */
     private fun centerNote(text: CharSequence, icon: Int?): View = LinearLayout(this).apply {
@@ -613,6 +629,10 @@ class DdnViewerActivity : AppCompatActivity() {
     internal fun showControlsForTest(): Boolean = playerView()?.let { setChrome(true); it.showController(); true } ?: false
     /** A video's seek bar and time are on screen, below the top bar and above the navigation bar (null: no video / controls yet). */
     internal fun controlsClearForTest(): Boolean? = VideoFit.clear(playerView(), top)
+    /** The current page shows the loading spinner (its whole photo is still coming). */
+    internal fun loadingForTest(): Boolean = holderAt(pager.currentItem)?.box?.findViewWithTag<View>(LOADING)?.isShown == true
+    /** The current page shows its whole photo (not only the preview). */
+    internal fun fullShownForTest(): Boolean = fullAt >= 0 && fullAt == pager.currentItem
     internal fun hasPictureForTest(): Boolean = (holderAt(pager.currentItem)?.box?.getChildAt(0) as? ImageView)?.drawable is android.graphics.drawable.BitmapDrawable
     internal fun chromeShownForTest(): Boolean = chromeOn && top.visibility == View.VISIBLE
     internal fun tapForTest() = toggleChrome()
@@ -641,6 +661,10 @@ class DdnViewerActivity : AppCompatActivity() {
         @Volatile var pending: List<IndexReplica.Child>? = null
         /** Whole photos up to this size are shown in full; larger ones stay on the preview. */
         const val FULL_IMAGE_MAX = 40L * 1024 * 1024
+        private const val LOADING = "ddn-viewer-loading"
+        private const val LOADING_AFTER_MS = 300L
+        /** Tests: hold the whole photo back this long, so the spinner can be seen. */
+        @Volatile internal var fullDelayForTest = 0L
         /** The bar hides after this long without a touch (a video's controls use the same). */
         const val HIDE_MS = 3000L
     }
