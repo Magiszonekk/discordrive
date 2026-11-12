@@ -26,6 +26,8 @@ import kotlin.concurrent.thread
  * (every device sees both). The picture is the full file when it is not too big, else the stored preview.
  * The copy keeps the original's EXIF (date taken, camera, exposure, GPS position; orientation reset, the
  * pixels are already turned as shown) and its date taken, so it sits next to the original in the Gallery.
+ * A file too big to hold in memory without a stored preview is downloaded to the cache and decoded from there,
+ * scaled down.
  */
 class DdnEditActivity : AppCompatActivity() {
     private lateinit var image: ImageView
@@ -35,8 +37,11 @@ class DdnEditActivity : AppCompatActivity() {
     private var original: Bitmap? = null
     private var working: Bitmap? = null
     @Volatile private var saving = false
-    /** The original's EXIF and date taken (read with the picture). */
-    @Volatile private var sourceExif: android.media.ExifInterface? = null
+    /**
+     * The original's EXIF and date taken (read with the picture). AndroidX's reader: the system one does not
+     * know some tags (the lens make and model), so it would neither read nor write them.
+     */
+    @Volatile private var sourceExif: androidx.exifinterface.media.ExifInterface? = null
     @Volatile private var sourceTaken: Long? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -113,10 +118,12 @@ class DdnEditActivity : AppCompatActivity() {
                 val full = if (size in 1..FULL_MAX) s.files.range(ref, size, 0, size - 1) else null
                 // EXIF sits at the start of the file: a big one is read only that far.
                 val head = full ?: runCatching { if (size > 0) s.files.range(ref, size, 0, minOf(size, EXIF_HEAD) - 1) else null }.getOrNull()
-                sourceExif = head?.let { h -> runCatching { android.media.ExifInterface(h.inputStream()) }.getOrNull() }
-                sourceTaken = sourceExif?.let(DdnPictures::takenAt) ?: runCatching { s.files.manifest(ref).second.takenAt }.getOrNull()
+                val sysExif = head?.let { h -> runCatching { android.media.ExifInterface(h.inputStream()) }.getOrNull() }
+                sourceExif = head?.let { h -> runCatching { androidx.exifinterface.media.ExifInterface(h.inputStream()) }.getOrNull() }
+                sourceTaken = sysExif?.let(DdnPictures::takenAt) ?: runCatching { s.files.manifest(ref).second.takenAt }.getOrNull()
                 // The stored preview is already upright; the file is turned here by its orientation tag.
-                if (full != null) DdnThumbs.decode(full, MAX_PX)?.let { DdnThumbs.upright(it, sourceExif) } else DdnThumbs.load(s, ref, 'p', MAX_PX)
+                if (full != null) DdnThumbs.decode(full, MAX_PX)?.let { DdnThumbs.upright(it, sysExif) }
+                else DdnThumbs.load(s, ref, 'p', MAX_PX) ?: if (size in 1..BIG_MAX) bigFile(s, ref, size, c.sha256) else null
             }.getOrNull()
             runOnUiThread {
                 loading.visibility = View.GONE
@@ -126,6 +133,20 @@ class DdnEditActivity : AppCompatActivity() {
                 enable(true)
                 loadedForTest = true
             }
+        }
+    }
+
+    /**
+     * A big file without a stored preview (sent by a client that could not make one): the whole file into the
+     * cache, decoded from there scaled down to the editor's size, so only the decoded picture sits in memory.
+     */
+    private fun bigFile(s: DdnSession, ref: String, size: Long, sha256: String?): Bitmap? {
+        val f = java.io.File.createTempFile("edit-big-", ".jpg", cacheDir)
+        try {
+            f.outputStream().buffered().use { out -> s.files.download(ref, size, sha256, out) }
+            return decodeFileUpright(f, MAX_PX)
+        } finally {
+            f.delete()
         }
     }
 
@@ -209,6 +230,22 @@ class DdnEditActivity : AppCompatActivity() {
         private const val FULL_MAX = 40L * 1024 * 1024
         private const val MAX_PX = 4096
         private const val EXIF_HEAD = 256L * 1024
+        /** The largest file without a preview the editor downloads whole to decode it (beyond: "cannot load"). */
+        private const val BIG_MAX = 300L * 1024 * 1024
+
+        /** A photo file on disk decoded to at most `maxPx` (sampled while decoding) and turned by its orientation. */
+        internal fun decodeFileUpright(f: java.io.File, maxPx: Int): Bitmap? {
+            val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeFile(f.path, o)
+            if (o.outWidth <= 0 || o.outHeight <= 0) return null
+            // Strictly within maxPx (a 9000 px photo decoded at 4500 and turned would need two ~54 MB bitmaps).
+            var sample = 1
+            while (maxOf(o.outWidth, o.outHeight) / sample > maxPx) sample *= 2
+            val b = android.graphics.BitmapFactory.decodeFile(f.path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
+            val up = DdnThumbs.upright(b, runCatching { android.media.ExifInterface(f.path) }.getOrNull())
+            if (up !== b) b.recycle()
+            return up
+        }
 
         /**
          * What the copy takes over from the original's EXIF: when and with what it was made, and where. Not the
@@ -217,7 +254,7 @@ class DdnEditActivity : AppCompatActivity() {
         private val KEPT_TAGS = listOf(
             android.media.ExifInterface.TAG_DATETIME_ORIGINAL, android.media.ExifInterface.TAG_DATETIME_DIGITIZED, android.media.ExifInterface.TAG_DATETIME,
             "OffsetTimeOriginal", "OffsetTimeDigitized", "OffsetTime", "SubSecTimeOriginal", "SubSecTimeDigitized", "SubSecTime",
-            android.media.ExifInterface.TAG_MAKE, android.media.ExifInterface.TAG_MODEL, "LensMake", "LensModel", "Software", "Artist", "Copyright",
+            android.media.ExifInterface.TAG_MAKE, android.media.ExifInterface.TAG_MODEL, "LensMake", "LensModel", "LensSpecification", "Software", "Artist", "Copyright",
             android.media.ExifInterface.TAG_F_NUMBER, android.media.ExifInterface.TAG_APERTURE_VALUE, android.media.ExifInterface.TAG_EXPOSURE_TIME,
             android.media.ExifInterface.TAG_SHUTTER_SPEED_VALUE, android.media.ExifInterface.TAG_EXPOSURE_BIAS_VALUE, android.media.ExifInterface.TAG_EXPOSURE_PROGRAM,
             android.media.ExifInterface.TAG_ISO_SPEED_RATINGS, android.media.ExifInterface.TAG_FOCAL_LENGTH, android.media.ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM,
@@ -231,15 +268,15 @@ class DdnEditActivity : AppCompatActivity() {
         )
 
         /** `jpeg` with the original's kept EXIF and orientation 1 (normal): through a file, as ExifInterface saves. */
-        internal fun withExif(jpeg: ByteArray, from: android.media.ExifInterface, tmpDir: java.io.File): ByteArray {
+        internal fun withExif(jpeg: ByteArray, from: androidx.exifinterface.media.ExifInterface, tmpDir: java.io.File): ByteArray {
             val f = java.io.File.createTempFile("edit-", ".jpg", tmpDir)
             try {
                 f.writeBytes(jpeg)
-                val to = android.media.ExifInterface(f.path)
+                val to = androidx.exifinterface.media.ExifInterface(f.path)
                 var any = false
                 for (t in KEPT_TAGS) from.getAttribute(t)?.let { to.setAttribute(t, it); any = true }
                 if (!any) return jpeg
-                to.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL.toString())
+                to.setAttribute(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION, androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL.toString())
                 to.saveAttributes()
                 return f.readBytes()
             } finally {
