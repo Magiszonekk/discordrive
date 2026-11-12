@@ -349,7 +349,7 @@ export async function runCli(argv: string[], env: CliEnv): Promise<number> {
     const [code] = args;
     if (!code || !st.http) throw new Error("usage: pair-accept <code> (server mode)");
     const http = st.http;
-    const { sas, deviceId } = await acceptPairing(code, { accountId: st.accountId, accountKey: st.key.rawB64, fromDevice: st.device.name }, (pub) => http.addDevice(pub), http.pairingMailbox());
+    const { sas, deviceId } = await acceptPairing(code, { accountId: st.accountId, accountKey: st.key.rawB64, fromDevice: st.device.name }, (pub) => http.addPairedDevice(pub), http.pairingMailbox());
     out(`paired device ${deviceId}; check the code on both devices: ${sas}`);
     return 0;
   }

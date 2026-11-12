@@ -68,6 +68,32 @@ describe("device pairing", () => {
     await expect(acceptPairing("hello", bundle(), fakeRegister, mb)).rejects.toThrow(/not a pairing code/);
   });
 
+  it("trying again with the same code after a lost mailbox step finishes the pairing with the same device", async () => {
+    const { url } = await startServer();
+    const acct = await newAccount(url);
+    const bKey = await generateDeviceKey();
+    const pending = await startPairing(bKey.publicKey);
+    const real = acct.api.pairingMailbox();
+    // First try: the key gets registered, then the connection drops before the mailbox answers.
+    const lost: PairingMailbox = { put: async () => Promise.reject(new Error("server_timeout: no answer")), take: (id) => real.take(id) };
+    await expect(acceptPairing(pending.offer, bundle(acct.key), (pub) => acct.api.addPairedDevice(pub), lost)).rejects.toThrow(/server_timeout/);
+    expect(await acct.api.listDevices()).toHaveLength(2);
+    // Second try, same code: no 409, the SAS shows, still one new device, and it can sign in.
+    const { sas, deviceId } = await acceptPairing(pending.offer, { ...bundle(acct.key), accountId: acct.accountId }, (pub) => acct.api.addPairedDevice(pub), real);
+    const got = await pending.complete(new HttpPairingMailbox(url, null));
+    expect(got!.sas).toBe(sas);
+    expect(got!.bundle.deviceCredential.deviceId).toBe(deviceId);
+    const devs = await acct.api.listDevices();
+    expect(devs).toHaveLength(2);
+    expect(devs.find((d) => d.publicKey === bKey.publicKey)!.deviceId).toBe(deviceId);
+    const apiB = new HttpApi({ baseUrl: url, accountId: acct.accountId, deviceId, key: bKey });
+    expect(await apiB.read(0)).toEqual([]);
+    // A key held by another account is still refused.
+    const other = await newAccount(url);
+    await expect(other.api.addPairedDevice(bKey.publicKey)).rejects.toMatchObject({ status: 409, code: "public_key_in_use" });
+    expect(await other.api.listDevices()).toHaveLength(1);
+  });
+
   it("end to end over HTTP: A registers B's public key by signing, B signs in itself, reads vault and log", async () => {
     const { srv, url } = await startServer();
     const acct = await newAccount(url);
