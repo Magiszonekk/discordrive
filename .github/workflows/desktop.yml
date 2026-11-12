@@ -46,10 +46,10 @@ jobs:
 
       - name: "Linux: display, and user namespaces for the Chromium sandbox"
         if: runner.os == 'Linux'
-        timeout-minutes: 5
+        timeout-minutes: 12
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb
+          .github/scripts/apt-get.sh update -qq
+          .github/scripts/apt-get.sh install -y -qq xvfb
           # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; the sandbox needs them
           # (an installed .deb ships its own AppArmor profile instead).
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
@@ -72,11 +72,11 @@ jobs:
       # The disk in the system (Linux): the FUSE helper in Rust (no libfuse; mounts through fusermount3).
       - name: "Linux: build the disk helper (ddn-fuse) and make FUSE usable"
         if: runner.os == 'Linux'
-        timeout-minutes: 8
+        timeout-minutes: 12
         run: |
-          (command -v fusermount3 && test -e /dev/fuse) || sudo apt-get install -y -qq fuse3
+          (command -v fusermount3 && test -e /dev/fuse) || .github/scripts/apt-get.sh install -y -qq fuse3
           # The disk test makes a photo and its stored pictures with ImageMagick.
-          command -v convert || sudo apt-get install -y -qq --no-install-recommends imagemagick
+          command -v convert || .github/scripts/apt-get.sh install -y -qq --no-install-recommends imagemagick
           ls -l /dev/fuse
           cargo build --release --manifest-path apps/desktop/native/fuse/Cargo.toml
           ls -l apps/desktop/native/fuse/target/release/ddn-fuse
@@ -119,5 +119,5 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 12
         run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends gnome-keyring gcr dbus-daemon libglib2.0-bin
+          .github/scripts/apt-get.sh install -y -qq --no-install-recommends gnome-keyring gcr dbus-daemon libglib2.0-bin
           timeout 300 dbus-run-session -- xvfb-run -a npx tsx apps/desktop/test/keyring-refused.ts

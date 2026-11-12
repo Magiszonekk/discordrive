@@ -160,7 +160,7 @@ jobs:
       - name: Install
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
-        run: npm ci --no-audit --no-fund && sudo apt-get install -y -q xvfb
+        run: npm ci --no-audit --no-fund && .github/scripts/apt-get.sh install -y -q xvfb
 
       - name: Version A (the same code, an older version and commit)
         env:
