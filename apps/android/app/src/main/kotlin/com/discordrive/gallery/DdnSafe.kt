@@ -241,29 +241,63 @@ object DdnSafe {
     fun moveIn(c: Context, items: List<IndexReplica.Child>, safeParent: String = "root", progress: (String) -> Unit = {}): Int {
         val s = DdnSession.get(c)!!
         var files = 0
+        // Folders this move made in the Safe (in order): the ones still empty when it stops go again.
+        val made = LinkedHashMap<String, String>() // folder -> its parent in the Safe
         fun one(it: IndexReplica.Child, into: String) {
             if (it.isFolder) {
                 // A folder of that name already there (a move interrupted and started again): fill it, no "Name (2)".
                 val same = children(c, into).firstOrNull { k -> k.isFolder && k.name.equals(it.name, ignoreCase = true) }
-                val id = same?.id ?: mkdir(c, it.name, into).nodeId!!
+                val id = same?.id ?: mkdir(c, it.name, into).nodeId!!.also { nid -> made[nid] = into }
                 for (k in s.children(it.id)) one(k, id)
                 return
             }
             progress(it.name)
             val tmp = File.createTempFile("safe-in", null, c.cacheDir)
             try {
-                tmp.outputStream().use { o -> s.files.download(it.manifestRef!!, it.size!!, it.sha256, o) }
+                try {
+                    tmp.outputStream().use { o -> s.files.download(it.manifestRef!!, it.size!!, it.sha256, o) }
+                } catch (e: Exception) {
+                    if (channelGone(e)) throw MoveGone(it.name, files, e)
+                    throw e
+                }
                 val taken = runCatching { s.files.manifest(it.manifestRef!!).second.takenAt }.getOrNull()
                 upload(c, { tmp.inputStream() }, tmp.length(), it.name, into, taken)
             } finally { tmp.delete() }
             s.moveToTrash(listOf(it.id)); s.purge(listOf(it.id))
             files++
         }
-        for (it in items) one(it, safeParent)
+        try {
+            for (it in items) one(it, safeParent)
+        } catch (e: Exception) {
+            // Stopped part way: what was not moved is still in Files; no empty folder of this move stays in the Safe.
+            runCatching {
+                // Inner folders first (made after their parents): a folder holding only empty ones is empty too.
+                val empty = HashSet<String>()
+                for (id in made.keys.reversed()) if (children(c, id).all { k -> k.isFolder && k.id in empty }) empty += id
+                // Only the top ones: deleting a folder takes what is inside it.
+                val top = made.keys.filter { it in empty && made[it] !in empty }
+                if (top.isNotEmpty()) delete(c, top)
+            }
+            throw e
+        }
         // The folders moved, emptied of their files: out of the account too.
         val folders = items.filter { it.isFolder }.map { it.id }
         if (folders.isNotEmpty()) { s.moveToTrash(folders); s.purge(folders) }
         return files
+    }
+
+    /** A file that cannot be moved: its pieces are on a channel removed on Discord (the webhook answers 401 / 404). */
+    class MoveGone(val name: String, val moved: Int, cause: Throwable) : Exception("file gone: $name", cause)
+
+    /** The pieces are on a channel removed on Discord (its webhook answers 401 / 404), anywhere in the causes. */
+    internal fun channelGone(e: Throwable): Boolean {
+        var x: Throwable? = e
+        var guard = 0
+        while (x != null && guard++ < 16) {
+            if (x is io.github.magiszonekk.discordrive.core.ServerException && (x.status == 404 || x.status == 401)) return true
+            x = x.cause
+        }
+        return false
     }
 
     /** A file of the Safe out to a folder of the Drive (sent again: the Safe's key never reaches the log). */

@@ -626,6 +626,7 @@ Tekst: %3$s</string>
     <string name="safe_no_viewer">Brak aplikacji do otwarcia tego pliku.</string>
     <string name="safe_need_open">Najpierw odblokuj Sejf.</string>
     <string name="safe_to_safe">Przenieś do Sejfu</string>
+    <string name="safe_move_gone">Nie przeniesiono „%1$s”: kanał z jego fragmentami usunięto na Discordzie, więc pliku nie da się odczytać. Przenoszenie zatrzymane; to, czego nie przeniesiono, zostało w Plikach bez zmian.</string>
     <string name="safe_to_safe_ask">Przenieść „%s” do Sejfu?</string>
     <string name="safe_to_safe_note">Kopia w Plikach zostanie usunięta na stałe.</string>
     <string name="safe_move_cost_n">Pliki do ponownej wysyłki pod nowym kluczem: %1$d (%2$s).</string>
