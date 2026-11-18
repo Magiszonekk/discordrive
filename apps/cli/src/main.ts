@@ -1,11 +1,19 @@
 // Process entry of `ddn`: wires the terminal (stdin, stdout, a progress line on stderr) to main().
 import { main } from "./cli.js";
+import { parseArgs } from "./profile.js";
 
 // The reader went away (`ddn ls | head`, `ddn get x - | head -c 100`): a listing stops quietly, as other
 // tools do. A transfer (put, get to files) is not cut short by its report: it finishes, writing nothing more,
 // and exits with its own result (a backup piped into `grep -m1` must not leave 48 of 50 files unsent).
 const TRANSFERS = new Set(["put", "get"]);
-const cmd = process.argv.slice(2).find((a) => !a.startsWith("-"));
+// The command as the parser sees it (an option with a value before it, `--profile P put`, is not the command).
+const cmd = (() => {
+  try {
+    return parseArgs(process.argv.slice(2)).cmd;
+  } catch {
+    return null;
+  }
+})();
 let stdoutGone = false;
 let stderrGone = false;
 for (const st of [process.stdout, process.stderr])
@@ -14,7 +22,13 @@ for (const st of [process.stdout, process.stderr])
     if (st === process.stdout) stdoutGone = true;
     else stderrGone = true;
     // get to standard output: its reader is the data's destination, nothing left to do.
-    const toStdout = cmd === "get" && process.argv.includes("-");
+    const toStdout = cmd === "get" && (() => {
+      try {
+        return parseArgs(process.argv.slice(2)).args.includes("-");
+      } catch {
+        return false;
+      }
+    })();
     if (!TRANSFERS.has(cmd ?? "") || toStdout) process.exit(0);
   });
 const write = (st: NodeJS.WriteStream, gone: () => boolean, l: string) => {
