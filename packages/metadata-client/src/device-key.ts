@@ -81,6 +81,15 @@ function pkcs8FromSeed(seed: Uint8Array): Uint8Array {
   return out;
 }
 
+/** The private CryptoKey for a raw 32-byte Ed25519 seed and its public half (extractable when asked, to store it again). */
+export async function privateKeyFromSeed(seed: Uint8Array, extractable = false): Promise<{ privateKey: CryptoKey; publicKey: string }> {
+  if (seed.byteLength !== 32) throw new Error("device key: seed must be 32 bytes");
+  const priv = await crypto.subtle.importKey("pkcs8", pkcs8FromSeed(seed) as BufferSource, ED, true, ["sign"]);
+  const jwk = await crypto.subtle.exportKey("jwk", priv);
+  const privateKey = extractable ? priv : await crypto.subtle.importKey("jwk", { ...jwk, key_ops: ["sign"] }, ED, false, ["sign"]);
+  return { privateKey, publicKey: jwk.x! };
+}
+
 /** A signing key from its raw 32-byte Ed25519 seed (non-extractable), with its public half. */
 export async function deviceKeyFromSeed(seed: Uint8Array): Promise<DeviceKey> {
   if (seed.byteLength !== 32) throw new Error("device key: seed must be 32 bytes");

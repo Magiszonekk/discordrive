@@ -75,7 +75,7 @@ Etap 2 discordrive-next: klient trybu metadata only na rdzeniu `@ddv4/sync-core`
   klucz swoim podpisem i szyfruje do nowego urządzenia klucz konta, serwer przekazuje jedną nieczytelną wiadomość (skrzynka
   jednorazowa, 10 min). Obie strony pokazują 6-cyfrowy kod (SAS): podmiana klucza przez
   serwer daje różne kody, a klucza konta serwer nie zobaczy w żadnym wariancie.
-- **CLI** `ddn init [--server URL] | rescue | pair-offer | pair-accept | devices [revoke] | kit |
+- **Narzędzie deweloperskie** (`src/cli.ts`, bin `ddn-dev`; CLI dla użytkownika to `apps/cli`, docs/cli.md) `ddn init [--server URL] | rescue | pair-offer | pair-accept | devices [revoke] | kit |
   webhook add|ls|rm | put | get | ls`. Z `--server` (tylko 127.0.0.1 w etapie 2) działa przez
   HTTP z kluczem Ed25519 urządzenia w `device.json` (0600); bez — tryb lokalny (testy). Katalog stanu 0700, pliki 0600;
   `server/` to dokładnie to, co trzymałby serwer (zaszyfrowany log i sejf), do czasu

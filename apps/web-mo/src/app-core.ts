@@ -42,6 +42,9 @@ import {
   newAccountKey,
   openDeviceInfo,
   createApiKey,
+  decodeApiKey,
+  privateKeyFromSeed,
+  unb64u,
   openShare,
   passwordStrength,
   protectAccountKey,
@@ -574,6 +577,32 @@ export class AppCore {
     });
   }
 
+  /**
+   * This program becomes the device an API key names (command line, local service): the key's account,
+   * device and signing key are stored like those of any device here. Nothing is registered: the key's device
+   * already exists on the server (made by the device that created the key).
+   */
+  async useApiKey(text: string): Promise<{ accountId: string; deviceId: string; server: string }> {
+    const k = await decodeApiKey(text);
+    const seed = unb64u(k.seed);
+    const dk = await privateKeyFromSeed(seed, this.platform.extractableDeviceKey);
+    seed.fill(0);
+    await this.platform.keys.save({
+      serverUrl: k.server,
+      instanceId: k.instanceId,
+      accountId: k.accountId,
+      deviceId: k.deviceId,
+      deviceName: "api",
+      accountKey: k.accountKey,
+      devicePublicKey: dk.publicKey,
+      devicePrivateKey: dk.privateKey,
+      // The account's kit was confirmed on the device that made the key; a key does not show one.
+      kitSavedAt: Date.now(),
+      kitFormat: mode.kitVersion,
+    });
+    return { accountId: k.accountId, deviceId: k.deviceId, server: k.server };
+  }
+
   /** Open the stored account: sign in, open the tree (OPFS if main tab), catch up, subscribe. */
   async open(): Promise<void> {
     const a = await this.platform.keys.load();
@@ -622,12 +651,17 @@ export class AppCore {
     if (mode.clientSnapshots && this.resume) void cleanupLeftovers(this.client!, this.resume).catch(() => 0);
     this.sub = this.http.subscribe(
       () =>
-        void this.pullLog().then((rs) => {
-          this.version++;
-          this.onEvent({ type: "changed" });
-          const mine = this.uiNotices(rs, false);
-          if (mine.length) this.onEvent({ type: "notices", notices: mine });
-        }),
+        void this.pullLog()
+          .then((rs) => {
+            this.version++;
+            this.onEvent({ type: "changed" });
+            const mine = this.uiNotices(rs, false);
+            if (mine.length) this.onEvent({ type: "notices", notices: mine });
+          })
+          // Closed meanwhile (a command line that finished, an agent quitting): the index is gone, nothing to do.
+          .catch((e: unknown) => {
+            if (!this.closed) throw e;
+          }),
       { onAuthLost: (code) => this.lostAuth(code === "account_blocked" ? "blocked" : "gone") },
     );
     void this.ensureOwnName().catch(() => {});
@@ -1688,6 +1722,78 @@ export class AppCore {
     }
     const n = this.c().store.getNode(nodeId);
     return new Blob(parts as BlobPart[], { type: n ? mimeOf(n.name) : "" });
+  }
+
+  /**
+   * Download into any sink (command line: a file or stdout), verified like every download. `onProgress`
+   * gets the bytes written so far.
+   */
+  async downloadTo(nodeId: string, sink: { write(d: Uint8Array): Promise<void> }, onProgress?: (done: number, total: number) => void, signal?: AbortSignal): Promise<{ bytes: number; sha256: string | null }> {
+    let bytes = 0;
+    const v = await this.c().download(nodeId, { write: async (d) => ((bytes += d.byteLength), sink.write(d)) }, { signal, onProgress });
+    return { bytes, sha256: v.plaintextSha256 };
+  }
+
+  /** One node by ID, with what a listing needs (null if gone). Trashed nodes too (`trashed`). */
+  node(nodeId: string): { id: string; name: string; kind: "file" | "folder"; parentId: string | null; size: number | null; modifiedAt: number | null; sha256: string | null; trashed: boolean } | null {
+    const n = this.c().store.getNode(nodeId);
+    if (!n) return null;
+    return {
+      id: n.id,
+      name: n.name,
+      kind: n.kind as "file" | "folder",
+      parentId: n.parentId,
+      size: n.content?.sizeBytes ?? null,
+      modifiedAt: n.content?.createdAt ?? null,
+      sha256: n.content?.plaintextSha256 ?? null,
+      trashed: inTrash(this.c().store, n.id),
+    };
+  }
+
+  /** The child of a folder with this name (case-folded like the tree's uniqueness), not trashed; null if none. */
+  childNamed(parentId: string, name: string): string | null {
+    return this.c().store.childByKey(parentId, nameKey(name.normalize("NFC"))) ?? null;
+  }
+
+  /**
+   * Upload a file from disk to `parentId` under `name` (command line). `onConflict`: "rename" = a name taken
+   * gets a " (n)" suffix like in the app, "replace" = a new version of the file of that name, "skip" = nothing
+   * is sent. An interrupted upload of the same file to the same folder continues where it stopped.
+   */
+  async uploadFile(
+    path: string,
+    parentId: string,
+    name: string,
+    onConflict: "rename" | "replace" | "skip" = "rename",
+    onProgress?: (done: number, total: number) => void,
+    signal?: AbortSignal,
+  ): Promise<{ nodeId: string; name: string; size: number; resumed: number; skipped: boolean; replaced: boolean; sha256: string }> {
+    const nfc = normalizeName(name.trim());
+    const bad = validateName(nfc);
+    if (bad) throw new Error(`invalid_name: ${bad}`);
+    const was = this.childNamed(parentId, nfc);
+    const wasNode = was ? this.c().store.getNode(was) : undefined;
+    if (wasNode && onConflict === "skip") return { nodeId: wasNode.id, name: wasNode.name, size: wasNode.content?.sizeBytes ?? 0, resumed: 0, skipped: true, replaced: false, sha256: wasNode.content?.plaintextSha256 ?? "" };
+    if (wasNode && onConflict === "replace" && wasNode.kind !== "file") throw new Error("name_taken_by_folder");
+    const src = await this.disk().openSource(path);
+    try {
+      const taken = await takenOf(src, nfc, Math.floor(src.mtimeMs) || undefined);
+      const replace = wasNode && onConflict === "replace" ? { nodeId: wasNode.id, baseVersionId: wasNode.content?.versionId ?? null } : undefined;
+      const r = await this.c().upload(src, nfc, parentId, {
+        signal,
+        resumeKey: diskResumeKey(parentId, path, src.size, src.mtimeMs),
+        takenAt: taken,
+        ...(onProgress ? { onProgress: (done: number, total: number) => onProgress(done, total) } : {}),
+        ...(replace ? { replace } : {}),
+      });
+      this.rememberTaken(r.version.manifestRef, taken);
+      this.version++;
+      void this.snapshotSoon();
+      const n = this.c().store.getNode(r.nodeId);
+      return { nodeId: r.nodeId, name: n?.name ?? nfc, size: src.size, resumed: r.resumed, skipped: false, replaced: !!replace, sha256: r.version.plaintextSha256 ?? "" };
+    } finally {
+      await src.close();
+    }
   }
 
   /** Size and type of a file (the UI picks the download path by size). */
@@ -2909,7 +3015,10 @@ export class AppCore {
     return new Blob(parts as BlobPart[], { type: s.opened.meta.mime ?? "" });
   }
 
+  /** Set by close(): late notifications find the index closed and are dropped. */
+  private closed = false;
   close() {
+    this.closed = true;
     this.safeClose();
     void this.tlogStore?.stop();
     this.sub?.close();
