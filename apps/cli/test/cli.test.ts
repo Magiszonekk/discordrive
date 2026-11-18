@@ -113,6 +113,7 @@ for (const mode of ["metadata-only", "e2ee", "plain"] as Mode[]) {
       writeFileSync(join(local, "tree", "a.txt"), "alpha");
       writeFileSync(join(local, "tree", "sub", "b.txt"), "beta");
       writeFileSync(join(local, "tree", "sub", "deeper", "c.txt"), "gamma");
+      mkdirSync(join(local, "tree", "empty", "inner"), { recursive: true });
 
       expect(await run(x, "mkdir", "-p", "/Backup/2026", "--json")).toBe(0);
       expect(await run(x, "put", join(local, "big.bin"), "/Backup/2026/", "--json")).toBe(0);
@@ -120,14 +121,18 @@ for (const mode of ["metadata-only", "e2ee", "plain"] as Mode[]) {
       expect(up).toMatchObject({ path: "/Backup/2026/big.bin", size: big.byteLength, sha256: sha(big), skipped: false });
       expect(await run(x, "put", join(local, "tree"), "/Backup/", "--json")).toBe(0);
       expect(x.lines().filter((l) => l.event === "uploaded").map((l) => l.path).sort()).toEqual(["/Backup/tree/a.txt", "/Backup/tree/sub/b.txt", "/Backup/tree/sub/deeper/c.txt"]);
+      expect(x.lines().filter((l) => l.event === "folder").map((l) => l.path)).toEqual(["/Backup/tree/empty/inner"]);
 
       // Listing: stable JSON lines; names for people.
       expect(await run(x, "ls", "/Backup", "--json")).toBe(0);
       expect(x.lines().map((l) => [l.name, l.kind])).toEqual([["2026", "folder"], ["tree", "folder"]]);
       expect(await run(x, "ls", "/Backup/tree")).toBe(0);
-      expect(x.outs).toEqual(["sub/", "a.txt"]);
+      expect(x.outs).toEqual(["empty/", "sub/", "a.txt"]);
       expect(await run(x, "stat", "/Backup/2026/big.bin", "--json")).toBe(0);
       expect(x.lines()[0]).toMatchObject({ kind: "file", size: big.byteLength, sha256: sha(big) });
+      // A file's ID from --json works where a path does.
+      expect(await run(x, "stat", String(up.id), "--json")).toBe(0);
+      expect(x.lines()[0]).toMatchObject({ path: "/Backup/2026/big.bin", kind: "file" });
 
       // Conflicts: rename (default) adds " (1)", skip leaves it, replace makes a new version.
       writeFileSync(join(local, "a.txt"), "second alpha");
@@ -145,6 +150,10 @@ for (const mode of ["metadata-only", "e2ee", "plain"] as Mode[]) {
       expect(existsSync(join(dl, "big.bin.ddnpart"))).toBe(false);
       expect(await run(x, "get", "/Backup/tree/a.txt", "-")).toBe(0);
       expect(x.bytes().toString()).toBe("second alpha");
+      expect(await run(x, "stat", "/Backup/tree/a.txt", "--json")).toBe(0);
+      const aId = String(x.lines()[0]!.id);
+      expect(await run(x, "get", aId, "-")).toBe(0);
+      expect(x.bytes().toString()).toBe("second alphasecond alpha");
       expect(await run(x, "get", "/Backup/tree", dl)).toBe(2);
       expect(await run(x, "get", "-r", "/Backup/tree", dl)).toBe(0);
       expect(readFileSync(join(dl, "tree", "sub", "deeper", "c.txt"), "utf8")).toBe("gamma");
@@ -201,6 +210,8 @@ describe("ddn usage", () => {
     expect(x.outs.join("\n")).toMatch(/ddn login/);
     expect(await run(x, "help")).toBe(0);
     expect(await run(x, "--bogus")).toBe(2);
+    // An unknown command is a usage error before any key is looked at.
+    expect(await run(x, "frob")).toBe(2);
     expect(await run(x, "version", "--json")).toBe(0);
     expect(x.lines()[0]).toHaveProperty("version");
   });

@@ -1,6 +1,9 @@
 // Process entry of `ddn`: wires the terminal (stdin, stdout, a progress line on stderr) to main().
 import { main } from "./cli.js";
 
+// The reader went away (`ddn ls | head`, `ddn get x - | head -c 100`): stop quietly, as other tools do.
+for (const st of [process.stdout, process.stderr]) st.on("error", (e: NodeJS.ErrnoException) => (e.code === "EPIPE" ? process.exit(0) : undefined));
+
 const tty = process.stderr.isTTY;
 let shown = false;
 const code = await main(process.argv.slice(2), {
