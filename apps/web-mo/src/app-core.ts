@@ -112,6 +112,8 @@ export interface CoreConfig {
   discordApiOrigin?: string;
   /** Test hook: the line test's server instead of speed.cloudflare.com. Never set in production. */
   lineTestOrigin?: string;
+  /** Who writes the transfer log (`src`): default the browser ("web") or the desktop agent ("agent"). */
+  logSrc?: "cli" | "serve";
   wasmUrl?: string;
 }
 
@@ -392,8 +394,8 @@ export class AppCore {
   /** Last snapshot outcome, for the status line. */
   lastSnapshot: { at: number; kind: string; written: string } | null = null;
   /** `src` of this device's transfer log lines: the browser, or the desktop app's agent. */
-  private get logSrc(): "web" | "agent" {
-    return this.platform.kind === "desktop" ? "agent" : "web";
+  private get logSrc(): "web" | "agent" | "cli" | "serve" {
+    return this.cfg.logSrc ?? (this.platform.kind === "desktop" ? "agent" : "web");
   }
   /** Set by the worker host: push events to the UI. */
   onEvent: (e: CoreEvent) => void = () => {};

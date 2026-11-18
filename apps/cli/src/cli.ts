@@ -40,6 +40,8 @@ export interface CliIo {
   discordApiOrigin?: string;
   /** Tests: fetch for Discord (e.g. h2 to a fake with its own CA). */
   discordFetch?: typeof fetch;
+  /** `ddn serve` stops when this aborts (tests; the process uses SIGTERM / SIGINT). */
+  stop?: AbortSignal;
   /** Ask a yes/no question (rm --permanent without --yes). */
   confirm?(q: string): Promise<boolean>;
 }
@@ -61,6 +63,7 @@ Commands:
   mv SRC... DEST         move into a folder, or rename one item
   rm PATH...             to the trash; --permanent deletes for good (asks, or --yes)
   find TEXT              search by name
+  serve [--listen H:P]   local HTTP API for scripts and services (docs/local-api.md)
   logout                 forget the key on this computer (revoke it in the app)
   version
 
@@ -71,7 +74,7 @@ instead of the Drive), --profile NAME. Exit codes: 0 ok, 1 failed, 2 usage, 3 no
 // The core and the desktop platform are loaded once the instance's mode is known.
 type Core = import("../../web-mo/src/app-core.js").AppCore;
 
-interface Ctx {
+export interface Ctx {
   io: CliIo;
   p: ParsedArgs;
   json: boolean;
@@ -81,7 +84,7 @@ interface Ctx {
   space: "drive" | "gallery";
 }
 
-function emit(c: { io: CliIo; json: boolean }, obj: Record<string, unknown>, human: string | null) {
+export function emit(c: { io: CliIo; json: boolean }, obj: Record<string, unknown>, human: string | null) {
   if (c.json) c.io.out(JSON.stringify(obj));
   else if (human !== null) c.io.out(human);
 }
@@ -171,7 +174,7 @@ async function where(io: CliIo, p: ParsedArgs): Promise<{ dir: string; keyText: 
   return { dir: profileDir(root, name), keyText: null };
 }
 
-async function loadCore(dir: string, mode: string, io: CliIo, keysInMemory = false): Promise<Core> {
+async function loadCore(dir: string, mode: string, io: CliIo, keysInMemory = false, logSrc: "cli" | "serve" = "cli"): Promise<Core> {
   selectMode(mode);
   const [{ AppCore }, { nodePlatform }] = await Promise.all([import("../../web-mo/src/app-core.js"), import("../../desktop/src/agent/node-platform.js")]);
   const f = io.discordFetch ?? (await h2FetchMaybe());
@@ -181,9 +184,9 @@ async function loadCore(dir: string, mode: string, io: CliIo, keysInMemory = fal
     type Stored = Awaited<ReturnType<typeof platform.keys.load>>;
     let held: Stored = undefined;
     const keys = { load: async () => held, save: async (a: NonNullable<Stored>) => void (held = a), clear: async () => void (held = undefined) };
-    return new AppCore({ discordApiOrigin: io.discordApiOrigin }, { ...platform, keys });
+    return new AppCore({ discordApiOrigin: io.discordApiOrigin, logSrc }, { ...platform, keys });
   }
-  return new AppCore({ discordApiOrigin: io.discordApiOrigin }, platform);
+  return new AppCore({ discordApiOrigin: io.discordApiOrigin, logSrc }, platform);
 }
 
 async function instanceMode(server: string): Promise<ModeName> {
@@ -245,14 +248,14 @@ async function openAccount(io: CliIo, p: ParsedArgs): Promise<{ core: Core; prof
     const prof = readProfile(dir);
     mode = prof?.mode ?? (await instanceMode(k.server));
     ensurePrivateDir(dir);
-    core = await loadCore(dir, mode, io, true);
+    core = await loadCore(dir, mode, io, true, p.cmd === "serve" ? "serve" : "cli");
     await core.useApiKey(keyText);
     if (!prof) writeProfile(dir, { v: 1, server: k.server, mode, accountId: k.accountId, deviceId: k.deviceId, at: Date.now() });
   } else {
     const prof = readProfile(dir);
     if (!prof || !existsSync(join(dir, "keys.bin"))) throw new CliError(EXIT.auth, "not signed in: run `ddn login` (or set DDN_API_KEY)");
     mode = prof.mode;
-    core = await loadCore(dir, mode, io);
+    core = await loadCore(dir, mode, io, false, p.cmd === "serve" ? "serve" : "cli");
   }
   await core.open();
   const st = await core.status();
@@ -262,9 +265,9 @@ async function openAccount(io: CliIo, p: ParsedArgs): Promise<{ core: Core; prof
 
 // ── paths ───────────────────────────────────────────────────────────
 
-const ROOTS = { drive: "root", gallery: "gallery" } as const;
+export const ROOTS = { drive: "root", gallery: "gallery" } as const;
 
-function splitPath(path: string): string[] {
+export function splitPath(path: string): string[] {
   return path
     .replace(/\\/g, "/")
     .split("/")
@@ -272,7 +275,7 @@ function splitPath(path: string): string[] {
 }
 
 /** Node ID of a path (or a node ID given as is); null if it does not exist. */
-function resolveRef(c: Ctx, ref: string): string | null {
+export function resolveRef(c: Ctx, ref: string): string | null {
   // A node ID as printed by --json (folders: 32 hex, files: 22 base64url characters); a path otherwise.
   if (!ref.includes("/") && /^[A-Za-z0-9_-]{16,64}$/.test(ref) && c.core.node(ref)) return ref;
   let id: string = ROOTS[c.space];
@@ -289,13 +292,13 @@ function resolveRef(c: Ctx, ref: string): string | null {
   return id;
 }
 
-function mustResolve(c: Ctx, ref: string): string {
+export function mustResolve(c: Ctx, ref: string): string {
   const id = resolveRef(c, ref);
   if (!id) throw new CliError(EXIT.notFound, `no such file or folder: ${ref}`);
   return id;
 }
 
-function pathOfId(c: Ctx, id: string): string {
+export function pathOfId(c: Ctx, id: string): string {
   const parts: string[] = [];
   let cur: string | null = id;
   for (let i = 0; cur && cur !== ROOTS[c.space] && i < 256; i++) {
@@ -307,7 +310,7 @@ function pathOfId(c: Ctx, id: string): string {
   return "/" + parts.join("/");
 }
 
-async function mkdirs(c: Ctx, path: string): Promise<string> {
+export async function mkdirs(c: Ctx, path: string): Promise<string> {
   let id: string = ROOTS[c.space];
   for (const part of splitPath(path)) {
     const next = c.core.childNamed(id, part);
@@ -319,7 +322,7 @@ async function mkdirs(c: Ctx, path: string): Promise<string> {
   return id;
 }
 
-function folderId(c: Ctx, id: string, ref: string): string {
+export function folderId(c: Ctx, id: string, ref: string): string {
   if (c.core.node(id)?.kind !== "folder" && id !== ROOTS[c.space]) throw new CliError(EXIT.failed, `not a folder: ${ref}`);
   return id;
 }
@@ -345,6 +348,12 @@ function progress(c: Ctx, what: string) {
 type Cmd = (c: Ctx) => Promise<number>;
 
 const COMMANDS: Record<string, Cmd> = {
+  // The local service: one process keeps the account open and answers HTTP on this computer (serve.ts).
+  async serve(c) {
+    const { serve } = await import("./serve.js");
+    return serve(c);
+  },
+
   async whoami(c) {
     const st = await c.core.status();
     const ch = await c.core.webhooks(false).catch(() => null);
@@ -646,7 +655,7 @@ function emptyDirs(dir: string): string[][] {
   return out.filter((p) => !out.some((q) => q.length > p.length && p.every((x, i) => q[i] === x)));
 }
 
-function safeName(name: string): string {
+export function safeName(name: string): string {
   let s = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/[. ]+$/, "");
   if (/^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(s)) s = `_${s}`;
   return s || "file";

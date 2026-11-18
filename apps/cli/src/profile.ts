@@ -80,8 +80,8 @@ export function forgetProfile(dir: string): boolean {
 }
 
 /** Options that may stand anywhere on the command line. Boolean flags take no value. */
-const VALUE_FLAGS = new Set(["--profile", "--key-file", "--on-conflict", "--name"]);
-const BOOL_FLAGS = new Set(["--json", "--quiet", "-q", "--gallery", "--parents", "-p", "-l", "--long", "--permanent", "--yes", "-y", "--help", "-h", "--recursive", "-r", "--no-progress"]);
+const VALUE_FLAGS = new Set(["--profile", "--key-file", "--on-conflict", "--name", "--listen", "--token-file", "--parallel"]);
+const BOOL_FLAGS = new Set(["--json", "--quiet", "-q", "--gallery", "--parents", "-p", "-l", "--long", "--permanent", "--yes", "-y", "--help", "-h", "--recursive", "-r", "--no-progress", "--transfer-log"]);
 
 export interface ParsedArgs {
   cmd: string | null;

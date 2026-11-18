@@ -139,6 +139,11 @@ signature. The text is shown once and not stored by the app.
 - Revoking it is revoking that device (above), with the same limit: whoever copied the text kept the
   account key and could already read what it reached, and could register a new device with the rescue
   key derived from it.
+- `ddn` (`apps/cli`) stores the key in its profile folder (0700, `keys.bin` 0600) or keeps it in memory only
+  (`DDN_API_KEY`). `ddn serve` (`docs/local-api.md`) answers HTTP with the account opened: each request needs
+  a local token (random, 0600 file, compared in constant time; not the API key, never sent to the instance).
+  It listens on 127.0.0.1 unless told otherwise, has no TLS, and anyone with the token and network access
+  to it has the same access as the key. Its logs carry neither the key, the token nor file names.
 
 ### 2.5 Optional password key
 

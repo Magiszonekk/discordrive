@@ -10,7 +10,7 @@
 
 export type TransferDir = "up" | "down";
 /** Who wrote a log line: the browser, the CLI, the instance, or the desktop app's background agent. */
-export type TransferSource = "web" | "cli" | "server" | "agent";
+export type TransferSource = "web" | "cli" | "server" | "agent" | "serve";
 
 export const TRANSFER_LOG_VERSION = 1;
 

@@ -1,0 +1,894 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "discordrive-next local API (ddn serve)",
+  "version": "1",
+  "description": "See docs/local-api.md. Every request needs the local token: Authorization: Bearer <token>."
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:7777"
+  }
+ ],
+ "security": [
+  {
+   "local": []
+  }
+ ],
+ "components": {
+  "securitySchemes": {
+   "local": {
+    "type": "http",
+    "scheme": "bearer"
+   }
+  },
+  "schemas": {
+   "Error": {
+    "type": "object",
+    "properties": {
+     "error": {
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "error"
+    ]
+   },
+   "Entry": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "file",
+       "folder"
+      ]
+     },
+     "size": {
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "modifiedAt": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "ms since 1970, UTC"
+     },
+     "sha256": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "path": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "name",
+     "kind",
+     "path"
+    ]
+   },
+   "Job": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "kind": {
+      "const": "upload"
+     },
+     "state": {
+      "type": "string",
+      "enum": [
+       "queued",
+       "running",
+       "done",
+       "failed",
+       "cancelled"
+      ]
+     },
+     "name": {
+      "type": "string"
+     },
+     "folder": {
+      "type": "string"
+     },
+     "size": {
+      "type": "integer"
+     },
+     "done": {
+      "type": "integer"
+     },
+     "createdAt": {
+      "type": "integer"
+     },
+     "finishedAt": {
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "result": {
+      "type": [
+       "object",
+       "null"
+      ],
+      "properties": {
+       "id": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "path": {
+        "type": "string"
+       },
+       "size": {
+        "type": "integer"
+       },
+       "sha256": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "skipped": {
+        "type": "boolean"
+       },
+       "replaced": {
+        "type": "boolean"
+       },
+       "resumedPieces": {
+        "type": "integer"
+       }
+      }
+     },
+     "error": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "id",
+     "state"
+    ]
+   },
+   "Health": {
+    "type": "object",
+    "properties": {
+     "ok": {
+      "type": "boolean"
+     },
+     "version": {
+      "type": "string"
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "metadata-only",
+       "e2ee",
+       "plain"
+      ]
+     },
+     "accountId": {
+      "type": "string"
+     },
+     "deviceId": {
+      "type": "string"
+     },
+     "connected": {
+      "type": "boolean"
+     },
+     "authLost": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "canUpload": {
+      "type": [
+       "boolean",
+       "null"
+      ]
+     },
+     "channels": {
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "jobs": {
+      "type": "object",
+      "properties": {
+       "queued": {
+        "type": "integer"
+       },
+       "running": {
+        "type": "integer"
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "paths": {
+  "/v1/health": {
+   "get": {
+    "summary": "service and account state",
+    "responses": {
+     "200": {
+      "description": "ok",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Health"
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "key refused",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Health"
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/list": {
+   "get": {
+    "summary": "list a folder",
+    "parameters": [
+     {
+      "name": "path",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "default": "/"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "schema": {
+       "type": "integer",
+       "maximum": 1000
+      }
+     },
+     {
+      "name": "after",
+      "in": "query",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "space",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "drive",
+        "gallery"
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "ok",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "path": {
+           "type": "string"
+          },
+          "total": {
+           "type": "integer"
+          },
+          "entries": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Entry"
+           }
+          },
+          "next": {
+           "type": [
+            "string",
+            "null"
+           ]
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/folders": {
+   "post": {
+    "summary": "make a folder (with parents)",
+    "parameters": [
+     {
+      "name": "space",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "drive",
+        "gallery"
+       ]
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "path": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "path"
+        ]
+       }
+      }
+     }
+    },
+    "responses": {
+     "201": {
+      "description": "made",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Entry"
+        }
+       }
+      }
+     },
+     "200": {
+      "description": "existed",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Entry"
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/files": {
+   "post": {
+    "summary": "upload a file (raw body)",
+    "parameters": [
+     {
+      "name": "path",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "default": "/"
+      }
+     },
+     {
+      "name": "name",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "on_conflict",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "rename",
+        "replace",
+        "skip"
+       ]
+      }
+     },
+     {
+      "name": "parents",
+      "in": "query",
+      "schema": {
+       "const": "1"
+      }
+     },
+     {
+      "name": "wait",
+      "in": "query",
+      "schema": {
+       "const": "1"
+      }
+     },
+     {
+      "name": "space",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "drive",
+        "gallery"
+       ]
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/octet-stream": {
+       "schema": {
+        "type": "string",
+        "format": "binary"
+       }
+      }
+     }
+    },
+    "responses": {
+     "202": {
+      "description": "queued",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Job"
+        }
+       }
+      }
+     },
+     "201": {
+      "description": "done (wait=1)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Job"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "415": {
+      "description": "error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "503": {
+      "description": "error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/files/{ref}": {
+   "get": {
+    "summary": "download (Range supported)",
+    "parameters": [
+     {
+      "name": "ref",
+      "in": "path",
+      "required": true,
+      "description": "node ID or path (URL-encoded)",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "meta",
+      "in": "query",
+      "schema": {
+       "const": "1"
+      }
+     },
+     {
+      "name": "Range",
+      "in": "header",
+      "schema": {
+       "type": "string",
+       "example": "bytes=0-1048575"
+      }
+     },
+     {
+      "name": "space",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "drive",
+        "gallery"
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "the file",
+      "content": {
+       "application/octet-stream": {
+        "schema": {
+         "type": "string",
+         "format": "binary"
+        }
+       }
+      }
+     },
+     "206": {
+      "description": "a range"
+     },
+     "416": {
+      "description": "error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   },
+   "head": {
+    "summary": "headers only",
+    "parameters": [
+     {
+      "name": "ref",
+      "in": "path",
+      "required": true,
+      "description": "node ID or path (URL-encoded)",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "space",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "drive",
+        "gallery"
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "ok"
+     },
+     "206": {
+      "description": "a range"
+     }
+    }
+   },
+   "delete": {
+    "summary": "to the trash (permanent=1: for good)",
+    "parameters": [
+     {
+      "name": "ref",
+      "in": "path",
+      "required": true,
+      "description": "node ID or path (URL-encoded)",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "permanent",
+      "in": "query",
+      "schema": {
+       "const": "1"
+      }
+     },
+     {
+      "name": "space",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "drive",
+        "gallery"
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "ok",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Entry"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/move": {
+   "post": {
+    "summary": "move into a folder, optionally rename one item",
+    "parameters": [
+     {
+      "name": "space",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "drive",
+        "gallery"
+       ]
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "from": {
+          "oneOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "array",
+            "items": {
+             "type": "string"
+            }
+           }
+          ]
+         },
+         "to": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "from",
+         "to"
+        ]
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "ok",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "moved": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Entry"
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/jobs": {
+   "get": {
+    "summary": "recent jobs",
+    "responses": {
+     "200": {
+      "description": "ok",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "jobs": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/Job"
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/jobs/{id}": {
+   "get": {
+    "summary": "one job (wait=1: until it ends)",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "name": "wait",
+      "in": "query",
+      "schema": {
+       "const": "1"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "ok",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Job"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "summary": "cancel",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "202": {
+      "description": "ok",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Job"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/events": {
+   "get": {
+    "summary": "Server-Sent Events: hello, changed, job, progress, auth-lost",
+    "responses": {
+     "200": {
+      "description": "text/event-stream",
+      "content": {
+       "text/event-stream": {
+        "schema": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}
