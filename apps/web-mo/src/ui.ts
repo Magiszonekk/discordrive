@@ -337,7 +337,7 @@ type SettingsTab = (typeof SETTINGS_TABS)[number];
 const isSettingsTab = (x: string): x is SettingsTab => (SETTINGS_TABS as readonly string[]).includes(x);
 /** The old one-page anchors (/settings#network, …) and the section ids, mapped to their tab. */
 const SECTION_TAB: Record<string, SettingsTab> = {
-  channels: "channels", account: "account", rescue: "account", security: "account", sharing: "account",
+  channels: "channels", account: "account", rescue: "account", security: "account", apikeys: "account", sharing: "account",
   storage: "storage", network: "network", appearance: "appearance", diagnostics: "app", "desktop-app": "app", browser: "app",
 };
 const SETTINGS_TAB_KEY = "ddn.settings.tab";
@@ -1019,9 +1019,11 @@ async function renderDevices(myId: string | null) {
     ui("dev-count").textContent = String(devs.length);
     list.replaceChildren(
       ...devs.map((d) => {
-        const li = h("li", { title: `ID: ${d.deviceId}` }, icon("phone"), d.name ? h("span", { class: "dname" }, d.name) : h("span", { class: "dname mono" }, short(d.deviceId)));
+        const li = h("li", { title: `ID: ${d.deviceId}` }, icon(d.kind === "api" ? "key" : "phone"), d.name ? h("span", { class: "dname" }, d.name) : h("span", { class: "dname mono" }, short(d.deviceId)));
         li.dataset.ddn = "device";
+        li.dataset.kind = d.kind;
         if (d.deviceId === myId) li.append(chip(t("dev.me"), "accent"));
+        if (d.kind === "api") li.append(chip(t("dev.apiKey")));
         li.append(h("span", { class: "when" }, t("dev.since", { date: fmtDate(d.createdAt) })));
         if (d.deviceId !== myId) {
           const name = d.name ?? short(d.deviceId);
@@ -1277,7 +1279,7 @@ async function renderNow() {
     ui("about-storage").textContent = st.persistent ? t("status.persistent") : t("status.cache");
     ui("about-storage-t").textContent = st.persistent ? t("status.persistent.t") : t("status.cache.t");
     ui("about-device").textContent = st.deviceId ?? "-";
-    await Promise.all([renderShares(), renderStorage(), renderSecurity(), renderAi(), renderDiagnostics(), renderDesktopApp(), channelsUi.paintStorage(wh)]);
+    await Promise.all([renderShares(), tab === "account" ? renderApiKeys() : null, renderStorage(), renderSecurity(), renderAi(), renderDiagnostics(), renderDesktopApp(), channelsUi.paintStorage(wh)]);
     return;
   }
 
@@ -3453,6 +3455,89 @@ function wireSecurity() {
     });
 }
 
+// ── API keys (Settings → Account & security) ─────────────────────────
+/** The account's API keys: devices whose sealed name says "api" (the server cannot tell them apart). */
+async function renderApiKeys() {
+  const list = await core.devices().catch(() => null);
+  if (!list) return;
+  const keys = list.filter((d) => d.kind === "api");
+  ui("ak-count").textContent = keys.length ? tn("ak.count", keys.length) : "";
+  ui("ak-count").hidden = keys.length === 0;
+  ui("ak-empty").hidden = keys.length > 0;
+  $("apikeys").hidden = keys.length === 0;
+  $("apikeys").replaceChildren(
+    ...keys.map((k) => {
+      const name = k.name ?? short(k.deviceId);
+      const li = h(
+        "li",
+        { title: `ID: ${k.deviceId}`, "data-ddn": "apikey", "data-id": k.deviceId },
+        icon("key"),
+        h("span", { class: "dname" }, name),
+        h("span", { class: "when" }, `${t("ak.since", { date: fmtDate(k.createdAt) })} · ${k.lastSeenAt ? t("ak.used", { date: fmtDateTime(k.lastSeenAt) }) : t("ak.unused")}`),
+      );
+      const rm = h("button", { class: "iconbtn danger", type: "button", "data-ddn": "apikey-revoke", "aria-label": t("ak.revoke.aria", { name }), title: t("ak.revoke") }, icon("x"));
+      rm.onclick = () =>
+        void act(rm, async () => {
+          if (!(await confirmDanger(t("ak.revoke.h"), t("ak.revoke.q", { name }), t("ak.revoke.yes")))) return;
+          await core.revokeDevice(k.deviceId);
+          devicesLoaded = false;
+          await renderApiKeys();
+          toast(t("ak.revoked"));
+        });
+      li.append(rm);
+      return li;
+    }),
+  );
+}
+
+function wireApiKeys() {
+  const d = $<HTMLDialogElement>("apikey-dialog");
+  const text = $<HTMLTextAreaElement>("ak-text");
+  // Shown once: the text leaves the page when the dialog closes (no copy kept in the DOM).
+  d.addEventListener("close", () => {
+    text.value = "";
+    ui("ak-example").textContent = "";
+    delete d.dataset.name;
+  });
+  ui<HTMLFormElement>("ak-form").onsubmit = (e) => {
+    e.preventDefault();
+    const btn = $("ak-create");
+    void act(btn, async () => {
+      const input = $<HTMLInputElement>("ak-name");
+      const name = input.value.trim();
+      if (!name) {
+        toast(t("ak.err.name"), "err");
+        input.focus();
+        return;
+      }
+      const made = await core.createApiKey(name);
+      input.value = "";
+      devicesLoaded = false;
+      text.value = made.text;
+      d.dataset.name = name;
+      ui("ak-d-name").textContent = t("ak.d.name", { name });
+      ui("ak-example").textContent = [`ddn login --key-file ${t("ak.file.name")}`, "ddn whoami", "ddn put ./photos /Dysk/Backup/"].join("\n");
+      d.showModal();
+      text.select();
+      await renderApiKeys();
+    });
+  };
+  $("ak-copy").onclick = () => void copy(text.value, t("ak.copied"));
+  $("ak-download").onclick = () => {
+    const body = [t("ak.file.title", { name: d.dataset.name ?? "" }), t("kit.file.server", { url: serverUrl }), t("kit.file.created", { date: fmtDateTime(Date.now()) }), "", text.value, "", t("ak.file.how"), ""].join("\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([body], { type: "text/plain" }));
+    a.download = t("ak.file.name");
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+  };
+  // The key may already be in use (pasted into a script while the dialog was open): show its last use.
+  $("ak-done").onclick = () => {
+    d.close();
+    void renderApiKeys();
+  };
+}
+
 // ── Trash page ──────────────────────────────────────────────────────
 function trashRow(x: TrashRow, i: number) {
   const tr = h("tr", { class: "reveal", style: `--i:${Math.min(i, 12)}`, "data-ddn": "trash-row", "data-id": x.id });
@@ -4451,6 +4536,7 @@ async function main() {
   wireDesktopApp();
   wireSignedOut(server);
   wireKit();
+  wireApiKeys();
   wireHooks();
   channelsUi.wire();
   wireFilesPage();

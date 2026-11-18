@@ -40,7 +40,8 @@ import {
   getChallenge,
   getHealth,
   newAccountKey,
-  openDeviceName,
+  openDeviceInfo,
+  createApiKey,
   openShare,
   passwordStrength,
   protectAccountKey,
@@ -2748,19 +2749,33 @@ export class AppCore {
     });
   }
 
-  /** Devices with their names (sealed with the account key; the server cannot read them). */
+  /** Devices with their names (sealed with the account key; the server cannot read them) and kind (API keys). */
   async devices() {
     const list = await this.http!.listDevices();
     const a = this.acct!;
     return Promise.all(
-      list.map(async (d) => ({
-        deviceId: d.deviceId,
-        createdAt: d.createdAt,
-        addedBy: d.addedBy ?? null,
-        name: await openDeviceName(this.key!, a.accountId, d.deviceId, d.nameSealed),
-        me: d.deviceId === a.deviceId,
-      })),
+      list.map(async (d) => {
+        const info = await openDeviceInfo(this.key!, a.accountId, d.deviceId, d.nameSealed);
+        return {
+          deviceId: d.deviceId,
+          createdAt: d.createdAt,
+          addedBy: d.addedBy ?? null,
+          lastSeenAt: d.lastSeenAt ?? null,
+          name: info?.name ?? null,
+          kind: info?.kind ?? "device",
+          me: d.deviceId === a.deviceId,
+        };
+      }),
     );
+  }
+
+  /**
+   * New API key (a device of this account for scripts, the command line, a local service), registered
+   * and named by this device. The text is the only copy of its secret: shown once, never stored here.
+   */
+  async createApiKey(name: string): Promise<{ text: string; deviceId: string }> {
+    const a = this.acct!;
+    return createApiKey(this.http!, { server: a.serverUrl, instanceId: a.instanceId, accountId: a.accountId, key: this.key! }, name);
   }
 
   async renameDevice(deviceId: string, name: string) {

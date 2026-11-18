@@ -719,6 +719,20 @@
           </div>
         </section>
 
+        <section id="apikeys" aria-labelledby="ak-h" data-ddn="apikeys-sec" data-tab="account">
+          <h2 class="sec-h"><span id="ak-h" data-i18n="ak.h">API keys</span><span class="chip" data-ddn-ui="ak-count"></span></h2>
+          <p class="sec-lead" data-i18n="ak.lead"></p>
+          <div class="sec-body">
+            <div class="note warn"><svg class="i"><use href="#i-key"/></svg><p data-i18n-html="ak.warn"></p></div>
+            <ul class="list" data-ddn="apikeys"></ul>
+            <p class="hint" data-ddn-ui="ak-empty" data-i18n="ak.none" hidden></p>
+            <form class="inline" data-ddn-ui="ak-form">
+              <label class="field"><span class="lab" data-i18n="ak.name">Key name</span><input class="input" data-ddn="ak-name" maxlength="64" autocomplete="off" spellcheck="false" data-i18n-attr="placeholder=ak.name.ph"></label>
+              <button class="btn primary tall" type="submit" data-ddn="ak-create"><svg class="i"><use href="#i-key"/></svg><span data-i18n="ak.create">Create key</span></button>
+            </form>
+          </div>
+        </section>
+
         <section id="ai" aria-labelledby="ai-h" data-ddn="ai-sec" data-tab="account">
           <h2 class="sec-h"><span id="ai-h" data-i18n="ai.h">AI search</span><span class="chip" data-ddn="ai-state"></span></h2>
           <p class="sec-lead" data-i18n="ai.lead"></p>
@@ -895,6 +909,23 @@
     </div>
     <label class="ack no-print"><input type="checkbox" data-ddn="kit-ack"><span data-i18n="kit.ack"></span></label>
     <div class="modal-acts no-print"><button class="btn primary" data-ddn="kit-done" type="button" disabled data-i18n="kit.done">Done</button></div>
+  </div>
+</dialog>
+
+<!-- A new API key: shown once -->
+<dialog class="modal lg" data-ddn="apikey-dialog" aria-labelledby="akd-h">
+  <div class="modal-h"><h2 id="akd-h"><svg class="i"><use href="#i-key"/></svg><span data-i18n="ak.d.h">Your new API key</span></h2></div>
+  <div class="modal-b">
+    <p class="muted" data-i18n="ak.d.lead"></p>
+    <div class="note warn"><svg class="i"><use href="#i-alert"/></svg><p data-i18n-html="ak.d.warn"></p></div>
+    <label class="field"><span class="lab" data-ddn-ui="ak-d-name"></span><textarea class="codebox" data-ddn="ak-text" readonly rows="4" spellcheck="false"></textarea></label>
+    <div class="row-btns">
+      <button class="btn" data-ddn="ak-copy" type="button" data-i18n="kit.copy">Copy</button>
+      <button class="btn" data-ddn="ak-download" type="button"><svg class="i"><use href="#i-download"/></svg><span data-i18n="kit.download">Download file</span></button>
+    </div>
+    <p class="label-mono" data-i18n="ak.d.example">Example</p>
+    <pre class="codebox" data-ddn-ui="ak-example"></pre>
+    <div class="modal-acts"><button class="btn primary" data-ddn="ak-done" type="button" data-i18n="ak.d.done">I saved it</button></div>
   </div>
 </dialog>
 
