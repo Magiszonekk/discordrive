@@ -1,16 +1,33 @@
 // Process entry of `ddn`: wires the terminal (stdin, stdout, a progress line on stderr) to main().
 import { main } from "./cli.js";
 
-// The reader went away (`ddn ls | head`, `ddn get x - | head -c 100`): stop quietly, as other tools do.
-for (const st of [process.stdout, process.stderr]) st.on("error", (e: NodeJS.ErrnoException) => (e.code === "EPIPE" ? process.exit(0) : undefined));
+// The reader went away (`ddn ls | head`, `ddn get x - | head -c 100`): a listing stops quietly, as other
+// tools do. A transfer (put, get to files) is not cut short by its report: it finishes, writing nothing more,
+// and exits with its own result (a backup piped into `grep -m1` must not leave 48 of 50 files unsent).
+const TRANSFERS = new Set(["put", "get"]);
+const cmd = process.argv.slice(2).find((a) => !a.startsWith("-"));
+let stdoutGone = false;
+let stderrGone = false;
+for (const st of [process.stdout, process.stderr])
+  st.on("error", (e: NodeJS.ErrnoException) => {
+    if (e.code !== "EPIPE") return;
+    if (st === process.stdout) stdoutGone = true;
+    else stderrGone = true;
+    // get to standard output: its reader is the data's destination, nothing left to do.
+    const toStdout = cmd === "get" && process.argv.includes("-");
+    if (!TRANSFERS.has(cmd ?? "") || toStdout) process.exit(0);
+  });
+const write = (st: NodeJS.WriteStream, gone: () => boolean, l: string) => {
+  if (!gone()) st.write(l);
+};
 
 const tty = process.stderr.isTTY;
 let shown = false;
 const code = await main(process.argv.slice(2), {
-  out: (l) => process.stdout.write(l + "\n"),
+  out: (l) => write(process.stdout, () => stdoutGone, l + "\n"),
   err: (l) => {
     if (shown) (process.stderr.write("\r\x1b[2K"), (shown = false));
-    process.stderr.write(l + "\n");
+    write(process.stderr, () => stderrGone, l + "\n");
   },
   progress: tty
     ? (l) => {

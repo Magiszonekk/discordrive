@@ -51,7 +51,7 @@ A node ID (the `id` printed by `--json`) works wherever a path does.
 | `ddn ls [PATH] [-l]` | list a folder (default `/`); `-l` with sizes and dates |
 | `ddn stat PATH` | one file (size, date, SHA-256) or folder (counts) |
 | `ddn put SRC… DEST` | upload files and folders (folders recursively, empty ones too). DEST: an existing folder, or a path ending in `/` (made with `--parents`), or a new name for one file |
-| `ddn get PATH [DEST]` | download a file (into DEST, a folder or a file name; default the current folder; `-` = standard output). `-r` for a folder |
+| `ddn get PATH [DEST]` | download a file (into DEST, a folder or a file name; default the current folder; `-` = standard output). `-r` for a folder (empty folders too) |
 | `ddn mkdir [-p] PATH` | make a folder (`-p`: with its parents, no error if it exists) |
 | `ddn mv SRC… DEST` | move into a folder, or rename one item (`ddn mv /a.txt /b/c.txt`) |
 | `ddn rm PATH…` | move to the trash (30 days, restore in the app). `--permanent` deletes for good: asks, or `--yes` |
@@ -64,7 +64,8 @@ it stopped (run the same `put` again). Downloads are written to `<name>.ddnpart`
 whole file's SHA-256 matched.
 
 Progress goes to standard error (on a terminal); `--quiet` / `-q` turns it off. Output piped into a
-reader that stops early (`ddn ls | head`) ends quietly. An interrupted `get` leaves `<name>.ddnpart`
+reader that stops early ends quietly: a listing (`ddn ls | head`) stops there; `put` and `get` to files
+finish the transfer without printing more and exit with its result. An interrupted `get` leaves `<name>.ddnpart`
 and starts over on the next try.
 
 ## Output for scripts: `--json`

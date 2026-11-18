@@ -157,6 +157,8 @@ for (const mode of ["metadata-only", "e2ee", "plain"] as Mode[]) {
       expect(await run(x, "get", "/Backup/tree", dl)).toBe(2);
       expect(await run(x, "get", "-r", "/Backup/tree", dl)).toBe(0);
       expect(readFileSync(join(dl, "tree", "sub", "deeper", "c.txt"), "utf8")).toBe("gamma");
+      // Empty folders come back too.
+      expect(statSync(join(dl, "tree", "empty", "inner")).isDirectory()).toBe(true);
 
       // Not found: exit 3.
       expect(await run(x, "get", "/nope.bin", dl)).toBe(3);

@@ -67,19 +67,27 @@ r.missing = (await ddn("get", "/Smoke/none.bin", tmp)).code;
 // A reader that stops early: quiet end, no Node stack (exit 0 or the shell's SIGPIPE status).
 const pipe = (cmd: string) =>
   new Promise<{ code: number; err: string }>((res) => {
-    execFile("/bin/sh", ["-c", cmd], { env }, (e, _o, err) => res({ code: e ? ((e as { code?: number }).code ?? 1) : 0, err }));
+    execFile("bash", ["-c", cmd], { env }, (e, _o, err) => res({ code: e ? ((e as { code?: number }).code ?? 1) : 0, err }));
   });
 if (process.platform !== "win32") {
   for (let i = 0; i < 60; i++) await ddn("mkdir", `/Smoke/d${String(i).padStart(2, "0")}`);
   const q = JSON.stringify(process.execPath);
   const b = JSON.stringify(bin);
+  // A transfer whose report is cut short (`| grep -m1`, `| head -1`) still sends every file.
+  const many = join(tmp, "many");
+  mkdirSync(many);
+  for (let i = 0; i < 10; i++) writeFileSync(join(many, `f${i}.txt`), `file ${i}`);
+  const cut = await pipe(`set -o pipefail; ${JSON.stringify(process.execPath)} ${JSON.stringify(bin)} put --json --parents ${JSON.stringify(many)} /Cut/ | head -1 >/dev/null`);
+  const left = await ddn("ls", "/Cut/many", "--json");
+  r.putCut = { code: cut.code, quiet: !/EPIPE|node:events|Error:/.test(cut.err), files: left.out.trim().split("\n").filter((l) => l.includes('"kind":"file"')).length };
   r.epipe = [await pipe(`${q} ${b} ls /Smoke --json | head -1 >/dev/null`), await pipe(`${q} ${b} get /Smoke/big.bin - | head -c 100 >/dev/null`)].map((x) => ({ code: x.code, quiet: !/EPIPE|node:events|Error:/.test(x.err) }));
 }
 await api.revokeDevice(made.deviceId);
 const rev = await ddn("ls", "/");
 r.revoked = { code: rev.code, err: rev.err.trim() };
 console.log(JSON.stringify(r, null, 1));
-const epipeOk = !r.epipe || (r.epipe as { quiet: boolean }[]).every((x) => x.quiet);
+const pc = r.putCut as { code: number; quiet: boolean; files: number } | undefined;
+const epipeOk = (!r.epipe || (r.epipe as { quiet: boolean }[]).every((x) => x.quiet)) && (!pc || (pc.files === 10 && pc.quiet));
 const ok = epipeOk && r.notSignedIn === 5 && r.login === 0 && put.code === 0 && get.code === 0 && r.sha256Ok === true && r.missing === 3 && rev.code === 5;
 await srv.close();
 await fake.close();
