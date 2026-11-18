@@ -2482,7 +2482,12 @@ try {
     // Esc does not close it (the key would be lost), and no earlier error toast hangs over it.
     await p.keyboard.press("Escape");
     await p.waitForTimeout(300);
-    ak.escKeepsOpen = await p.isVisible("[data-ddn=apikey-dialog][open]");
+    // A second Esc after a click and a pause (a new close request, not cancellable again in Chromium).
+    await p.click("[data-ddn=ak-text]");
+    await p.waitForTimeout(1000);
+    await p.keyboard.press("Escape");
+    await p.waitForTimeout(300);
+    ak.escKeepsOpen = (await p.isVisible("[data-ddn=apikey-dialog][open]")) && (await p.inputValue("[data-ddn=ak-text]")) === text;
     ak.errToastsOverDialog = await p.$$eval(".toast.err", (e) => e.length);
     const k = await decodeApiKey(text);
     ak.server = k.server === base;

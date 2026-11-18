@@ -3475,7 +3475,7 @@ async function renderApiKeys() {
         { title: `ID: ${k.deviceId}`, "data-ddn": "apikey", "data-id": k.deviceId },
         icon("key"),
         h("span", { class: "dname" }, name),
-        h("span", { class: "when" }, `${t("ak.since", { date: fmtDate(k.createdAt) })} · ${k.lastSeenAt ? t("ak.used", { date: fmtDateTime(k.lastSeenAt) }) : t("ak.unused")}`),
+        h("span", { class: "when" }, `${t("ak.since", { date: fmtDate(k.createdAt) })} · ${k.lastSeenAt ? t("ak.used", { date: new Date(k.lastSeenAt).toLocaleString(locale(), { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) }) : t("ak.unused")}`),
       );
       const rm = h("button", { class: "iconbtn danger", type: "button", "data-ddn": "apikey-revoke", "aria-label": t("ak.revoke.aria", { name }), title: t("ak.revoke") }, icon("x"));
       rm.onclick = () =>
@@ -3501,9 +3501,22 @@ function wireApiKeys() {
     ui("ak-example").textContent = "";
     delete d.dataset.name;
   };
-  d.addEventListener("close", forget);
   // Esc would lose the key for good: only "I saved it" closes this dialog (like the forced rescue kit).
+  // Chromium lets a page cancel the close request only once per user activation, so a second Esc
+  // still closes it: stop the key itself, and should it close anyway, open it again with the key.
+  let saved = false;
+  d.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") e.preventDefault();
+  });
   d.addEventListener("cancel", (e) => e.preventDefault());
+  d.addEventListener("close", () => {
+    if (!saved && text.value) {
+      d.showModal();
+      return;
+    }
+    saved = false;
+    forget();
+  });
   ui<HTMLFormElement>("ak-form").onsubmit = (e) => {
     e.preventDefault();
     const btn = $("ak-create");
@@ -3540,6 +3553,7 @@ function wireApiKeys() {
   };
   // The key may already be in use (pasted into a script while the dialog was open): show its last use.
   $("ak-done").onclick = () => {
+    saved = true;
     forget();
     d.close();
     void renderApiKeys();
