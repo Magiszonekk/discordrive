@@ -3531,7 +3531,11 @@ function wireApiKeys() {
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
   };
-  $("ak-done").onclick = () => d.close();
+  // The key may already be in use (pasted into a script while the dialog was open): show its last use.
+  $("ak-done").onclick = () => {
+    d.close();
+    void renderApiKeys();
+  };
 }
 
 // ── Trash page ──────────────────────────────────────────────────────
