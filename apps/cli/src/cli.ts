@@ -530,7 +530,10 @@ const COMMANDS: Record<string, Cmd> = {
     // DEST: an existing directory (into it), else a file name; default: the current directory.
     const dest = resolve(destArg ?? ".");
     const jobs: { id: string; target: string }[] = [];
+    const dirs: string[] = [];
     const walk = (fid: string, dir: string) => {
+      // Every folder is made, empty ones too (the tree comes back as put sent it).
+      dirs.push(dir);
       let after: string | undefined;
       for (;;) {
         const page = c.core.list(fid, after, 500);
@@ -545,6 +548,7 @@ const COMMANDS: Record<string, Cmd> = {
     if (isFolder) walk(id, existsSync(dest) && statSync(dest).isDirectory() ? join(dest, safeName(n?.name || "drive")) : dest);
     else jobs.push({ id, target: existsSync(dest) && statSync(dest).isDirectory() ? join(dest, safeName(n!.name)) : dest });
     let failed = 0;
+    for (const d of dirs) mkdirSync(d, { recursive: true });
     for (const j of jobs) {
       try {
         mkdirSync(resolve(j.target, ".."), { recursive: true });
