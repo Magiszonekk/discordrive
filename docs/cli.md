@@ -43,14 +43,14 @@ with it). The key is then kept in memory only; the file list and resume points g
 ## Commands
 
 Paths are those of the Drive in the app (`/Photos/2024/a.jpg`); `--gallery` uses the Gallery instead.
-A node ID (32 hex characters, as printed by `--json`) works wherever a path does.
+A node ID (the `id` printed by `--json`) works wherever a path does.
 
 | Command | What it does |
 |---|---|
 | `ddn whoami` | server, mode, account, device, channels, files and space used |
 | `ddn ls [PATH] [-l]` | list a folder (default `/`); `-l` with sizes and dates |
 | `ddn stat PATH` | one file (size, date, SHA-256) or folder (counts) |
-| `ddn put SRC… DEST` | upload files and folders (folders recursively). DEST: an existing folder, or a path ending in `/` (made with `--parents`), or a new name for one file |
+| `ddn put SRC… DEST` | upload files and folders (folders recursively, empty ones too). DEST: an existing folder, or a path ending in `/` (made with `--parents`), or a new name for one file |
 | `ddn get PATH [DEST]` | download a file (into DEST, a folder or a file name; default the current folder; `-` = standard output). `-r` for a folder |
 | `ddn mkdir [-p] PATH` | make a folder (`-p`: with its parents, no error if it exists) |
 | `ddn mv SRC… DEST` | move into a folder, or rename one item (`ddn mv /a.txt /b/c.txt`) |
@@ -63,7 +63,9 @@ file of that name) or `skip`. An interrupted upload of the same file to the same
 it stopped (run the same `put` again). Downloads are written to `<name>.ddnpart` and renamed when the
 whole file's SHA-256 matched.
 
-Progress goes to standard error (on a terminal); `--quiet` / `-q` turns it off.
+Progress goes to standard error (on a terminal); `--quiet` / `-q` turns it off. Output piped into a
+reader that stops early (`ddn ls | head`) ends quietly. An interrupted `get` leaves `<name>.ddnpart`
+and starts over on the next try.
 
 ## Output for scripts: `--json`
 
@@ -76,6 +78,7 @@ One JSON object per line on standard output. Fields are only ever added, not ren
   per file, `{"event":"failed","source","error"}` for a file that failed.
 - `get`: `{"event":"downloaded","id","path","target","size","sha256"}`, or `failed`.
 - `mv`: `{"event":"moved","id","path","outcome"}`; `rm`: `{"event":"trashed"|"deleted","id","path"}`.
+- `put` of a folder also prints `{"event":"folder","id","path"}` for each empty folder it made.
 - `mkdir`: `{"id","path","created"}`; `find`: `{"id","name","kind","size","path"}`.
 - `whoami`: `{"server","mode","accountId","deviceId","channels","canUpload","files","bytes","version"}`.
 - `login`: `{"ok":true,"server","mode","accountId","deviceId","profile"}`.

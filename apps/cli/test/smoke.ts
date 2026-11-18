@@ -64,11 +64,23 @@ r.getOut = (get.out + get.err).trim().slice(-600);
 r.putErr = put.err.trim().slice(-600);
 r.sha256Ok = get.code === 0 && (await sha(join(tmp, "back.bin"))) === want;
 r.missing = (await ddn("get", "/Smoke/none.bin", tmp)).code;
+// A reader that stops early: quiet end, no Node stack (exit 0 or the shell's SIGPIPE status).
+const pipe = (cmd: string) =>
+  new Promise<{ code: number; err: string }>((res) => {
+    execFile("/bin/sh", ["-c", cmd], { env }, (e, _o, err) => res({ code: e ? ((e as { code?: number }).code ?? 1) : 0, err }));
+  });
+if (process.platform !== "win32") {
+  for (let i = 0; i < 60; i++) await ddn("mkdir", `/Smoke/d${String(i).padStart(2, "0")}`);
+  const q = JSON.stringify(process.execPath);
+  const b = JSON.stringify(bin);
+  r.epipe = [await pipe(`${q} ${b} ls /Smoke --json | head -1 >/dev/null`), await pipe(`${q} ${b} get /Smoke/big.bin - | head -c 100 >/dev/null`)].map((x) => ({ code: x.code, quiet: !/EPIPE|node:events|Error:/.test(x.err) }));
+}
 await api.revokeDevice(made.deviceId);
 const rev = await ddn("ls", "/");
 r.revoked = { code: rev.code, err: rev.err.trim() };
 console.log(JSON.stringify(r, null, 1));
-const ok = r.notSignedIn === 5 && r.login === 0 && put.code === 0 && get.code === 0 && r.sha256Ok === true && r.missing === 3 && rev.code === 5;
+const epipeOk = !r.epipe || (r.epipe as { quiet: boolean }[]).every((x) => x.quiet);
+const ok = epipeOk && r.notSignedIn === 5 && r.login === 0 && put.code === 0 && get.code === 0 && r.sha256Ok === true && r.missing === 3 && rev.code === 5;
 await srv.close();
 await fake.close();
 console.log(ok ? "SMOKE OK" : "SMOKE FAILED");

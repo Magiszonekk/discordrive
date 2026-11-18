@@ -19,7 +19,7 @@
 // Exit codes: 0 ok, 1 other failure, 2 usage, 3 no such file, 4 network/server, 5 key refused (revoked,
 // damaged), 6 limits / no channel to upload to.
 
-import { createWriteStream, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { getHealth, ApiKeyError, decodeApiKey, isNetworkError, ServerError, h2FetchMaybe } from "./deps.js";
 import { CliError, EXIT, configRoot, ensurePrivateDir, envKeyText, forgetProfile, keyLine, parseArgs, profileDir, readProfile, writeProfile, type ModeName, type ParsedArgs } from "./profile.js";
@@ -137,6 +137,7 @@ export async function main(argv: string[], io: CliIo): Promise<number> {
   try {
     if (p.cmd === "login") return await login(io, p, json);
     if (p.cmd === "logout") return logout(io, p, json);
+    if (!COMMANDS[p.cmd]) throw new CliError(EXIT.usage, `unknown command ${p.cmd} (ddn help)`);
     const opened = await openAccount(io, p);
     core = opened.core;
     const c: Ctx = { io, p, json, quiet: p.opts.has("--quiet") || p.opts.has("-q"), core, profile: opened.profile, space: p.opts.has("--gallery") ? "gallery" : "drive" };
@@ -272,7 +273,8 @@ function splitPath(path: string): string[] {
 
 /** Node ID of a path (or a node ID given as is); null if it does not exist. */
 function resolveRef(c: Ctx, ref: string): string | null {
-  if (/^[0-9a-f]{32}$/.test(ref) && c.core.node(ref)) return ref;
+  // A node ID as printed by --json (folders: 32 hex, files: 22 base64url characters); a path otherwise.
+  if (!ref.includes("/") && /^[A-Za-z0-9_-]{16,64}$/.test(ref) && c.core.node(ref)) return ref;
   let id: string = ROOTS[c.space];
   for (const part of splitPath(ref)) {
     if (part === "..") {
@@ -453,6 +455,7 @@ const COMMANDS: Record<string, Cmd> = {
     let files = 0;
     let bytes = 0;
     const jobs: { path: string; folder: string[]; name: string }[] = [];
+    const emptyFolders: string[][] = [];
     for (const s of srcs) {
       if (!existsSync(s)) {
         failed++;
@@ -462,21 +465,29 @@ const COMMANDS: Record<string, Cmd> = {
       }
       if (statSync(s).isDirectory()) {
         for (const f of await c.core.listPaths([resolve(s)])) jobs.push({ path: f.path, folder: f.folder, name: f.name });
+        // Folders with no file in them are made too (the tree arrives as it is on disk).
+        for (const d of emptyDirs(resolve(s))) emptyFolders.push(d);
       } else jobs.push({ path: resolve(s), folder: [], name: rename ?? basename(s) });
     }
     const folders = new Map<string, string>();
+    const folderOf = async (names: string[]) => {
+      const key = names.join("/");
+      let id = folders.get(key);
+      if (!id) {
+        id = destId!;
+        for (const part of names) id = c.core.childNamed(id, part) ?? (await c.core.mkdir(part, id));
+        folders.set(key, id);
+      }
+      return id;
+    };
+    for (const names of emptyFolders) {
+      const id = await folderOf(names);
+      emit(c, { event: "folder", id, path: pathOfId(c, id) }, null);
+    }
     for (const j of jobs) {
       try {
         let into = destId;
-        if (j.folder.length) {
-          const key = j.folder.join("/");
-          into = folders.get(key) ?? (await (async () => {
-            let id = destId!;
-            for (const part of j.folder) id = c.core.childNamed(id, part) ?? (await c.core.mkdir(part, id));
-            folders.set(key, id);
-            return id;
-          })());
-        }
+        if (j.folder.length) into = await folderOf(j.folder);
         const r = await c.core.uploadFile(j.path, into, j.name, onConflict as "rename", progress(c, j.name));
         c.io.progress?.(null);
         files += r.skipped ? 0 : 1;
@@ -507,7 +518,13 @@ const COMMANDS: Record<string, Cmd> = {
     if (destArg === "-") {
       if (isFolder) throw new CliError(EXIT.usage, "a folder cannot go to standard output");
       const out = c.io.stdout ?? process.stdout;
-      await c.core.downloadTo(id, { write: (d) => new Promise<void>((res, rej) => out.write(d, (e) => (e ? rej(e) : res()))) }, progress(c, n!.name));
+      try {
+        await c.core.downloadTo(id, { write: (d) => new Promise<void>((res, rej) => out.write(d, (e) => (e ? rej(e) : res()))) }, progress(c, n!.name));
+      } catch (e) {
+        // The reader closed the pipe (`| head -c 100`): what it wanted was delivered.
+        if ((e as NodeJS.ErrnoException)?.code === "EPIPE") return EXIT.ok;
+        throw e;
+      }
       return EXIT.ok;
     }
     // DEST: an existing directory (into it), else a file name; default: the current directory.
@@ -606,6 +623,24 @@ const COMMANDS: Record<string, Cmd> = {
     return hits.length ? EXIT.ok : EXIT.notFound;
   },
 };
+
+/** Folders under `dir` with no file anywhere below them, as name paths starting with `dir`'s own name. */
+function emptyDirs(dir: string): string[][] {
+  const out: string[][] = [];
+  const base = basename(dir);
+  const go = (d: string, rel: string[]): boolean => {
+    let hasFile = false;
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (e.isDirectory()) hasFile = go(join(d, e.name), [...rel, e.name]) || hasFile;
+      else if (e.isFile()) hasFile = true;
+    }
+    if (!hasFile) out.push([base, ...rel]);
+    return hasFile;
+  };
+  go(dir, []);
+  // Only the deepest ones: making them makes their parents.
+  return out.filter((p) => !out.some((q) => q.length > p.length && p.every((x, i) => q[i] === x)));
+}
 
 function safeName(name: string): string {
   let s = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/[. ]+$/, "");
