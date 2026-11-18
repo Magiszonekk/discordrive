@@ -78,6 +78,10 @@ if (process.platform !== "win32") {
   mkdirSync(many);
   for (let i = 0; i < 10; i++) writeFileSync(join(many, `f${i}.txt`), `file ${i}`);
   const cut = await pipe(`set -o pipefail; ${JSON.stringify(process.execPath)} ${JSON.stringify(bin)} put --json --parents ${JSON.stringify(many)} /Cut/ | head -1 >/dev/null`);
+  // The same with an option and its value before the command (`--profile P put …`).
+  const cut2 = await pipe(`set -o pipefail; ${JSON.stringify(process.execPath)} ${JSON.stringify(bin)} --profile default put --json --parents ${JSON.stringify(many)} /Cut2/ | head -1 >/dev/null`);
+  const left2 = await ddn("ls", "/Cut2/many", "--json");
+  r.putCutProfile = { code: cut2.code, files: left2.out.trim().split("\n").filter((l) => l.includes('"kind":"file"')).length };
   const left = await ddn("ls", "/Cut/many", "--json");
   r.putCut = { code: cut.code, quiet: !/EPIPE|node:events|Error:/.test(cut.err), files: left.out.trim().split("\n").filter((l) => l.includes('"kind":"file"')).length };
   r.epipe = [await pipe(`${q} ${b} ls /Smoke --json | head -1 >/dev/null`), await pipe(`${q} ${b} get /Smoke/big.bin - | head -c 100 >/dev/null`)].map((x) => ({ code: x.code, quiet: !/EPIPE|node:events|Error:/.test(x.err) }));
@@ -87,7 +91,7 @@ const rev = await ddn("ls", "/");
 r.revoked = { code: rev.code, err: rev.err.trim() };
 console.log(JSON.stringify(r, null, 1));
 const pc = r.putCut as { code: number; quiet: boolean; files: number } | undefined;
-const epipeOk = (!r.epipe || (r.epipe as { quiet: boolean }[]).every((x) => x.quiet)) && (!pc || (pc.files === 10 && pc.quiet));
+const epipeOk = (!r.epipe || (r.epipe as { quiet: boolean }[]).every((x) => x.quiet)) && (!pc || (pc.files === 10 && pc.quiet)) && (!r.putCutProfile || (r.putCutProfile as { files: number }).files === 10);
 const ok = epipeOk && r.notSignedIn === 5 && r.login === 0 && put.code === 0 && get.code === 0 && r.sha256Ok === true && r.missing === 3 && rev.code === 5;
 await srv.close();
 await fake.close();
