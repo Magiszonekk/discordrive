@@ -2479,6 +2479,11 @@ try {
     ak.prefix = text.startsWith("ddn-api1:");
     ak.example = /ddn login/.test((await p.textContent("[data-ddn-ui=ak-example]")) ?? "");
     await shot(p, "44a-api-key-created");
+    // Esc does not close it (the key would be lost), and no earlier error toast hangs over it.
+    await p.keyboard.press("Escape");
+    await p.waitForTimeout(300);
+    ak.escKeepsOpen = await p.isVisible("[data-ddn=apikey-dialog][open]");
+    ak.errToastsOverDialog = await p.$$eval(".toast.err", (e) => e.length);
     const k = await decodeApiKey(text);
     ak.server = k.server === base;
     const c = await apiKeyHttp(k);
@@ -2724,7 +2729,7 @@ try {
     share: typeof share === "string" ? !!remote : share.sha256Ok === true && share.revokedStopsNew === true && share.linkHasKeyAfterHash === true,
     apiKeys: ((a) =>
       !!a && a.emptyShown === true && a.nameRequired === true && a.prefix === true && a.example === true && a.server === true && a.signsIn === true &&
-      JSON.stringify(a.kind) === JSON.stringify({ name: "Skrypt kopii", kind: "api" }) && a.textGoneAfterClose === true && /Skrypt kopii/.test(String(a.row)) &&
+      JSON.stringify(a.kind) === JSON.stringify({ name: "Skrypt kopii", kind: "api" }) && a.textGoneAfterClose === true && a.escKeepsOpen === true && a.errToastsOverDialog === 0 && /Skrypt kopii/.test(String(a.row)) &&
       a.onDevices === true && a.revokedRefused === 401 && a.freshRefused === 401 && a.emptyAgain === true)(r.apiKeys as Record<string, unknown> | undefined),
     pairing: (r.sas as { match: boolean }).match && r.phoneNoKitPrompt === true && r.phoneDownloadOk === true,
     pairRetry: (() => {

@@ -1030,7 +1030,9 @@ async function renderDevices(myId: string | null) {
           const rm = h("button", { class: "iconbtn danger", type: "button", "aria-label": t("dev.revoke.aria", { name }), title: t("dev.revoke") }, icon("x"));
           rm.onclick = () =>
             void act(rm, async () => {
-              if (!confirm(t("dev.revoke.confirm", { name }))) return;
+              // An API key: the same warning as in Settings (whoever copied it could already read the files).
+              const ok = d.kind === "api" ? await confirmDanger(t("ak.revoke.h"), t("ak.revoke.q", { name }), t("ak.revoke.yes")) : confirm(t("dev.revoke.confirm", { name }));
+              if (!ok) return;
               await core.revokeDevice(d.deviceId);
               devicesLoaded = false;
               await render();
@@ -3494,11 +3496,14 @@ function wireApiKeys() {
   const d = $<HTMLDialogElement>("apikey-dialog");
   const text = $<HTMLTextAreaElement>("ak-text");
   // Shown once: the text leaves the page when the dialog closes (no copy kept in the DOM).
-  d.addEventListener("close", () => {
+  const forget = () => {
     text.value = "";
     ui("ak-example").textContent = "";
     delete d.dataset.name;
-  });
+  };
+  d.addEventListener("close", forget);
+  // Esc would lose the key for good: only "I saved it" closes this dialog (like the forced rescue kit).
+  d.addEventListener("cancel", (e) => e.preventDefault());
   ui<HTMLFormElement>("ak-form").onsubmit = (e) => {
     e.preventDefault();
     const btn = $("ak-create");
@@ -3517,6 +3522,8 @@ function wireApiKeys() {
       d.dataset.name = name;
       ui("ak-d-name").textContent = t("ak.d.name", { name });
       ui("ak-example").textContent = [`ddn login --key-file ${t("ak.file.name")}`, "ddn whoami", "ddn put ./photos /Dysk/Backup/"].join("\n");
+      // Errors of earlier attempts ("give the key a name") would hang over the dialog.
+      ui("toasts").querySelectorAll(".toast.err").forEach((x) => x.remove());
       d.showModal();
       text.select();
       await renderApiKeys();
@@ -3533,6 +3540,7 @@ function wireApiKeys() {
   };
   // The key may already be in use (pasted into a script while the dialog was open): show its last use.
   $("ak-done").onclick = () => {
+    forget();
     d.close();
     void renderApiKeys();
   };
