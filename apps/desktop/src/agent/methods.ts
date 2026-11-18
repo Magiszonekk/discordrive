@@ -131,6 +131,7 @@ export const CORE_METHODS: Record<string, string[]> = {
   devices: [],
   renameDevice: ["s", "s"],
   revokeDevice: ["s"],
+  createApiKey: ["s"],
   rescueKit: [],
   confirmKitSaved: [],
   kitReminder: [],

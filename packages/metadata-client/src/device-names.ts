@@ -14,17 +14,32 @@ export function cleanDeviceName(name: string): string {
   return [...n].slice(0, MAX_DEVICE_NAME).join("") || "device";
 }
 
-export async function sealDeviceName(key: AccountKey, accountId: string, deviceId: string, name: string): Promise<string> {
-  return toBase64(await sealJson(await key.subkey("device-name"), { n: cleanDeviceName(name) }, aad(accountId, deviceId)));
+/**
+ * What kind of device an entry is. "api": an API key (a device whose key was handed to scripts, the
+ * command line or a local service). Kept next to the name, sealed: the server cannot tell an API key
+ * from any other device. Older apps read only the name and ignore the kind.
+ */
+export type DeviceKind = "device" | "api";
+
+export async function sealDeviceName(key: AccountKey, accountId: string, deviceId: string, name: string, kind: DeviceKind = "device"): Promise<string> {
+  const v: { n: string; k?: DeviceKind } = { n: cleanDeviceName(name) };
+  if (kind !== "device") v.k = kind;
+  return toBase64(await sealJson(await key.subkey("device-name"), v, aad(accountId, deviceId)));
+}
+
+/** Name and kind; null if missing or not decryptable (e.g. tampered): the UI shows the short ID instead. */
+export async function openDeviceInfo(key: AccountKey, accountId: string, deviceId: string, sealed: string | null | undefined): Promise<{ name: string; kind: DeviceKind } | null> {
+  if (!sealed) return null;
+  try {
+    const v = await unsealJson<{ n: string; k?: string }>(await key.subkey("device-name"), fromBase64(sealed), aad(accountId, deviceId), "device name");
+    if (typeof v?.n !== "string") return null;
+    return { name: v.n, kind: v.k === "api" ? "api" : "device" };
+  } catch {
+    return null;
+  }
 }
 
 /** Null if missing or not decryptable (e.g. tampered): the UI shows the short ID instead. */
 export async function openDeviceName(key: AccountKey, accountId: string, deviceId: string, sealed: string | null | undefined): Promise<string | null> {
-  if (!sealed) return null;
-  try {
-    const v = await unsealJson<{ n: string }>(await key.subkey("device-name"), fromBase64(sealed), aad(accountId, deviceId), "device name");
-    return typeof v?.n === "string" ? v.n : null;
-  } catch {
-    return null;
-  }
+  return (await openDeviceInfo(key, accountId, deviceId, sealed))?.name ?? null;
 }

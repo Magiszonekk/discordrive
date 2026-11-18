@@ -2459,6 +2459,54 @@ try {
     (r.oldBrowser as Record<string, unknown>).modernNoNote = !(await p.$("[data-ddn=old-browser]"));
   }
 
+  step("api keys");
+  // Settings → Account & security → API keys: create (shown once), the key signs in from outside the
+  // browser and reads the account, it is listed (also on Devices, as an API key), revoked → refused.
+  {
+    const ak: Record<string, unknown> = {};
+    const { apiKeyHttp, decodeApiKey, openDeviceInfo } = await import("@ddv4/metadata-client");
+    await nav(p, "settings", "account");
+    await p.waitForSelector("[data-ddn=apikeys-sec]", { state: "visible" });
+    ak.emptyShown = await p.isVisible("[data-ddn-ui=ak-empty]");
+    await p.click("[data-ddn=ak-create]");
+    ak.nameRequired = await p
+      .waitForFunction(() => [...document.querySelectorAll(".toast.err")].some((x) => /name|nazw/i.test(x.textContent ?? "")), null, { timeout: 5_000 })
+      .then(() => true, () => false);
+    await typeInto(p, "[data-ddn=ak-name]", "Skrypt kopii");
+    await p.click("[data-ddn=ak-create]");
+    await p.waitForSelector("[data-ddn=apikey-dialog][open]", { timeout: 20_000 });
+    const text = await p.inputValue("[data-ddn=ak-text]");
+    ak.prefix = text.startsWith("ddn-api1:");
+    ak.example = /ddn login/.test((await p.textContent("[data-ddn-ui=ak-example]")) ?? "");
+    await shot(p, "44a-api-key-created");
+    const k = await decodeApiKey(text);
+    ak.server = k.server === base;
+    const c = await apiKeyHttp(k);
+    const listed = await c.http.listDevices();
+    const me = listed.find((d) => d.deviceId === k.deviceId);
+    ak.signsIn = !!me && typeof me.lastSeenAt === "number";
+    ak.kind = me ? await openDeviceInfo(c.key, k.accountId, k.deviceId, me.nameSealed) : null;
+    await p.click("[data-ddn=ak-done]");
+    ak.textGoneAfterClose = (await p.inputValue("[data-ddn=ak-text]")) === "";
+    await p.locator("[data-ddn=apikey]", { hasText: "Skrypt kopii" }).waitFor({ timeout: 10_000 });
+    ak.row = ((await p.locator("[data-ddn=apikey]", { hasText: "Skrypt kopii" }).textContent()) ?? "").trim();
+    await shot(p, "44b-api-keys-list");
+    await nav(p, "devices");
+    await p.locator("[data-ddn=device][data-kind=api]", { hasText: "Skrypt kopii" }).waitFor({ timeout: 10_000 });
+    ak.onDevices = ((await p.locator("[data-ddn=device][data-kind=api]").textContent()) ?? "").includes(LANG === "pl" ? "Klucz API" : "API key");
+    await nav(p, "settings", "account");
+    const row = p.locator("[data-ddn=apikey]", { hasText: "Skrypt kopii" });
+    await row.waitFor({ timeout: 10_000 });
+    await row.locator("[data-ddn=apikey-revoke]").click();
+    await p.waitForSelector("[data-ddn=confirm-dialog][open]");
+    await p.click("[data-ddn=confirm-yes]");
+    await row.waitFor({ state: "detached", timeout: 15_000 });
+    ak.revokedRefused = await c.http.listDevices().then(() => 0, (e: { status?: number }) => e.status ?? -1);
+    ak.freshRefused = await (await apiKeyHttp(k)).http.listDevices().then(() => 0, (e: { status?: number }) => e.status ?? -1);
+    ak.emptyAgain = await p.isVisible("[data-ddn-ui=ak-empty]");
+    r.apiKeys = ak;
+  }
+
   step("admin");
   // Instance administration: only an account with the admin flag (set from the server) sees "Admin".
   // A second account (own browser) does not; the admin makes and revokes an invite code, blocks the
@@ -2636,7 +2684,7 @@ try {
     settingsLayoutStable: ((x) => !!x && x.moved.length === 0)(r.settingsLayout as { moved: string[] } | undefined),
     localSearch: ((x) => !!x && x.byTakenDate && x.byNameNoDiacritics && x.allWords)(r.localSearch as { byTakenDate: boolean; byNameNoDiacritics: boolean; allWords: boolean } | undefined),
     settingsTabs: ((x) => !!x && x.everySectionOnce && x.untabbed.length === 0 && x.oneChannelList && x.reloadApp && x.back && x.anchor && x.remembered === "/settings/network" &&
-      x.tabs.channels!.join() === "channels" && x.tabs.account!.join() === "account,rescue,security,ai,sharing" && x.tabs.storage!.join() === "storage" &&
+      x.tabs.channels!.join() === "channels" && x.tabs.account!.join() === "account,rescue,security,apikeys,ai,sharing" && x.tabs.storage!.join() === "storage" &&
       x.tabs.network!.join() === "network,speed" && x.tabs.appearance!.join() === "appearance" && x.tabs.app!.join() === "diagnostics,browser")(
       r.settingsTabs as { tabs: Record<string, string[]>; reloadApp: boolean; back: boolean; anchor: boolean; remembered: string; everySectionOnce: boolean; untabbed: string[]; oneChannelList: boolean } | undefined),
     layout: r.filesPageClean === true && r.settingsSurvivesReload === true && r.devicesSurvivesReload === true && (r.folderRoute as { path: boolean; crumb: string }).path && (r.folderRoute as { crumb: string }).crumb === "Wakacje",
@@ -2674,6 +2722,10 @@ try {
     paging: pg.page1 === 50 && pg.page2 === 14,
     secondTab: st2.secondary && st2.rows === 50 && st2.page2 === 14 && st2.liveUpdate,
     share: typeof share === "string" ? !!remote : share.sha256Ok === true && share.revokedStopsNew === true && share.linkHasKeyAfterHash === true,
+    apiKeys: ((a) =>
+      !!a && a.emptyShown === true && a.nameRequired === true && a.prefix === true && a.example === true && a.server === true && a.signsIn === true &&
+      JSON.stringify(a.kind) === JSON.stringify({ name: "Skrypt kopii", kind: "api" }) && a.textGoneAfterClose === true && /Skrypt kopii/.test(String(a.row)) &&
+      a.onDevices === true && a.revokedRefused === 401 && a.freshRefused === 401 && a.emptyAgain === true)(r.apiKeys as Record<string, unknown> | undefined),
     pairing: (r.sas as { match: boolean }).match && r.phoneNoKitPrompt === true && r.phoneDownloadOk === true,
     pairRetry: (() => {
       const q = r.pairRetry as { timedOut: boolean; codeKept: boolean; unlocked: boolean; devices: number; newErrors: string[] } | undefined;

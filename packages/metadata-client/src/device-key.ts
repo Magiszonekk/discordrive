@@ -81,6 +81,14 @@ function pkcs8FromSeed(seed: Uint8Array): Uint8Array {
   return out;
 }
 
+/** A signing key from its raw 32-byte Ed25519 seed (non-extractable), with its public half. */
+export async function deviceKeyFromSeed(seed: Uint8Array): Promise<DeviceKey> {
+  if (seed.byteLength !== 32) throw new Error("device key: seed must be 32 bytes");
+  const priv = await crypto.subtle.importKey("pkcs8", pkcs8FromSeed(seed) as BufferSource, ED, true, ["sign"]);
+  const jwk = await crypto.subtle.exportKey("jwk", priv);
+  return fromPrivate(await crypto.subtle.importKey("jwk", { ...jwk, key_ops: ["sign"] }, ED, false, ["sign"]), unb64u(jwk.x!));
+}
+
 /** The rescue key: deterministic from the account key (HKDF label "ddn-rescue-ed25519-v1"). */
 export async function rescueKey(account: AccountKey): Promise<DeviceKey> {
   const raw = fromBase64(account.rawB64);

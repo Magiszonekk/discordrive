@@ -126,6 +126,20 @@ still:
 
 Full recovery after losing a device to an attacker = a new account and uploading again (§6).
 
+**API keys** (`packages/metadata-client/src/api-key.ts`): a key for scripts, the command line and a
+local service is an ordinary device of the account. The creating device makes a new Ed25519 key,
+registers its public half with its own signature (as in pairing) and seals the name with the kind
+`api` (`device-names.ts`), so the server cannot tell an API key from any other device. The key text
+`ddn-api1:<base64url JSON>.<checksum>` carries the server address, instance ID, account ID, device ID,
+the device's Ed25519 seed and **the account key** (without it the holder could not encrypt or decrypt
+anything; with it, it can read every file of the account except the Safe, which needs its own
+password). The checksum (6 bytes of SHA-256) only catches typos and cut-off copies; it is not a
+signature. The text is shown once and not stored by the app.
+- The server cannot scope a key to a folder: it does not know the tree. A key is full access.
+- Revoking it is revoking that device (above), with the same limit: whoever copied the text kept the
+  account key and could already read what it reached, and could register a new device with the rescue
+  key derived from it.
+
 ### 2.5 Optional password key
 
 `packages/metadata-client/src/password-key.ts`, `node/password-keys.ts`. Off by default, turned on

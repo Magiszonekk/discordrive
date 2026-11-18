@@ -249,11 +249,13 @@ export {
 } from "./safe.js";
 export { SafeTree, SafeFileGoneError, SAFE_ORPHAN_GRACE_MS, emptySafeTree, safeChildren, safeTreeOf, type SafeCleanupReport, type SafeGone, type SafePieces, type SafeTreeOptions, type SafeTreeState } from "./safe-tree.js";
 export { HttpApi, HttpPairingMailbox, ServerError, createAccountHttp, getChallenge, getHealth, passwordParams, passwordSealedKey, rescueRegisterDevice, setRequestTimeout, type HttpSession, type ServerDevice } from "./http-api.js";
-export { sealDeviceName, openDeviceName, cleanDeviceName, MAX_DEVICE_NAME } from "./device-names.js";
+export { sealDeviceName, openDeviceName, openDeviceInfo, cleanDeviceName, MAX_DEVICE_NAME, type DeviceKind } from "./device-names.js";
+export { API_KEY_PREFIX, ApiKeyError, apiKeyHttp, createApiKey, decodeApiKey, encodeApiKey, type ApiKey } from "./api-key.js";
 export { prepareShare, prepareShareWith, shareLink, parseShareLink, openShare, attachmentFilename, type ShareMeta, type ShareAttachment, type OpenedShare } from "./share.js";
 export {
   generateDeviceKey,
   deviceKeyFromCryptoKey,
+  deviceKeyFromSeed,
   exportDeviceKey,
   importDeviceKey,
   rescueKey,

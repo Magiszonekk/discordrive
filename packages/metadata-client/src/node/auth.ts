@@ -37,7 +37,7 @@ export interface Authenticator {
   addDevice(s: Session, body: unknown): Promise<{ deviceId: string }>;
   rescueAddDevice(body: unknown): Promise<{ deviceId: string }>;
   revokeDevice(s: Session, deviceId: string, body: unknown): Promise<void>;
-  listDevices(s: Session): { deviceId: string; publicKey: string; createdAt: number; addedBy: string; nameSealed: string | null }[];
+  listDevices(s: Session): { deviceId: string; publicKey: string; createdAt: number; addedBy: string; nameSealed: string | null; lastSeenAt: number | null }[];
   verify(authorization: string | undefined): Session | null;
 }
 
@@ -218,13 +218,15 @@ export class Ed25519Authenticator implements Authenticator {
   }
 
   listDevices(s: Session) {
-    return (this.db.prepare("SELECT id, public_key, created_at, added_by, name_sealed FROM devices WHERE account_id = ? ORDER BY created_at, id").all(s.accountId) as {
+    // last_seen_at: the last sign-in or request (refreshed at most once a minute), e.g. "last used" of an API key.
+    return (this.db.prepare("SELECT id, public_key, created_at, added_by, name_sealed, last_seen_at FROM devices WHERE account_id = ? ORDER BY created_at, id").all(s.accountId) as {
       id: string;
       public_key: string;
       created_at: number;
       added_by: string;
       name_sealed: string | null;
-    }[]).map((d) => ({ deviceId: d.id, publicKey: d.public_key, createdAt: d.created_at, addedBy: d.added_by, nameSealed: d.name_sealed }));
+      last_seen_at: number | null;
+    }[]).map((d) => ({ deviceId: d.id, publicKey: d.public_key, createdAt: d.created_at, addedBy: d.added_by, nameSealed: d.name_sealed, lastSeenAt: d.last_seen_at ?? null }));
   }
 
   /** Any device of the account may (re)name any device of the same account. */

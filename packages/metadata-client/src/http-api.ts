@@ -146,6 +146,8 @@ export interface ServerDevice {
   addedBy?: string;
   /** Display name sealed with the account key, or null. */
   nameSealed?: string | null;
+  /** Last sign-in or request of the device (server time, refreshed at most once a minute); absent on older servers. */
+  lastSeenAt?: number | null;
 }
 
 /** Server health (GET /v1/health, no auth). */
