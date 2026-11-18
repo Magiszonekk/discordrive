@@ -1,5 +1,6 @@
 #!/usr/bin/env -S npx tsx
-// ddn: discordrive-next metadata-only CLI (stage 2, single device).
+// ddn-dev: developer and test tool of the metadata-only client (stage 2, single device). The command
+// line for users (API keys, every mode) is apps/cli (`ddn`, docs/cli.md).
 //
 //   ddn [--state DIR] init [--server URL]          # new account (local or on a server)
 //   ddn [--state DIR] rescue --server URL <kit-file>  # new device from the rescue kit

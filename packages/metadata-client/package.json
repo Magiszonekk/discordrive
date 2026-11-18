@@ -15,7 +15,7 @@
     "./transfer-report": "./src/transfer-report.ts"
   },
   "bin": {
-    "ddn": "./src/cli.ts"
+    "ddn-dev": "./src/cli.ts"
   },
   "scripts": {
     "test": "vitest run",

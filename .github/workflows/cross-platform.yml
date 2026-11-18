@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - "apps/ddn-server/**"
+      - "apps/cli/**"
       - "apps/web-mo/**"
       - "packages/sync-core/**"
       - "packages/metadata-client/**"
@@ -64,6 +65,7 @@ jobs:
           npm run typecheck -w @ddv4/metadata-client
           npm run typecheck -w @ddv4/server-discord
           npx tsc -p apps/web-mo/tsconfig.json --noEmit
+          npm run typecheck -w @ddv4/cli
 
       - name: Unit tests (sync-core)
         run: npm test -w @ddv4/sync-core
@@ -76,6 +78,12 @@ jobs:
 
       - name: Unit tests (ddn-server, incl. the real background start)
         run: npm test -w @ddv4/ddn-server
+
+      - name: Command line ddn (API key, every mode, against the fake Discord)
+        run: npm test -w @ddv4/cli
+
+      - name: ddn as a separate process (64 MiB put/get, SHA-256, exit codes)
+        run: npx tsx apps/cli/test/smoke.ts
 
       - name: setup --yes without --accept-risk is refused
         run: |
