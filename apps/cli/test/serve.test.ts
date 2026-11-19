@@ -135,6 +135,14 @@ for (const mode of ["metadata-only", "e2ee"] as Mode[]) {
       void reader.cancel();
       await readEvents;
 
+      // The command line on the same profile while serve runs: refused at once (7), nothing done.
+      const busyErr: string[] = [];
+      const busyIo: CliIo = { ...io, out: () => {}, err: (l) => void busyErr.push(l), stop: undefined };
+      expect(await main(["mkdir", "/BusyDir"], busyIo)).toBe(7);
+      expect(busyErr.join("\n")).toMatch(/in use by `ddn serve`/);
+      expect(busyErr.join("\n")).not.toMatch(/\n\s+at /);
+      expect((await j("GET", "/v1/list?path=/BusyDir")).status).toBe(404);
+
       // Missing folder → 404, ?parents=1 makes it; conflict skip.
       expect((await fetch(`${base}/v1/files?path=/New/Deep&name=a.txt`, { method: "POST", headers: H, body: "x" })).status).toBe(404);
       expect((await fetch(`${base}/v1/files?path=/New/Deep&name=a.txt&parents=1&wait=1`, { method: "POST", headers: H, body: "x" })).status).toBe(201);
@@ -188,6 +196,8 @@ for (const mode of ["metadata-only", "e2ee"] as Mode[]) {
       // No file or folder names in the log, whatever failed.
       for (const name of ["MARK", "zażółć", "film", "p0.bin", "renamed", "a.txt"]) expect(err.join("\n"), name).not.toContain(name);
       expect(existsSync(join(hello.tokenFile, "..", "serve-spool"))).toBe(false);
+      // Once it stopped, the profile is free again; two commands at once wait for each other.
+      expect(await Promise.all([main(["ls", "/"], { ...io, out: () => {}, stop: undefined }), main(["ls", "/Media"], { ...io, out: () => {}, stop: undefined })])).toEqual([5, 5]);
       writeFileSync(join(cfg, "done"), "");
     });
   });

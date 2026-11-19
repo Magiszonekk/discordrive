@@ -29,8 +29,7 @@ chmod +x ddn-linux-x64 && sudo mv ddn-linux-x64 /usr/local/bin/ddn
 ddn login --key-file ~/discordrive-api-key.txt
 ```
 
-The executable unpacks its program into a private folder of the system's temporary directory at the first
-start (`ddn-<user>/`); deleting it is harmless.
+The executable runs its program from memory (nothing is unpacked to a temporary folder).
 
 **From the repository** (Node.js 22.13 or newer):
 
@@ -111,6 +110,12 @@ One JSON object per line on standard output. Fields are only ever added, not ren
 | 4 | network or server error (try again) |
 | 5 | the key was refused: not signed in, damaged, revoked, or the account is blocked |
 | 6 | no channel to upload to (add one in the app), or a rate limit |
+| 7 | the profile is in use by a running `ddn serve`: nothing was done (use its HTTP API, or another profile) |
+
+One profile, one process at a time: commands on the same profile run one after another (a second one waits), and
+while `ddn serve` runs on a profile, other commands on it stop at once with code 7 without changing anything.
+To use the command line next to a running `ddn serve`, sign the same key in under a second profile
+(`ddn login --key-file KEY --profile scripts`, then `ddn --profile scripts …`) or call the service's HTTP API.
 
 ## Examples
 

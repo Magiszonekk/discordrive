@@ -39,8 +39,13 @@ await build({
   target: "node22",
   plugins: [modePlugin],
   define: { __DDN_BUILD__: JSON.stringify(BUILD) },
-  // Bundled CommonJS dependencies call require(): give the module one.
-  banner: { js: "import { createRequire as __ddnCreateRequire } from 'node:module'; const require = __ddnCreateRequire(import.meta.url);" },
+  // Bundled CommonJS dependencies call require(): give the module one. Inside a single executable the module
+  // is loaded from a data: URL (below), which createRequire does not take: resolve from the executable then.
+  banner: {
+    js: "import { createRequire as __ddnCreateRequire } from 'node:module'; const require = __ddnCreateRequire(import.meta.url.startsWith('file:') ? import.meta.url : process.execPath);",
+  },
+  // Stack traces name the module, not the whole data: URL.
+  footer: { js: "//# sourceURL=ddn.mjs" },
   // Optional pieces the command line never loads (browser storage).
   external: ["@sqlite.org/sqlite-wasm"],
   logLevel: "error",
@@ -48,7 +53,8 @@ await build({
 });
 // Step 2: the launcher (CommonJS, as single executables need): quiets node:sqlite's warning, private file
 // modes, then imports the bundle. As a file next to ddn.mjs it is `ddn.cjs`; inside an executable the bundle is
-// an embedded asset written to a private temporary file first (a single executable can only run CommonJS).
+// an embedded asset imported straight from memory (a data: URL). It is never written to disk: a file in a shared
+// temporary directory could be planted or swapped by another local user and would then run as this user.
 const launcher = (embedded: boolean) => `#!/usr/bin/env node
 "use strict";
 { const e = process.emitWarning; process.emitWarning = function (w, ...r) { if (String((w && w.message) || w).includes("SQLite is an experimental feature")) return; return e.call(process, w, ...r); }; }
@@ -56,13 +62,7 @@ if (process.platform !== "win32") process.umask(0o077);
 ${
   embedded
     ? `const { getAsset } = require("node:sea");
-const fs = require("node:fs"), os = require("node:os"), path = require("node:path"), crypto = require("node:crypto");
-const code = Buffer.from(getAsset("ddn.mjs"));
-const dir = path.join(os.tmpdir(), "ddn-" + (process.getuid ? process.getuid() : "u"));
-fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-const file = path.join(dir, "ddn-" + crypto.createHash("sha256").update(code).digest("hex").slice(0, 16) + ".mjs");
-if (!fs.existsSync(file)) { const tmp = file + "." + process.pid; fs.writeFileSync(tmp, code, { mode: 0o600 }); fs.renameSync(tmp, file); }
-import(require("node:url").pathToFileURL(file).href).catch((e) => { console.error(e); process.exit(1); });`
+import("data:text/javascript;base64," + Buffer.from(getAsset("ddn.mjs")).toString("base64")).catch((e) => { console.error(e); process.exit(1); });`
     : `import(require("node:url").pathToFileURL(require("node:path").join(__dirname, "ddn.mjs")).href).catch((e) => { console.error(e); process.exit(1); });`
 }
 `;

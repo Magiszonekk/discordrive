@@ -4,9 +4,9 @@
 //   npx tsx apps/cli/test/smoke.ts
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { createReadStream, mkdirSync, mkdtempSync, openSync, writeSync, closeSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, writeSync, closeSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DiscordWebhookTransport, HttpApi, WebhookVault, createAccountHttp, createApiKey, generateDeviceKey, inspectForVault, newAccountKey } from "@ddv4/metadata-client";
 import { DdnServer, FakeDiscord } from "@ddv4/metadata-client/node";
@@ -54,6 +54,19 @@ const ddn = (...args: string[]) =>
 const sha = (p: string) => new Promise<string>((res) => { const x = createHash("sha256"); createReadStream(p).on("data", (d) => x.update(d)).on("end", () => res(x.digest("hex"))); });
 
 const r: Record<string, unknown> = { MB };
+// A single executable runs its program from memory: a file planted where an older build unpacked it (the
+// shared temporary folder, ddn-<uid>/ddn-<hash>.mjs) never runs, and nothing is written there.
+if (built && launch[1].length === 0 && existsSync(join(dirname(built), "ddn.mjs"))) {
+  const t = join(tmp, "tmpdir");
+  const planted = join(t, `ddn-${process.getuid ? process.getuid() : "u"}`);
+  mkdirSync(planted, { recursive: true });
+  const marker = join(tmp, "planted-ran");
+  const hash = createHash("sha256").update(readFileSync(join(dirname(built), "ddn.mjs"))).digest("hex").slice(0, 16);
+  writeFileSync(join(planted, `ddn-${hash}.mjs`), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "x");\n`);
+  const v = await new Promise<{ code: number }>((res) => execFile(launch[0], ["version"], { env: { ...process.env, TMPDIR: t, TMP: t, TEMP: t } }, (e) => res({ code: e ? ((e as { code?: number }).code ?? 1) : 0 })));
+  // Besides the planted folder and file, nothing new.
+  r.fromMemory = { code: v.code, plantedRan: existsSync(marker), written: readdirSync(t).length - 1 + readdirSync(planted).length - 1 };
+}
 r.notSignedIn = (await ddn("whoami")).code;
 const lg = await ddn("login", "--key-file", join(tmp, "key.txt"));
 r.login = lg.code;
@@ -102,9 +115,11 @@ if (process.platform !== "win32") {
   const t0 = Date.now();
   while (!outBuf.includes('"listening"') && Date.now() - t0 < 60_000) await new Promise((res) => setTimeout(res, 100));
   const hello = JSON.parse(outBuf.split("\n").find((l) => l.includes('"listening"'))!) as { port: number; tokenFile: string };
-  const { readFileSync } = await import("node:fs");
   const H = { authorization: `Bearer ${readFileSync(hello.tokenFile, "utf8").trim()}` };
   const sbase = `http://127.0.0.1:${hello.port}`;
+  // The command line on the same profile meanwhile: refused (7), nothing done, no stack.
+  const busy = await ddn("mkdir", "/Busy");
+  r.busy = { code: busy.code, err: busy.err.trim().slice(0, 300) };
   const blob = new Uint8Array(randomBytes(24 * 1024 * 1024));
   const st = (await (await fetch(`${sbase}/v1/files?path=/Serve&name=s.bin&parents=1`, { method: "POST", headers: H, body: blob })).json()) as { id: string };
   // Stop while that upload is on its way: SIGTERM (Linux, macOS), the HTTP stop endpoint (Windows, where a
@@ -117,6 +132,7 @@ if (process.platform !== "win32") {
   const after = await ddn("stat", "/Serve/s.bin", "--json");
   const meta = after.code === 0 ? (JSON.parse(after.out.trim()) as { size: number; sha256: string }) : null;
   r.serveSigterm = { job: !!st.id, exit: code, uploaded: meta?.size === blob.byteLength && meta?.sha256 === createHash("sha256").update(blob).digest("hex"), stopped: /"stopped"/.test(errBuf) };
+  r.busyNotDone = (await ddn("stat", "/Busy")).code === 3;
 }
 await api.revokeDevice(made.deviceId);
 const rev = await ddn("ls", "/");
@@ -125,7 +141,11 @@ console.log(JSON.stringify(r, null, 1));
 const pc = r.putCut as { code: number; quiet: boolean; files: number } | undefined;
 const epipeOk = (!r.epipe || (r.epipe as { quiet: boolean }[]).every((x) => x.quiet)) && (!pc || (pc.files === 10 && pc.quiet)) && (!r.putCutProfile || (r.putCutProfile as { files: number }).files === 10);
 const ss = r.serveSigterm as { exit: number; uploaded: boolean; stopped: boolean };
-const ok = epipeOk && ss.exit === 0 && ss.uploaded && ss.stopped && r.notSignedIn === 5 && r.login === 0 && put.code === 0 && get.code === 0 && r.sha256Ok === true && r.missing === 3 && rev.code === 5;
+const fm = r.fromMemory as { code: number; plantedRan: boolean; written: number } | undefined;
+const bz = r.busy as { code: number; err: string };
+const lockOk = bz.code === 7 && !/\n\s+at /.test(bz.err) && r.busyNotDone === true;
+const memOk = !fm || (fm.code === 0 && !fm.plantedRan && fm.written === 0);
+const ok = lockOk && memOk && epipeOk && ss.exit === 0 && ss.uploaded && ss.stopped && r.notSignedIn === 5 && r.login === 0 && put.code === 0 && get.code === 0 && r.sha256Ok === true && r.missing === 3 && rev.code === 5;
 await srv.close();
 await fake.close();
 console.log(ok ? "SMOKE OK" : "SMOKE FAILED");

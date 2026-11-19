@@ -17,13 +17,14 @@
 // Paths are as in the app's Drive ("/Photos/2024/a.jpg"); --gallery for the Gallery. A node ID (as printed by
 // --json) works wherever a path does. Output: lines for people, --json = one JSON object per line.
 // Exit codes: 0 ok, 1 other failure, 2 usage, 3 no such file, 4 network/server, 5 key refused (revoked,
-// damaged), 6 limits / no channel to upload to.
+// damaged), 6 limits / no channel to upload to, 7 the profile is in use by `ddn serve` (nothing was done).
 
 import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { getHealth, ApiKeyError, decodeApiKey, isNetworkError, ServerError, h2FetchMaybe } from "./deps.js";
 import { CliError, EXIT, configRoot, ensurePrivateDir, envKeyText, forgetProfile, keyLine, parseArgs, profileDir, readProfile, writeProfile, type ModeName, type ParsedArgs } from "./profile.js";
 import { selectMode } from "./mode-switch.js";
+import { lockProfile, type ProfileLock } from "./lock.js";
 
 export const CLI_VERSION = typeof __DDN_BUILD__ === "string" ? __DDN_BUILD__ : "dev";
 declare const __DDN_BUILD__: string | undefined;
@@ -69,7 +70,7 @@ Commands:
 
 Options: --json (one JSON object per line), --quiet / -q (no progress), --gallery (the Gallery
 instead of the Drive), --profile NAME. Exit codes: 0 ok, 1 failed, 2 usage, 3 not found,
-4 network or server, 5 key refused, 6 no channel / limits.`;
+4 network or server, 5 key refused, 6 no channel / limits, 7 profile in use by ddn serve.`;
 
 // The core and the desktop platform are loaded once the instance's mode is known.
 type Core = import("../../web-mo/src/app-core.js").AppCore;
@@ -137,11 +138,12 @@ export async function main(argv: string[], io: CliIo): Promise<number> {
     return EXIT.ok;
   }
   let core: Core | null = null;
+  let lock = null as ProfileLock | null;
   try {
     if (p.cmd === "login") return await login(io, p, json);
-    if (p.cmd === "logout") return logout(io, p, json);
+    if (p.cmd === "logout") return await logout(io, p, json);
     if (!COMMANDS[p.cmd]) throw new CliError(EXIT.usage, `unknown command ${p.cmd} (ddn help)`);
-    const opened = await openAccount(io, p);
+    const opened = await openAccount(io, p, (l) => void (lock = l));
     core = opened.core;
     const c: Ctx = { io, p, json, quiet: p.opts.has("--quiet") || p.opts.has("-q"), core, profile: opened.profile, space: p.opts.has("--gallery") ? "gallery" : "drive" };
     const fn = COMMANDS[p.cmd];
@@ -155,11 +157,20 @@ export async function main(argv: string[], io: CliIo): Promise<number> {
   } finally {
     io.progress?.(null);
     core?.close();
-    closeIndexes?.();
+    if (core) closeIndexes.get(core)?.();
+    lock?.release();
   }
 }
 
-let closeIndexes: (() => void) | null = null;
+/** Each core's open file lists (one per core: `ddn serve` and a test's second command share a process). */
+const closeIndexes = new WeakMap<Core, () => void>();
+/** The profile's lock while a command runs (lock.ts). */
+async function takeLock(io: CliIo, dir: string, cmd: string, json: boolean): Promise<ProfileLock> {
+  ensurePrivateDir(dir);
+  return lockProfile(dir, cmd, (h) => {
+    if (!json) io.err(`ddn: waiting for another ddn command on this profile${h ? ` (process ${h.pid}, ${h.cmd})` : ""}…`);
+  });
+}
 
 /** Which profile folder: --profile, else DDN_PROFILE, else "default"; with a key in the environment, one per key. */
 async function where(io: CliIo, p: ParsedArgs): Promise<{ dir: string; keyText: string | null }> {
@@ -179,14 +190,15 @@ async function loadCore(dir: string, mode: string, io: CliIo, keysInMemory = fal
   const [{ AppCore }, { nodePlatform }] = await Promise.all([import("../../web-mo/src/app-core.js"), import("../../desktop/src/agent/node-platform.js")]);
   const f = io.discordFetch ?? (await h2FetchMaybe());
   const platform = nodePlatform({ dataDir: dir, discordFetch: f ?? undefined, downloadsDir: process.cwd() });
-  closeIndexes = () => platform.closeIndexes();
+  let core: Core;
   if (keysInMemory) {
     type Stored = Awaited<ReturnType<typeof platform.keys.load>>;
     let held: Stored = undefined;
     const keys = { load: async () => held, save: async (a: NonNullable<Stored>) => void (held = a), clear: async () => void (held = undefined) };
-    return new AppCore({ discordApiOrigin: io.discordApiOrigin, logSrc }, { ...platform, keys });
-  }
-  return new AppCore({ discordApiOrigin: io.discordApiOrigin, logSrc }, platform);
+    core = new AppCore({ discordApiOrigin: io.discordApiOrigin, logSrc }, { ...platform, keys });
+  } else core = new AppCore({ discordApiOrigin: io.discordApiOrigin, logSrc }, platform);
+  closeIndexes.set(core, () => platform.closeIndexes());
+  return core;
 }
 
 async function instanceMode(server: string): Promise<ModeName> {
@@ -208,6 +220,7 @@ async function login(io: CliIo, p: ParsedArgs, json: boolean): Promise<number> {
   const line = keyLine(text);
   const k = await decodeApiKey(line);
   const { dir } = await where(io, p);
+  const lock = await takeLock(io, dir, "login", json);
   const mode = await instanceMode(k.server);
   const core = await loadCore(ensurePrivateDir(dir), mode, io);
   try {
@@ -221,25 +234,36 @@ async function login(io: CliIo, p: ParsedArgs, json: boolean): Promise<number> {
     return EXIT.ok;
   } catch (e) {
     core.close();
-    closeIndexes?.();
+    closeIndexes.get(core)?.();
+    // Unlocked first: an open lock file cannot be deleted on Windows.
+    lock.release();
     forgetProfile(dir);
     throw e;
   } finally {
     core.close();
+    closeIndexes.get(core)?.();
+    lock.release();
   }
 }
 
-function logout(io: CliIo, p: ParsedArgs, json: boolean): number {
+async function logout(io: CliIo, p: ParsedArgs, json: boolean): Promise<number> {
   const env = io.env ?? process.env;
   const root = configRoot(env);
   const name = (p.opts.get("--profile") as string | undefined) ?? env.DDN_PROFILE ?? "default";
-  const gone = forgetProfile(profileDir(root, name));
+  const dir = profileDir(root, name);
+  // Not under a running `ddn serve` (or a transfer) of this profile.
+  if (existsSync(dir)) {
+    (await takeLock(io, dir, "logout", json)).release();
+  }
+  const gone = forgetProfile(dir);
   emit({ io, json }, { ok: true, removed: gone }, gone ? "Key forgotten on this computer. It still works elsewhere until you revoke it in the app." : "No key stored in this profile.");
   return EXIT.ok;
 }
 
-async function openAccount(io: CliIo, p: ParsedArgs): Promise<{ core: Core; profile: { dir: string; mode: ModeName } }> {
+async function openAccount(io: CliIo, p: ParsedArgs, locked: (l: ProfileLock) => void): Promise<{ core: Core; profile: { dir: string; mode: ModeName } }> {
   const { dir, keyText } = await where(io, p);
+  if (!keyText && !readProfile(dir)) throw new CliError(EXIT.auth, "not signed in: run `ddn login` (or set DDN_API_KEY)");
+  locked(await takeLock(io, dir, p.cmd ?? "", p.opts.has("--json")));
   let mode: ModeName;
   let core: Core;
   if (keyText) {
