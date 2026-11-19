@@ -141,26 +141,52 @@ for (const mode of ["metadata-only", "e2ee"] as Mode[]) {
       const skip = (await (await fetch(`${base}/v1/files?path=/New/Deep&name=a.txt&on_conflict=skip&wait=1`, { method: "POST", headers: H, body: "y" })).json()) as Record<string, any>;
       expect(skip.result.skipped).toBe(true);
 
+      // Bad requests are 4xx, not failures: a name with "/", a folder under a file, a folder into itself.
+      expect((await fetch(`${base}/v1/files?path=/New&name=${encodeURIComponent("a/b.txt")}&wait=1`, { method: "POST", headers: H, body: "x" })).status).toBe(400);
+      expect((await j("POST", "/v1/folders", { path: "/New/Deep/a.txt/sub" })).status).toBe(409);
+      expect((await j("POST", "/v1/folders", { path: "/New/Deep/Inner" })).status).toBe(201);
+      expect((await j("POST", "/v1/move", { from: "/New/Deep", to: "/New/Deep/Inner" })).status).toBe(409);
+      expect((await j("POST", "/v1/move", { from: "/New/Deep", to: "/New/Deep" })).status).toBe(409);
+
       // Move + rename, then trash.
       const mv = await j("POST", "/v1/move", { from: "/Media/p0.bin", to: "/New", name: "renamed.bin" });
       expect(mv.body.moved[0].path).toBe("/New/renamed.bin");
       expect((await j("DELETE", `/v1/files/${encodeURIComponent("New/renamed.bin")}`)).status).toBe(200);
+      const gone = await j("DELETE", `/v1/files/${encodeURIComponent("Media/p1.bin")}?permanent=1`);
+      expect(gone.body).toMatchObject({ name: "p1.bin", kind: "file", path: "/Media/p1.bin", permanent: true });
       expect((await j("GET", "/v1/list?path=/New")).body.entries.map((e: { name: string }) => e.name)).toEqual(["Deep"]);
-      expect((await j("GET", "/v1/list?path=/Nope")).status).toBe(404);
+      expect((await j("GET", `/v1/list?path=${encodeURIComponent("/Nope zażółć-MARK")}`)).status).toBe(404);
+      expect((await j("POST", "/v1/folders", { path: "/New/Deep/a.txt/MARK-folder" })).status).toBe(409);
 
-      // Revoked in the app: the service says so (health 503, key_refused for a request).
+      // Revoked in the app: every endpoint says so (503 key_refused), reads of the local list and of pieces on
+      // Discord too, within seconds.
       await S.api.revokeDevice(S.made.deviceId);
-      await new Promise((r) => setTimeout(r, 300));
-      const rv = await j("POST", "/v1/folders", { path: "/After" });
-      expect(rv.status).toBe(503);
-      expect(rv.body.error).toBe("key_refused");
+      const t0 = Date.now();
+      while ((await fetch(base + "/v1/health", { headers: H })).status !== 503 && Date.now() - t0 < 15_000) await new Promise((r) => setTimeout(r, 200));
+      expect(Date.now() - t0).toBeLessThan(15_000);
+      for (const [method, path, body] of [
+        ["GET", "/v1/list?path=/Media", undefined],
+        ["GET", `/v1/files/${fileId}`, undefined],
+        ["POST", "/v1/folders", { path: "/After" }],
+      ] as [string, string, unknown][]) {
+        const rv = await j(method, path, body);
+        expect(rv.status, path).toBe(503);
+        expect(rv.body.error, path).toBe("key_refused");
+      }
+      const rg = await fetch(`${base}/v1/files/${fileId}`, { headers: { ...H, range: "bytes=0-99" } });
+      expect(rg.status).toBe(503);
+      const wt = await fetch(`${base}/v1/files?path=/Media&name=late.bin&wait=1`, { method: "POST", headers: H, body: "late" });
+      expect(wt.status).toBe(503);
 
-      // Stop: returns 0, the spool folder is gone.
-      stop.abort();
+      // Stop over HTTP (the way on Windows; SIGTERM elsewhere): returns 0, the spool folder is gone.
+      expect((await fetch(base + "/v1/shutdown", { method: "POST", headers: H })).status).toBe(202);
+      void stop;
       expect(await running).toBe(0);
       expect(err.some((l) => l.includes('"stopped"'))).toBe(true);
       expect(err.join("\n")).not.toContain(S.made.text.slice(10, 40));
       expect(err.join("\n")).not.toContain(token);
+      // No file or folder names in the log, whatever failed.
+      for (const name of ["MARK", "zażółć", "film", "p0.bin", "renamed", "a.txt"]) expect(err.join("\n"), name).not.toContain(name);
       expect(existsSync(join(hello.tokenFile, "..", "serve-spool"))).toBe(false);
       writeFileSync(join(cfg, "done"), "");
     });
@@ -171,7 +197,7 @@ describe("docs/local-api.openapi.json", () => {
   it("is JSON and lists every endpoint the service answers", () => {
     const spec = JSON.parse(readFileSync(new URL("../../../docs/local-api.openapi.json", import.meta.url), "utf8")) as { paths: Record<string, unknown> };
     const src = readFileSync(new URL("../src/serve.ts", import.meta.url), "utf8");
-    for (const p of ["/v1/health", "/v1/list", "/v1/folders", "/v1/files", "/v1/move", "/v1/jobs", "/v1/events"]) {
+    for (const p of ["/v1/health", "/v1/list", "/v1/folders", "/v1/files", "/v1/move", "/v1/jobs", "/v1/events", "/v1/shutdown"]) {
       expect(src, p).toContain(`"${p}`);
       expect(Object.keys(spec.paths), p).toContain(p);
     }

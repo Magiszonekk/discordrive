@@ -103,10 +103,12 @@ if (process.platform !== "win32") {
   const sbase = `http://127.0.0.1:${hello.port}`;
   const blob = new Uint8Array(randomBytes(24 * 1024 * 1024));
   const st = (await (await fetch(`${sbase}/v1/files?path=/Serve&name=s.bin&parents=1`, { method: "POST", headers: H, body: blob })).json()) as { id: string };
-  // SIGTERM while that upload is on its way.
+  // Stop while that upload is on its way: SIGTERM (Linux, macOS), the HTTP stop endpoint (Windows, where a
+  // signal ends the process outright).
   await new Promise((res) => setTimeout(res, 300));
   const exited = new Promise<number>((res) => child.once("exit", (c) => res(c ?? -1)));
-  child.kill("SIGTERM");
+  if (process.platform === "win32") await fetch(`${sbase}/v1/shutdown`, { method: "POST", headers: H });
+  else child.kill("SIGTERM");
   const code = await exited;
   const after = await ddn("stat", "/Serve/s.bin", "--json");
   const meta = after.code === 0 ? (JSON.parse(after.out.trim()) as { size: number; sha256: string }) : null;

@@ -14,11 +14,20 @@ import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { CLI_VERSION, classify, mkdirs, mustResolve, pathOfId, resolveRef, ROOTS, splitPath, type Ctx } from "./cli.js";
 import { CliError, EXIT } from "./profile.js";
+import { normalizeName, validateName } from "@ddv4/sync-core";
 
 const DEFAULT_LISTEN = "127.0.0.1:7777";
 /** Job records kept after they finished (GET /v1/jobs/<id>). */
 const JOBS_KEPT = 500;
 const MAX_RANGE = 64 * 1024 * 1024;
+/** How often the service asks the instance whether the key is still accepted (requests in between use the answer). */
+const AUTH_EVERY_MS = 5_000;
+
+/** The endpoint of a URL without anything that names a file (for the log). */
+function endpointOf(url: string | undefined): string {
+  const p = new URL(url ?? "/", "http://local").pathname;
+  return p.startsWith("/v1/files/") ? "/v1/files/{ref}" : p.startsWith("/v1/jobs/") ? "/v1/jobs/{id}" : p;
+}
 
 interface Job {
   id: string;
@@ -32,6 +41,8 @@ interface Job {
   finishedAt: number | null;
   result: Record<string, unknown> | null;
   error: string | null;
+  /** Exit-code class of a failure (EXIT.*), to answer ?wait=1 with the right status. */
+  exit?: number;
   /** Spool file of the request body (removed when the job ends). */
   spool: string;
   onConflict: "rename" | "replace" | "skip";
@@ -153,7 +164,7 @@ export async function serve(c: Ctx): Promise<number> {
   };
   c.core.onEvent = (e) => {
     if (e.type === "changed") broadcast("changed", { at: Date.now() });
-    else if (e.type === "auth-lost") broadcast("auth-lost", { code: e.code });
+    else if (e.type === "auth-lost") ((authLost = e.code), broadcast("auth-lost", { code: e.code }));
   };
 
   // ── uploads: a queue, `parallel` at a time, in order ─────────
@@ -180,12 +191,15 @@ export async function serve(c: Ctx): Promise<number> {
       j.state = "running";
       broadcast("job", publicJob(j));
       let last = 0;
-      void c.core
-        .uploadFile(j.spool, j.folder, j.name, j.onConflict, (done) => {
+      void authGone()
+        .then((gone) => {
+          if (gone) throw new CliError(EXIT.auth, "the server refused this API key (revoked?) or the account is blocked");
+        })
+        .then(() => c.core.uploadFile(j.spool, j.folder, j.name, j.onConflict, (done) => {
           j.done = done;
           const t = Date.now();
           if (t - last > 500) ((last = t), broadcast("progress", { id: j.id, done, size: j.size }));
-        }, j.abort.signal)
+        }, j.abort.signal))
         .then((r) => {
           j.done = j.size;
           j.result = { id: r.nodeId, name: r.name, path: pathOfId(c, r.nodeId), size: r.size, sha256: r.sha256 || null, skipped: r.skipped, replaced: r.replaced, resumedPieces: r.resumed };
@@ -194,13 +208,27 @@ export async function serve(c: Ctx): Promise<number> {
         })
         .catch((e: unknown) => {
           j.error = classify(e).message;
-          log({ ev: "upload_failed", job: j.id, error: j.error });
+          j.exit = classify(e).code;
+          log({ ev: "upload_failed", job: j.id, exit: classify(e).code });
           finish(j, j.abort.signal.aborted ? "cancelled" : "failed");
         })
         .finally(() => running--);
     }
   };
   const publicJob = (j: Job) => ({ id: j.id, kind: j.kind, state: j.state, name: j.name, folder: pathOfId(c, j.folder), size: j.size, done: j.done, createdAt: j.createdAt, finishedAt: j.finishedAt, result: j.result, error: j.error });
+
+  // The server's answer about this key, asked at most every AUTH_EVERY_MS (and at once after a refusal it
+  // pushed: the notification socket ends with "auth lost").
+  let authAt = 0;
+  let authLost: string | null = null;
+  const authGone = async (): Promise<boolean> => {
+    if (authLost) return true;
+    if (Date.now() - authAt < AUTH_EVERY_MS) return false;
+    authAt = Date.now();
+    authLost = await c.core.checkAuth().catch(() => null);
+    return !!authLost;
+  };
+  let stopNow: (() => void) | null = null;
 
   // ── helpers over paths ─────────
   const space = (u: URL): Ctx => (u.searchParams.get("space") === "gallery" ? { ...c, space: "gallery" } : c);
@@ -226,7 +254,18 @@ export async function serve(c: Ctx): Promise<number> {
     const cc = space(u);
     const path = u.pathname;
 
+    // Graceful stop over HTTP (needed on Windows, where a service manager's stop kills the process outright).
+    if (method === "POST" && path === "/v1/shutdown") {
+      sendJson(res, 202, { stopping: true, running, queued: queue.filter((j) => j.state === "queued").length });
+      stopNow?.();
+      return;
+    }
+    // A revoked key or a blocked account: every request but health is refused with 503 key_refused, also
+    // reads that need no new request to the instance (the file list is local; pieces are on Discord).
+    if (path !== "/v1/health" && (await authGone())) throw new HttpErr(503, "key_refused", "the server refused this API key (revoked?) or the account is blocked: make a new key in the app");
+
     if (method === "GET" && path === "/v1/health") {
+      await authGone();
       const st = await c.core.status();
       const ch = await c.core.webhooks(false).catch(() => null);
       return sendJson(res, st.authLost ? 503 : 200, {
@@ -266,6 +305,13 @@ export async function serve(c: Ctx): Promise<number> {
         if (cc.core.node(was)?.kind !== "folder") throw new HttpErr(409, "exists_as_file");
         return sendJson(res, 200, { ...entry(cc, was), created: false });
       }
+      // A file on the way (POST /v1/folders {path:"/a.txt/x"}): 409, not a failure.
+      for (let i = 1; i < splitPath(b.path).length; i++) {
+        const up = resolveRef(cc, "/" + splitPath(b.path).slice(0, i).join("/"));
+        if (up && cc.core.node(up)?.kind === "file") throw new HttpErr(409, "file_in_the_way");
+        if (!up) break;
+      }
+      for (const part of splitPath(b.path)) if (validateName(normalizeName(part))) throw new HttpErr(400, "bad_name");
       const id = await mkdirs(cc, b.path);
       return sendJson(res, 201, { ...entry(cc, id), created: true });
     }
@@ -277,6 +323,9 @@ export async function serve(c: Ctx): Promise<number> {
       const ids = (from as string[]).map((r) => mustResolve(cc, r));
       const to = mustResolve(cc, b.to);
       if (to !== ROOTS[cc.space] && cc.core.node(to)?.kind !== "folder") throw new HttpErr(400, "not_a_folder");
+      // A folder into itself or one of its own subfolders: refused (the tree would not change).
+      for (let up: string | null = to; up; up = cc.core.node(up)?.parentId ?? null) if (ids.includes(up)) throw new HttpErr(409, "move_into_itself");
+      if (typeof b.name === "string" && validateName(normalizeName(b.name.trim()))) throw new HttpErr(400, "bad_name");
       if (ids.some((x) => cc.core.node(x)?.parentId !== to)) await cc.core.move(ids, to);
       if (typeof b.name === "string") {
         if (ids.length !== 1) throw new HttpErr(400, "name_needs_one_item");
@@ -290,14 +339,20 @@ export async function serve(c: Ctx): Promise<number> {
       const name = u.searchParams.get("name");
       const onConflict = (u.searchParams.get("on_conflict") ?? "rename") as Job["onConflict"];
       if (!name) throw new HttpErr(400, "name_required", "?name=<file name> (and ?path=<folder>)");
+      if (validateName(normalizeName(name.trim()))) throw new HttpErr(400, "bad_name", "a file name without / and control characters");
       if (!["rename", "replace", "skip"].includes(onConflict)) throw new HttpErr(400, "bad_on_conflict");
       if (/multipart\//i.test(req.headers["content-type"] ?? "")) throw new HttpErr(415, "raw_body_only", "send the file as the raw request body (Content-Type: application/octet-stream)");
       let folder = resolveRef(cc, folderRef);
       if (!folder) {
         if (u.searchParams.get("parents") !== "1") throw new HttpErr(404, "no_such_folder", `no such folder: ${folderRef} (?parents=1 makes it)`);
+        for (let i = 1; i <= splitPath(folderRef).length; i++) {
+          const up = resolveRef(cc, "/" + splitPath(folderRef).slice(0, i).join("/"));
+          if (up && cc.core.node(up)?.kind === "file") throw new HttpErr(409, "file_in_the_way");
+          if (!up) break;
+        }
         folder = await mkdirs(cc, folderRef);
       }
-      if (folder !== ROOTS[cc.space] && cc.core.node(folder)?.kind !== "folder") throw new HttpErr(400, "not_a_folder");
+      if (folder !== ROOTS[cc.space] && cc.core.node(folder)?.kind !== "folder") throw new HttpErr(409, "not_a_folder");
       const id = randomBytes(9).toString("base64url");
       const spool = join(spoolDir, id);
       // The body goes to a private file as it arrives (never whole into memory), then the core sends it piece
@@ -316,7 +371,7 @@ export async function serve(c: Ctx): Promise<number> {
       pump();
       if (u.searchParams.get("wait") === "1") {
         await new Promise<void>((r) => (j.finishedAt !== null ? r() : j.waiters.push(r)));
-        return sendJson(res, j.state === "done" ? 201 : 500, publicJob(j));
+        return sendJson(res, j.state === "done" ? 201 : j.state === "cancelled" ? 503 : j.exit === EXIT.auth || j.exit === EXIT.limit ? 503 : j.exit === EXIT.usage ? 400 : j.exit === EXIT.network ? 502 : 500, publicJob(j));
       }
       res.setHeader("location", `/v1/jobs/${id}`);
       return sendJson(res, 202, publicJob(j));
@@ -352,9 +407,11 @@ export async function serve(c: Ctx): Promise<number> {
       const { id, n } = nodeOf(cc, ref.includes("/") || !ref ? `/${ref}` : ref);
       if (method === "DELETE") {
         if (id === ROOTS[cc.space]) throw new HttpErr(400, "cannot_remove_root");
+        // What it was, read before it goes (a purged node is no longer in the tree).
+        const was = entry(cc, id);
         await cc.core.trash([id]);
         if (u.searchParams.get("permanent") === "1") await cc.core.purge([id]);
-        return sendJson(res, 200, { ...entry(cc, id), trashed: true, permanent: u.searchParams.get("permanent") === "1" });
+        return sendJson(res, 200, { ...was, trashed: true, permanent: u.searchParams.get("permanent") === "1" });
       }
       if (method !== "GET" && method !== "HEAD") throw new HttpErr(405, "method_not_allowed");
       if (!n || n.kind !== "file") {
@@ -398,7 +455,8 @@ export async function serve(c: Ctx): Promise<number> {
 
   const server = createServer((req, res) => {
     handle(req, res).catch((e) => {
-      if (!(e instanceof HttpErr)) log({ ev: "request_failed", method: req.method, error: classify(e).message });
+      // The log says what kind of failure it was, never the message (it can carry a file or folder name).
+      if (!(e instanceof HttpErr)) log({ ev: "request_failed", method: req.method, endpoint: endpointOf(req.url), exit: classify(e).code });
       sendErr(res, e);
     });
   });
@@ -433,6 +491,7 @@ export async function serve(c: Ctx): Promise<number> {
     process.once("SIGTERM", stop);
     process.once("SIGINT", stop);
     c.io.stop?.addEventListener("abort", stop, { once: true });
+    stopNow = stop;
   });
   server.closeAllConnections?.();
   rmSync(spoolDir, { recursive: true, force: true });

@@ -889,6 +889,16 @@
      }
     }
    }
+  },
+  "/v1/shutdown": {
+   "post": {
+    "summary": "stop gracefully (as SIGTERM); the way on Windows",
+    "responses": {
+     "202": {
+      "description": "stopping"
+     }
+    }
+   }
   }
  }
 }

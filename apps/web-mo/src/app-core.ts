@@ -721,6 +721,21 @@ export class AppCore {
     }
   }
 
+  /**
+   * Ask the server now whether it still accepts this device (one small signed-in request). A revoked key or a
+   * blocked account is noted as with any other refusal; returns why it was refused, or null.
+   */
+  async checkAuth(): Promise<AuthLost | null> {
+    if (this.authLost) return this.authLost;
+    try {
+      await this.http!.json("GET", "/v1/account");
+    } catch (e) {
+      this.noteAuthError(e);
+      if (!this.authLost) throw e;
+    }
+    return this.authLost;
+  }
+
   /** A call failed: was it because the server no longer accepts this device? (Then the UI shows why.) */
   async authProblem(message: string): Promise<boolean> {
     this.noteAuthError(message);

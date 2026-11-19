@@ -46,6 +46,7 @@ in the URL path, either its ID (`id` from any answer) or its path works: `/v1/fi
 | `GET /v1/files/<id or path>?meta=1` | `{id, name, kind, size, modifiedAt, sha256, path}` (folders too) |
 | `DELETE /v1/files/<id or path>[?permanent=1]` | to the trash (30 days); `permanent=1` deletes for good |
 | `POST /v1/move` `{from: path\|path[], to: folder, name?}` | move into a folder; `name` renames (one item) |
+| `POST /v1/shutdown` | stop gracefully, as on SIGTERM (202); the way to stop it on Windows |
 | `GET /v1/events` | Server-Sent Events: `hello`, `changed` (the file list changed, also from other devices), `job` (a job changed state), `progress` (`{id, done, size}`, at most every 0.5 s), `auth-lost` |
 
 Errors: JSON `{error, message}` with 400 (bad request), 401 (local token), 404 (`not_found`, `no_such_folder`),
@@ -57,8 +58,13 @@ Errors: JSON `{error, message}` with 400 (bad request), 401 (local token), 404 (
 - Uploads go `--parallel` at a time, in the order they arrived. Discord's limits are kept per channel as in
   the desktop app (pacing, waiting after 429).
 - A failed upload sent again (the same file, folder and name) continues from the pieces already sent.
-- **Stopping** (SIGTERM, SIGINT, `systemctl stop`): no new requests; uploads already sending finish; queued
-  ones are cancelled (their jobs say `cancelled`, the client sends them again). A second signal stops at once.
+- **Stopping** (SIGTERM, SIGINT, `systemctl stop`, or `POST /v1/shutdown`): no new requests; uploads already
+  sending finish; queued ones are cancelled (their jobs say `cancelled`, the client sends them again; with
+  `wait=1` the answer is 503). A second signal stops at once. **Windows** has no SIGTERM for a console program
+  (a service manager's stop kills it): stop it with `POST /v1/shutdown`, or Ctrl+C in its console.
+- **A revoked key** (or a blocked account): within a few seconds every request but `/v1/health` answers
+  503 `key_refused`, reads of files too; `/v1/health` answers 503 with `authLost`.
+- Errors in the log name the endpoint and the kind of failure, never a file or folder name.
 
 ## As a service (systemd, Linux)
 
