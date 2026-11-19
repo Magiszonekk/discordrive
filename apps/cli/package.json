@@ -12,12 +12,13 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@ddv4/desktop": "*",
     "@ddv4/metadata-client": "*",
     "@ddv4/sync-core": "*",
-    "@ddv4/web-mo": "*",
-    "@ddv4/desktop": "*"
+    "@ddv4/web-mo": "*"
   },
   "devDependencies": {
+    "postject": "^1.0.0-alpha.6",
     "vitest": "^4.1.5"
   }
 }

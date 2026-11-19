@@ -12,7 +12,12 @@ import { DiscordWebhookTransport, HttpApi, WebhookVault, createAccountHttp, crea
 import { DdnServer, FakeDiscord } from "@ddv4/metadata-client/node";
 
 const MB = Number(process.env.DDN_SMOKE_MB ?? 64);
-const bin = fileURLToPath(new URL("../bin/ddn.mjs", import.meta.url));
+// DDN_BIN: run a built `ddn` (dist/ddn.cjs, or a single executable) instead of the sources.
+const built = process.env.DDN_BIN ? (await import("node:path")).resolve(process.env.DDN_BIN) : null;
+const bin = built ?? fileURLToPath(new URL("../bin/ddn.mjs", import.meta.url));
+/** How to start ddn: [program, ...arguments before the command]. A single executable runs on its own. */
+const launch: [string, string[]] = built && !/\.(c|m)?js$/.test(built) ? [built, []] : [process.execPath, [bin]];
+const shellCmd = launch[1].length ? `${JSON.stringify(launch[0])} ${JSON.stringify(launch[1][0])}` : JSON.stringify(launch[0]);
 const tmp = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-smoke-"));
 const fake = new FakeDiscord();
 fake.blobDir = join(tmp, "blobs");
@@ -44,7 +49,7 @@ const env = { ...process.env, DDN_CONFIG_DIR: join(tmp, "conf"), DDN_TEST_DISCOR
 const ddn = (...args: string[]) =>
   new Promise<{ code: number; out: string; err: string; ms: number }>((res) => {
     const t0 = Date.now();
-    execFile(process.execPath, [bin, ...args], { env, maxBuffer: 64 << 20 }, (e, out, err) => res({ code: e ? ((e as { code?: number }).code ?? 1) : 0, out, err, ms: Date.now() - t0 }));
+    execFile(launch[0], [...launch[1], ...args], { env, maxBuffer: 64 << 20 }, (e, out, err) => res({ code: e ? ((e as { code?: number }).code ?? 1) : 0, out, err, ms: Date.now() - t0 }));
   });
 const sha = (p: string) => new Promise<string>((res) => { const x = createHash("sha256"); createReadStream(p).on("data", (d) => x.update(d)).on("end", () => res(x.digest("hex"))); });
 
@@ -71,26 +76,25 @@ const pipe = (cmd: string) =>
   });
 if (process.platform !== "win32") {
   for (let i = 0; i < 60; i++) await ddn("mkdir", `/Smoke/d${String(i).padStart(2, "0")}`);
-  const q = JSON.stringify(process.execPath);
-  const b = JSON.stringify(bin);
+  const qb = shellCmd;
   // A transfer whose report is cut short (`| grep -m1`, `| head -1`) still sends every file.
   const many = join(tmp, "many");
   mkdirSync(many);
   for (let i = 0; i < 10; i++) writeFileSync(join(many, `f${i}.txt`), `file ${i}`);
-  const cut = await pipe(`set -o pipefail; ${JSON.stringify(process.execPath)} ${JSON.stringify(bin)} put --json --parents ${JSON.stringify(many)} /Cut/ | head -1 >/dev/null`);
+  const cut = await pipe(`set -o pipefail; ${shellCmd} put --json --parents ${JSON.stringify(many)} /Cut/ | head -1 >/dev/null`);
   // The same with an option and its value before the command (`--profile P put …`).
-  const cut2 = await pipe(`set -o pipefail; ${JSON.stringify(process.execPath)} ${JSON.stringify(bin)} --profile default put --json --parents ${JSON.stringify(many)} /Cut2/ | head -1 >/dev/null`);
+  const cut2 = await pipe(`set -o pipefail; ${shellCmd} --profile default put --json --parents ${JSON.stringify(many)} /Cut2/ | head -1 >/dev/null`);
   const left2 = await ddn("ls", "/Cut2/many", "--json");
   r.putCutProfile = { code: cut2.code, files: left2.out.trim().split("\n").filter((l) => l.includes('"kind":"file"')).length };
   const left = await ddn("ls", "/Cut/many", "--json");
   r.putCut = { code: cut.code, quiet: !/EPIPE|node:events|Error:/.test(cut.err), files: left.out.trim().split("\n").filter((l) => l.includes('"kind":"file"')).length };
-  r.epipe = [await pipe(`${q} ${b} ls /Smoke --json | head -1 >/dev/null`), await pipe(`${q} ${b} get /Smoke/big.bin - | head -c 100 >/dev/null`)].map((x) => ({ code: x.code, quiet: !/EPIPE|node:events|Error:/.test(x.err) }));
+  r.epipe = [await pipe(`${qb} ls /Smoke --json | head -1 >/dev/null`), await pipe(`${qb} get /Smoke/big.bin - | head -c 100 >/dev/null`)].map((x) => ({ code: x.code, quiet: !/EPIPE|node:events|Error:/.test(x.err) }));
 }
 // ddn serve as its own process: an upload through it, a Range read, then SIGTERM during an upload: the running
 // upload finishes, the process ends with 0.
 {
   const { spawn } = await import("node:child_process");
-  const child = spawn(process.execPath, [bin, "serve", "--listen", "127.0.0.1:0", "--json"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(launch[0], [...launch[1], "serve", "--listen", "127.0.0.1:0", "--json"], { env, stdio: ["ignore", "pipe", "pipe"] });
   let outBuf = "";
   let errBuf = "";
   child.stdout.on("data", (d) => (outBuf += d));

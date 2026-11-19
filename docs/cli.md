@@ -18,7 +18,21 @@ Create one in the app: **Settings → Account & security → API keys → Create
 
 ## Setup
 
-From the repository (Node.js 22.13 or newer):
+**Ready-made:** the `main-build` pre-release of the repository has one file per system, nothing to install:
+`ddn-linux-x64`, `ddn-linux-arm64`, `ddn-windows-x64.exe` (SHA-256 in `SHA256SUMS`), and
+`ddn-node.tar.gz` (`ddn.cjs` + `ddn.mjs`) for any system with Node.js 22.13 or newer
+(`node ddn.cjs …`). They are not code-signed (Windows SmartScreen may warn). `ddn version` prints the build;
+a newer one is on the same page; `ddn` never updates itself.
+
+```sh
+chmod +x ddn-linux-x64 && sudo mv ddn-linux-x64 /usr/local/bin/ddn
+ddn login --key-file ~/discordrive-api-key.txt
+```
+
+The executable unpacks its program into a private folder of the system's temporary directory at the first
+start (`ddn-<user>/`); deleting it is harmless.
+
+**From the repository** (Node.js 22.13 or newer):
 
 ```sh
 npm ci
