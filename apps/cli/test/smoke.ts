@@ -4,15 +4,20 @@
 //   npx tsx apps/cli/test/smoke.ts
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { createReadStream, mkdirSync, mkdtempSync, openSync, writeSync, closeSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, writeSync, closeSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DiscordWebhookTransport, HttpApi, WebhookVault, createAccountHttp, createApiKey, generateDeviceKey, inspectForVault, newAccountKey } from "@ddv4/metadata-client";
 import { DdnServer, FakeDiscord } from "@ddv4/metadata-client/node";
 
 const MB = Number(process.env.DDN_SMOKE_MB ?? 64);
-const bin = fileURLToPath(new URL("../bin/ddn.mjs", import.meta.url));
+// DDN_BIN: run a built `ddn` (dist/ddn.cjs, or a single executable) instead of the sources.
+const built = process.env.DDN_BIN ? (await import("node:path")).resolve(process.env.DDN_BIN) : null;
+const bin = built ?? fileURLToPath(new URL("../bin/ddn.mjs", import.meta.url));
+/** How to start ddn: [program, ...arguments before the command]. A single executable runs on its own. */
+const launch: [string, string[]] = built && !/\.(c|m)?js$/.test(built) ? [built, []] : [process.execPath, [bin]];
+const shellCmd = launch[1].length ? `${JSON.stringify(launch[0])} ${JSON.stringify(launch[1][0])}` : JSON.stringify(launch[0]);
 const tmp = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ddn-smoke-"));
 const fake = new FakeDiscord();
 fake.blobDir = join(tmp, "blobs");
@@ -44,11 +49,24 @@ const env = { ...process.env, DDN_CONFIG_DIR: join(tmp, "conf"), DDN_TEST_DISCOR
 const ddn = (...args: string[]) =>
   new Promise<{ code: number; out: string; err: string; ms: number }>((res) => {
     const t0 = Date.now();
-    execFile(process.execPath, [bin, ...args], { env, maxBuffer: 64 << 20 }, (e, out, err) => res({ code: e ? ((e as { code?: number }).code ?? 1) : 0, out, err, ms: Date.now() - t0 }));
+    execFile(launch[0], [...launch[1], ...args], { env, maxBuffer: 64 << 20 }, (e, out, err) => res({ code: e ? ((e as { code?: number }).code ?? 1) : 0, out, err, ms: Date.now() - t0 }));
   });
 const sha = (p: string) => new Promise<string>((res) => { const x = createHash("sha256"); createReadStream(p).on("data", (d) => x.update(d)).on("end", () => res(x.digest("hex"))); });
 
 const r: Record<string, unknown> = { MB };
+// A single executable runs its program from memory: a file planted where an older build unpacked it (the
+// shared temporary folder, ddn-<uid>/ddn-<hash>.mjs) never runs, and nothing is written there.
+if (built && launch[1].length === 0 && existsSync(join(dirname(built), "ddn.mjs"))) {
+  const t = join(tmp, "tmpdir");
+  const planted = join(t, `ddn-${process.getuid ? process.getuid() : "u"}`);
+  mkdirSync(planted, { recursive: true });
+  const marker = join(tmp, "planted-ran");
+  const hash = createHash("sha256").update(readFileSync(join(dirname(built), "ddn.mjs"))).digest("hex").slice(0, 16);
+  writeFileSync(join(planted, `ddn-${hash}.mjs`), `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "x");\n`);
+  const v = await new Promise<{ code: number }>((res) => execFile(launch[0], ["version"], { env: { ...process.env, TMPDIR: t, TMP: t, TEMP: t } }, (e) => res({ code: e ? ((e as { code?: number }).code ?? 1) : 0 })));
+  // Besides the planted folder and file, nothing new.
+  r.fromMemory = { code: v.code, plantedRan: existsSync(marker), written: readdirSync(t).length - 1 + readdirSync(planted).length - 1 };
+}
 r.notSignedIn = (await ddn("whoami")).code;
 const lg = await ddn("login", "--key-file", join(tmp, "key.txt"));
 r.login = lg.code;
@@ -71,26 +89,25 @@ const pipe = (cmd: string) =>
   });
 if (process.platform !== "win32") {
   for (let i = 0; i < 60; i++) await ddn("mkdir", `/Smoke/d${String(i).padStart(2, "0")}`);
-  const q = JSON.stringify(process.execPath);
-  const b = JSON.stringify(bin);
+  const qb = shellCmd;
   // A transfer whose report is cut short (`| grep -m1`, `| head -1`) still sends every file.
   const many = join(tmp, "many");
   mkdirSync(many);
   for (let i = 0; i < 10; i++) writeFileSync(join(many, `f${i}.txt`), `file ${i}`);
-  const cut = await pipe(`set -o pipefail; ${JSON.stringify(process.execPath)} ${JSON.stringify(bin)} put --json --parents ${JSON.stringify(many)} /Cut/ | head -1 >/dev/null`);
+  const cut = await pipe(`set -o pipefail; ${shellCmd} put --json --parents ${JSON.stringify(many)} /Cut/ | head -1 >/dev/null`);
   // The same with an option and its value before the command (`--profile P put …`).
-  const cut2 = await pipe(`set -o pipefail; ${JSON.stringify(process.execPath)} ${JSON.stringify(bin)} --profile default put --json --parents ${JSON.stringify(many)} /Cut2/ | head -1 >/dev/null`);
+  const cut2 = await pipe(`set -o pipefail; ${shellCmd} --profile default put --json --parents ${JSON.stringify(many)} /Cut2/ | head -1 >/dev/null`);
   const left2 = await ddn("ls", "/Cut2/many", "--json");
   r.putCutProfile = { code: cut2.code, files: left2.out.trim().split("\n").filter((l) => l.includes('"kind":"file"')).length };
   const left = await ddn("ls", "/Cut/many", "--json");
   r.putCut = { code: cut.code, quiet: !/EPIPE|node:events|Error:/.test(cut.err), files: left.out.trim().split("\n").filter((l) => l.includes('"kind":"file"')).length };
-  r.epipe = [await pipe(`${q} ${b} ls /Smoke --json | head -1 >/dev/null`), await pipe(`${q} ${b} get /Smoke/big.bin - | head -c 100 >/dev/null`)].map((x) => ({ code: x.code, quiet: !/EPIPE|node:events|Error:/.test(x.err) }));
+  r.epipe = [await pipe(`${qb} ls /Smoke --json | head -1 >/dev/null`), await pipe(`${qb} get /Smoke/big.bin - | head -c 100 >/dev/null`)].map((x) => ({ code: x.code, quiet: !/EPIPE|node:events|Error:/.test(x.err) }));
 }
 // ddn serve as its own process: an upload through it, a Range read, then SIGTERM during an upload: the running
 // upload finishes, the process ends with 0.
 {
   const { spawn } = await import("node:child_process");
-  const child = spawn(process.execPath, [bin, "serve", "--listen", "127.0.0.1:0", "--json"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(launch[0], [...launch[1], "serve", "--listen", "127.0.0.1:0", "--json"], { env, stdio: ["ignore", "pipe", "pipe"] });
   let outBuf = "";
   let errBuf = "";
   child.stdout.on("data", (d) => (outBuf += d));
@@ -98,9 +115,11 @@ if (process.platform !== "win32") {
   const t0 = Date.now();
   while (!outBuf.includes('"listening"') && Date.now() - t0 < 60_000) await new Promise((res) => setTimeout(res, 100));
   const hello = JSON.parse(outBuf.split("\n").find((l) => l.includes('"listening"'))!) as { port: number; tokenFile: string };
-  const { readFileSync } = await import("node:fs");
   const H = { authorization: `Bearer ${readFileSync(hello.tokenFile, "utf8").trim()}` };
   const sbase = `http://127.0.0.1:${hello.port}`;
+  // The command line on the same profile meanwhile: refused (7), nothing done, no stack.
+  const busy = await ddn("mkdir", "/Busy");
+  r.busy = { code: busy.code, err: busy.err.trim().slice(0, 300) };
   const blob = new Uint8Array(randomBytes(24 * 1024 * 1024));
   const st = (await (await fetch(`${sbase}/v1/files?path=/Serve&name=s.bin&parents=1`, { method: "POST", headers: H, body: blob })).json()) as { id: string };
   // Stop while that upload is on its way: SIGTERM (Linux, macOS), the HTTP stop endpoint (Windows, where a
@@ -113,6 +132,7 @@ if (process.platform !== "win32") {
   const after = await ddn("stat", "/Serve/s.bin", "--json");
   const meta = after.code === 0 ? (JSON.parse(after.out.trim()) as { size: number; sha256: string }) : null;
   r.serveSigterm = { job: !!st.id, exit: code, uploaded: meta?.size === blob.byteLength && meta?.sha256 === createHash("sha256").update(blob).digest("hex"), stopped: /"stopped"/.test(errBuf) };
+  r.busyNotDone = (await ddn("stat", "/Busy")).code === 3;
 }
 await api.revokeDevice(made.deviceId);
 const rev = await ddn("ls", "/");
@@ -121,7 +141,11 @@ console.log(JSON.stringify(r, null, 1));
 const pc = r.putCut as { code: number; quiet: boolean; files: number } | undefined;
 const epipeOk = (!r.epipe || (r.epipe as { quiet: boolean }[]).every((x) => x.quiet)) && (!pc || (pc.files === 10 && pc.quiet)) && (!r.putCutProfile || (r.putCutProfile as { files: number }).files === 10);
 const ss = r.serveSigterm as { exit: number; uploaded: boolean; stopped: boolean };
-const ok = epipeOk && ss.exit === 0 && ss.uploaded && ss.stopped && r.notSignedIn === 5 && r.login === 0 && put.code === 0 && get.code === 0 && r.sha256Ok === true && r.missing === 3 && rev.code === 5;
+const fm = r.fromMemory as { code: number; plantedRan: boolean; written: number } | undefined;
+const bz = r.busy as { code: number; err: string };
+const lockOk = bz.code === 7 && !/\n\s+at /.test(bz.err) && r.busyNotDone === true;
+const memOk = !fm || (fm.code === 0 && !fm.plantedRan && fm.written === 0);
+const ok = lockOk && memOk && epipeOk && ss.exit === 0 && ss.uploaded && ss.stopped && r.notSignedIn === 5 && r.login === 0 && put.code === 0 && get.code === 0 && r.sha256Ok === true && r.missing === 3 && rev.code === 5;
 await srv.close();
 await fake.close();
 console.log(ok ? "SMOKE OK" : "SMOKE FAILED");

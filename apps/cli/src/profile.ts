@@ -6,6 +6,7 @@
 //   keys.bin      the API key's account key and device key (written by `ddn login`, 0600)
 //   index/        the account's file list (SQLite), so a command does not fetch it again
 //   resume/       unfinished uploads and downloads
+//   lock.db       one process at a time (lock.ts)
 // With DDN_API_KEY / DDN_API_KEY_FILE the key is never written: only the list and the resume points
 // are kept, in a folder per key (<config>/ddn/env-<device>).
 
@@ -26,7 +27,7 @@ export interface ProfileFile {
 }
 
 /** Exit codes (stable, documented in docs/cli.md). */
-export const EXIT = { ok: 0, failed: 1, usage: 2, notFound: 3, network: 4, auth: 5, limit: 6 } as const;
+export const EXIT = { ok: 0, failed: 1, usage: 2, notFound: 3, network: 4, auth: 5, limit: 6, busy: 7 } as const;
 
 export class CliError extends Error {
   constructor(

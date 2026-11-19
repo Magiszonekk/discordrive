@@ -18,7 +18,20 @@ Create one in the app: **Settings → Account & security → API keys → Create
 
 ## Setup
 
-From the repository (Node.js 22.13 or newer):
+**Ready-made:** the `main-build` pre-release of the repository has one file per system, nothing to install:
+`ddn-linux-x64`, `ddn-linux-arm64`, `ddn-windows-x64.exe` (SHA-256 in `SHA256SUMS`), and
+`ddn-node.tar.gz` (`ddn.cjs` + `ddn.mjs`) for any system with Node.js 22.13 or newer
+(`node ddn.cjs …`). They are not code-signed (Windows SmartScreen may warn). `ddn version` prints the build;
+a newer one is on the same page; `ddn` never updates itself.
+
+```sh
+chmod +x ddn-linux-x64 && sudo mv ddn-linux-x64 /usr/local/bin/ddn
+ddn login --key-file ~/discordrive-api-key.txt
+```
+
+The executable runs its program from memory (nothing is unpacked to a temporary folder).
+
+**From the repository** (Node.js 22.13 or newer):
 
 ```sh
 npm ci
@@ -97,6 +110,12 @@ One JSON object per line on standard output. Fields are only ever added, not ren
 | 4 | network or server error (try again) |
 | 5 | the key was refused: not signed in, damaged, revoked, or the account is blocked |
 | 6 | no channel to upload to (add one in the app), or a rate limit |
+| 7 | the profile is in use by a running `ddn serve`: nothing was done (use its HTTP API, or another profile) |
+
+One profile, one process at a time: commands on the same profile run one after another (a second one waits), and
+while `ddn serve` runs on a profile, other commands on it stop at once with code 7 without changing anything.
+To use the command line next to a running `ddn serve`, sign the same key in under a second profile
+(`ddn login --key-file KEY --profile scripts`, then `ddn --profile scripts …`) or call the service's HTTP API.
 
 ## Examples
 
