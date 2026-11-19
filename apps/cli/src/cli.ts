@@ -281,9 +281,16 @@ async function openAccount(io: CliIo, p: ParsedArgs, locked: (l: ProfileLock) =>
     mode = prof.mode;
     core = await loadCore(dir, mode, io, false, p.cmd === "serve" ? "serve" : "cli");
   }
-  await core.open();
-  const st = await core.status();
-  if (st.authLost) throw new CliError(EXIT.auth, st.authLost === "blocked" ? "the account is blocked on this instance" : "the server refused this API key (revoked?): make a new one in the app");
+  try {
+    await core.open();
+    const st = await core.status();
+    if (st.authLost) throw new CliError(EXIT.auth, st.authLost === "blocked" ? "the account is blocked on this instance" : "the server refused this API key (revoked?): make a new one in the app");
+  } catch (e) {
+    // The caller never gets this core: close its file lists here (Windows cannot delete open files, `ddn logout`).
+    core.close();
+    closeIndexes.get(core)?.();
+    throw e;
+  }
   return { core, profile: { dir, mode } };
 }
 
