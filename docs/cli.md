@@ -56,6 +56,7 @@ A node ID (the `id` printed by `--json`) works wherever a path does.
 | `ddn mv SRC… DEST` | move into a folder, or rename one item (`ddn mv /a.txt /b/c.txt`) |
 | `ddn rm PATH…` | move to the trash (30 days, restore in the app). `--permanent` deletes for good: asks, or `--yes` |
 | `ddn find TEXT` | search names (and descriptions where the account has them) |
+| `ddn serve` | local HTTP API for scripts and services (`docs/local-api.md`) |
 | `ddn version` | the build |
 
 `put --on-conflict`: `rename` (default, like the app: `name (2).ext`), `replace` (a new version of the

@@ -86,13 +86,42 @@ if (process.platform !== "win32") {
   r.putCut = { code: cut.code, quiet: !/EPIPE|node:events|Error:/.test(cut.err), files: left.out.trim().split("\n").filter((l) => l.includes('"kind":"file"')).length };
   r.epipe = [await pipe(`${q} ${b} ls /Smoke --json | head -1 >/dev/null`), await pipe(`${q} ${b} get /Smoke/big.bin - | head -c 100 >/dev/null`)].map((x) => ({ code: x.code, quiet: !/EPIPE|node:events|Error:/.test(x.err) }));
 }
+// ddn serve as its own process: an upload through it, a Range read, then SIGTERM during an upload: the running
+// upload finishes, the process ends with 0.
+{
+  const { spawn } = await import("node:child_process");
+  const child = spawn(process.execPath, [bin, "serve", "--listen", "127.0.0.1:0", "--json"], { env, stdio: ["ignore", "pipe", "pipe"] });
+  let outBuf = "";
+  let errBuf = "";
+  child.stdout.on("data", (d) => (outBuf += d));
+  child.stderr.on("data", (d) => (errBuf += d));
+  const t0 = Date.now();
+  while (!outBuf.includes('"listening"') && Date.now() - t0 < 60_000) await new Promise((res) => setTimeout(res, 100));
+  const hello = JSON.parse(outBuf.split("\n").find((l) => l.includes('"listening"'))!) as { port: number; tokenFile: string };
+  const { readFileSync } = await import("node:fs");
+  const H = { authorization: `Bearer ${readFileSync(hello.tokenFile, "utf8").trim()}` };
+  const sbase = `http://127.0.0.1:${hello.port}`;
+  const blob = new Uint8Array(randomBytes(24 * 1024 * 1024));
+  const st = (await (await fetch(`${sbase}/v1/files?path=/Serve&name=s.bin&parents=1`, { method: "POST", headers: H, body: blob })).json()) as { id: string };
+  // Stop while that upload is on its way: SIGTERM (Linux, macOS), the HTTP stop endpoint (Windows, where a
+  // signal ends the process outright).
+  await new Promise((res) => setTimeout(res, 300));
+  const exited = new Promise<number>((res) => child.once("exit", (c) => res(c ?? -1)));
+  if (process.platform === "win32") await fetch(`${sbase}/v1/shutdown`, { method: "POST", headers: H });
+  else child.kill("SIGTERM");
+  const code = await exited;
+  const after = await ddn("stat", "/Serve/s.bin", "--json");
+  const meta = after.code === 0 ? (JSON.parse(after.out.trim()) as { size: number; sha256: string }) : null;
+  r.serveSigterm = { job: !!st.id, exit: code, uploaded: meta?.size === blob.byteLength && meta?.sha256 === createHash("sha256").update(blob).digest("hex"), stopped: /"stopped"/.test(errBuf) };
+}
 await api.revokeDevice(made.deviceId);
 const rev = await ddn("ls", "/");
 r.revoked = { code: rev.code, err: rev.err.trim() };
 console.log(JSON.stringify(r, null, 1));
 const pc = r.putCut as { code: number; quiet: boolean; files: number } | undefined;
 const epipeOk = (!r.epipe || (r.epipe as { quiet: boolean }[]).every((x) => x.quiet)) && (!pc || (pc.files === 10 && pc.quiet)) && (!r.putCutProfile || (r.putCutProfile as { files: number }).files === 10);
-const ok = epipeOk && r.notSignedIn === 5 && r.login === 0 && put.code === 0 && get.code === 0 && r.sha256Ok === true && r.missing === 3 && rev.code === 5;
+const ss = r.serveSigterm as { exit: number; uploaded: boolean; stopped: boolean };
+const ok = epipeOk && ss.exit === 0 && ss.uploaded && ss.stopped && r.notSignedIn === 5 && r.login === 0 && put.code === 0 && get.code === 0 && r.sha256Ok === true && r.missing === 3 && rev.code === 5;
 await srv.close();
 await fake.close();
 console.log(ok ? "SMOKE OK" : "SMOKE FAILED");

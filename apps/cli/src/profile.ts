@@ -80,8 +80,11 @@ export function forgetProfile(dir: string): boolean {
 }
 
 /** Options that may stand anywhere on the command line. Boolean flags take no value. */
-const VALUE_FLAGS = new Set(["--profile", "--key-file", "--on-conflict", "--name"]);
-const BOOL_FLAGS = new Set(["--json", "--quiet", "-q", "--gallery", "--parents", "-p", "-l", "--long", "--permanent", "--yes", "-y", "--help", "-h", "--recursive", "-r", "--no-progress"]);
+const VALUE_FLAGS = new Set(["--profile", "--key-file", "--on-conflict", "--name", "--listen", "--token-file", "--parallel"]);
+const BOOL_FLAGS = new Set(["--json", "--quiet", "-q", "--gallery", "--parents", "-p", "-l", "--long", "--permanent", "--yes", "-y", "--help", "-h", "--recursive", "-r", "--no-progress", "--transfer-log"]);
+
+/** A file's node ID as printed by --json (16 random bytes in base64url, no padding). */
+const FILE_ID_RE = /^[A-Za-z0-9_-]{21}[AQgw]$/;
 
 export interface ParsedArgs {
   cmd: string | null;
@@ -110,6 +113,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       if (v === undefined) throw new CliError(EXIT.usage, `${name} needs a value`);
       opts.set(name, v);
     } else if (BOOL_FLAGS.has(name) && eq < 0) opts.set(name, true);
+    // A file ID (22 base64url characters) may start with "-" (about 1 in 64): an argument, not an option.
+    else if (FILE_ID_RE.test(a)) rest.push(a);
     else throw new CliError(EXIT.usage, `unknown option ${a} (ddn help)`);
   }
   return { cmd: rest[0] ?? null, args: rest.slice(1), opts };
