@@ -205,6 +205,19 @@ for (const mode of ["metadata-only", "e2ee", "plain"] as Mode[]) {
   });
 }
 
+describe("arguments", () => {
+  it("a file ID starting with '-' is an argument, not an option", async () => {
+    const { parseArgs } = await import("../src/profile.js");
+    const id = "-kapVfz4WfqyfXM2UnUfqg";
+    expect(parseArgs(["get", id, "-"]).args).toEqual([id, "-"]);
+    expect(parseArgs(["stat", "--json", id]).args).toEqual([id]);
+    expect(parseArgs(["mv", id, "/X"]).args).toEqual([id, "/X"]);
+    // Still an error: an unknown option that is not an ID.
+    expect(() => parseArgs(["ls", "--bogus"])).toThrow(/unknown option/);
+    expect(() => parseArgs(["ls", "-zzz"])).toThrow(/unknown option/);
+  });
+});
+
 describe("ddn usage", () => {
   it("help, unknown command and option, version", async () => {
     const x = io({ origin: "http://127.0.0.1:9" }, tmp("ddn-cli-u-"));
